@@ -2366,7 +2366,7 @@ Wallet setup per GO-LIVE-CHECKLIST, POLY_PRIVATE_KEY in Edge secrets, goLiveGate
 
 ### Module: functions/_shared (§6.12)
 - [ ] `runJob` — 401 without secret; 409 only when existing run is ok or young-running; **stale 'running' row taken over by CAS (attempt+1, started_at predicate — W16: two concurrent takeovers → exactly one proceeds)**; 202 fast path; failure → job_runs 'failed' + Slack CRITICAL
-- [ ] `fetchJson` — retries 429/5xx with backoff; UpstreamError carries source+status; timeout enforced
+- [x] `fetchJson` — retries 429/5xx with backoff; UpstreamError carries source+status; timeout enforced
 - [ ] `notifySlack` — sent=false insert → 2xx flips sent=true; **failed post does NOT consume the dedupe key**; resend sweep delivers it; Slack outage never throws; BET_REC delivery recorded on the bet
 - [ ] `gradeEvent` — winner written once (idempotent re-run no-op); pnl math incl. fees; ledger unique per bet; Polymarket-winner mismatch → CRITICAL + flag; **ADR-16 scored-row selection appends to scored_for_leads[] for leads {0,1} — timeline tests use an AMERICAS city (NYC, created 02:01 UTC) and Wellington, not just Seoul (C7); quiet-market case: one row carries both leads (W18)**; RESOLUTION INFO emitted (deduped); streak breaker evaluated
 - [ ] concurrent gradeEvent invocations (fetch-actuals + sweep) — winner-claim CAS admits exactly one grader; no double ledger entries, no double scored_for_leads appends, no double alerts (race test)

@@ -6,6 +6,7 @@
   "include": [
     "packages/*/src/**/*.ts",
     "packages/*/test/**/*.ts",
+    "supabase/functions/**/*.ts",
     "supabase/tests/**/*.ts",
     "vitest.workspace.ts"
   ]

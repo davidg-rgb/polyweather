@@ -9,6 +9,10 @@
 
 ## Completed
 
+- **P2 progress (iteration 10, 2026-06-10):**
+  - `packages/io` (§6.12, Deno+Node portable): http.ts fetchJson (timeout via AbortController, 429/5xx/network retries with exp backoff + jitter, non-retryable 4xx and non-JSON-200 fail fast, UpstreamError carries source/status/retryable) + slack.ts (slackPost returns true only on 2xx and never throws — ADR-11; buildAlertBlocks Block-Kit formatter with severity emoji + optional dashboard link).
+  - `supabase/functions/_shared/auth.ts`: requireCronAuth (constant-time compare, fails CLOSED on missing/short CRON_SECRET, AuthError 401) + getEnv (Deno/process probe). Vitest workspace now has 4 projects (core/io/functions/db); root tsconfig covers supabase/functions.
+  - 19 new tests (mocked fetch: retry counts, abort timing, init passthrough; auth prefix/extension rejection). §15 _shared fetchJson item ticked. Suite: 337 green.
 - **P1 COMPLETE (iteration 9, 2026-06-10):**
   - `core/config.ts` (§6.11): ConfigSchema (every tunable, ranges enforced, jobWallLimitSec invariant documented), parseConfigRows (string-row coercion, non-schema rows ignored, ConfigError lists every invalid key). Seed-parity test: code defaults == 0010 migration values VERBATIM, and every tunable is seeded.
   - Coverage gate: `pnpm test:coverage` enforces ≥95% lines/functions on packages/core/src (excl. type-only types.ts + barrel index.ts) — measured **99.84% lines / 100% functions**; error-paths suite added to close every guard branch. CI now runs the coverage gate.
@@ -43,7 +47,7 @@
 
 ## Next Task
 
-**P2 begins — IO plumbing first (§6.12):** packages/io (http.ts fetchJson with retry/backoff/timeout + UpstreamError; slack.ts slackPost raw webhook) and supabase/functions/_shared (runJob idempotency + CAS takeover W16, db service-role factory, auth requireCronAuth constant-time, slack notifySlack dedupe-then-post, grading gradeEvent — the big one, ADR-16 + C7/W18 scored-row selection). These are testable in vitest with mocked fetch + PGlite. Then discover-markets job (§6.13) + seed-stations script (§6.22). Edge Function index.ts files need `deno check` — Deno is NOT installed; add to Operator TODO or vendor a portable check.
+**P2 continues — the _shared DB layer (§6.12):** db.ts (service-role client factory — to keep PGlite-testability, define a minimal query interface the jobs consume, with a supabase-js implementation for Deno and a PGlite adapter for tests), slack.ts notifySlack (dedupe insert sent=false → slackPost → flip sent=true on 2xx only, ADR-11 failed-post-keeps-key, never throws), runJob (401 → claim period via insert; 409 only when existing is ok/young-running; stale-running/failed CAS takeover attempt+1 with started_at predicate W16; 202 fast path; failure → job_runs failed + Slack CRITICAL). Test the W16 two-concurrent-takeovers race against PGlite. Then gradeEvent (§6.12) as its own iteration. Edge Function index.ts files need `deno check` — Deno not installed → Operator TODO when they land.
 
 ## Blockers
 
