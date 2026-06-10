@@ -64,6 +64,9 @@ export async function metarNowcast(ctx: JobCtx, deps: NowcastDeps): Promise<JobS
       p_max_tenths: maxTenths,
       p_max_native: metarMaxToNative(maxTenths, t.unit),
       p_n_obs: stationObs.length,
+      // station-local hour of this poll — feeds the intraday_advances log the
+      // weekly §7.8a nowcast_lift rebuild consumes
+      p_local_hour: localHour(t.tz, deps.now),
     });
     if (advanced?.upsert_intraday) {
       maxesAdvanced++;

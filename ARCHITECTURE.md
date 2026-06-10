@@ -2379,7 +2379,7 @@ Wallet setup per GO-LIVE-CHECKLIST, POLY_PRIVATE_KEY in Edge secrets, goLiveGate
 - [ ] metar-nowcast — daytime station selection; batched call; intraday_max monotone; in-process nowcast rebuild
 - [ ] build-distributions — champion + challengers written; inputs_hash dedupe; freshness skip; σ floor; °F conversion path
 - [ ] poll-markets — **job_locks lease claim/release (C8: overlap exits 'overlapped'; expired lease reclaimable; NO pg advisory session locks anywhere in job code)**; pagination until short page (+ >4-pages WARN); delta-dedupe write rule with unique-key backstop; adaptive heartbeat (30 min candidates / 2 h others); consensus rows; screen-then-book economy (≤15 books/cycle); **fee-adjusted Kelly inputs pre-filtered to q > p′ (W20: p′ ≥ 1 nowcast bucket excluded without killing the event)**; recommendation upsert + refresh + 20%-stake-change re-notify; CAS expiry path (live mode: cancel via execute-bet); hourly edge_evaluations persist; zod-sampling CPU guard with cpuMs stat
-- [ ] run-calibration — residual join correctness (one fixture day hand-checked); stats keyed (station, model, lead, **slot**) — 10Z/22Z never pooled (W3); **backfill/gapfill residuals seed BOTH slots ×1.15 σ (W19)**; scores computed on time-matched rows only, **gate stats restricted to (event, lead) pairs where both sources have scored rows (C7)**; pooled bootstrap p-value persisted to the zero-UUID row; stats_version increments; window tags 30d/60d/90d; weekly nowcast_lift rebuild; drift gate halts; promotion report
+- [x] run-calibration — residual join correctness (one fixture day hand-checked); stats keyed (station, model, lead, **slot**) — 10Z/22Z never pooled (W3); **backfill/gapfill residuals seed BOTH slots ×1.15 σ (W19)**; scores computed on time-matched rows only, **gate stats restricted to (event, lead) pairs where both sources have scored rows (C7)**; pooled bootstrap p-value persisted to the zero-UUID row; stats_version increments; window tags 30d/60d/90d; weekly nowcast_lift rebuild; drift gate halts; promotion report
 - [ ] grade-bets sweep — catches artificially un-graded event; market-resolved-but-no-truth CRITICAL; **live-mode reconciliation diff vs mocked data-api positions raises POSITION_DRIFT (F-033)**
 - [ ] daily-digest — renders all sections from seeded data incl. edge-decile table; monthly withdrawal reminder fires in live mode (F-036)
 - [ ] health-monitor — staleness matrix per job (**discovery threshold 10h — no false nightly alarm, W7**); reaper flips stuck 'running' runs and re-opens the period; unsent-alert resend; dead-man halt fires on stale data; tomorrow-events sanity
@@ -2412,16 +2412,16 @@ Wallet setup per GO-LIVE-CHECKLIST, POLY_PRIVATE_KEY in Edge secrets, goLiveGate
 - [x] RLS: anon sees nothing; operator email reads all; writes service-role only (tested with anon client)
 - [x] config seeded with §6.11 defaults; models seeded incl. disabled traps (kma, ecmwf_ifs04, gfs025)
 - [x] Downsample cron enforces EVERY retention rule: market_snapshots tiers (7d/30d/180d), forecast_snapshots 90d lead-0–2@10Z keep, bucket_probabilities resolution+30d scored-rows keep, edge_evaluations 30d, intraday_max 14d, job_runs/alerts_log 90d (fixture rows aged artificially)
-- [ ] model_stats PK includes snapshot_slot; queries never pool slots (W3)
+- [x] model_stats PK includes snapshot_slot; queries never pool slots (W3)
 - [ ] job_locks lease semantics: claim-by-CAS, expiry reclaim, release-on-completion (C8)
 - [x] job_runs.attempt increments on CAS takeover; unique (job, period_key) never violated (W16)
 - [ ] market_snapshots unique (bucket_id, captured_at); overlapping-poll protection via the job_locks lease (W10/C8)
 - [x] bucket_probabilities.scored_for_leads[] appended only by gradeEvent; per (event, source, lead) exactly one row carries that lead
-- [ ] calibration_scores.window_tag domain incl. 'backtest'/'nowcast'; zero-UUID pooled row carries bootstrap_p
+- [x] calibration_scores.window_tag domain incl. 'backtest'/'nowcast'; zero-UUID pooled row carries bootstrap_p
 - [ ] nowcast_lift populated by backfill-actuals; weekly refresh by run-calibration; missing row ⇒ truncation-only nowcast
 - [ ] edge_decile_stats view matches hand-computed deciles on seeded bets (W-2)
 - [x] bankroll_balance view sum equals manual ledger arithmetic; no stored running-balance column exists (W10)
-- [ ] model_stats_history rows written on every stats_version increment
+- [x] model_stats_history rows written on every stats_version increment
 - [ ] edge_evaluations unique (event, bucket, hour); written hourly; queryable from /events page (F-038)
 - [x] pg_cron job commands read CRON_SECRET from Vault — `select command from cron.job` contains no literal secret (W11)
 - [ ] tmax columns: °F city observations carry units=e integers (spot-check vs WU page)
@@ -2434,7 +2434,7 @@ Wallet setup per GO-LIVE-CHECKLIST, POLY_PRIVATE_KEY in Edge secrets, goLiveGate
 - [ ] 9.4 race branch — concurrent approve + expire on one bet: exactly one CAS winner, loser 409, no double ledger entry
 - [ ] 9.10 digest→review loop renders end-to-end (J-1)
 - [ ] ADR-16 row-existence: discovery-seeded distribution exists before the lead-1 cutoff for a same-UTC-day Americas creation (NYC fixture timeline) and a UTC+12/13 city (Wellington)
-- [ ] 9.5 calibration run updates stats + scores; drift halt fires on synthetic bad Brier
+- [x] 9.5 calibration run updates stats + scores; drift halt fires on synthetic bad Brier
 - [ ] 9.6 nowcast: rising METAR max eliminates buckets in the stored distribution
 - [ ] 9.7 backfill scripts resumable (kill mid-run, restart continues from cursor); budget sleeper engages
 - [ ] 9.8 dead-man: stop snapshots 30h (clock-mock) → halt:global + CRITICAL

@@ -5,7 +5,7 @@ import { asRole, freshDb, hasUniqueIndex, migrationFiles, rows } from './harness
 const TABLES = [
   'clusters', 'cities', 'stations', 'city_stations', 'models',
   'forecast_snapshots', 'ensemble_snapshots', 'observations',
-  'intraday_max', 'nowcast_lift',
+  'intraday_max', 'intraday_advances', 'nowcast_lift',
   'market_events', 'market_buckets', 'market_snapshots',
   'bucket_probabilities', 'model_stats', 'model_stats_history',
   'calibration_scores', 'edge_evaluations',
@@ -62,6 +62,7 @@ describe('migrations 0001–0010', () => {
       '0007_ops.sql', '0008_rls.sql', '0009_cron.sql', '0010_seed.sql',
       '0011_job_rpcs.sql', '0012_discovery_rpcs.sql', '0013_grading_rpcs.sql',
       '0014_snapshot_rpcs.sql', '0015_truth_rpcs.sql', '0016_distribution_rpcs.sql',
+      '0017_calibration_rpcs.sql',
     ]);
   });
 });
@@ -89,6 +90,7 @@ describe('unique / natural keys (§7, §15)', () => {
     ['job_locks', ['job']],
     ['edge_evaluations', ['event_id', 'bucket_idx', 'captured_hour']],
     ['intraday_max', ['icao', 'date_local']],
+    ['intraday_advances', ['icao', 'date_local', 'local_hour']],
     ['nowcast_lift', ['icao', 'local_hour']],
     ['backfill_progress', ['script', 'scope']],
   ];
@@ -281,7 +283,7 @@ describe('RLS (ADR-13, §11.5)', () => {
     const models = await asRole(db, 'authenticated', { email: 'david.geborek@gmail.com' }, () =>
       rows(db, `select * from models`),
     );
-    expect(models.length).toBe(14);
+    expect(models.length).toBe(15); // 14 seeded (§7.4 incl. 3 traps) + the 0017 'blend' pseudo-model
   });
 
   it('writes are service-role only', async () => {

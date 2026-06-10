@@ -44,7 +44,7 @@ const FN_ARGS: Record<string, string[]> = {
   finalize_observation: ['p_icao', 'p_date', 'p_metar_tenths', 'p_metar_native', 'p_iem_f', 'p_era5_c', 'p_divergence'],
   set_config_value: ['p_key', 'p_value'],
   events_for_grading: ['p_icao', 'p_date'],
-  upsert_intraday: ['p_icao', 'p_date', 'p_max_tenths', 'p_max_native', 'p_n_obs'],
+  upsert_intraday: ['p_icao', 'p_date', 'p_max_tenths', 'p_max_native', 'p_n_obs', 'p_local_hour'],
   nowcast_targets: [],
   list_buildable_events: [],
   get_build_inputs: ['p_event_id'],
@@ -52,6 +52,14 @@ const FN_ARGS: Record<string, string[]> = {
     'p_event_id', 'p_source', 'p_lead', 'p_nowcast', 'p_inputs_hash',
     'p_probs', 'p_mu', 'p_sigma', 'p_stats_version',
   ],
+  calib_cursor_bound: ['p_since', 'p_max_obs'],
+  calib_new_pairs: ['p_since', 'p_until'],
+  calib_current_bias: ['p_icaos'],
+  calib_window_errors: ['p_window_days', 'p_icaos', 'p_today'],
+  upsert_model_stats: ['p_rows'],
+  calib_scored_rows: ['p_days', 'p_today'],
+  upsert_calibration_scores: ['p_rows'],
+  rebuild_nowcast_lift: ['p_min_n', 'p_today'],
 };
 
 export function pglitePort(db: PGlite): DbPort {
