@@ -9,6 +9,10 @@
 
 ## Completed
 
+- **P2 progress (iteration 11, 2026-06-10):**
+  - Migration 0011_job_rpcs.sql: race-critical mutations as SQL functions so PostgREST callers and PGlite tests run ONE implementation — claim_job_run (insert / already_ran / running_young / W16 started_at-predicate CAS takeover / lost_race), complete_job_run (attempt-guarded so late isolates no-op), claim_alert (ADR-11 insert/retry/skip), mark_alert_sent.
+  - `_shared/db.ts` (DbPort + supabasePort wrapper + getServiceDb Deno factory via dynamic npm: import), `_shared/slack.ts` (notifySlack: dedupe→post→flip-on-2xx-only, never throws), `_shared/runJob.ts` (401/409/202 contract, waitUntil-deferred work, failure→failed+Slack CRITICAL, deps-injected for tests). `supabase/tests/pglite-port.ts` = the DbPort test twin.
+  - 19 PGlite-backed tests: full claim lifecycle, stale-isolate takeover, the W16 predicate proven directly (mismatched observed started_at moves nothing), late-isolate complete no-op, ADR-11 lifecycle (fail-keeps-key → retry-delivers → skip), runJob 202-before-handler-finishes timing. §15 runJob ticked (note: PGlite is single-session — predicate + sequential outcome proven; true interleaving rests on Postgres row locking, re-verifiable live in P3). Suite: 356 green.
 - **P2 progress (iteration 10, 2026-06-10):**
   - `packages/io` (§6.12, Deno+Node portable): http.ts fetchJson (timeout via AbortController, 429/5xx/network retries with exp backoff + jitter, non-retryable 4xx and non-JSON-200 fail fast, UpstreamError carries source/status/retryable) + slack.ts (slackPost returns true only on 2xx and never throws — ADR-11; buildAlertBlocks Block-Kit formatter with severity emoji + optional dashboard link).
   - `supabase/functions/_shared/auth.ts`: requireCronAuth (constant-time compare, fails CLOSED on missing/short CRON_SECRET, AuthError 401) + getEnv (Deno/process probe). Vitest workspace now has 4 projects (core/io/functions/db); root tsconfig covers supabase/functions.
@@ -47,7 +51,7 @@
 
 ## Next Task
 
-**P2 continues — the _shared DB layer (§6.12):** db.ts (service-role client factory — to keep PGlite-testability, define a minimal query interface the jobs consume, with a supabase-js implementation for Deno and a PGlite adapter for tests), slack.ts notifySlack (dedupe insert sent=false → slackPost → flip sent=true on 2xx only, ADR-11 failed-post-keeps-key, never throws), runJob (401 → claim period via insert; 409 only when existing is ok/young-running; stale-running/failed CAS takeover attempt+1 with started_at predicate W16; 202 fast path; failure → job_runs failed + Slack CRITICAL). Test the W16 two-concurrent-takeovers race against PGlite. Then gradeEvent (§6.12) as its own iteration. Edge Function index.ts files need `deno check` — Deno not installed → Operator TODO when they land.
+**P2 continues — discover-markets (§6.13) + seed-stations (§6.22):** read §6.13 spec (gamma pagination via tag fixtures, zombie filter, new-city flow with clusterOf region assignment + derived-tz provisional station, station-change suspend+alert flow, unparseable-event flagged storage) and §6.22 seed-stations (OurAirports → stations). Extend DbPort with the upsert surface these need (or add 0012 RPCs where mutations are race-sensitive). Tests: tag-page fixtures drive discovery end-to-end against PGlite (gamma-events-tag*-active.json have real pagination + the Jinan zombies); station-change simulation per §15 (fixture with altered URL → suspend+alert). gradeEvent (§6.12) lands after discovery (needs events+buckets rows to grade). Edge Function index.ts files need `deno check` — Deno not installed → Operator TODO when they land.
 
 ## Blockers
 

@@ -2365,7 +2365,7 @@ Wallet setup per GO-LIVE-CHECKLIST, POLY_PRIVATE_KEY in Edge secrets, goLiveGate
 - [x] `parseConfigRows` — DB override wins; ConfigError lists every invalid key
 
 ### Module: functions/_shared (§6.12)
-- [ ] `runJob` — 401 without secret; 409 only when existing run is ok or young-running; **stale 'running' row taken over by CAS (attempt+1, started_at predicate — W16: two concurrent takeovers → exactly one proceeds)**; 202 fast path; failure → job_runs 'failed' + Slack CRITICAL
+- [x] `runJob` — 401 without secret; 409 only when existing run is ok or young-running; **stale 'running' row taken over by CAS (attempt+1, started_at predicate — W16: two concurrent takeovers → exactly one proceeds)**; 202 fast path; failure → job_runs 'failed' + Slack CRITICAL
 - [x] `fetchJson` — retries 429/5xx with backoff; UpstreamError carries source+status; timeout enforced
 - [ ] `notifySlack` — sent=false insert → 2xx flips sent=true; **failed post does NOT consume the dedupe key**; resend sweep delivers it; Slack outage never throws; BET_REC delivery recorded on the bet
 - [ ] `gradeEvent` — winner written once (idempotent re-run no-op); pnl math incl. fees; ledger unique per bet; Polymarket-winner mismatch → CRITICAL + flag; **ADR-16 scored-row selection appends to scored_for_leads[] for leads {0,1} — timeline tests use an AMERICAS city (NYC, created 02:01 UTC) and Wellington, not just Seoul (C7); quiet-market case: one row carries both leads (W18)**; RESOLUTION INFO emitted (deduped); streak breaker evaluated
@@ -2414,7 +2414,7 @@ Wallet setup per GO-LIVE-CHECKLIST, POLY_PRIVATE_KEY in Edge secrets, goLiveGate
 - [x] Downsample cron enforces EVERY retention rule: market_snapshots tiers (7d/30d/180d), forecast_snapshots 90d lead-0–2@10Z keep, bucket_probabilities resolution+30d scored-rows keep, edge_evaluations 30d, intraday_max 14d, job_runs/alerts_log 90d (fixture rows aged artificially)
 - [ ] model_stats PK includes snapshot_slot; queries never pool slots (W3)
 - [ ] job_locks lease semantics: claim-by-CAS, expiry reclaim, release-on-completion (C8)
-- [ ] job_runs.attempt increments on CAS takeover; unique (job, period_key) never violated (W16)
+- [x] job_runs.attempt increments on CAS takeover; unique (job, period_key) never violated (W16)
 - [ ] market_snapshots unique (bucket_id, captured_at); overlapping-poll protection via the job_locks lease (W10/C8)
 - [ ] bucket_probabilities.scored_for_leads[] appended only by gradeEvent; per (event, source, lead) exactly one row carries that lead
 - [ ] calibration_scores.window_tag domain incl. 'backtest'/'nowcast'; zero-UUID pooled row carries bootstrap_p

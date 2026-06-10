@@ -54,12 +54,13 @@ describe('migrations 0001–0010', () => {
     expect(clusters.length).toBe(12);
   });
 
-  it('has migration files 0001–0010 in order', () => {
+  it('has the migration files in order', () => {
     const names = migrationFiles().map((m) => m.name);
     expect(names).toEqual([
       '0001_extensions.sql', '0002_reference.sql', '0003_ingestion.sql',
       '0004_markets.sql', '0005_analytics.sql', '0006_trading.sql',
       '0007_ops.sql', '0008_rls.sql', '0009_cron.sql', '0010_seed.sql',
+      '0011_job_rpcs.sql',
     ]);
   });
 });
