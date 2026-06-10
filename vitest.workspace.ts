@@ -28,4 +28,12 @@ export default defineWorkspace([
       hookTimeout: 120_000,
     },
   },
+  {
+    test: {
+      name: 'scripts',
+      include: ['scripts/**/*.test.ts'],
+      testTimeout: 120_000,
+      hookTimeout: 120_000,
+    },
+  },
 ]);

@@ -13,5 +13,7 @@ dist/
 
 # Local artifacts
 backups/
+scripts/.cache/
+coverage/
 .DS_Store
 Thumbs.db

@@ -38,9 +38,16 @@ const titleCityRe = /temperature in (.+?) on /i;
 interface CityState {
   city_id: string;
   tz: string;
+  unit: 'C' | 'F';
   betting_enabled: boolean;
   current_icao: string | null;
 }
+
+const slugDateRe = /-on-([a-z]+)-(\d{1,2})-(\d{4})$/;
+const MONTH_NUM: Record<string, number> = {
+  january: 1, february: 2, march: 3, april: 4, may: 5, june: 6,
+  july: 7, august: 8, september: 9, october: 10, november: 11, december: 12,
+};
 
 export async function discoverMarkets(ctx: JobCtx, deps: DiscoverDeps): Promise<JobStats> {
   const { db, log } = ctx;
@@ -85,6 +92,30 @@ export async function discoverMarkets(ctx: JobCtx, deps: DiscoverDeps): Promise<
     } catch (e) {
       stats.parseFailures++;
       log('event parse failed — flagged unbettable', { slug: ev.slug, error: String(e) });
+      // §6.13: store the event FLAGGED when the schema can be satisfied — a
+      // known city supplies city_id/unit, the slug supplies the date. A fully
+      // unknown event (no city row) can only be alerted.
+      const dm = slugDateRe.exec(ev.slug);
+      const month = dm ? MONTH_NUM[dm[1]!] : undefined;
+      if (cityState && dm && month) {
+        const targetDate = `${dm[3]}-${String(month).padStart(2, '0')}-${String(Number(dm[2])).padStart(2, '0')}`;
+        await db.rpc('upsert_event', {
+          p_poly_event_id: ev.id,
+          p_slug: ev.slug,
+          p_kind: ev.slug.startsWith('lowest-') ? 'lowest' : 'highest',
+          p_city_id: cityState.city_id,
+          p_icao: cityState.current_icao,
+          p_target_date: targetDate,
+          p_unit: cityState.unit,
+          p_neg_risk_market_id: ev.negRiskMarketID ?? null,
+          p_accepting: false,
+          p_volume24h: ev.volume24hr ?? null,
+          p_liquidity: ev.liquidity ?? null,
+          p_ladder_ok: false,
+          p_ladder_problems: [String(e)],
+        });
+        seenPolyIds.push(ev.id);
+      }
       await deps.notify({
         kind: 'EVENT_UNPARSEABLE',
         severity: 'WARN',

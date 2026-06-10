@@ -4,12 +4,12 @@
 
 -- City + current-station snapshot for an incoming event's slug.
 create or replace function public.get_city_state(p_slug text)
-returns table (city_id uuid, tz text, betting_enabled boolean, current_icao text)
+returns table (city_id uuid, tz text, unit text, betting_enabled boolean, current_icao text)
 language sql
 security definer
 set search_path = public
 as $$
-  select c.id, c.tz, c.betting_enabled, cs.icao
+  select c.id, c.tz, c.unit, c.betting_enabled, cs.icao
   from cities c
   left join city_stations cs on cs.city_id = c.id and cs.valid_to is null
   where c.slug = p_slug;

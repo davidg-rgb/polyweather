@@ -5,10 +5,16 @@
 
 ## Active Phase
 
-**P2 — Reference data + discovery** (§14): seed-stations script; discover-markets job + runJob/_shared plumbing; cities/stations/events/buckets populating. P0+P1 complete (P0's two DoD items operator-environment-gated, see Blockers). Note: P2's live-run DoD items (live discovery of ~49 cities, stations for ≥45) need network access to the live APIs — code + fixture tests land first; live verification follows when run.
+**P3 — Ingestion: forecasts + truth** (§14): snapshot-forecasts, snapshot-ensembles, fetch-actuals, metar-nowcast jobs. P0–P2 complete. NOTE: the P3 DoD ("48h of live operation: ≥95% cell coverage, finalized actuals for ≥45 stations, key-refresh exercised") requires the HOSTED stack running on a schedule — code + fixture/PGlite tests + local live smoke land now; the 48h DoD is verified post-deploy (Operator TODO).
+
+**P2 DoD evidence (live run, 2026-06-10 23:34):** 49 cities discovered · 45 current station mappings with coordinates · seed-stations matched 46/46 ICAOs (0 unmatched) · 116 live events → 111 ingested + 1 stored-flagged, 4 zombies filtered · 1,221 buckets · idempotency via runJob 409 tests. `pnpm tsx scripts/prove-discovery-live.ts` reproduces.
 
 ## Completed
 
+- **P2 COMPLETE (iteration 13, 2026-06-10):**
+  - `scripts/seed-stations.ts` (§6.22): OurAirports CSV (cached) → coordinates/name/elevation/country for every referenced ICAO; tz via tz-lookup with provisional-Etc-only replacement (operator tz overrides survive); unmatched ICAOs printed. `scripts/lib/csv.ts` (RFC-4180, dep-free) + `scripts/lib/script-db.ts` (postgres-js over DATABASE_URL).
+  - Unparseable-event gap closed: known-city hard-parse-failures are stored FLAGGED (ladder_ok=false, zero buckets) + alerted; unknown-city failures alert-only (FK-unsatisfiable, documented).
+  - `scripts/prove-discovery-live.ts`: the P2 DoD evidence harness — live Gamma + live OurAirports into PGlite. **PASS: 49 cities, 45 mapped stations with coords, 46/46 ICAOs, 4 zombies filtered live.** §15 discover-markets + seed-stations boxes ticked. Suite: 366 green.
 - **P2 progress (iteration 12, 2026-06-10):**
   - Migration 0012_discovery_rpcs.sql: get_city_state, upsert_city (xmax-insert detection, new ⇒ betting disabled), ensure_station (provisional lat/lon-null rows), swap_station (ADR-03 unchanged/new/changed temporal swap + suspend), upsert_event (poly-id upsert + recreated-event adoption via unique_violation), upsert_bucket, close_stale_events. stations.lat/lon made nullable in 0002 (provisional rows per §6.13 override §7.2's not-null — pre-deploy edit, no hosted DB exists).
   - `core/risk.ts` += regionForCity (documented country+offset heuristic for new-city cluster assignment — §6.13 gap) and etcZoneForOffset (provisional IANA zones, Etc/GMT sign-inverted). `functions/discover-markets/handler.ts` (full §6.13 flow incl. first-seen seedDistribution hook for §6.16/C7) + index.ts Deno entry.
@@ -55,7 +61,7 @@
 
 ## Next Task
 
-**P2 continues — seed-stations script (§6.22) + LIVE discovery proof:** (a) scripts/seed-stations.ts — OurAirports CSV → stations coordinates for all discovered ICAOs (or prints the manual list); needs scripts/lib plumbing (pg via PGlite? No — scripts talk to the real DB via DATABASE_URL; for now make the script's transform pure + tested, DB write via the same DbPort pattern). (b) The §14 P2 DoD "live run discovers all ~49 cities" can be proven WITHOUT hosted Supabase: a local harness that runs discoverMarkets against the LIVE Gamma API with a PGlite DB — also satisfies live pagination + zombie behavior. (c) Remaining §6.13 gap: hard-unparseable events are alerted but not stored flagged (only ladder-problem events are stored) — close it or document. Then gradeEvent (§6.12). Edge Function index.ts files need `deno check` — Deno not installed → Operator TODO.
+**P3 begins — gradeEvent first (§6.12):** the single grading path both fetch-actuals and the sweep call. Likely a 0013 SQL RPC family for the race-critical parts (winner-claim CAS on market_events.winning_bucket_idx, ledger-unique pnl writes, scored_for_leads append guarded by `NOT (scored_for_leads @> ARRAY[$lead])`) + a TS orchestrator (winningBucket, takerFeeTotal, brierScore, ADR-16 cutoff row selection via localDayWindow, Polymarket-winner cross-check → CRITICAL on mismatch, RESOLUTION INFO alert, evaluateBreakers). §15 demands: idempotent re-run no-op; C7 timeline tests with an AMERICAS city (NYC created 02:01 UTC) AND Wellington; W18 quiet-market one-row-carries-both-leads; the concurrent-graders race (CAS admits exactly one). Then snapshot-forecasts + snapshot-ensembles (§6.14), fetch-actuals + metar-nowcast (§6.15). Edge Function index.ts files need `deno check` — Deno not installed → Operator TODO.
 
 ## Blockers
 

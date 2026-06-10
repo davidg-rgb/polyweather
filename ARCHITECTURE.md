@@ -2372,7 +2372,7 @@ Wallet setup per GO-LIVE-CHECKLIST, POLY_PRIVATE_KEY in Edge secrets, goLiveGate
 - [ ] concurrent gradeEvent invocations (fetch-actuals + sweep) — winner-claim CAS admits exactly one grader; no double ledger entries, no double scored_for_leads appends, no double alerts (race test)
 
 ### Jobs (§6.13–6.19) — each: registered in pg_cron (0009), idempotent, stats recorded
-- [ ] discover-markets — 2-page pagination; zombie filter; new-city flow; station-change flow (suspend+alert); unparseable event stored flagged
+- [x] discover-markets — 2-page pagination; zombie filter; new-city flow; station-change flow (suspend+alert); unparseable event stored flagged
 - [ ] snapshot-forecasts — ≥95% cell coverage on live run; gap-fill repairs deleted day; MODEL_DEGRADED after 3 null runs
 - [ ] snapshot-ensembles — member arrays stored; ≥20-member events only feed house_ensemble
 - [ ] fetch-actuals — local-day-over gating; provisional→finalized transition; key-refresh path; divergence flags; ERA5T column; triggers gradeEvent
@@ -2447,7 +2447,7 @@ Wallet setup per GO-LIVE-CHECKLIST, POLY_PRIVATE_KEY in Edge secrets, goLiveGate
 - [ ] Bet audit JSON fully visible on /events/[slug] (spec §15: derive stake from stored values)
 
 ### Scripts (§6.22)
-- [ ] seed-stations covers all discovered ICAOs or prints the manual list
+- [x] seed-stations covers all discovered ICAOs or prints the manual list
 - [ ] backfill-forecasts honors --budget, requestWeight accounting, resumability
 - [ ] backfill-actuals WU + IEM-fallback provenance recorded
 - [ ] backfill-market-history reconstructs ≥1 resolved event's consensus + winner correctly vs fixture

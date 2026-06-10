@@ -72,8 +72,17 @@ describe('discover-markets (§6.13)', () => {
     expect(stats['eventsNew']).toBe(live);
     expect(stats['bucketsUpserted']).toBe(live * 11);
 
+    // §6.13: unparseable events with a KNOWN city are stored FLAGGED (ladder_ok
+    // false, zero buckets); unknown-city failures are alert-only.
+    const flaggedNoBuckets = await rows<{ n: number }>(
+      db,
+      `select count(*)::int as n from market_events me
+       where me.ladder_ok = false
+         and not exists (select 1 from market_buckets b where b.event_id = me.id)`,
+    );
     const evCount = await rows<{ n: number }>(db, `select count(*)::int as n from market_events`);
-    expect(evCount[0]!.n).toBe(live);
+    expect(evCount[0]!.n).toBe(live + flaggedNoBuckets[0]!.n);
+    expect(flaggedNoBuckets[0]!.n).toBeLessThanOrEqual(stats['parseFailures'] as number);
     const bkCount = await rows<{ n: number }>(db, `select count(*)::int as n from market_buckets`);
     expect(bkCount[0]!.n).toBe(live * 11);
   });
