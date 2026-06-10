@@ -140,6 +140,13 @@ export class DistributionError extends DataIntegrityError {
   }
 }
 
+/** Unknown IANA timezone — raised by every core/time entry point (§6.1). */
+export class InvalidTimezoneError extends DataIntegrityError {
+  constructor(message: string, details?: ErrorDetails) {
+    super('ERR_INVALID_TZ', message, details);
+  }
+}
+
 /** Execution-path failures (§6.20/§6.20a). */
 export class ExecutionError extends AppError {
   constructor(code: string, message: string, details?: ErrorDetails, httpStatus?: number) {

@@ -5,11 +5,13 @@
 
 ## Active Phase
 
-**P0 — Scaffold** (§14): monorepo, migrations 0001–0010, .env.example, README.
-Code-complete this iteration; two DoD items are operator-environment-gated (see Blockers).
+**P1 — Core domain: parsing & math** (§14). P0 is code-complete (two DoD items operator-environment-gated, see Blockers).
 
 ## Completed
 
+- **P1 progress (iteration 2, 2026-06-10):**
+  - `core/types.ts` (Unit, BucketDef, EdgeConfig), `core/time.ts` (§6.1 — TZDate-backed local-day windows, leads, DST-safe), `core/units.ts` (§6.2 — WU rounding replica incl. −0 guard, A-11 negative-half assumption documented), `core/fees.ts` (§6.4 — fee curve + minEdgeRequired). `InvalidTimezoneError` added to the §11.1 taxonomy (mandated by §6.1, absent from the §11.1 list).
+  - 39 new unit tests: fixture-anchored windows (Seoul/NYC gameStartTime), 4 DST transition days (Chicago + London, 23h/25h), boundary-instant classification, leadDays incl. −1 collapse, fall-back repeated wall-hour, fee worked examples + symmetry + monotonicity. §15: core/time 6/6, core/units 4/4, core/fees 3/4 ticked (fee_rate-from-DB invariant awaits P5 consumers).
 - **P0 (iteration 1, 2026-06-10):**
   - Monorepo: pnpm workspaces, strict shared tsconfig, vitest workspace (projects: core, db), GitHub Actions CI (typecheck + test).
   - `packages/core`: §11.1 error taxonomy (`errors.ts`) + unit tests.
@@ -19,7 +21,7 @@ Code-complete this iteration; two DoD items are operator-environment-gated (see 
 
 ## Next Task
 
-**P1 — Core domain: parsing & math (§14).** Order: `core/time` (§6.1) → `core/units` (§6.2) → `core/buckets` (§6.3) → `core/fees` (§6.4) → distributions (§6.5) → calibration (§6.6) → edge/kelly/risk (§6.7–6.8) → polymarket (§6.9) → weather (§6.10) → config (§6.11). Fixtures from `research/*.json` are ground truth; every §15 core checklist item; DST window tests; property tests for jointKellyStakes; ≥95% line coverage on core.
+**P1 continues — `core/buckets` (§6.3):** parseBucketLabel with the full observed-label table (every label in every research gamma fixture enumerated in one table-driven test — incl. bare single-degree °C/°F, NBSP/EN-dash, negatives, W1), bucketRange ±0.5 continuity, validateLadder on all 4 research event fixtures + synthetic failures, winningBucket + NYC resolved-fixture winner check. Then: distributions (§6.5) → calibration (§6.6) → edge/kelly/risk (§6.7–6.8) → polymarket (§6.9) → weather (§6.10) → config (§6.11). End of P1: coverage gate ≥95% on core.
 
 ## Blockers
 

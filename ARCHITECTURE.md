@@ -2279,18 +2279,18 @@ Wallet setup per GO-LIVE-CHECKLIST, POLY_PRIVATE_KEY in Edge secrets, goLiveGate
 ## 15. Build Verification Checklist
 
 ### Module: core/time (§6.1)
-- [ ] `localDayWindow(tz, dateISO)` — correct UTC bounds for Asia/Seoul, Europe/London, America/Chicago fixtures
-- [ ] `localDayWindow` — DST spring-forward (23h day) and fall-back (25h day) windows correct
-- [ ] `localDateAt(tz, instant)` — boundary instants (23:59:59.9, 00:00:00) classify correctly
-- [ ] `leadDays(now, target, tz)` — 0 on target day local, −1 after local midnight, matches gameStartTime fixtures
-- [ ] `isLocalDayOver` / `localHour` — consistent with localDayWindow
-- [ ] InvalidTimezoneError raised on unknown tz everywhere
+- [x] `localDayWindow(tz, dateISO)` — correct UTC bounds for Asia/Seoul, Europe/London, America/Chicago fixtures
+- [x] `localDayWindow` — DST spring-forward (23h day) and fall-back (25h day) windows correct
+- [x] `localDateAt(tz, instant)` — boundary instants (23:59:59.9, 00:00:00) classify correctly
+- [x] `leadDays(now, target, tz)` — 0 on target day local, −1 after local midnight, matches gameStartTime fixtures
+- [x] `isLocalDayOver` / `localHour` — consistent with localDayWindow
+- [x] InvalidTimezoneError raised on unknown tz everywhere
 
 ### Module: core/units (§6.2)
-- [ ] `cToF`/`fToC` — exact round-trip on integers
-- [ ] `wuRound(30.6) = 31`; `wuRound(23.4) = 23`; half cases documented + tested
-- [ ] `metarMaxToNative(30.6, 'F') = 87` (live-verified KORD case)
-- [ ] `toNative` — °F conversion before bucketization (no double rounding)
+- [x] `cToF`/`fToC` — exact round-trip on integers
+- [x] `wuRound(30.6) = 31`; `wuRound(23.4) = 23`; half cases documented + tested
+- [x] `metarMaxToNative(30.6, 'F') = 87` (live-verified KORD case)
+- [x] `toNative` — °F conversion before bucketization (no double rounding)
 
 ### Module: core/buckets (§6.3)
 - [ ] `parseBucketLabel` — '94-95°F', '87°F or below', '19°C or higher', **bare single-degree '15°C'/'94°F' (9 of 11 buckets on intl fixtures — W1)**, negative degrees, NBSP/EN-dash variants, every label in every research fixture enumerated in one table-driven test
@@ -2301,9 +2301,9 @@ Wallet setup per GO-LIVE-CHECKLIST, POLY_PRIVATE_KEY in Edge secrets, goLiveGate
 - [ ] NYC resolved fixture: winner '80-81°F' matches Polymarket outcomePrices
 
 ### Module: core/fees (§6.4)
-- [ ] `takerFeePerShare(0.34, 0.05)` = 0.01122 (docs worked example: 100 sh → $1.12)
-- [ ] `takerFeeTotal` symmetric at p and 1−p
-- [ ] `minEdgeRequired` — monotone components; uses observed spread/2 when > buffer floor
+- [x] `takerFeePerShare(0.34, 0.05)` = 0.01122 (docs worked example: 100 sh → $1.12)
+- [x] `takerFeeTotal` symmetric at p and 1−p
+- [x] `minEdgeRequired` — monotone components; uses observed spread/2 when > buffer floor
 - [ ] feeRate read from market_buckets.fee_rate (no hardcoded 0.05 outside config/defaults)
 
 ### Module: core/distributions (§6.5)
