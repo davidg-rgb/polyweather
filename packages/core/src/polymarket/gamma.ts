@@ -5,6 +5,7 @@
  * assume; every quirk here was observed live (W2 station URLs, C6 Seoul
  * gameStartTime, the yearless-slug 2025 trap, Jinan zombies).
  */
+import { z } from 'zod';
 import { parseBucketLabel, bucketRange, validateLadder } from '../buckets.ts';
 import { GammaShapeError } from '../errors.ts';
 import { localDayWindow } from '../time.ts';
@@ -280,4 +281,57 @@ export function isZombieEvent(ev: RawGammaEvent, todayUtcISO: string): boolean {
   const noneAccepting = markets.every((m) => m.acceptingOrders == null || m.acceptingOrders === false);
   const allDegenerate = markets.every((m) => (m.bestBid ?? 0) === 0 && (m.bestAsk ?? 1) === 1);
   return noneAccepting && allDegenerate;
+}
+
+// --- W15 sampled deep validation ---------------------------------------------
+
+const RawGammaMarketSchema = z
+  .object({
+    id: z.string(),
+    conditionId: z.string(),
+    question: z.string().optional(),
+    groupItemTitle: z.string().optional(),
+    outcomes: z.string().optional(),
+    outcomePrices: z.string().optional(),
+    clobTokenIds: z.string().optional(),
+    bestBid: z.number().nullable().optional(),
+    bestAsk: z.number().nullable().optional(),
+    spread: z.number().nullable().optional(),
+    orderPriceMinTickSize: z.number().optional(),
+    orderMinSize: z.number().optional(),
+    volume24hr: z.number().optional(),
+    acceptingOrders: z.boolean().nullable().optional(),
+    gameStartTime: z.string().nullable().optional(),
+    resolutionSource: z.string().optional(),
+    feeSchedule: z.object({ rate: z.number() }).nullable().optional(),
+  })
+  .passthrough();
+
+const RawGammaEventSchema = z
+  .object({
+    id: z.string(),
+    slug: z.string(),
+    title: z.string(),
+    endDate: z.string().optional(),
+    negRiskMarketID: z.string().optional(),
+    volume24hr: z.number().optional(),
+    liquidity: z.number().optional(),
+    resolutionSource: z.string().optional(),
+    gameStartTime: z.string().nullable().optional(),
+    markets: z.array(RawGammaMarketSchema),
+  })
+  .passthrough();
+
+/**
+ * FULL zod validation of one raw Gamma event — the W15 per-run sample (deep
+ * validation of every event in a ~7 MB payload would blow the 2s CPU budget;
+ * cheap structural guards cover the rest). GammaShapeError on drift.
+ */
+export function validateRawGammaEvent(ev: unknown): void {
+  const r = RawGammaEventSchema.safeParse(ev);
+  if (!r.success) {
+    throw new GammaShapeError('sampled event failed deep shape validation (upstream drift?)', {
+      issues: r.error.issues.slice(0, 10),
+    });
+  }
 }

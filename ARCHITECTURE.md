@@ -2331,7 +2331,7 @@ Wallet setup per GO-LIVE-CHECKLIST, POLY_PRIVATE_KEY in Edge secrets, goLiveGate
 - [x] `applyLiquidityFilters` — each veto (volume ≥ $2k, spread > maxSpread, t-to-close, unverified, halt) individually tested
 - [x] `jointKellyStakes` — property tests scoped to the q > p candidate set (ADR-08 policy): Σf ≤ 1; inclusion ⇔ q/p > c within the set; greedy-excluded candidates have gradient ≤ 0; single-bucket reduces to (q−p)/(1−p); all-zero when nothing passes; KellyDomainError on true domain violations only; p′ ≥ 1 bucket excluded without throwing (W20)
 - [x] `jointKellyStakes` integration — fed fee-adjusted effective prices (p' = p + fee(p) + slippage), verified stakes shrink vs raw prices (W4)
-- [ ] `applyKellyFraction` — audit object shows full vs fractional stakes side by side
+- [x] `applyKellyFraction` — audit object shows full vs fractional stakes side by side (bets.audit kellyRaw/kellyFrac, poll-markets test)
 - [x] `applyRiskCaps` — cap order per-trade→event→cluster→daily; share flooring respects orderMinSize; capAudit strings record every clamp; sub-$5 stakes dropped
 - [x] `evaluateBreakers` — each rule fires at exactly its threshold (8 losses, −5% day, 25% DD, Brier 0.30, staleness)
 - [x] `exposureSummary`/`clusterOf` — aggregates match seeded fixtures
@@ -2378,7 +2378,7 @@ Wallet setup per GO-LIVE-CHECKLIST, POLY_PRIVATE_KEY in Edge secrets, goLiveGate
 - [ ] fetch-actuals — local-day-over gating; provisional→finalized transition; key-refresh path; divergence flags; ERA5T column; triggers gradeEvent
 - [ ] metar-nowcast — daytime station selection; batched call; intraday_max monotone; in-process nowcast rebuild
 - [ ] build-distributions — champion + challengers written; inputs_hash dedupe; freshness skip; σ floor; °F conversion path
-- [ ] poll-markets — **job_locks lease claim/release (C8: overlap exits 'overlapped'; expired lease reclaimable; NO pg advisory session locks anywhere in job code)**; pagination until short page (+ >4-pages WARN); delta-dedupe write rule with unique-key backstop; adaptive heartbeat (30 min candidates / 2 h others); consensus rows; screen-then-book economy (≤15 books/cycle); **fee-adjusted Kelly inputs pre-filtered to q > p′ (W20: p′ ≥ 1 nowcast bucket excluded without killing the event)**; recommendation upsert + refresh + 20%-stake-change re-notify; CAS expiry path (live mode: cancel via execute-bet); hourly edge_evaluations persist; zod-sampling CPU guard with cpuMs stat
+- [x] poll-markets — **job_locks lease claim/release (C8: overlap exits 'overlapped'; expired lease reclaimable; NO pg advisory session locks anywhere in job code)**; pagination until short page (+ >4-pages WARN); delta-dedupe write rule with unique-key backstop; adaptive heartbeat (30 min candidates / 2 h others); consensus rows; screen-then-book economy (≤15 books/cycle); **fee-adjusted Kelly inputs pre-filtered to q > p′ (W20: p′ ≥ 1 nowcast bucket excluded without killing the event)**; recommendation upsert + refresh + 20%-stake-change re-notify; CAS expiry path (live mode: cancel via execute-bet); hourly edge_evaluations persist; zod-sampling CPU guard with cpuMs stat
 - [x] run-calibration — residual join correctness (one fixture day hand-checked); stats keyed (station, model, lead, **slot**) — 10Z/22Z never pooled (W3); **backfill/gapfill residuals seed BOTH slots ×1.15 σ (W19)**; scores computed on time-matched rows only, **gate stats restricted to (event, lead) pairs where both sources have scored rows (C7)**; pooled bootstrap p-value persisted to the zero-UUID row; stats_version increments; window tags 30d/60d/90d; weekly nowcast_lift rebuild; drift gate halts; promotion report
 - [ ] grade-bets sweep — catches artificially un-graded event; market-resolved-but-no-truth CRITICAL; **live-mode reconciliation diff vs mocked data-api positions raises POSITION_DRIFT (F-033)**
 - [ ] daily-digest — renders all sections from seeded data incl. edge-decile table; monthly withdrawal reminder fires in live mode (F-036)
@@ -2413,16 +2413,16 @@ Wallet setup per GO-LIVE-CHECKLIST, POLY_PRIVATE_KEY in Edge secrets, goLiveGate
 - [x] config seeded with §6.11 defaults; models seeded incl. disabled traps (kma, ecmwf_ifs04, gfs025)
 - [x] Downsample cron enforces EVERY retention rule: market_snapshots tiers (7d/30d/180d), forecast_snapshots 90d lead-0–2@10Z keep, bucket_probabilities resolution+30d scored-rows keep, edge_evaluations 30d, intraday_max 14d, job_runs/alerts_log 90d (fixture rows aged artificially)
 - [x] model_stats PK includes snapshot_slot; queries never pool slots (W3)
-- [ ] job_locks lease semantics: claim-by-CAS, expiry reclaim, release-on-completion (C8)
+- [x] job_locks lease semantics: claim-by-CAS, expiry reclaim, release-on-completion (C8)
 - [x] job_runs.attempt increments on CAS takeover; unique (job, period_key) never violated (W16)
-- [ ] market_snapshots unique (bucket_id, captured_at); overlapping-poll protection via the job_locks lease (W10/C8)
+- [x] market_snapshots unique (bucket_id, captured_at); overlapping-poll protection via the job_locks lease (W10/C8)
 - [x] bucket_probabilities.scored_for_leads[] appended only by gradeEvent; per (event, source, lead) exactly one row carries that lead
 - [x] calibration_scores.window_tag domain incl. 'backtest'/'nowcast'; zero-UUID pooled row carries bootstrap_p
 - [x] nowcast_lift populated by backfill-actuals; weekly refresh by run-calibration; missing row ⇒ truncation-only nowcast
 - [ ] edge_decile_stats view matches hand-computed deciles on seeded bets (W-2)
 - [x] bankroll_balance view sum equals manual ledger arithmetic; no stored running-balance column exists (W10)
 - [x] model_stats_history rows written on every stats_version increment
-- [ ] edge_evaluations unique (event, bucket, hour); written hourly; queryable from /events page (F-038)
+- [x] edge_evaluations unique (event, bucket, hour); written hourly; queryable from /events page (F-038) — /events page rendering lands in P6
 - [x] pg_cron job commands read CRON_SECRET from Vault — `select command from cron.job` contains no literal secret (W11)
 - [ ] tmax columns: °F city observations carry units=e integers (spot-check vs WU page)
 

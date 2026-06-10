@@ -62,7 +62,7 @@ describe('migrations 0001–0010', () => {
       '0007_ops.sql', '0008_rls.sql', '0009_cron.sql', '0010_seed.sql',
       '0011_job_rpcs.sql', '0012_discovery_rpcs.sql', '0013_grading_rpcs.sql',
       '0014_snapshot_rpcs.sql', '0015_truth_rpcs.sql', '0016_distribution_rpcs.sql',
-      '0017_calibration_rpcs.sql',
+      '0017_calibration_rpcs.sql', '0018_market_rpcs.sql',
     ]);
   });
 });
