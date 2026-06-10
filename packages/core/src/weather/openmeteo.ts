@@ -53,6 +53,11 @@ const DailySchema = z.object({
  * Read daily.time[] × temperature_2m_max_{model} suffixed arrays; null entries
  * skipped (per-model horizon). Per-model absence tolerated; ALL models absent
  * → OpenMeteoShapeError (upstream shape change).
+ *
+ * SINGLE-MODEL CALLS DROP THE SUFFIX (live-verified 2026-06-11, fixture
+ * openmeteo_historical_forecast_daily_single_model_RKSI.json): when exactly
+ * one model was requested and its suffixed key is absent, the bare
+ * `temperature_2m_max` series is that model's data.
  */
 export function parseMultiModelDaily(
   json: unknown,
@@ -66,8 +71,10 @@ export function parseMultiModelDaily(
   const rows: { model: string; targetDate: string; tmaxC: number }[] = [];
   let presentModels = 0;
   for (const model of models) {
-    const series = daily[`temperature_2m_max_${model}`];
-    if (!Array.isArray(series)) continue; // tolerated — logged by the caller
+    const raw = daily[`temperature_2m_max_${model}`] ??
+      (models.length === 1 ? daily['temperature_2m_max'] : undefined); // unsuffixed single-model shape
+    if (!Array.isArray(raw)) continue; // tolerated — logged by the caller
+    const series: unknown[] = raw;
     presentModels++;
     daily.time.forEach((date, i) => {
       const v = series[i];
@@ -114,6 +121,11 @@ const HourlySchema = z.object({
  * sets timezone=auto, so hourly.time[] is already station-local — the date
  * prefix IS the local day (equivalent to localDayWindow bucketing; the tz
  * param documents the contract and is validated against nothing else here).
+ *
+ * SINGLE-MODEL CALLS DROP THE `_{model}` SUFFIX (live-verified 2026-06-11,
+ * fixture openmeteo_prevruns_hourly_single_model_RKSI.json) — when exactly one
+ * model was requested and its suffixed key is absent, the bare per-lead series
+ * is that model's data.
  */
 export function parsePreviousRunsHourly(
   json: unknown,
@@ -139,8 +151,12 @@ export function parsePreviousRunsHourly(
   for (const model of models) {
     for (const lead of leads) {
       const key = lead === 0 ? `temperature_2m_${model}` : `temperature_2m_previous_day${lead}_${model}`;
-      const series = hourly[key];
-      if (!Array.isArray(series)) continue;
+      const raw = hourly[key] ??
+        (models.length === 1
+          ? hourly[lead === 0 ? 'temperature_2m' : `temperature_2m_previous_day${lead}`]
+          : undefined);
+      if (!Array.isArray(raw)) continue;
+      const series: unknown[] = raw;
       for (const [day, idxs] of dayIndexes) {
         if (idxs.length < 20) continue; // partial local day — never grade a truncated max
         const vals = idxs

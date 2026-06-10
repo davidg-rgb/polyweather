@@ -143,6 +143,34 @@ describe('parsePreviousRunsHourly (§6.10)', () => {
   });
 });
 
+describe('single-model unsuffixed payloads (live-verified 2026-06-11 — the backfill shape)', () => {
+  it('previous-runs: one model ⇒ bare per-lead keys parse as that model', () => {
+    const json = fixture('openmeteo_prevruns_hourly_single_model_RKSI.json');
+    const rows = parsePreviousRunsHourly(json, ['ecmwf_ifs025'], [1, 2], 'Asia/Seoul');
+    expect(rows.length).toBe(4); // 1 model × 2 leads × 2 full local days
+    expect(rows.every((r) => r.model === 'ecmwf_ifs025')).toBe(true);
+    const pick = (lead: number, day: string) => rows.find((r) => r.leadDays === lead && r.targetDate === day);
+    expect(pick(1, '2026-06-01')?.tmaxC).toBe(22.4);
+    expect(pick(1, '2026-06-02')?.tmaxC).toBe(27.2);
+    expect(pick(2, '2026-06-01')?.tmaxC).toBe(23.1);
+    expect(pick(2, '2026-06-02')?.tmaxC).toBe(28);
+  });
+
+  it('historical-forecast: one model ⇒ the bare daily series is that model', () => {
+    const json = fixture('openmeteo_historical_forecast_daily_single_model_RKSI.json');
+    expect(parseMultiModelDaily(json, ['ecmwf_ifs025'])).toEqual([
+      { model: 'ecmwf_ifs025', targetDate: '2026-06-01', tmaxC: 23.0 },
+      { model: 'ecmwf_ifs025', targetDate: '2026-06-02', tmaxC: 28.2 },
+      { model: 'ecmwf_ifs025', targetDate: '2026-06-03', tmaxC: 25.7 },
+    ]);
+  });
+
+  it('multi-model requests NEVER fall back to bare keys (no misattribution)', () => {
+    const single = fixture('openmeteo_prevruns_hourly_single_model_RKSI.json');
+    expect(parsePreviousRunsHourly(single, ['ecmwf_ifs025', 'gfs_seamless'], [1], 'Asia/Seoul')).toEqual([]);
+  });
+});
+
 describe('parseEnsembleDaily (§6.10, I2)', () => {
   it('fixture-verified member-suffix scheme: control = member 0 + 50 perturbed members', () => {
     const rows = parseEnsembleDaily(fixture('openmeteo_ensemble_daily_max_RKSI.json'));
