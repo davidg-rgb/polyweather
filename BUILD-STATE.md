@@ -11,6 +11,10 @@
 
 ## Completed
 
+- **P3 progress (iteration 14, 2026-06-10):**
+  - Migration 0013_grading_rpcs.sql: get_grading_context (one-round-trip jsonb), claim_event_winner (THE winner CAS), settle_bets (ADR-09 transitions, pnl=(win?sh×(1−p):−sh×p)−fee, single payout ledger entry via partial-unique ON CONFLICT, recommended→expired), score_distributions (ADR-16 last-≤-cutoff nowcast=false selection per (source,lead∈{1,0}), guarded scored_for_leads append, in-SQL Brier Σq²−2q_w+1, nowcast-row Brier fill), flag_grading_mismatch, city_loss_streaks (newest-first streak walk per city|lead from audit.leadDays), apply_halt (config + system audit row).
+  - `_shared/grading.ts`: the §6.12 orchestrator — context → winningBucket → CAS → settle → Polymarket cross-check (CRITICAL on mismatch) → ADR-16 cutoffs via localDayWindow (cutoff = startUtc − lead×24h) → score → RESOLUTION INFO (our q vs market p) → consecutive-loss breaker → halts.
+  - 8 PGlite tests: NYC C7 timeline (02:15 build → lead-1; 22:50 → lead-0; 10:50 superseded), Wellington UTC+12 timeline, W18 one-consensus-row-carries-both-leads, hand-computed Briers (0.42/0.8/0.08 incl. nowcast), settlement math (27.40/−5.25), single payout, idempotent re-run + direct CAS predicate, mismatch flag + CRITICAL, 8-loss streak → halt:city_lead:denver:1 + audit + WARN. §15 gradeEvent + concurrent-graders + scored_for_leads boxes ticked (PGlite single-session caveat as W16). Suite: 374 green.
 - **P2 COMPLETE (iteration 13, 2026-06-10):**
   - `scripts/seed-stations.ts` (§6.22): OurAirports CSV (cached) → coordinates/name/elevation/country for every referenced ICAO; tz via tz-lookup with provisional-Etc-only replacement (operator tz overrides survive); unmatched ICAOs printed. `scripts/lib/csv.ts` (RFC-4180, dep-free) + `scripts/lib/script-db.ts` (postgres-js over DATABASE_URL).
   - Unparseable-event gap closed: known-city hard-parse-failures are stored FLAGGED (ladder_ok=false, zero buckets) + alerted; unknown-city failures alert-only (FK-unsatisfiable, documented).
@@ -61,7 +65,7 @@
 
 ## Next Task
 
-**P3 begins — gradeEvent first (§6.12):** the single grading path both fetch-actuals and the sweep call. Likely a 0013 SQL RPC family for the race-critical parts (winner-claim CAS on market_events.winning_bucket_idx, ledger-unique pnl writes, scored_for_leads append guarded by `NOT (scored_for_leads @> ARRAY[$lead])`) + a TS orchestrator (winningBucket, takerFeeTotal, brierScore, ADR-16 cutoff row selection via localDayWindow, Polymarket-winner cross-check → CRITICAL on mismatch, RESOLUTION INFO alert, evaluateBreakers). §15 demands: idempotent re-run no-op; C7 timeline tests with an AMERICAS city (NYC created 02:01 UTC) AND Wellington; W18 quiet-market one-row-carries-both-leads; the concurrent-graders race (CAS admits exactly one). Then snapshot-forecasts + snapshot-ensembles (§6.14), fetch-actuals + metar-nowcast (§6.15). Edge Function index.ts files need `deno check` — Deno not installed → Operator TODO.
+**P3 continues — snapshot-forecasts + snapshot-ensembles (§6.14):** read the §6.14 spec (lines ~1075–1100). snapshot-forecasts: one multi-model Forecast API call per station (enabled models), upsert forecast_snapshots at the 10Z/22Z slot, gap-fill via previous-runs, MODEL_DEGRADED after 3 null runs; snapshot-ensembles: per-model ensemble calls (ecmwf_ifs025 + gfs05), member arrays into ensemble_snapshots. Needs a 0014 RPC family or COPY-style batch upserts (cell volume: ~50 stations × 9 models × 16 leads/run). Then fetch-actuals + metar-nowcast (§6.15) wiring gradeEvent. The P3 48h-live-operation DoD is hosted-gated (Operator TODO); local live smoke per job lands with each. Edge Function index.ts files need `deno check` — Deno not installed → Operator TODO.
 
 ## Blockers
 

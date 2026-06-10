@@ -2368,8 +2368,8 @@ Wallet setup per GO-LIVE-CHECKLIST, POLY_PRIVATE_KEY in Edge secrets, goLiveGate
 - [x] `runJob` — 401 without secret; 409 only when existing run is ok or young-running; **stale 'running' row taken over by CAS (attempt+1, started_at predicate — W16: two concurrent takeovers → exactly one proceeds)**; 202 fast path; failure → job_runs 'failed' + Slack CRITICAL
 - [x] `fetchJson` — retries 429/5xx with backoff; UpstreamError carries source+status; timeout enforced
 - [ ] `notifySlack` — sent=false insert → 2xx flips sent=true; **failed post does NOT consume the dedupe key**; resend sweep delivers it; Slack outage never throws; BET_REC delivery recorded on the bet
-- [ ] `gradeEvent` — winner written once (idempotent re-run no-op); pnl math incl. fees; ledger unique per bet; Polymarket-winner mismatch → CRITICAL + flag; **ADR-16 scored-row selection appends to scored_for_leads[] for leads {0,1} — timeline tests use an AMERICAS city (NYC, created 02:01 UTC) and Wellington, not just Seoul (C7); quiet-market case: one row carries both leads (W18)**; RESOLUTION INFO emitted (deduped); streak breaker evaluated
-- [ ] concurrent gradeEvent invocations (fetch-actuals + sweep) — winner-claim CAS admits exactly one grader; no double ledger entries, no double scored_for_leads appends, no double alerts (race test)
+- [x] `gradeEvent` — winner written once (idempotent re-run no-op); pnl math incl. fees; ledger unique per bet; Polymarket-winner mismatch → CRITICAL + flag; **ADR-16 scored-row selection appends to scored_for_leads[] for leads {0,1} — timeline tests use an AMERICAS city (NYC, created 02:01 UTC) and Wellington, not just Seoul (C7); quiet-market case: one row carries both leads (W18)**; RESOLUTION INFO emitted (deduped); streak breaker evaluated
+- [x] concurrent gradeEvent invocations (fetch-actuals + sweep) — winner-claim CAS admits exactly one grader; no double ledger entries, no double scored_for_leads appends, no double alerts (race test)
 
 ### Jobs (§6.13–6.19) — each: registered in pg_cron (0009), idempotent, stats recorded
 - [x] discover-markets — 2-page pagination; zombie filter; new-city flow; station-change flow (suspend+alert); unparseable event stored flagged
@@ -2416,7 +2416,7 @@ Wallet setup per GO-LIVE-CHECKLIST, POLY_PRIVATE_KEY in Edge secrets, goLiveGate
 - [ ] job_locks lease semantics: claim-by-CAS, expiry reclaim, release-on-completion (C8)
 - [x] job_runs.attempt increments on CAS takeover; unique (job, period_key) never violated (W16)
 - [ ] market_snapshots unique (bucket_id, captured_at); overlapping-poll protection via the job_locks lease (W10/C8)
-- [ ] bucket_probabilities.scored_for_leads[] appended only by gradeEvent; per (event, source, lead) exactly one row carries that lead
+- [x] bucket_probabilities.scored_for_leads[] appended only by gradeEvent; per (event, source, lead) exactly one row carries that lead
 - [ ] calibration_scores.window_tag domain incl. 'backtest'/'nowcast'; zero-UUID pooled row carries bootstrap_p
 - [ ] nowcast_lift populated by backfill-actuals; weekly refresh by run-calibration; missing row ⇒ truncation-only nowcast
 - [ ] edge_decile_stats view matches hand-computed deciles on seeded bets (W-2)

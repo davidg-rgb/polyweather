@@ -25,6 +25,13 @@ const FN_ARGS: Record<string, string[]> = {
     'p_condition_id', 'p_token_yes', 'p_token_no', 'p_tick', 'p_min_order', 'p_fee_rate',
   ],
   close_stale_events: ['p_seen_poly_ids'],
+  get_grading_context: ['p_event_id'],
+  claim_event_winner: ['p_event_id', 'p_winner_idx'],
+  flag_grading_mismatch: ['p_event_id'],
+  settle_bets: ['p_event_id', 'p_winner_idx', 'p_resolution_native'],
+  score_distributions: ['p_event_id', 'p_winner_idx', 'p_cutoff_lead0', 'p_cutoff_lead1'],
+  city_loss_streaks: [],
+  apply_halt: ['p_scope', 'p_reason'],
 };
 
 export function pglitePort(db: PGlite): DbPort {
