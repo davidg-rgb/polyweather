@@ -2307,13 +2307,13 @@ Wallet setup per GO-LIVE-CHECKLIST, POLY_PRIVATE_KEY in Edge secrets, goLiveGate
 - [ ] feeRate read from market_buckets.fee_rate (no hardcoded 0.05 outside config/defaults)
 
 ### Module: core/distributions (§6.5)
-- [ ] `normCdf` — |error| < 1e-7 against reference values
-- [ ] `gaussianBucketProbs` — Σ=1±1e-9; mass shifts with μ; DistributionError at σ ≤ 0.2
-- [ ] `gaussianBucketProbs` — °F ladder (2° buckets) and °C ladder (1° buckets) both correct
-- [ ] `ensembleStats` — weighted mean/std; zero-weight models excluded
-- [ ] `dressedEnsembleProbs` — ≥20-member guard; reduces to gaussian for identical members
-- [ ] `impliedDistribution` — normalizes; null when >2 mids missing; clamps degenerate quotes
-- [ ] `applyRunningMaxConstraint` — eliminated buckets zeroed; renormalized; top-tail edge case keeps mass 1; partial-bucket lift applied when table provided
+- [x] `normCdf` — |error| < 1e-7 against reference values
+- [x] `gaussianBucketProbs` — Σ=1±1e-9; mass shifts with μ; DistributionError at σ ≤ 0.2
+- [x] `gaussianBucketProbs` — °F ladder (2° buckets) and °C ladder (1° buckets) both correct
+- [x] `ensembleStats` — weighted mean/std; zero-weight models excluded
+- [x] `dressedEnsembleProbs` — ≥20-member guard; reduces to gaussian for identical members
+- [x] `impliedDistribution` — normalizes; null when >2 mids missing; clamps degenerate quotes
+- [x] `applyRunningMaxConstraint` — eliminated buckets zeroed; renormalized; top-tail edge case keeps mass 1; partial-bucket lift applied when table provided
 
 ### Module: core/calibration (§6.6)
 - [ ] `updateBias` — seeds on null; converges geometrically on constant error

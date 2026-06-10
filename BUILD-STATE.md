@@ -9,6 +9,9 @@
 
 ## Completed
 
+- **P1 progress (iteration 4, 2026-06-10):**
+  - `core/distributions/`: gaussian.ts (A&S 7.1.26 normCdf |ε|<7.5e-8, gaussianBucketProbs with σ≤0.2 floor + shared renormalize), ensemble.ts (ensembleStats weighted/excluding zero-weight, dressedEnsembleProbs ≥20-member + σ guards), consensus.ts (impliedDistribution clamp/floor/null->2-missing), nowcast.ts (applyRunningMaxConstraint: elimination, piecewise-linear lift CDF through (p50,0.5)/(p90,0.9), physical-certainty fallback when prior mass on survivors is 0). ForecastPoint added to types.
+  - 35 tests: Φ vs 9 reference values, both ladder geometries vs direct Φ computation, identical-members reduction to gaussian, degenerate-quote clamping, lift-CDF worked examples incl. step case. §15 distributions 7/7 ticked. Suite: 182 green.
 - **P1 progress (iteration 3, 2026-06-10):**
   - `core/buckets.ts` (§6.3): parseBucketLabel (tails/ranges/bare single-degree W1; NBSP/EN-dash/EM-dash/U+2212 + negative degrees normalized; strict-after-normalization, BucketParseError never guesses, inverted ranges rejected), bucketRange ±0.5 continuity, validateLadder (tails/contiguity/units/order), winningBucket whole-degree semantics + LadderGapError.
   - 53 tests: all 55 labels across the 5 gamma fixtures enumerated + parsed; all 5 fixture ladders validate; synthetic gap/duplicate/mixed-unit/tail failures; NYC resolved winner '80-81°F' cross-checked against outcomePrices (double-encoded JSON). §15 core/buckets 6/6 ticked. Suite: 147 green.
@@ -24,7 +27,7 @@
 
 ## Next Task
 
-**P1 continues — `core/distributions/*` (§6.5):** gaussian.ts (normCdf |err|<1e-7, gaussianBucketProbs Σ=1±1e-9, DistributionError at σ≤0.2, °F 2° + °C 1° ladders), ensemble.ts (ensembleStats weighted, dressedEnsembleProbs ≥20-member guard), consensus.ts (impliedDistribution normalize/null>2-missing/clamp), nowcast.ts (applyRunningMaxConstraint zero+renormalize, top-tail edge, partial-bucket lift). Then: calibration (§6.6) → edge/kelly/risk (§6.7–6.8) → polymarket (§6.9) → weather (§6.10) → config (§6.11). End of P1: coverage gate ≥95% on core.
+**P1 continues — `core/calibration/*` (§6.6):** emos.ts (updateBias seed-on-null + geometric convergence, fitSigma null-under-minN, computeModelWeights inverse-MSE Σ=1, correctPoint as the ONLY bias-subtraction site) + scores.ts (brierScore multi-category, expectedCalibrationError + reliabilityBins, sharpness, pairedBootstrapPValue seeded mulberry32 + n<30→1.0 + the C5 zero-skill Monte Carlo regression: synthetic no-skill data passes the full gate <5% of 1,000 trials). Then: edge/kelly/risk (§6.7–6.8) → polymarket (§6.9) → weather (§6.10) → config (§6.11). End of P1: coverage gate ≥95% on core.
 
 ## Blockers
 

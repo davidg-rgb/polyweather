@@ -17,6 +17,12 @@ export interface BucketDef {
   unit: Unit;
 }
 
+/** A bias-corrected per-model forecast point feeding ensembleStats (§6.5); value in native degrees. */
+export interface ForecastPoint {
+  model: string;
+  value: number;
+}
+
 /** Inputs of minEdgeRequired (§6.4). feeRate comes from market_buckets.fee_rate — never hardcoded. */
 export interface EdgeConfig {
   /** Probability-point buffer for model misspecification (config uncertaintyMargin, default 0.05). */
