@@ -41,8 +41,10 @@ create or replace trigger trg_cities_updated_at
 create table if not exists public.stations (
   icao         varchar(4) primary key,
   name         text,
-  lat          numeric(8,5) not null,
-  lon          numeric(8,5) not null,
+  -- nullable: discover-markets inserts PROVISIONAL rows (tz from the derived
+  -- gameStartTime offset) before seed-stations fills coordinates (§6.13)
+  lat          numeric(8,5),
+  lon          numeric(8,5),
   elevation_m  numeric,
   country_code varchar(2) not null,
   tz           text not null,

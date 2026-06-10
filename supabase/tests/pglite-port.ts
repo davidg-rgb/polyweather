@@ -12,6 +12,19 @@ const FN_ARGS: Record<string, string[]> = {
   complete_job_run: ['p_run_id', 'p_attempt', 'p_status', 'p_stats', 'p_error', 'p_duration_ms'],
   claim_alert: ['p_kind', 'p_severity', 'p_dedupe_key', 'p_title', 'p_body'],
   mark_alert_sent: ['p_alert_id'],
+  get_city_state: ['p_slug'],
+  upsert_city: ['p_slug', 'p_display_name', 'p_country_code', 'p_unit', 'p_tz', 'p_region'],
+  ensure_station: ['p_icao', 'p_country_code', 'p_tz'],
+  swap_station: ['p_city_id', 'p_icao', 'p_wu_cc', 'p_source_url'],
+  upsert_event: [
+    'p_poly_event_id', 'p_slug', 'p_kind', 'p_city_id', 'p_icao', 'p_target_date', 'p_unit',
+    'p_neg_risk_market_id', 'p_accepting', 'p_volume24h', 'p_liquidity', 'p_ladder_ok', 'p_ladder_problems',
+  ],
+  upsert_bucket: [
+    'p_event_id', 'p_bucket_idx', 'p_label', 'p_low', 'p_high', 'p_poly_market_id',
+    'p_condition_id', 'p_token_yes', 'p_token_no', 'p_tick', 'p_min_order', 'p_fee_rate',
+  ],
+  close_stale_events: ['p_seen_poly_ids'],
 };
 
 export function pglitePort(db: PGlite): DbPort {
@@ -21,6 +34,10 @@ export function pglitePort(db: PGlite): DbPort {
       if (!order) throw new Error(`pglitePort: unknown rpc '${fn}' — add it to FN_ARGS`);
       const params = order.map((name) => {
         const v = args[name];
+        if (Array.isArray(v)) {
+          // PG array literal — JSON.stringify would corrupt text[]/uuid[] params
+          return `{${v.map((x) => `"${String(x).replace(/(["\\])/g, '\\$1')}"`).join(',')}}`;
+        }
         return v !== null && typeof v === 'object' ? JSON.stringify(v) : v;
       });
       const placeholders = order.map((_, i) => `$${i + 1}`).join(', ');

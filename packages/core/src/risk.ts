@@ -103,3 +103,56 @@ export function exposureSummary(
 export function clusterOf(city: { region: string }): string {
   return city.region;
 }
+
+const COUNTRY_REGION: Record<string, string> = {
+  GB: 'europe-west', IE: 'europe-west', FR: 'europe-west', ES: 'europe-west', PT: 'europe-west',
+  DE: 'europe-west', NL: 'europe-west', BE: 'europe-west', IT: 'europe-west', CH: 'europe-west',
+  AT: 'europe-west', DK: 'europe-west', NO: 'europe-west', SE: 'europe-west',
+  FI: 'europe-east', PL: 'europe-east', CZ: 'europe-east', HU: 'europe-east', RO: 'europe-east',
+  GR: 'europe-east', TR: 'europe-east', UA: 'europe-east', RU: 'europe-east', RS: 'europe-east',
+  KR: 'east-asia', JP: 'east-asia', CN: 'east-asia', TW: 'east-asia', HK: 'east-asia', MN: 'east-asia',
+  IN: 'south-asia', PK: 'south-asia', BD: 'south-asia', LK: 'south-asia', NP: 'south-asia',
+  SG: 'southeast-asia', TH: 'southeast-asia', VN: 'southeast-asia', MY: 'southeast-asia',
+  ID: 'southeast-asia', PH: 'southeast-asia', KH: 'southeast-asia', MM: 'southeast-asia',
+  AE: 'mideast', SA: 'mideast', QA: 'mideast', KW: 'mideast', BH: 'mideast', OM: 'mideast',
+  IL: 'mideast', JO: 'mideast', IQ: 'mideast', IR: 'mideast', LB: 'mideast',
+  EG: 'africa', ZA: 'africa', NG: 'africa', KE: 'africa', MA: 'africa', GH: 'africa',
+  ET: 'africa', TZ: 'africa', DZ: 'africa', TN: 'africa',
+  MX: 'latam', BR: 'latam', AR: 'latam', CL: 'latam', CO: 'latam', PE: 'latam',
+  VE: 'latam', EC: 'latam', UY: 'latam', PA: 'latam',
+  AU: 'oceania', NZ: 'oceania', FJ: 'oceania',
+};
+
+/**
+ * Cluster-region assignment for NEWLY DISCOVERED cities (§6.13). The §6.8
+ * regions are "seeded", but the architecture defines no assignment rule for a
+ * brand-new city — this documented heuristic covers it: country lookup, with
+ * the US/CA split (and unknown countries) resolved by UTC offset. New cities
+ * are betting-disabled until operator verification, so a misassignment only
+ * affects cluster caps after a human has already looked at the city.
+ */
+export function regionForCity(countryCode: string, utcOffsetHours: number): string {
+  const cc = countryCode.toUpperCase();
+  if (cc === 'US' || cc === 'CA') {
+    if (utcOffsetHours <= -7) return 'na-west';
+    if (utcOffsetHours <= -6) return 'na-central';
+    return 'na-east';
+  }
+  const mapped = COUNTRY_REGION[cc];
+  if (mapped) return mapped;
+  // Unknown country: coarse offset bands.
+  if (utcOffsetHours <= -3) return 'latam';
+  if (utcOffsetHours <= 3) return 'europe-west';
+  if (utcOffsetHours <= 4.5) return 'mideast';
+  if (utcOffsetHours <= 6.5) return 'south-asia';
+  if (utcOffsetHours <= 7.5) return 'southeast-asia';
+  if (utcOffsetHours <= 10) return 'east-asia';
+  return 'oceania';
+}
+
+/** Valid provisional IANA zone for a fixed UTC offset (Etc zones invert the sign: UTC+9 → Etc/GMT-9). */
+export function etcZoneForOffset(hours: number): string {
+  const whole = Math.round(hours);
+  if (whole === 0) return 'Etc/GMT';
+  return whole > 0 ? `Etc/GMT-${whole}` : `Etc/GMT+${Math.abs(whole)}`;
+}

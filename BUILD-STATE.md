@@ -9,6 +9,10 @@
 
 ## Completed
 
+- **P2 progress (iteration 12, 2026-06-10):**
+  - Migration 0012_discovery_rpcs.sql: get_city_state, upsert_city (xmax-insert detection, new ⇒ betting disabled), ensure_station (provisional lat/lon-null rows), swap_station (ADR-03 unchanged/new/changed temporal swap + suspend), upsert_event (poly-id upsert + recreated-event adoption via unique_violation), upsert_bucket, close_stale_events. stations.lat/lon made nullable in 0002 (provisional rows per §6.13 override §7.2's not-null — pre-deploy edit, no hosted DB exists).
+  - `core/risk.ts` += regionForCity (documented country+offset heuristic for new-city cluster assignment — §6.13 gap) and etcZoneForOffset (provisional IANA zones, Etc/GMT sign-inverted). `functions/discover-markets/handler.ts` (full §6.13 flow incl. first-seen seedDistribution hook for §6.16/C7) + index.ts Deno entry.
+  - 7 PGlite tests over the REAL tag-104596 fixture pages (136 events, 100+36 pagination, short-page stop): ~49 cities ingested betting-disabled with WARN alerts, ≥45 station mappings (unparseable sources correctly left unmapped), 11 buckets/event, idempotent re-run, §15 station-change simulation (RKSI→RKSS: suspend + CRITICAL + closed history row + provisional station), close-stale sweep, Jinan zombies filtered. pglite-port array-param fix (PG array literals, not JSON). Suite: 363 green.
 - **P2 progress (iteration 11, 2026-06-10):**
   - Migration 0011_job_rpcs.sql: race-critical mutations as SQL functions so PostgREST callers and PGlite tests run ONE implementation — claim_job_run (insert / already_ran / running_young / W16 started_at-predicate CAS takeover / lost_race), complete_job_run (attempt-guarded so late isolates no-op), claim_alert (ADR-11 insert/retry/skip), mark_alert_sent.
   - `_shared/db.ts` (DbPort + supabasePort wrapper + getServiceDb Deno factory via dynamic npm: import), `_shared/slack.ts` (notifySlack: dedupe→post→flip-on-2xx-only, never throws), `_shared/runJob.ts` (401/409/202 contract, waitUntil-deferred work, failure→failed+Slack CRITICAL, deps-injected for tests). `supabase/tests/pglite-port.ts` = the DbPort test twin.
@@ -51,7 +55,7 @@
 
 ## Next Task
 
-**P2 continues — discover-markets (§6.13) + seed-stations (§6.22):** read §6.13 spec (gamma pagination via tag fixtures, zombie filter, new-city flow with clusterOf region assignment + derived-tz provisional station, station-change suspend+alert flow, unparseable-event flagged storage) and §6.22 seed-stations (OurAirports → stations). Extend DbPort with the upsert surface these need (or add 0012 RPCs where mutations are race-sensitive). Tests: tag-page fixtures drive discovery end-to-end against PGlite (gamma-events-tag*-active.json have real pagination + the Jinan zombies); station-change simulation per §15 (fixture with altered URL → suspend+alert). gradeEvent (§6.12) lands after discovery (needs events+buckets rows to grade). Edge Function index.ts files need `deno check` — Deno not installed → Operator TODO when they land.
+**P2 continues — seed-stations script (§6.22) + LIVE discovery proof:** (a) scripts/seed-stations.ts — OurAirports CSV → stations coordinates for all discovered ICAOs (or prints the manual list); needs scripts/lib plumbing (pg via PGlite? No — scripts talk to the real DB via DATABASE_URL; for now make the script's transform pure + tested, DB write via the same DbPort pattern). (b) The §14 P2 DoD "live run discovers all ~49 cities" can be proven WITHOUT hosted Supabase: a local harness that runs discoverMarkets against the LIVE Gamma API with a PGlite DB — also satisfies live pagination + zombie behavior. (c) Remaining §6.13 gap: hard-unparseable events are alerted but not stored flagged (only ladder-problem events are stored) — close it or document. Then gradeEvent (§6.12). Edge Function index.ts files need `deno check` — Deno not installed → Operator TODO.
 
 ## Blockers
 
