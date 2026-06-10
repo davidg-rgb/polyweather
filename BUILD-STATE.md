@@ -9,6 +9,9 @@
 
 ## Completed
 
+- **P1 progress (iteration 3, 2026-06-10):**
+  - `core/buckets.ts` (§6.3): parseBucketLabel (tails/ranges/bare single-degree W1; NBSP/EN-dash/EM-dash/U+2212 + negative degrees normalized; strict-after-normalization, BucketParseError never guesses, inverted ranges rejected), bucketRange ±0.5 continuity, validateLadder (tails/contiguity/units/order), winningBucket whole-degree semantics + LadderGapError.
+  - 53 tests: all 55 labels across the 5 gamma fixtures enumerated + parsed; all 5 fixture ladders validate; synthetic gap/duplicate/mixed-unit/tail failures; NYC resolved winner '80-81°F' cross-checked against outcomePrices (double-encoded JSON). §15 core/buckets 6/6 ticked. Suite: 147 green.
 - **P1 progress (iteration 2, 2026-06-10):**
   - `core/types.ts` (Unit, BucketDef, EdgeConfig), `core/time.ts` (§6.1 — TZDate-backed local-day windows, leads, DST-safe), `core/units.ts` (§6.2 — WU rounding replica incl. −0 guard, A-11 negative-half assumption documented), `core/fees.ts` (§6.4 — fee curve + minEdgeRequired). `InvalidTimezoneError` added to the §11.1 taxonomy (mandated by §6.1, absent from the §11.1 list).
   - 39 new unit tests: fixture-anchored windows (Seoul/NYC gameStartTime), 4 DST transition days (Chicago + London, 23h/25h), boundary-instant classification, leadDays incl. −1 collapse, fall-back repeated wall-hour, fee worked examples + symmetry + monotonicity. §15: core/time 6/6, core/units 4/4, core/fees 3/4 ticked (fee_rate-from-DB invariant awaits P5 consumers).
@@ -21,7 +24,7 @@
 
 ## Next Task
 
-**P1 continues — `core/buckets` (§6.3):** parseBucketLabel with the full observed-label table (every label in every research gamma fixture enumerated in one table-driven test — incl. bare single-degree °C/°F, NBSP/EN-dash, negatives, W1), bucketRange ±0.5 continuity, validateLadder on all 4 research event fixtures + synthetic failures, winningBucket + NYC resolved-fixture winner check. Then: distributions (§6.5) → calibration (§6.6) → edge/kelly/risk (§6.7–6.8) → polymarket (§6.9) → weather (§6.10) → config (§6.11). End of P1: coverage gate ≥95% on core.
+**P1 continues — `core/distributions/*` (§6.5):** gaussian.ts (normCdf |err|<1e-7, gaussianBucketProbs Σ=1±1e-9, DistributionError at σ≤0.2, °F 2° + °C 1° ladders), ensemble.ts (ensembleStats weighted, dressedEnsembleProbs ≥20-member guard), consensus.ts (impliedDistribution normalize/null>2-missing/clamp), nowcast.ts (applyRunningMaxConstraint zero+renormalize, top-tail edge, partial-bucket lift). Then: calibration (§6.6) → edge/kelly/risk (§6.7–6.8) → polymarket (§6.9) → weather (§6.10) → config (§6.11). End of P1: coverage gate ≥95% on core.
 
 ## Blockers
 

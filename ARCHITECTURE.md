@@ -2293,12 +2293,12 @@ Wallet setup per GO-LIVE-CHECKLIST, POLY_PRIVATE_KEY in Edge secrets, goLiveGate
 - [x] `toNative` — °F conversion before bucketization (no double rounding)
 
 ### Module: core/buckets (§6.3)
-- [ ] `parseBucketLabel` — '94-95°F', '87°F or below', '19°C or higher', **bare single-degree '15°C'/'94°F' (9 of 11 buckets on intl fixtures — W1)**, negative degrees, NBSP/EN-dash variants, every label in every research fixture enumerated in one table-driven test
-- [ ] `parseBucketLabel` — BucketParseError on unknown shapes (never guesses)
-- [ ] `bucketRange` — ±0.5 continuity; tails → ±Infinity
-- [ ] `validateLadder` — passes all 4 research event fixtures; fails gap/duplicate/mixed-unit synthetic ladders
-- [ ] `winningBucket(93°F) = '92-93°F'` idx; LadderGapError on impossible value
-- [ ] NYC resolved fixture: winner '80-81°F' matches Polymarket outcomePrices
+- [x] `parseBucketLabel` — '94-95°F', '87°F or below', '19°C or higher', **bare single-degree '15°C'/'94°F' (9 of 11 buckets on intl fixtures — W1)**, negative degrees, NBSP/EN-dash variants, every label in every research fixture enumerated in one table-driven test
+- [x] `parseBucketLabel` — BucketParseError on unknown shapes (never guesses)
+- [x] `bucketRange` — ±0.5 continuity; tails → ±Infinity
+- [x] `validateLadder` — passes all 4 research event fixtures; fails gap/duplicate/mixed-unit synthetic ladders
+- [x] `winningBucket(93°F) = '92-93°F'` idx; LadderGapError on impossible value
+- [x] NYC resolved fixture: winner '80-81°F' matches Polymarket outcomePrices
 
 ### Module: core/fees (§6.4)
 - [x] `takerFeePerShare(0.34, 0.05)` = 0.01122 (docs worked example: 100 sh → $1.12)
