@@ -47,6 +47,9 @@ create table if not exists public.stations (
   lon          numeric(8,5),
   elevation_m  numeric,
   country_code varchar(2) not null,
+  -- US state code (from OurAirports iso_region) — the {ST}_ASOS IEM network
+  -- needs it and it is not derivable from cc+icao (§6.10 iemNetworkFor)
+  us_state     varchar(2),
   tz           text not null,
   source       text not null default 'ourairports' check (source in ('ourairports', 'manual')),
   created_at   timestamptz not null default now()

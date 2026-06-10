@@ -28,6 +28,8 @@ export interface StationRow {
   lon: number;
   elevationM: number | null;
   countryCode: string;
+  /** US state from iso_region (US-IL → IL) — the IEM {ST}_ASOS network needs it. */
+  usState: string | null;
   tz: string;
 }
 
@@ -56,13 +58,16 @@ export function buildStationRows(
       continue;
     }
     const elevationFt = Number(row['elevation_ft']);
+    const cc = (row['iso_country'] ?? 'ZZ').toUpperCase();
+    const region = row['iso_region'] ?? '';
     matched.push({
       icao,
       name: row['name'] ?? icao,
       lat,
       lon,
       elevationM: Number.isFinite(elevationFt) ? Math.round(elevationFt * 0.3048 * 10) / 10 : null,
-      countryCode: (row['iso_country'] ?? 'ZZ').toUpperCase(),
+      countryCode: cc,
+      usState: cc === 'US' && /^US-[A-Z]{2}$/.test(region) ? region.slice(3) : null,
       tz: tzlookup(lat, lon),
     });
   }
@@ -91,17 +96,18 @@ export async function seedStations(deps: SeedDeps): Promise<{ updated: number; u
   for (const s of matched) {
     // tz: only replace PROVISIONAL (Etc/*) zones — operator overrides stick (§6.22).
     await deps.db.query(
-      `insert into stations (icao, name, lat, lon, elevation_m, country_code, tz, source)
-       values ($1, $2, $3, $4, $5, $6, $7, 'ourairports')
+      `insert into stations (icao, name, lat, lon, elevation_m, country_code, us_state, tz, source)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, 'ourairports')
        on conflict (icao) do update
          set name = excluded.name,
              lat = excluded.lat,
              lon = excluded.lon,
              elevation_m = excluded.elevation_m,
              country_code = excluded.country_code,
+             us_state = excluded.us_state,
              tz = case when stations.tz like 'Etc/%' then excluded.tz else stations.tz end,
              source = 'ourairports'`,
-      [s.icao, s.name, s.lat, s.lon, s.elevationM, s.countryCode, s.tz],
+      [s.icao, s.name, s.lat, s.lon, s.elevationM, s.countryCode, s.usState, s.tz],
     );
   }
 

@@ -38,6 +38,14 @@ const FN_ARGS: Record<string, string[]> = {
   forecast_gap_matrix: ['p_days'],
   bump_model_null_streak: ['p_model', 'p_was_null'],
   upsert_ensemble_rows: ['p_rows'],
+  list_truth_stations: [],
+  finalized_dates: ['p_icao', 'p_from', 'p_to'],
+  upsert_observation: ['p_icao', 'p_date', 'p_tmax', 'p_unit', 'p_n_obs'],
+  finalize_observation: ['p_icao', 'p_date', 'p_metar_tenths', 'p_metar_native', 'p_iem_f', 'p_era5_c', 'p_divergence'],
+  set_config_value: ['p_key', 'p_value'],
+  events_for_grading: ['p_icao', 'p_date'],
+  upsert_intraday: ['p_icao', 'p_date', 'p_max_tenths', 'p_max_native', 'p_n_obs'],
+  nowcast_targets: [],
 };
 
 export function pglitePort(db: PGlite): DbPort {

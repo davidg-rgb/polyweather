@@ -29,7 +29,8 @@ describe('buildStationRows (§6.22)', () => {
     const { matched, unmatched } = buildStationRows(CSV, ['KORD', 'RKSI', 'EGLL', 'ZZZZ']);
     expect(unmatched).toEqual(['ZZZZ']);
     const byIcao = new Map(matched.map((m) => [m.icao, m]));
-    expect(byIcao.get('KORD')).toMatchObject({ countryCode: 'US', tz: 'America/Chicago' });
+    expect(byIcao.get('KORD')).toMatchObject({ countryCode: 'US', tz: 'America/Chicago', usState: 'IL' });
+    expect(byIcao.get('RKSI')!.usState).toBeNull();
     expect(byIcao.get('KORD')!.elevationM).toBeCloseTo(204.8, 1);
     expect(byIcao.get('RKSI')!.tz).toBe('Asia/Seoul');
     expect(byIcao.get('EGLL')!.tz).toBe('Europe/London');
