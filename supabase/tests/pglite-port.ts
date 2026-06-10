@@ -32,6 +32,12 @@ const FN_ARGS: Record<string, string[]> = {
   score_distributions: ['p_event_id', 'p_winner_idx', 'p_cutoff_lead0', 'p_cutoff_lead1'],
   city_loss_streaks: [],
   apply_halt: ['p_scope', 'p_reason'],
+  list_active_stations: [],
+  list_enabled_models: ['p_is_ensemble'],
+  upsert_forecast_rows: ['p_rows'],
+  forecast_gap_matrix: ['p_days'],
+  bump_model_null_streak: ['p_model', 'p_was_null'],
+  upsert_ensemble_rows: ['p_rows'],
 };
 
 export function pglitePort(db: PGlite): DbPort {
@@ -42,8 +48,12 @@ export function pglitePort(db: PGlite): DbPort {
       const params = order.map((name) => {
         const v = args[name];
         if (Array.isArray(v)) {
-          // PG array literal — JSON.stringify would corrupt text[]/uuid[] params
-          return `{${v.map((x) => `"${String(x).replace(/(["\\])/g, '\\$1')}"`).join(',')}}`;
+          // arrays of primitives → PG array literal (text[]/uuid[] params);
+          // arrays of objects → jsonb payload (e.g. upsert_*_rows p_rows)
+          if (v.every((x) => x === null || typeof x !== 'object')) {
+            return `{${v.map((x) => `"${String(x).replace(/(["\\])/g, '\\$1')}"`).join(',')}}`;
+          }
+          return JSON.stringify(v);
         }
         return v !== null && typeof v === 'object' ? JSON.stringify(v) : v;
       });
