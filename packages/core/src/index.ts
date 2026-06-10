@@ -1,5 +1,6 @@
 export * from './errors.ts';
 export * from './types.ts';
+export * from './config.ts';
 export * from './time.ts';
 export * from './units.ts';
 export * from './buckets.ts';

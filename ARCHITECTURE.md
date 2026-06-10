@@ -2361,8 +2361,8 @@ Wallet setup per GO-LIVE-CHECKLIST, POLY_PRIVATE_KEY in Edge secrets, goLiveGate
 - [x] `iemDailyUrl`/`parseIemDaily` — parse vs iem_daily_ORD fixture; null on empty data array
 
 ### Module: core/config (§6.11)
-- [ ] ConfigSchema defaults match §6.11 table exactly
-- [ ] `parseConfigRows` — DB override wins; ConfigError lists every invalid key
+- [x] ConfigSchema defaults match §6.11 table exactly
+- [x] `parseConfigRows` — DB override wins; ConfigError lists every invalid key
 
 ### Module: functions/_shared (§6.12)
 - [ ] `runJob` — 401 without secret; 409 only when existing run is ok or young-running; **stale 'running' row taken over by CAS (attempt+1, started_at predicate — W16: two concurrent takeovers → exactly one proceeds)**; 202 fast path; failure → job_runs 'failed' + Slack CRITICAL

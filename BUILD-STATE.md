@@ -5,10 +5,14 @@
 
 ## Active Phase
 
-**P1 — Core domain: parsing & math** (§14). P0 is code-complete (two DoD items operator-environment-gated, see Blockers).
+**P2 — Reference data + discovery** (§14): seed-stations script; discover-markets job + runJob/_shared plumbing; cities/stations/events/buckets populating. P0+P1 complete (P0's two DoD items operator-environment-gated, see Blockers). Note: P2's live-run DoD items (live discovery of ~49 cities, stations for ≥45) need network access to the live APIs — code + fixture tests land first; live verification follows when run.
 
 ## Completed
 
+- **P1 COMPLETE (iteration 9, 2026-06-10):**
+  - `core/config.ts` (§6.11): ConfigSchema (every tunable, ranges enforced, jobWallLimitSec invariant documented), parseConfigRows (string-row coercion, non-schema rows ignored, ConfigError lists every invalid key). Seed-parity test: code defaults == 0010 migration values VERBATIM, and every tunable is seeded.
+  - Coverage gate: `pnpm test:coverage` enforces ≥95% lines/functions on packages/core/src (excl. type-only types.ts + barrel index.ts) — measured **99.84% lines / 100% functions**; error-paths suite added to close every guard branch. CI now runs the coverage gate.
+  - P1 DoD met in full: §6.1–6.11 implemented, every §15 core checklist item ticked (sole exception: applyKellyFraction audit-object item, which by definition lands with poll-markets' audit JSON in P5), Kelly property tests, all observed label variants, DST windows. Suite: 318 tests green.
 - **P1 progress (iteration 8, 2026-06-10):**
   - `core/weather/`: openmeteo.ts (5 URL builders matching research-verified shapes + trap-model rejection, parseMultiModelDaily, parsePreviousRunsHourly with <20-point guard + lead-0 base key, parseEnsembleDaily control=member-0 + I2 one-model guard, parseEra5Daily, requestWeight), wu.ts (wuObsUrl, extractWuApiKey runtime 32-hex, parseWuObservations/wuDailyMax, isFinalized), metar.ts (parseMetarJson, metarRunningMax), iem.ts (iemNetworkFor US/intl conventions, iemDailyUrl, parseIemDaily). zod added to core deps (§4 stack).
   - 26 tests across all weather fixtures: KORD 87/RKSI 25 grading values, Seoul local-day METAR maxes (23/20), ensemble 51 series × 7 dates, prevruns 2×8×2 matrix with hand-verified maxes, the saved-HTML WU key extraction. Fixed a time-of-day-flaky retention fixture (same-hour pair now anchored to date_trunc hour). §15 weather 14/14 ticked. Suite: 294 green.
@@ -39,7 +43,7 @@
 
 ## Next Task
 
-**P1 final slice — `core/config.ts` (§6.11) + coverage gate:** ConfigSchema zod object with every §6.11 default (matching the 0010 seed exactly — add a test asserting code defaults == migration seed values), parseConfigRows (DB override wins, ConfigError lists every invalid key). Then run the ≥95% line-coverage gate on packages/core (`@vitest/coverage-v8`), close out P1, and start P2 (seed-stations script + discover-markets job + runJob/_shared plumbing — first IO code: packages/io http/slack + supabase/functions/_shared).
+**P2 begins — IO plumbing first (§6.12):** packages/io (http.ts fetchJson with retry/backoff/timeout + UpstreamError; slack.ts slackPost raw webhook) and supabase/functions/_shared (runJob idempotency + CAS takeover W16, db service-role factory, auth requireCronAuth constant-time, slack notifySlack dedupe-then-post, grading gradeEvent — the big one, ADR-16 + C7/W18 scored-row selection). These are testable in vitest with mocked fetch + PGlite. Then discover-markets job (§6.13) + seed-stations script (§6.22). Edge Function index.ts files need `deno check` — Deno is NOT installed; add to Operator TODO or vendor a portable check.
 
 ## Blockers
 
