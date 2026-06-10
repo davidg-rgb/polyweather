@@ -9,6 +9,9 @@
 
 ## Completed
 
+- **P1 progress (iteration 5, 2026-06-10):**
+  - `core/calibration/`: emos.ts (updateBias decay/seed, fitSigma sample-std null-under-minN, computeModelWeights inverse-MSE with non-finite→0 + 1e-6 clamp, correctPoint as sole bias-subtraction site) + scores.ts (brierScore, reliabilityBins non-empty-bins, expectedCalibrationError, sharpness, mulberry32, pairedBootstrapPValue seeded one-sided).
+  - 22 tests incl. geometric-convergence factor check, ECE≈0 on perfectly-calibrated synthetic, the codebase-wide grep tripwire for bias subtraction (comment-stripped), and the C5 zero-skill Monte Carlo: 1,000 no-skill trials vs the conjunctive gate (point ≤0.95× AND bootstrap p<0.05) passes <5%. §15 calibration 8/8 ticked. Suite: 204 green.
 - **P1 progress (iteration 4, 2026-06-10):**
   - `core/distributions/`: gaussian.ts (A&S 7.1.26 normCdf |ε|<7.5e-8, gaussianBucketProbs with σ≤0.2 floor + shared renormalize), ensemble.ts (ensembleStats weighted/excluding zero-weight, dressedEnsembleProbs ≥20-member + σ guards), consensus.ts (impliedDistribution clamp/floor/null->2-missing), nowcast.ts (applyRunningMaxConstraint: elimination, piecewise-linear lift CDF through (p50,0.5)/(p90,0.9), physical-certainty fallback when prior mass on survivors is 0). ForecastPoint added to types.
   - 35 tests: Φ vs 9 reference values, both ladder geometries vs direct Φ computation, identical-members reduction to gaussian, degenerate-quote clamping, lift-CDF worked examples incl. step case. §15 distributions 7/7 ticked. Suite: 182 green.
@@ -27,7 +30,7 @@
 
 ## Next Task
 
-**P1 continues — `core/calibration/*` (§6.6):** emos.ts (updateBias seed-on-null + geometric convergence, fitSigma null-under-minN, computeModelWeights inverse-MSE Σ=1, correctPoint as the ONLY bias-subtraction site) + scores.ts (brierScore multi-category, expectedCalibrationError + reliabilityBins, sharpness, pairedBootstrapPValue seeded mulberry32 + n<30→1.0 + the C5 zero-skill Monte Carlo regression: synthetic no-skill data passes the full gate <5% of 1,000 trials). Then: edge/kelly/risk (§6.7–6.8) → polymarket (§6.9) → weather (§6.10) → config (§6.11). End of P1: coverage gate ≥95% on core.
+**P1 continues — `core/edge.ts` + `core/kelly.ts` + `core/risk.ts` (§6.7–6.8):** executableAsk book-walking vs the research CLOB fixture (best = normalized first), computeBucketEdges (edge math, spread carried, reasons[]), applyLiquidityFilters (each veto individually tested), jointKellyStakes (greedy threshold solver + ADR-08-scoped property tests + W4 fee-adjusted-input integration + W20 p′≥1 exclusion), applyKellyFraction (audit full-vs-fractional), applyRiskCaps (cap order, share flooring, capAudit strings, sub-$5 drop), evaluateBreakers (each rule at exact threshold), exposureSummary/clusterOf. Then: polymarket (§6.9) → weather (§6.10) → config (§6.11). End of P1: coverage gate ≥95% on core.
 
 ## Blockers
 

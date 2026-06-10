@@ -2316,14 +2316,14 @@ Wallet setup per GO-LIVE-CHECKLIST, POLY_PRIVATE_KEY in Edge secrets, goLiveGate
 - [x] `applyRunningMaxConstraint` — eliminated buckets zeroed; renormalized; top-tail edge case keeps mass 1; partial-bucket lift applied when table provided
 
 ### Module: core/calibration (§6.6)
-- [ ] `updateBias` — seeds on null; converges geometrically on constant error
-- [ ] `fitSigma` — null under minN; matches manual std-dev
-- [ ] `computeModelWeights` — Σ=1; missing-data models → 0; single-model → 1
-- [ ] `brierScore` — 0 perfect / 2 worst-case sanity; matches hand example
-- [ ] `expectedCalibrationError` + `reliabilityBins` — synthetic perfectly-calibrated set → ECE≈0; bins carry n
-- [ ] `sharpness` — ordering sanity on sharp vs flat sets
-- [ ] `correctPoint` — grep-verified as the ONLY site subtracting bias anywhere in the codebase
-- [ ] `pairedBootstrapPValue` — seeded reproducibility; returns 1.0 under n<30; **zero-skill Monte Carlo regression: synthetic no-skill data passes the full gate in <5% of 1,000 trials (C5)**
+- [x] `updateBias` — seeds on null; converges geometrically on constant error
+- [x] `fitSigma` — null under minN; matches manual std-dev
+- [x] `computeModelWeights` — Σ=1; missing-data models → 0; single-model → 1
+- [x] `brierScore` — 0 perfect / 2 worst-case sanity; matches hand example
+- [x] `expectedCalibrationError` + `reliabilityBins` — synthetic perfectly-calibrated set → ECE≈0; bins carry n
+- [x] `sharpness` — ordering sanity on sharp vs flat sets
+- [x] `correctPoint` — grep-verified as the ONLY site subtracting bias anywhere in the codebase
+- [x] `pairedBootstrapPValue` — seeded reproducibility; returns 1.0 under n<30; **zero-skill Monte Carlo regression: synthetic no-skill data passes the full gate in <5% of 1,000 trials (C5)**
 
 ### Module: core/edge + kelly + risk (§6.7–6.8)
 - [ ] `executableAsk` — walks depth correctly on the research CLOB fixture (best = normalized first)
