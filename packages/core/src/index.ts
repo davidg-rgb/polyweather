@@ -7,6 +7,8 @@ export * from './fees.ts';
 export * from './edge.ts';
 export * from './kelly.ts';
 export * from './risk.ts';
+export * from './polymarket/gamma.ts';
+export * from './polymarket/clob.ts';
 export * from './calibration/emos.ts';
 export * from './calibration/scores.ts';
 export * from './distributions/gaussian.ts';

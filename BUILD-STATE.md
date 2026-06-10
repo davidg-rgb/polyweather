@@ -9,6 +9,9 @@
 
 ## Completed
 
+- **P1 progress (iteration 7, 2026-06-10):**
+  - `core/polymarket/gamma.ts` (§6.9): parseStringArray (field-named GammaShapeError), extractStationFromUrl (variable middle-segment regex, W2), targetDateFromEvent (slug-with-year + yearless-trap rejection + title cross-check + C6 strict gameStartTime check when tz known), parseGammaEvent (full typed ParsedEvent: sorted buckets, tokens, per-bucket feeSchedule.rate, derivedTzOffset for new cities, ladderProblems attached not thrown), isZombieEvent (expiry OR none-accepting+degenerate-quotes). `core/polymarket/clob.ts`: normalizeBook (raw-last=best reorder both sides, numeric coercion with ClobShapeError, hash/tick/min/negRisk/lastTrade carried).
+  - 26 tests against the real fixtures: 4 city events fully parsed (unit/station/11 buckets/both ticks/feeRate 0.05), resolved-event outcomePricesResolved winner '80-81°F', live-captured Jinan zombie flagged + live events pass, tz derivation Seoul +9 / NYC −4. §15 polymarket 6/6 ticked. Suite: 268 green.
 - **P1 progress (iteration 6, 2026-06-10):**
   - `core/edge.ts` (§6.7): executableAsk best-first book walk, computeBucketEdges (per-market feeRate override into fee + threshold, reasons[] tokens), applyLiquidityFilters (5 vetoes, pure). `core/kelly.ts` (§6.8): jointKellyStakes greedy threshold solver (c recomputed per inclusion, budget guard, W20 natural exclusion), applyKellyFraction, applyRiskCaps (ordered clamps with depleting shared headrooms, whole-share flooring, capAudit, sub-$5 drop). `core/risk.ts`: evaluateBreakers (6 rules, exact thresholds), exposureSummary, clusterOf. Types: NormalizedBook/BookLevel/EdgeRow/RiskConfig/StakePlan; EdgeConfig extended with probe/filter fields.
   - 38 tests: CLOB-fixture depth walk (0.36678 avg over 3 levels), 300-trial seeded Kelly property suite, W4 fee-adjusted shrink, every cap/breaker/veto individually. §15 §6.7–6.8: 8/9 ticked (applyKellyFraction audit-object item lands with poll-markets' audit JSON in P5). Suite: 242 green.
@@ -33,7 +36,7 @@
 
 ## Next Task
 
-**P1 continues — `core/polymarket/*` (§6.9):** gamma.ts (parseStringArray double-encoded, extractStationFromUrl US two-middle-segment W2 + intl one-segment, targetDateFromEvent slug-with-year + 2025-stale-slug trap + Seoul C6 tz check, parseGammaEvent full 4-city fixtures + resolved, isZombieEvent Jinan fixture) + clob.ts (normalizeBook reorder raw-last=best, string→number, hash carried). Then: weather (§6.10) → config (§6.11). End of P1: coverage gate ≥95% on core.
+**P1 continues — `core/weather/*` (§6.10):** openmeteo.ts (forecastUrl/previousRunsUrl/ensembleUrl exact param strings vs research URLs, parseMultiModelDaily 9-model suffixes, parsePreviousRunsHourly local-day max + lead×model matrix, parseEnsembleDaily member-suffix + one-model-per-call I2, archiveUrl/parseEra5Daily, historicalForecastUrl, requestWeight fractional multiples), wu.ts (wuObsUrl {ICAO}:9:{CC}, extractWuApiKey from saved HTML, parseWuObservations/wuDailyMax KORD=87 RKSI=25, isFinalized), metar.ts (parseMetarJson/metarRunningMax RKSI fixture), iem.ts (iemNetworkFor US/intl, iemDailyUrl/parseIemDaily vs ORD fixture). Then config (§6.11) → P1 coverage gate ≥95%.
 
 ## Blockers
 

@@ -2337,12 +2337,12 @@ Wallet setup per GO-LIVE-CHECKLIST, POLY_PRIVATE_KEY in Edge secrets, goLiveGate
 - [x] `exposureSummary`/`clusterOf` — aggregates match seeded fixtures
 
 ### Module: core/polymarket (§6.9)
-- [ ] `parseStringArray` — double-encoded fixtures; GammaShapeError on malformed
-- [ ] `extractStationFromUrl` — US two-middle-segment URL (us/ny/new-york-city/KLGA — W2) AND intl one-segment URLs (EGLC/RKSI/LFPB); null on garbage
-- [ ] `targetDateFromEvent` — slug-with-year parse; 2025-stale-slug trap fixture rejected; **Seoul fixture passes (slug june-11 ↔ gameStartTime 2026-06-10T15:00Z with tz='Asia/Seoul' — C6)**; strict check skipped + tz derived when tz unknown
-- [ ] `parseGammaEvent` — full NYC/London/Seoul/Paris fixtures → correct unit, station, 11 sorted buckets, tokens, tick sizes (0.01 AND 0.001 present), feeRate 0.05
-- [ ] `isZombieEvent` — Jinan fixture flagged; live events pass
-- [ ] `normalizeBook` — reorder verified (raw last = best); string→number; hash carried
+- [x] `parseStringArray` — double-encoded fixtures; GammaShapeError on malformed
+- [x] `extractStationFromUrl` — US two-middle-segment URL (us/ny/new-york-city/KLGA — W2) AND intl one-segment URLs (EGLC/RKSI/LFPB); null on garbage
+- [x] `targetDateFromEvent` — slug-with-year parse; 2025-stale-slug trap fixture rejected; **Seoul fixture passes (slug june-11 ↔ gameStartTime 2026-06-10T15:00Z with tz='Asia/Seoul' — C6)**; strict check skipped + tz derived when tz unknown
+- [x] `parseGammaEvent` — full NYC/London/Seoul/Paris fixtures → correct unit, station, 11 sorted buckets, tokens, tick sizes (0.01 AND 0.001 present), feeRate 0.05
+- [x] `isZombieEvent` — Jinan fixture flagged; live events pass
+- [x] `normalizeBook` — reorder verified (raw last = best); string→number; hash carried
 
 ### Module: core/weather (§6.10)
 - [ ] `forecastUrl`/`previousRunsUrl`/`ensembleUrl` — exact param strings vs research-verified URLs; apikey switches host handled by caller config
