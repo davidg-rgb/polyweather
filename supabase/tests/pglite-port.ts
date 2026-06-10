@@ -46,6 +46,12 @@ const FN_ARGS: Record<string, string[]> = {
   events_for_grading: ['p_icao', 'p_date'],
   upsert_intraday: ['p_icao', 'p_date', 'p_max_tenths', 'p_max_native', 'p_n_obs'],
   nowcast_targets: [],
+  list_buildable_events: [],
+  get_build_inputs: ['p_event_id'],
+  upsert_distribution: [
+    'p_event_id', 'p_source', 'p_lead', 'p_nowcast', 'p_inputs_hash',
+    'p_probs', 'p_mu', 'p_sigma', 'p_stats_version',
+  ],
 };
 
 export function pglitePort(db: PGlite): DbPort {

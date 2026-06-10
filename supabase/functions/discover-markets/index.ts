@@ -4,6 +4,7 @@
  */
 import { fetchJson } from '../../../packages/io/src/index.ts';
 import { getServiceDb } from '../_shared/db.ts';
+import { buildDistributionForEvent } from '../_shared/distributions.ts';
 import { runJob } from '../_shared/runJob.ts';
 import { notifySlack } from '../_shared/slack.ts';
 import { discoverMarkets } from './handler.ts';
@@ -29,6 +30,14 @@ deno?.serve(async (req: Request) => {
             `${GAMMA_BASE}/events?tag_id=104596&active=true&closed=false&limit=100&offset=${offset}`,
           ),
         notify: (alert) => notifySlack(db, alert),
+        // ADR-16/C7: a house row must exist before the earliest cutoff.
+        seedDistribution: async (eventId) => {
+          const r = await buildDistributionForEvent(db, ctx.config, eventId, {
+            notify: (a) => notifySlack(db, a),
+            now: new Date(),
+          });
+          return r.written > 0;
+        },
         todayUtcISO: new Date().toISOString().slice(0, 10),
       }),
     { db },
