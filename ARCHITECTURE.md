@@ -2418,7 +2418,7 @@ Wallet setup per GO-LIVE-CHECKLIST, POLY_PRIVATE_KEY in Edge secrets, goLiveGate
 - [ ] market_snapshots unique (bucket_id, captured_at); overlapping-poll protection via the job_locks lease (W10/C8)
 - [x] bucket_probabilities.scored_for_leads[] appended only by gradeEvent; per (event, source, lead) exactly one row carries that lead
 - [x] calibration_scores.window_tag domain incl. 'backtest'/'nowcast'; zero-UUID pooled row carries bootstrap_p
-- [ ] nowcast_lift populated by backfill-actuals; weekly refresh by run-calibration; missing row ⇒ truncation-only nowcast
+- [x] nowcast_lift populated by backfill-actuals; weekly refresh by run-calibration; missing row ⇒ truncation-only nowcast
 - [ ] edge_decile_stats view matches hand-computed deciles on seeded bets (W-2)
 - [x] bankroll_balance view sum equals manual ledger arithmetic; no stored running-balance column exists (W10)
 - [x] model_stats_history rows written on every stats_version increment
@@ -2436,7 +2436,7 @@ Wallet setup per GO-LIVE-CHECKLIST, POLY_PRIVATE_KEY in Edge secrets, goLiveGate
 - [ ] ADR-16 row-existence: discovery-seeded distribution exists before the lead-1 cutoff for a same-UTC-day Americas creation (NYC fixture timeline) and a UTC+12/13 city (Wellington)
 - [x] 9.5 calibration run updates stats + scores; drift halt fires on synthetic bad Brier
 - [ ] 9.6 nowcast: rising METAR max eliminates buckets in the stored distribution
-- [ ] 9.7 backfill scripts resumable (kill mid-run, restart continues from cursor); budget sleeper engages
+- [x] 9.7 backfill scripts resumable (kill mid-run, restart continues from cursor); budget sleeper engages
 - [ ] 9.8 dead-man: stop snapshots 30h (clock-mock) → halt:global + CRITICAL
 - [ ] 9.9 go-live gate: every condition red→green transition rendered on /admin
 
@@ -2448,8 +2448,8 @@ Wallet setup per GO-LIVE-CHECKLIST, POLY_PRIVATE_KEY in Edge secrets, goLiveGate
 
 ### Scripts (§6.22)
 - [x] seed-stations covers all discovered ICAOs or prints the manual list
-- [ ] backfill-forecasts honors --budget, requestWeight accounting, resumability
-- [ ] backfill-actuals WU + IEM-fallback provenance recorded
+- [x] backfill-forecasts honors --budget, requestWeight accounting, resumability
+- [x] backfill-actuals WU + IEM-fallback provenance recorded
 - [ ] backfill-market-history reconstructs ≥1 resolved event's consensus + winner correctly vs fixture
 - [ ] simulate-historical-edge — walk-forward (no peeking: stats at D use only <D data — test with sentinel); scores at ADR-16 cutoffs only; prints fidelity table; writes 'backtest' scores
 - [ ] backfill-market-history — consensus rows synthesized at pre-cutoff timestamps only (post-cutoff prices never used — C2)
