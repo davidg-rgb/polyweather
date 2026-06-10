@@ -2345,20 +2345,20 @@ Wallet setup per GO-LIVE-CHECKLIST, POLY_PRIVATE_KEY in Edge secrets, goLiveGate
 - [x] `normalizeBook` — reorder verified (raw last = best); string→number; hash carried
 
 ### Module: core/weather (§6.10)
-- [ ] `forecastUrl`/`previousRunsUrl`/`ensembleUrl` — exact param strings vs research-verified URLs; apikey switches host handled by caller config
-- [ ] `parseMultiModelDaily` — suffix parsing for all 9 models; per-model null horizons tolerated
-- [ ] `parsePreviousRunsHourly` — local-day max via tz; <20-point days dropped; lead suffix × model suffix matrix
-- [ ] `parseEnsembleDaily` — single-model member-suffix scheme (fixture-backed); control = member 0; ensembleUrl enforces one-model-per-call (I2)
-- [ ] `archiveUrl`/`parseEra5Daily` — ERA5T daily parse vs openmeteo_era5_archive_daily_RKSI.json
-- [ ] `historicalForecastUrl` — param string matches the research-verified URL shape
-- [ ] `requestWeight` — >10 vars and >2-week cases produce fractional multiples
-- [ ] `wuObsUrl` — {ICAO}:9:{CC} format, units e/m
-- [ ] `extractWuApiKey` — finds key in saved RKSI history HTML fixture
-- [ ] `parseWuObservations`/`wuDailyMax` — KORD units=e fixture → 87; RKSI units=m → 25; empty-obs → null
-- [ ] `isFinalized` — next-day obs presence logic
-- [ ] `parseMetarJson`/`metarRunningMax` — RKSI fixture; local-day filter correctness
-- [ ] `iemNetworkFor` — US 3-letter + {ST}_ASOS; intl ICAO + {CC}__ASOS (two underscores)
-- [ ] `iemDailyUrl`/`parseIemDaily` — parse vs iem_daily_ORD fixture; null on empty data array
+- [x] `forecastUrl`/`previousRunsUrl`/`ensembleUrl` — exact param strings vs research-verified URLs; apikey switches host handled by caller config
+- [x] `parseMultiModelDaily` — suffix parsing for all 9 models; per-model null horizons tolerated
+- [x] `parsePreviousRunsHourly` — local-day max via tz; <20-point days dropped; lead suffix × model suffix matrix
+- [x] `parseEnsembleDaily` — single-model member-suffix scheme (fixture-backed); control = member 0; ensembleUrl enforces one-model-per-call (I2)
+- [x] `archiveUrl`/`parseEra5Daily` — ERA5T daily parse vs openmeteo_era5_archive_daily_RKSI.json
+- [x] `historicalForecastUrl` — param string matches the research-verified URL shape
+- [x] `requestWeight` — >10 vars and >2-week cases produce fractional multiples
+- [x] `wuObsUrl` — {ICAO}:9:{CC} format, units e/m
+- [x] `extractWuApiKey` — finds key in saved RKSI history HTML fixture
+- [x] `parseWuObservations`/`wuDailyMax` — KORD units=e fixture → 87; RKSI units=m → 25; empty-obs → null
+- [x] `isFinalized` — next-day obs presence logic
+- [x] `parseMetarJson`/`metarRunningMax` — RKSI fixture; local-day filter correctness
+- [x] `iemNetworkFor` — US 3-letter + {ST}_ASOS; intl ICAO + {CC}__ASOS (two underscores)
+- [x] `iemDailyUrl`/`parseIemDaily` — parse vs iem_daily_ORD fixture; null on empty data array
 
 ### Module: core/config (§6.11)
 - [ ] ConfigSchema defaults match §6.11 table exactly

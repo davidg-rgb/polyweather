@@ -75,10 +75,12 @@ describe('ops_downsample() retention rules', () => {
     await db.exec(`
       insert into market_snapshots (bucket_id, best_bid, best_ask, mid, captured_at)
       select '${bucketId}', 0.40, 0.44, 0.42, t from (values
-        -- >7d tier: two in the same hour (one survives), one alone (survives)
-        (now() - interval '10 days'),
-        (now() - interval '10 days' + interval '10 minutes'),
-        (now() - interval '10 days' + interval '2 hours'),
+        -- >7d tier: two in the same hour (one survives), one alone (survives).
+        -- Anchored to the hour start so the pair NEVER straddles an hour
+        -- boundary regardless of the wall-clock minute the test runs at.
+        (date_trunc('hour', now()) - interval '10 days' + interval '5 minutes'),
+        (date_trunc('hour', now()) - interval '10 days' + interval '15 minutes'),
+        (date_trunc('hour', now()) - interval '10 days' + interval '2 hours'),
         -- >30d tier: distinct hours 0,1,2,3 and 6,7 and 12 and 18 on one UTC day → 4 survive
         (date_trunc('day', now() at time zone 'utc') at time zone 'utc' - interval '40 days' + interval '0 hours'),
         (date_trunc('day', now() at time zone 'utc') at time zone 'utc' - interval '40 days' + interval '1 hour'),

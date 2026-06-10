@@ -9,6 +9,9 @@
 
 ## Completed
 
+- **P1 progress (iteration 8, 2026-06-10):**
+  - `core/weather/`: openmeteo.ts (5 URL builders matching research-verified shapes + trap-model rejection, parseMultiModelDaily, parsePreviousRunsHourly with <20-point guard + lead-0 base key, parseEnsembleDaily control=member-0 + I2 one-model guard, parseEra5Daily, requestWeight), wu.ts (wuObsUrl, extractWuApiKey runtime 32-hex, parseWuObservations/wuDailyMax, isFinalized), metar.ts (parseMetarJson, metarRunningMax), iem.ts (iemNetworkFor US/intl conventions, iemDailyUrl, parseIemDaily). zod added to core deps (§4 stack).
+  - 26 tests across all weather fixtures: KORD 87/RKSI 25 grading values, Seoul local-day METAR maxes (23/20), ensemble 51 series × 7 dates, prevruns 2×8×2 matrix with hand-verified maxes, the saved-HTML WU key extraction. Fixed a time-of-day-flaky retention fixture (same-hour pair now anchored to date_trunc hour). §15 weather 14/14 ticked. Suite: 294 green.
 - **P1 progress (iteration 7, 2026-06-10):**
   - `core/polymarket/gamma.ts` (§6.9): parseStringArray (field-named GammaShapeError), extractStationFromUrl (variable middle-segment regex, W2), targetDateFromEvent (slug-with-year + yearless-trap rejection + title cross-check + C6 strict gameStartTime check when tz known), parseGammaEvent (full typed ParsedEvent: sorted buckets, tokens, per-bucket feeSchedule.rate, derivedTzOffset for new cities, ladderProblems attached not thrown), isZombieEvent (expiry OR none-accepting+degenerate-quotes). `core/polymarket/clob.ts`: normalizeBook (raw-last=best reorder both sides, numeric coercion with ClobShapeError, hash/tick/min/negRisk/lastTrade carried).
   - 26 tests against the real fixtures: 4 city events fully parsed (unit/station/11 buckets/both ticks/feeRate 0.05), resolved-event outcomePricesResolved winner '80-81°F', live-captured Jinan zombie flagged + live events pass, tz derivation Seoul +9 / NYC −4. §15 polymarket 6/6 ticked. Suite: 268 green.
@@ -36,7 +39,7 @@
 
 ## Next Task
 
-**P1 continues — `core/weather/*` (§6.10):** openmeteo.ts (forecastUrl/previousRunsUrl/ensembleUrl exact param strings vs research URLs, parseMultiModelDaily 9-model suffixes, parsePreviousRunsHourly local-day max + lead×model matrix, parseEnsembleDaily member-suffix + one-model-per-call I2, archiveUrl/parseEra5Daily, historicalForecastUrl, requestWeight fractional multiples), wu.ts (wuObsUrl {ICAO}:9:{CC}, extractWuApiKey from saved HTML, parseWuObservations/wuDailyMax KORD=87 RKSI=25, isFinalized), metar.ts (parseMetarJson/metarRunningMax RKSI fixture), iem.ts (iemNetworkFor US/intl, iemDailyUrl/parseIemDaily vs ORD fixture). Then config (§6.11) → P1 coverage gate ≥95%.
+**P1 final slice — `core/config.ts` (§6.11) + coverage gate:** ConfigSchema zod object with every §6.11 default (matching the 0010 seed exactly — add a test asserting code defaults == migration seed values), parseConfigRows (DB override wins, ConfigError lists every invalid key). Then run the ≥95% line-coverage gate on packages/core (`@vitest/coverage-v8`), close out P1, and start P2 (seed-stations script + discover-markets job + runJob/_shared plumbing — first IO code: packages/io http/slack + supabase/functions/_shared).
 
 ## Blockers
 
@@ -52,6 +55,8 @@
 - **`models.notes` column added** (§7.4 lists no notes field but the seed spec says traps are "seeded enabled=false with notes").
 - **`alerts_log` per-day dedupe key goes through UTC** (`(created_at at time zone 'utc')::date`) because `timestamptz::date` is not immutable and cannot be indexed.
 - **`applyRiskCaps` proposed items carry `price` + `orderMinSize`** — the §6.8 signature elides them, but flooring to whole shares and respecting the market's min order size is impossible without them. The §6.20 plpgsql RPC parity test must use the same enriched inputs.
+- **`parsePreviousRunsHourly` groups by the payload's local-time date prefix** instead of re-deriving windows via localDayWindow: previousRunsUrl always sets `timezone=auto`, so `hourly.time[]` is already station-local and the prefix IS the local day (equivalent bucketing; tz param kept as the documented contract).
+- **`iemNetworkFor` takes an optional `usState` param** — the US `{ST}_ASOS` network needs the state, which is not derivable from (cc, icao); US calls without it throw ValidationError.
 
 ## Operator TODO
 
