@@ -2326,15 +2326,15 @@ Wallet setup per GO-LIVE-CHECKLIST, POLY_PRIVATE_KEY in Edge secrets, goLiveGate
 - [x] `pairedBootstrapPValue` — seeded reproducibility; returns 1.0 under n<30; **zero-skill Monte Carlo regression: synthetic no-skill data passes the full gate in <5% of 1,000 trials (C5)**
 
 ### Module: core/edge + kelly + risk (§6.7–6.8)
-- [ ] `executableAsk` — walks depth correctly on the research CLOB fixture (best = normalized first)
-- [ ] `computeBucketEdges` — edge math, spread carried, reasons[] populated per failed criterion
-- [ ] `applyLiquidityFilters` — each veto (volume ≥ $2k, spread > maxSpread, t-to-close, unverified, halt) individually tested
-- [ ] `jointKellyStakes` — property tests scoped to the q > p candidate set (ADR-08 policy): Σf ≤ 1; inclusion ⇔ q/p > c within the set; greedy-excluded candidates have gradient ≤ 0; single-bucket reduces to (q−p)/(1−p); all-zero when nothing passes; KellyDomainError on true domain violations only; p′ ≥ 1 bucket excluded without throwing (W20)
-- [ ] `jointKellyStakes` integration — fed fee-adjusted effective prices (p' = p + fee(p) + slippage), verified stakes shrink vs raw prices (W4)
+- [x] `executableAsk` — walks depth correctly on the research CLOB fixture (best = normalized first)
+- [x] `computeBucketEdges` — edge math, spread carried, reasons[] populated per failed criterion
+- [x] `applyLiquidityFilters` — each veto (volume ≥ $2k, spread > maxSpread, t-to-close, unverified, halt) individually tested
+- [x] `jointKellyStakes` — property tests scoped to the q > p candidate set (ADR-08 policy): Σf ≤ 1; inclusion ⇔ q/p > c within the set; greedy-excluded candidates have gradient ≤ 0; single-bucket reduces to (q−p)/(1−p); all-zero when nothing passes; KellyDomainError on true domain violations only; p′ ≥ 1 bucket excluded without throwing (W20)
+- [x] `jointKellyStakes` integration — fed fee-adjusted effective prices (p' = p + fee(p) + slippage), verified stakes shrink vs raw prices (W4)
 - [ ] `applyKellyFraction` — audit object shows full vs fractional stakes side by side
-- [ ] `applyRiskCaps` — cap order per-trade→event→cluster→daily; share flooring respects orderMinSize; capAudit strings record every clamp; sub-$5 stakes dropped
-- [ ] `evaluateBreakers` — each rule fires at exactly its threshold (8 losses, −5% day, 25% DD, Brier 0.30, staleness)
-- [ ] `exposureSummary`/`clusterOf` — aggregates match seeded fixtures
+- [x] `applyRiskCaps` — cap order per-trade→event→cluster→daily; share flooring respects orderMinSize; capAudit strings record every clamp; sub-$5 stakes dropped
+- [x] `evaluateBreakers` — each rule fires at exactly its threshold (8 losses, −5% day, 25% DD, Brier 0.30, staleness)
+- [x] `exposureSummary`/`clusterOf` — aggregates match seeded fixtures
 
 ### Module: core/polymarket (§6.9)
 - [ ] `parseStringArray` — double-encoded fixtures; GammaShapeError on malformed

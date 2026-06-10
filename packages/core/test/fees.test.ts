@@ -2,7 +2,15 @@ import { describe, expect, it } from 'vitest';
 import { minEdgeRequired, takerFeePerShare, takerFeeTotal } from '../src/fees.ts';
 import type { EdgeConfig } from '../src/types.ts';
 
-const cfg: EdgeConfig = { uncertaintyMargin: 0.05, spreadBufferMin: 0.01, feeRate: 0.05 };
+const cfg: EdgeConfig = {
+  uncertaintyMargin: 0.05,
+  spreadBufferMin: 0.01,
+  feeRate: 0.05,
+  probeStakeUsd: 20,
+  maxSpread: 0.05,
+  minEventVolumeUsd: 2000,
+  minHoursBeforeClose: 2,
+};
 
 describe('takerFeePerShare (§6.4, ADR-07)', () => {
   it('docs worked example: fee(0.34, 0.05) = 0.01122; 100 shares → $1.12', () => {

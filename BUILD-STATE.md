@@ -9,6 +9,9 @@
 
 ## Completed
 
+- **P1 progress (iteration 6, 2026-06-10):**
+  - `core/edge.ts` (§6.7): executableAsk best-first book walk, computeBucketEdges (per-market feeRate override into fee + threshold, reasons[] tokens), applyLiquidityFilters (5 vetoes, pure). `core/kelly.ts` (§6.8): jointKellyStakes greedy threshold solver (c recomputed per inclusion, budget guard, W20 natural exclusion), applyKellyFraction, applyRiskCaps (ordered clamps with depleting shared headrooms, whole-share flooring, capAudit, sub-$5 drop). `core/risk.ts`: evaluateBreakers (6 rules, exact thresholds), exposureSummary, clusterOf. Types: NormalizedBook/BookLevel/EdgeRow/RiskConfig/StakePlan; EdgeConfig extended with probe/filter fields.
+  - 38 tests: CLOB-fixture depth walk (0.36678 avg over 3 levels), 300-trial seeded Kelly property suite, W4 fee-adjusted shrink, every cap/breaker/veto individually. §15 §6.7–6.8: 8/9 ticked (applyKellyFraction audit-object item lands with poll-markets' audit JSON in P5). Suite: 242 green.
 - **P1 progress (iteration 5, 2026-06-10):**
   - `core/calibration/`: emos.ts (updateBias decay/seed, fitSigma sample-std null-under-minN, computeModelWeights inverse-MSE with non-finite→0 + 1e-6 clamp, correctPoint as sole bias-subtraction site) + scores.ts (brierScore, reliabilityBins non-empty-bins, expectedCalibrationError, sharpness, mulberry32, pairedBootstrapPValue seeded one-sided).
   - 22 tests incl. geometric-convergence factor check, ECE≈0 on perfectly-calibrated synthetic, the codebase-wide grep tripwire for bias subtraction (comment-stripped), and the C5 zero-skill Monte Carlo: 1,000 no-skill trials vs the conjunctive gate (point ≤0.95× AND bootstrap p<0.05) passes <5%. §15 calibration 8/8 ticked. Suite: 204 green.
@@ -30,7 +33,7 @@
 
 ## Next Task
 
-**P1 continues — `core/edge.ts` + `core/kelly.ts` + `core/risk.ts` (§6.7–6.8):** executableAsk book-walking vs the research CLOB fixture (best = normalized first), computeBucketEdges (edge math, spread carried, reasons[]), applyLiquidityFilters (each veto individually tested), jointKellyStakes (greedy threshold solver + ADR-08-scoped property tests + W4 fee-adjusted-input integration + W20 p′≥1 exclusion), applyKellyFraction (audit full-vs-fractional), applyRiskCaps (cap order, share flooring, capAudit strings, sub-$5 drop), evaluateBreakers (each rule at exact threshold), exposureSummary/clusterOf. Then: polymarket (§6.9) → weather (§6.10) → config (§6.11). End of P1: coverage gate ≥95% on core.
+**P1 continues — `core/polymarket/*` (§6.9):** gamma.ts (parseStringArray double-encoded, extractStationFromUrl US two-middle-segment W2 + intl one-segment, targetDateFromEvent slug-with-year + 2025-stale-slug trap + Seoul C6 tz check, parseGammaEvent full 4-city fixtures + resolved, isZombieEvent Jinan fixture) + clob.ts (normalizeBook reorder raw-last=best, string→number, hash carried). Then: weather (§6.10) → config (§6.11). End of P1: coverage gate ≥95% on core.
 
 ## Blockers
 
@@ -45,6 +48,7 @@
 - **§7.12 "nowcast extrema" interpreted as first + last nowcast row per (event, source)** (time-series extremes) in ops_downsample(). Revisit if the intent was min/max μ.
 - **`models.notes` column added** (§7.4 lists no notes field but the seed spec says traps are "seeded enabled=false with notes").
 - **`alerts_log` per-day dedupe key goes through UTC** (`(created_at at time zone 'utc')::date`) because `timestamptz::date` is not immutable and cannot be indexed.
+- **`applyRiskCaps` proposed items carry `price` + `orderMinSize`** — the §6.8 signature elides them, but flooring to whole shares and respecting the market's min order size is impossible without them. The §6.20 plpgsql RPC parity test must use the same enriched inputs.
 
 ## Operator TODO
 
