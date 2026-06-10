@@ -1,0 +1,17 @@
+# Secrets — never commit
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Dependencies & build
+node_modules/
+.next/
+dist/
+*.tsbuildinfo
+
+# Local artifacts
+backups/
+.DS_Store
+Thumbs.db
