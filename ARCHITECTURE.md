@@ -2407,11 +2407,11 @@ Wallet setup per GO-LIVE-CHECKLIST, POLY_PRIVATE_KEY in Edge secrets, goLiveGate
 
 ### Data models (§7)
 - [ ] Migrations 0001–0010 apply clean on empty DB and re-apply idempotently (db reset)
-- [ ] Every unique/natural key from §7 exists (cities.slug; city_stations one-current partial; forecast 5-col; ensemble 4-col; observations (icao,date); events (city,date,kind); buckets (event,idx); dist (event,source,hash); model_stats PK; scores PK; bets open-rec partial; ledger (bet,type); job_runs (job,period); alerts (dedupe,day))
-- [ ] Indexes from §7.5/§7.11 present in migrations (verified by reading SQL, not prose)
-- [ ] RLS: anon sees nothing; operator email reads all; writes service-role only (tested with anon client)
-- [ ] config seeded with §6.11 defaults; models seeded incl. disabled traps (kma, ecmwf_ifs04, gfs025)
-- [ ] Downsample cron enforces EVERY retention rule: market_snapshots tiers (7d/30d/180d), forecast_snapshots 90d lead-0–2@10Z keep, bucket_probabilities resolution+30d scored-rows keep, edge_evaluations 30d, intraday_max 14d, job_runs/alerts_log 90d (fixture rows aged artificially)
+- [x] Every unique/natural key from §7 exists (cities.slug; city_stations one-current partial; forecast 5-col; ensemble 4-col; observations (icao,date); events (city,date,kind); buckets (event,idx); dist (event,source,hash); model_stats PK; scores PK; bets open-rec partial; ledger (bet,type); job_runs (job,period); alerts (dedupe,day))
+- [x] Indexes from §7.5/§7.11 present in migrations (verified by reading SQL, not prose)
+- [x] RLS: anon sees nothing; operator email reads all; writes service-role only (tested with anon client)
+- [x] config seeded with §6.11 defaults; models seeded incl. disabled traps (kma, ecmwf_ifs04, gfs025)
+- [x] Downsample cron enforces EVERY retention rule: market_snapshots tiers (7d/30d/180d), forecast_snapshots 90d lead-0–2@10Z keep, bucket_probabilities resolution+30d scored-rows keep, edge_evaluations 30d, intraday_max 14d, job_runs/alerts_log 90d (fixture rows aged artificially)
 - [ ] model_stats PK includes snapshot_slot; queries never pool slots (W3)
 - [ ] job_locks lease semantics: claim-by-CAS, expiry reclaim, release-on-completion (C8)
 - [ ] job_runs.attempt increments on CAS takeover; unique (job, period_key) never violated (W16)
@@ -2420,10 +2420,10 @@ Wallet setup per GO-LIVE-CHECKLIST, POLY_PRIVATE_KEY in Edge secrets, goLiveGate
 - [ ] calibration_scores.window_tag domain incl. 'backtest'/'nowcast'; zero-UUID pooled row carries bootstrap_p
 - [ ] nowcast_lift populated by backfill-actuals; weekly refresh by run-calibration; missing row ⇒ truncation-only nowcast
 - [ ] edge_decile_stats view matches hand-computed deciles on seeded bets (W-2)
-- [ ] bankroll_balance view sum equals manual ledger arithmetic; no stored running-balance column exists (W10)
+- [x] bankroll_balance view sum equals manual ledger arithmetic; no stored running-balance column exists (W10)
 - [ ] model_stats_history rows written on every stats_version increment
 - [ ] edge_evaluations unique (event, bucket, hour); written hourly; queryable from /events page (F-038)
-- [ ] pg_cron job commands read CRON_SECRET from Vault — `select command from cron.job` contains no literal secret (W11)
+- [x] pg_cron job commands read CRON_SECRET from Vault — `select command from cron.job` contains no literal secret (W11)
 - [ ] tmax columns: °F city observations carry units=e integers (spot-check vs WU page)
 
 ### Data flows (§9)

@@ -1,0 +1,48 @@
+# BUILD-STATE — Weather Edge
+
+> The state file for the autonomous build loop. Files are the state — every
+> iteration reads this first, works, then updates it. Contract: ARCHITECTURE.md.
+
+## Active Phase
+
+**P0 — Scaffold** (§14): monorepo, migrations 0001–0010, .env.example, README.
+Code-complete this iteration; two DoD items are operator-environment-gated (see Blockers).
+
+## Completed
+
+- **P0 (iteration 1, 2026-06-10):**
+  - Monorepo: pnpm workspaces, strict shared tsconfig, vitest workspace (projects: core, db), GitHub Actions CI (typecheck + test).
+  - `packages/core`: §11.1 error taxonomy (`errors.ts`) + unit tests.
+  - Migrations 0001–0010 per §7: extensions (guarded), reference (clusters/cities/stations/city_stations/models), ingestion (forecast/ensemble/observations/intraday_max/nowcast_lift), markets (events/buckets/snapshots), analytics (bucket_probabilities/model_stats(+history)/calibration_scores/edge_evaluations), trading (bets/bankroll_ledger + bankroll_balance & edge_decile_stats views), ops (job_runs/job_locks/alerts_log/config/config_audit/backfill_progress), RLS (deny-by-default, is_operator()), cron (ops_downsample() + 12 §7.22 registrations, secrets via Vault — W11), seed (12 clusters, 14 models incl. 3 disabled traps, full §6.11 config incl. bankroll $1,000, ledger init row, poll-markets lease).
+  - PGlite migration test harness (`supabase/tests/`): applies the real chain against embedded Postgres with Supabase stubs (roles, auth.jwt(), cron.schedule→cron.job recorder, vault table). 55 tests green: keys, indexes, seeds, RLS behavior, cron registrations, W11 no-literal-secret, full retention-rule suite incl. idempotent second pass.
+  - `.env.example` (§11.2), README quickstart.
+
+## Next Task
+
+**P1 — Core domain: parsing & math (§14).** Order: `core/time` (§6.1) → `core/units` (§6.2) → `core/buckets` (§6.3) → `core/fees` (§6.4) → distributions (§6.5) → calibration (§6.6) → edge/kelly/risk (§6.7–6.8) → polymarket (§6.9) → weather (§6.10) → config (§6.11). Fixtures from `research/*.json` are ground truth; every §15 core checklist item; DST window tests; property tests for jointKellyStakes; ≥95% line coverage on core.
+
+## Blockers
+
+- **`supabase db reset` (P0 DoD)** — needs Supabase CLI + Docker (or a linked hosted project). Neither exists on this machine. Migration validity, idempotent re-apply, keys, seeds, RLS, and retention are PGlite-verified (real Postgres, full chain, 2× apply) — §15 box left unticked until the real reset runs. → Operator TODO 1/2.
+- **pg_cron rows registered on hosted project (P0 DoD)** — requires the hosted project + Vault secrets. Registration SQL is written and stub-verified. → Operator TODO 2/3.
+- **SLACK_WEBHOOK_URL** — variable scaffolded in .env.example; notifier coded against it from P2. BLOCKED on operator creating the webhook.
+
+## Deviations
+
+- **PGlite as P0 migration-verification harness.** §14 P0 DoD says `supabase db reset`; no Docker/CLI exists here. The full migration chain is instead applied to embedded real-Postgres (PGlite) with Supabase-environment stubs (roles, auth.jwt(), cron.schedule recorder, vault table) — strictly additive; migrations are unmodified Supabase SQL. Real reset stays an operator step.
+- **0001 extension creates are DO-block guarded** (`raise notice` on failure) so the chain applies in extension-less test environments. On hosted Supabase both extensions install normally.
+- **§7.12 "nowcast extrema" interpreted as first + last nowcast row per (event, source)** (time-series extremes) in ops_downsample(). Revisit if the intent was min/max μ.
+- **`models.notes` column added** (§7.4 lists no notes field but the seed spec says traps are "seeded enabled=false with notes").
+- **`alerts_log` per-day dedupe key goes through UTC** (`(created_at at time zone 'utc')::date`) because `timestamptz::date` is not immutable and cannot be indexed.
+
+## Operator TODO
+
+1. **Install Docker Desktop + Supabase CLI** (or skip straight to hosted): then `supabase start && supabase db reset` to confirm the P0 DoD on the real stack.
+2. **Create the hosted Supabase project** (free tier OK until P4; **upgrade to Pro before P4 backfill — R-4**), `supabase link`, `supabase db push`.
+3. **Seed Vault secrets** on the hosted project: `cron_secret` (≥32 chars, same value as CRON_SECRET) and `project_url` (the project's https URL) — pg_cron commands read both at run time (W11).
+4. **Create the Slack incoming webhook** and put it in `.env.local` as `SLACK_WEBHOOK_URL` + in Supabase Edge Function secrets.
+5. *(Post-P4, written here in advance)* Full-universe backfill is a multi-day rate-budgeted run; the build loop will only run the 3-station sample (RKSI, EGLL, KORD; 5 models; 12 months; `--budget 2000`). Full command will be added when scripts land in P4.
+
+## Phase Gate Notes
+
+- P9 (60-day paper campaign) and P10 (live enablement) are calendar/operator-gated; start procedures will be written here at P8 completion.
