@@ -10,36 +10,13 @@
  */
 import { createServerClient, parseCookieHeader } from '@supabase/ssr';
 import { buildAlertBlocks, slackPost } from '@weather-edge/io';
+import { webPort, type SupabaseishClient } from '../port.ts';
 import type { ApiDeps, WebAlert, WebDb } from './deps.ts';
 
 function need(name: string): string {
   const v = process.env[name];
   if (!v) throw new Error(`${name} missing from web environment (§11.2)`);
   return v;
-}
-
-interface SupabaseishClient {
-  rpc(fn: string, args: Record<string, unknown>): PromiseLike<{ data: unknown; error: { message: string } | null }>;
-  from(table: string): {
-    select(cols: string): PromiseLike<{ data: unknown; error: { message: string } | null }>;
-  };
-  auth: { getUser(): Promise<{ data: { user: { email?: string } | null } }> };
-}
-
-/** Same wrapping rules as functions/_shared supabasePort (PostgREST shapes). */
-function webPort(client: SupabaseishClient): WebDb {
-  return {
-    async rpc<T>(fn: string, args: Record<string, unknown>): Promise<T[]> {
-      const { data, error } = await client.rpc(fn, args);
-      if (error) throw new Error(`rpc ${fn} failed: ${error.message}`);
-      return (Array.isArray(data) ? data : data === null ? [] : [{ [fn]: data }]) as T[];
-    },
-    async getConfigRows(): Promise<{ key: string; value: string }[]> {
-      const { data, error } = await client.from('config').select('key, value');
-      if (error) throw new Error(`config select failed: ${error.message}`);
-      return (data ?? []) as { key: string; value: string }[];
-    },
-  };
 }
 
 /** notifySlack's web twin: alerts_log dedupe via RPC + webhook post (ADR-11). */

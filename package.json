@@ -5,6 +5,7 @@
   "type": "module",
   "packageManager": "pnpm@10.33.0",
   "scripts": {
+    "dev": "pnpm --filter @weather-edge/web dev",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage.enabled --coverage.include=packages/core/src/** --coverage.exclude=packages/core/src/index.ts --coverage.exclude=packages/core/src/types.ts --coverage.thresholds.lines=95 --coverage.thresholds.functions=95 --coverage.reporter=text-summary",

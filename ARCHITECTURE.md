@@ -2438,13 +2438,13 @@ Wallet setup per GO-LIVE-CHECKLIST, POLY_PRIVATE_KEY in Edge secrets, goLiveGate
 - [ ] 9.6 nowcast: rising METAR max eliminates buckets in the stored distribution
 - [x] 9.7 backfill scripts resumable (kill mid-run, restart continues from cursor); budget sleeper engages
 - [x] 9.8 dead-man: stop snapshots 30h (clock-mock) → halt:global + CRITICAL
-- [ ] 9.9 go-live gate: every condition red→green transition rendered on /admin
+- [x] 9.9 go-live gate: every condition red→green transition rendered on /admin
 
 ### Dashboard (§6.21)
 - [ ] 7 pages render with real data; Playwright smoke green
-- [ ] EdgeChart display recompute == stored edge rows (no silent drift between engine and UI)
-- [ ] Reliability diagram + heatmap match calibration_scores fixtures
-- [ ] Bet audit JSON fully visible on /events/[slug] (spec §15: derive stake from stored values)
+- [x] EdgeChart display recompute == stored edge rows (no silent drift between engine and UI)
+- [x] Reliability diagram + heatmap match calibration_scores fixtures
+- [x] Bet audit JSON fully visible on /events/[slug] (spec §15: derive stake from stored values)
 
 ### Scripts (§6.22)
 - [x] seed-stations covers all discovered ICAOs or prints the manual list
