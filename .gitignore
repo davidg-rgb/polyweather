@@ -18,3 +18,5 @@ scripts/.cache/
 coverage/
 .DS_Store
 Thumbs.db
+
+.vercel
