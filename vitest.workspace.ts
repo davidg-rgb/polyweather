@@ -15,6 +15,12 @@ export default defineWorkspace([
   },
   {
     test: {
+      name: 'trading',
+      include: ['packages/trading/test/**/*.test.ts'],
+    },
+  },
+  {
+    test: {
       name: 'functions',
       include: ['supabase/functions/**/*.test.ts'],
     },

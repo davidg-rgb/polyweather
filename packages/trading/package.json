@@ -1,0 +1,12 @@
+{
+  "name": "@weather-edge/trading",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@weather-edge/core": "workspace:*"
+  }
+}

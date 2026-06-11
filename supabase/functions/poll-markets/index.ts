@@ -1,5 +1,6 @@
 /** Edge Function entry — poll-markets (§6.17). Schedule: every 5 minutes UTC. */
 import { fetchJson } from '../../../packages/io/src/index.ts';
+import { getEnv } from '../_shared/auth.ts';
 import { getServiceDb } from '../_shared/db.ts';
 import { runJob } from '../_shared/runJob.ts';
 import { notifySlack } from '../_shared/slack.ts';
@@ -28,8 +29,18 @@ deno?.serve(async (req: Request) => {
           ),
         fetchBook: (tokenId) => fetchJson(`${CLOB_BASE}/book?token_id=${tokenId}`),
         notify: (a) => notifySlack(db, a),
-        // live-mode cancel is wired through execute-bet in P6 (§6.20a chokepoint);
-        // paper mode has no resting orders to pull
+        // §6.20a chokepoint: live-mode expiry pulls the resting GTC via
+        // execute-bet {action:'cancel'} over HTTP — never a direct clob call.
+        cancelLiveOrder: async (betId) => {
+          await fetch(`${getEnv('SUPABASE_URL')}/functions/v1/execute-bet`, {
+            method: 'POST',
+            headers: {
+              'content-type': 'application/json',
+              'x-cron-secret': getEnv('CRON_SECRET') ?? '',
+            },
+            body: JSON.stringify({ betId, action: 'cancel' }),
+          });
+        },
         now,
         runId: crypto.randomUUID(),
       }),

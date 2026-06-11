@@ -2385,12 +2385,12 @@ Wallet setup per GO-LIVE-CHECKLIST, POLY_PRIVATE_KEY in Edge secrets, goLiveGate
 - [ ] health-monitor — staleness matrix per job (**discovery threshold 10h — no false nightly alarm, W7**); reaper flips stuck 'running' runs and re-opens the period; unsent-alert resend; dead-man halt fires on stale data; tomorrow-events sanity
 
 ### Module: packages/trading (§6.20)
-- [ ] PaperExecutor — fill = WORSE-of(stored, live re-walked) ask + 1¢ + fee (W9); caps re-derived IN PLPGSQL inside the single `fill_bet_with_caps` RPC under pg_advisory_xact_lock — **two concurrent approvals of DIFFERENT bets serialize and cannot jointly breach caps (W17)**; TS↔SQL cap-ladder parity test (applyRiskCaps vs RPC on identical fixtures); ERR_CAPS path; 5-min stale-book 422 path; CAS transition (loser of approve-vs-expire race gets 409); ledger entry written once
-- [ ] TradeExecutor.cancel — reachable only via execute-bet {action:'cancel'}; paper no-op; live mock pulls the resting order
-- [ ] LiveExecutor — unit-tested against clob-client mock (order params: tokenID, price=exec_ask, GTC, negRisk:true, tick respected); no auto-retry on placement error
-- [ ] execute-bet — 401/404/409/422/503 response paths; **live gate failure NEVER paper-fills (C1)**; synchronous, no waitUntil
-- [ ] goLiveGate — each condition independently flips the verdict; reasons verbatim; gate = 60d + pooled bootstrap p<0.05 + ≤0.95× point + per-city n≥30 & ≤1.0× rule (C5); KYC attestation row checked
-- [ ] Invariant: grep-verified no clob-client import / POLY_PRIVATE_KEY read outside packages/trading, and packages/trading imported only by execute-bet + web gate-readout
+- [x] PaperExecutor — fill = WORSE-of(stored, live re-walked) ask + 1¢ + fee (W9); caps re-derived IN PLPGSQL inside the single `fill_bet_with_caps` RPC under pg_advisory_xact_lock — **two concurrent approvals of DIFFERENT bets serialize and cannot jointly breach caps (W17)**; TS↔SQL cap-ladder parity test (applyRiskCaps vs RPC on identical fixtures); ERR_CAPS path; 5-min stale-book 422 path; CAS transition (loser of approve-vs-expire race gets 409); ledger entry written once
+- [x] TradeExecutor.cancel — reachable only via execute-bet {action:'cancel'}; paper no-op; live mock pulls the resting order
+- [x] LiveExecutor — unit-tested against clob-client mock (order params: tokenID, price=exec_ask, GTC, negRisk:true, tick respected); no auto-retry on placement error
+- [x] execute-bet — 401/404/409/422/503 response paths; **live gate failure NEVER paper-fills (C1)**; synchronous, no waitUntil
+- [x] goLiveGate — each condition independently flips the verdict; reasons verbatim; gate = 60d + pooled bootstrap p<0.05 + ≤0.95× point + per-city n≥30 & ≤1.0× rule (C5); KYC attestation row checked
+- [x] Invariant: grep-verified no clob-client import / POLY_PRIVATE_KEY read outside packages/trading, and packages/trading imported only by execute-bet + web gate-readout
 
 ### API: operator routes (§8.2)
 - [ ] `[POST] /api/bets/{id}/approve` — thin proxy to execute-bet; 200 fill shape; 409 wrong status; 422 stale book/caps; 503 gate reasons relayed verbatim; auth enforced; CRON_SECRET never reaches the browser
