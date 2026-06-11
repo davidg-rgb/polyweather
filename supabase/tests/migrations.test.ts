@@ -54,6 +54,17 @@ describe('migrations 0001–0010', () => {
     expect(clusters.length).toBe(12);
   });
 
+  it('no RPC is RETURNS SETOF — the port wrap heuristic depends on it', () => {
+    // supabasePort (functions/_shared/db.ts) and webPort (apps/web port.ts)
+    // normalize PostgREST results by shape: array ⇒ RETURNS TABLE row set,
+    // bare value ⇒ wrap as [{ [fn]: value }]. A SETOF scalar/jsonb fn would
+    // return a bare-VALUE array PostgREST-side and be misread as rows. Use
+    // RETURNS TABLE (or a single jsonb object) instead.
+    for (const m of migrationFiles()) {
+      expect(m.sql, `${m.name} declares RETURNS SETOF`).not.toMatch(/returns\s+setof/i);
+    }
+  });
+
   it('has the migration files in order', () => {
     const names = migrationFiles().map((m) => m.name);
     expect(names).toEqual([

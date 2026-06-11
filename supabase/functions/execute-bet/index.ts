@@ -11,6 +11,19 @@ const CLOB_BASE = 'https://clob.polymarket.com';
 // fails closed on any fetch error.
 const GEOBLOCK_URL = 'https://docs.polymarket.com/api-reference/geoblock.md';
 
+// eszip npm-snapshot hints — NEVER executed. LiveExecutor (packages/trading/
+// src/live.ts, F-032) lazy-imports these via non-literal specifiers so the
+// apps/web webpack build never sees them; that also hides them from the
+// deploy-time bundler, which would ship a snapshot missing both packages and
+// 500 every live-mode fill at P10. Listing the SAME constraint strings as
+// literals here puts them in the snapshot; the runtime resolves live.ts's
+// non-literal lookups against it. Keep in lockstep with live.ts.
+const eszipNpmHints = () => [
+  import('npm:ethers@5'),
+  import('npm:@polymarket/clob-client@4'),
+];
+void eszipNpmHints;
+
 const deno = (globalThis as {
   Deno?: { serve(handler: (req: Request) => Response | Promise<Response>): void };
 }).Deno;
