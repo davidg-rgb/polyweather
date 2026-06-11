@@ -6,6 +6,19 @@ import { runJob } from '../_shared/runJob.ts';
 import { notifySlack } from '../_shared/slack.ts';
 import { healthMonitor } from './handler.ts';
 
+/** API model slug → open-meteo.com/data directory (live-verified 2026-06-11). */
+const META_DIR: Record<string, string> = {
+  gfs_seamless: 'ncep_gfs013',
+  ecmwf_ifs025: 'ecmwf_ifs025',
+  icon_seamless: 'dwd_icon',
+  jma_seamless: 'jma_gsm',
+  gem_seamless: 'cmc_gem_gdps',
+  meteofrance_seamless: 'meteofrance_arpege_world025',
+  ukmo_seamless: 'ukmo_global_deterministic_10km',
+  cma_grapes_global: 'cma_grapes_global',
+  // best_match is a composite with no data directory — intentionally absent.
+};
+
 const deno = (globalThis as {
   Deno?: { serve(handler: (req: Request) => Response | Promise<Response>): void };
 }).Deno;
@@ -26,8 +39,13 @@ deno?.serve(async (req: Request) => {
           return webhook ? slackPost(webhook, buildAlertBlocks(a)) : false;
         },
         fetchModelMeta: async (slug) => {
-          // Docs-based meta shape — re-verified by scripts/smoke-live-apis (P8).
-          const meta = (await fetchJson(`https://api.open-meteo.com/data/${slug}/static/meta.json`)) as {
+          // The data directories use real-model names, not API slugs — the
+          // seamless composites map to their primary member (live-verified
+          // 2026-06-11 via scripts/smoke-live-apis; unmapped/composite models
+          // return null = sampled-not-alarmed).
+          const dir = META_DIR[slug];
+          if (!dir) return null;
+          const meta = (await fetchJson(`https://api.open-meteo.com/data/${dir}/static/meta.json`)) as {
             last_run_initialisation_time?: number;
           };
           return typeof meta?.last_run_initialisation_time === 'number'

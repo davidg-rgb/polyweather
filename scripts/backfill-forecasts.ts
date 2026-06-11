@@ -17,6 +17,7 @@
  *        [--stations RKSI,EGLL,KORD] [--models ecmwf_ifs025,...] [--budget 8000]
  */
 import { parseArgs } from 'node:util';
+import { pathToFileURL } from 'node:url';
 import {
   parseMultiModelDaily,
   parsePreviousRunsHourly,
@@ -230,7 +231,7 @@ export async function backfillForecasts(
 }
 
 // CLI entry — only when executed directly (not when imported by tests).
-if (process.argv[1] && import.meta.url === `file://${process.argv[1].replace(/\\/g, '/')}`) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const { values } = parseArgs({
     options: {
       from: { type: 'string' },

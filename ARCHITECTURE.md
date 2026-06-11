@@ -2453,8 +2453,8 @@ Wallet setup per GO-LIVE-CHECKLIST, POLY_PRIVATE_KEY in Edge secrets, goLiveGate
 - [x] backfill-market-history reconstructs ≥1 resolved event's consensus + winner correctly vs fixture
 - [x] simulate-historical-edge — walk-forward (no peeking: stats at D use only <D data — test with sentinel); scores at ADR-16 cutoffs only; prints fidelity table; writes 'backtest' scores
 - [x] backfill-market-history — consensus rows synthesized at pre-cutoff timestamps only (post-cutoff prices never used — C2)
-- [ ] backup-db — produces restorable dump; retention of 8 verified (F-037)
-- [ ] smoke-live-apis — one assertion per integration; fails loudly on shape drift
+- [x] backup-db — produces restorable dump; retention of 8 verified (F-037)
+- [x] smoke-live-apis — one assertion per integration; fails loudly on shape drift
 
 ### Docs
 - [ ] README quickstart works from clean clone (verified by following it)

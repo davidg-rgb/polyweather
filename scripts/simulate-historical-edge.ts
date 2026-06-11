@@ -32,6 +32,7 @@
  *        [--source house_gaussian] [--stations RKSI,EGLL,KORD] [--out reports]
  */
 import { mkdirSync, writeFileSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import {
@@ -653,7 +654,7 @@ export async function simulateHistoricalEdge(
 }
 
 // CLI entry — only when executed directly (not when imported by tests).
-if (process.argv[1] && import.meta.url === `file://${process.argv[1].replace(/\\/g, '/')}`) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const { values } = parseArgs({
     options: {
       from: { type: 'string' },

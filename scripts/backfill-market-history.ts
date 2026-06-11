@@ -27,6 +27,7 @@
  *        [--limit 200] [--refetch]
  */
 import { createHash } from 'node:crypto';
+import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import {
   impliedDistribution,
@@ -309,7 +310,7 @@ export async function backfillMarketHistory(
 }
 
 // CLI entry — only when executed directly (not when imported by tests).
-if (process.argv[1] && import.meta.url === `file://${process.argv[1].replace(/\\/g, '/')}`) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const { values } = parseArgs({
     options: {
       from: { type: 'string' },

@@ -20,6 +20,7 @@
  *        [--stations RKSI,EGLL,KORD] [--budget 8000]
  */
 import { parseArgs } from 'node:util';
+import { pathToFileURL } from 'node:url';
 import {
   extractWuApiKey,
   fToC,
@@ -322,7 +323,7 @@ export async function backfillActuals(
 }
 
 // CLI entry — only when executed directly (not when imported by tests).
-if (process.argv[1] && import.meta.url === `file://${process.argv[1].replace(/\\/g, '/')}`) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const { values } = parseArgs({
     options: {
       from: { type: 'string' },

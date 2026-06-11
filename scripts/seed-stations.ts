@@ -10,7 +10,7 @@
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import tzlookup from 'tz-lookup';
 import { parseCsvWithHeader } from './lib/csv.ts';
 import { makeScriptDb, type ScriptDb } from './lib/script-db.ts';
@@ -132,7 +132,7 @@ export async function fetchAirportsCsv(): Promise<string> {
 }
 
 // CLI entry — only when executed directly (not when imported by tests).
-if (process.argv[1] && import.meta.url === `file://${process.argv[1].replace(/\\/g, '/')}`) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const db = makeScriptDb();
   try {
     await seedStations({ db, fetchCsv: fetchAirportsCsv, log: console.log });
