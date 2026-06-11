@@ -203,8 +203,14 @@
 
 ## Operator TODO
 
-1. **Install Docker Desktop + Supabase CLI** (or skip straight to hosted): then `supabase start && supabase db reset` to confirm the P0 DoD on the real stack.
-2. **Create the hosted Supabase project** (free tier OK until P4; **upgrade to Pro before P4 backfill — R-4**), `supabase link`, `supabase db push`.
+> **HOSTED DEPLOY IN PROGRESS (2026-06-11, Docker path skipped by operator decision — verification runs against the hosted stack instead):**
+> project `weather-edge` ref `lenysiqxihsmxljvyybt` (eu-north-1) CREATED via MCP; knitting-buddy paused to free the slot (restore anytime).
+> `.env.local` written (URL + anon key + generated CRON_SECRET + OPERATOR_EMAIL; DATABASE_URL awaits the password paste); `.env.functions` holds CRON_SECRET for `supabase secrets set`.
+> WAITING ON OPERATOR: (a) `npx supabase login`, (b) dashboard DB-password reset → paste into .env.local.
+> THEN (assistant continues): `db push` (0001–0023), `functions deploy` ×12 (--use-api, no Docker), `secrets set --env-file .env.functions`, vault seed via tsx script, cron verification, advisors check, Vercel deploy.
+
+1. ~~Install Docker Desktop + Supabase CLI~~ **SKIPPED — hosted-direct deploy** (the §15 db-reset box's verification = `supabase db push` onto the empty hosted DB + the PGlite 2×-apply idempotency proof).
+2. **Create the hosted Supabase project** — **DONE** (`lenysiqxihsmxljvyybt`); migrations push in progress per the note above.
 3. **Seed Vault secrets** on the hosted project: `cron_secret` (≥32 chars, same value as CRON_SECRET) and `project_url` (the project's https URL) — pg_cron commands read both at run time (W11).
 4. **Create the Slack incoming webhook** and put it in `.env.local` as `SLACK_WEBHOOK_URL` + in Supabase Edge Function secrets.
 5. **Full-universe backfill (completes the §14 P4 DoD "≥12 months × ≥40 stations")** — multi-day rate-budgeted run against the HOSTED Pro project (set `DATABASE_URL` in `.env.local` first; run `pnpm tsx scripts/seed-stations.ts` beforehand so every discovered station has coordinates). Both commands are resumable — re-run after any interruption and they continue from the cursor; the budgeter sleeps to the next UTC midnight when the daily weighted-call budget is exhausted (~3 days total on the free Open-Meteo tier; a paid `OPENMETEO_API_KEY` in env raises throughput and switches to customer- hosts automatically):
