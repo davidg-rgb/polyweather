@@ -56,3 +56,34 @@ export async function notifySlack(db: DbPort, alert: Alert): Promise<boolean> {
     return false;
   }
 }
+
+/**
+ * ADR-11 resend sweep (health-monitor §6.19): re-post alerts_log rows that
+ * are still sent=false after `olderThanMin` — a failed post never consumed
+ * the dedupe key, so this is what eventually delivers it. `post` is the raw
+ * webhook poster (deps-injected; production = slackPost to SLACK_WEBHOOK_URL).
+ * Flips sent=true on 2xx ONLY; never throws. Returns the resent count.
+ */
+export async function resendUnsentAlerts(
+  db: DbPort,
+  olderThanMin: number,
+  post: (alert: Alert) => Promise<boolean>,
+): Promise<number> {
+  let resent = 0;
+  try {
+    const unsent = await db.rpc<{ id: string; kind: string; severity: AlertSeverity; title: string; body: string }>(
+      'list_unsent_alerts',
+      { p_older_min: olderThanMin },
+    );
+    for (const row of unsent) {
+      const delivered = await post({ kind: row.kind, severity: row.severity, title: row.title, body: row.body });
+      if (delivered) {
+        await db.rpc('mark_alert_sent', { p_alert_id: row.id });
+        resent++;
+      }
+    }
+  } catch (e) {
+    console.error(JSON.stringify({ msg: 'resendUnsentAlerts failed (never throws)', error: String(e) }));
+  }
+  return resent;
+}
