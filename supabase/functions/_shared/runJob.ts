@@ -61,6 +61,18 @@ export async function runJob(
     throw e; // ConfigError on missing CRON_SECRET: fail loudly, not as a clean 401
   }
 
+  // §8.1: Body { periodKey? } — a caller-supplied key (admin trigger-job uses
+  // ':manual:{ts}' suffixes, §6.21) overrides the entry's derived slot key so
+  // manual retriggers never collide with the period already run.
+  try {
+    const body = (await req.clone().json()) as { periodKey?: unknown };
+    if (typeof body?.periodKey === 'string' && body.periodKey.length > 0) {
+      periodKey = body.periodKey;
+    }
+  } catch {
+    // no/invalid body — keep the derived key
+  }
+
   const db = deps.db;
   const config = parseConfigRows(await db.getConfigRows());
 

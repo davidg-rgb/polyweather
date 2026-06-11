@@ -6,6 +6,8 @@
   "include": [
     "packages/*/src/**/*.ts",
     "packages/*/test/**/*.ts",
+    "apps/*/src/**/*.ts",
+    "apps/*/test/**/*.ts",
     "scripts/**/*.ts",
     "supabase/functions/**/*.ts",
     "supabase/tests/**/*.ts",

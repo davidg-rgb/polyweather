@@ -2393,17 +2393,17 @@ Wallet setup per GO-LIVE-CHECKLIST, POLY_PRIVATE_KEY in Edge secrets, goLiveGate
 - [x] Invariant: grep-verified no clob-client import / POLY_PRIVATE_KEY read outside packages/trading, and packages/trading imported only by execute-bet + web gate-readout
 
 ### API: operator routes (§8.2)
-- [ ] `[POST] /api/bets/{id}/approve` — thin proxy to execute-bet; 200 fill shape; 409 wrong status; 422 stale book/caps; 503 gate reasons relayed verbatim; auth enforced; CRON_SECRET never reaches the browser
-- [ ] `[POST] /api/admin/manual-bet` — zod validation; paper path proxies to execute-bet; externally-executed live fill recorded verbatim (F-035)
-- [ ] `[POST] /api/admin/export` — CSV columns cover every fill + resolution with USD amounts (K4-ready, R-16); date-range filter works
-- [ ] `[POST] /api/bets/{id}/skip` — 200/404/409
-- [ ] `[POST] /api/admin/halt` + `resume` — halt key writes + audit + Slack; resume confirm mismatch 400
-- [ ] `[POST] /api/admin/config` — zod rejects bad keys (400 details); audit rows; bankroll change WARN
-- [ ] `[POST] /api/admin/verify-station` — sets verified, re-enables betting; 409 superseded row
-- [ ] `[POST] /api/admin/trigger-job` — secret stays server-side; unknown job 400
-- [ ] `[POST] /api/admin/promote-source` — server re-check blocks ineligible promotion (409)
-- [ ] `[GET] /api/health` — 200/503
-- [ ] All routes reject non-operator sessions (401) — RLS + email check
+- [x] `[POST] /api/bets/{id}/approve` — thin proxy to execute-bet; 200 fill shape; 409 wrong status; 422 stale book/caps; 503 gate reasons relayed verbatim; auth enforced; CRON_SECRET never reaches the browser
+- [x] `[POST] /api/admin/manual-bet` — zod validation; paper path proxies to execute-bet; externally-executed live fill recorded verbatim (F-035)
+- [x] `[POST] /api/admin/export` — CSV columns cover every fill + resolution with USD amounts (K4-ready, R-16); date-range filter works
+- [x] `[POST] /api/bets/{id}/skip` — 200/404/409
+- [x] `[POST] /api/admin/halt` + `resume` — halt key writes + audit + Slack; resume confirm mismatch 400
+- [x] `[POST] /api/admin/config` — zod rejects bad keys (400 details); audit rows; bankroll change WARN
+- [x] `[POST] /api/admin/verify-station` — sets verified, re-enables betting; 409 superseded row
+- [x] `[POST] /api/admin/trigger-job` — secret stays server-side; unknown job 400
+- [x] `[POST] /api/admin/promote-source` — server re-check blocks ineligible promotion (409)
+- [x] `[GET] /api/health` — 200/503
+- [x] All routes reject non-operator sessions (401) — RLS + email check
 
 ### Data models (§7)
 - [ ] Migrations 0001–0010 apply clean on empty DB and re-apply idempotently (db reset)
@@ -2431,13 +2431,13 @@ Wallet setup per GO-LIVE-CHECKLIST, POLY_PRIVATE_KEY in Edge secrets, goLiveGate
 - [ ] 9.2 discovery E2E; station-change fixture → suspend + verify round-trip re-enables
 - [ ] 9.3 truth: provisional→finalized→graded E2E on a real resolved event; our winner == Polymarket winner; WU-key failure branch exercised (forced 401)
 - [ ] 9.4 edge→rec→approve→fill→resolve E2E in paper mode on a live market (through the execute-bet proxy)
-- [ ] 9.4 race branch — concurrent approve + expire on one bet: exactly one CAS winner, loser 409, no double ledger entry
+- [x] 9.4 race branch — concurrent approve + expire on one bet: exactly one CAS winner, loser 409, no double ledger entry
 - [ ] 9.10 digest→review loop renders end-to-end (J-1)
 - [ ] ADR-16 row-existence: discovery-seeded distribution exists before the lead-1 cutoff for a same-UTC-day Americas creation (NYC fixture timeline) and a UTC+12/13 city (Wellington)
 - [x] 9.5 calibration run updates stats + scores; drift halt fires on synthetic bad Brier
 - [ ] 9.6 nowcast: rising METAR max eliminates buckets in the stored distribution
 - [x] 9.7 backfill scripts resumable (kill mid-run, restart continues from cursor); budget sleeper engages
-- [ ] 9.8 dead-man: stop snapshots 30h (clock-mock) → halt:global + CRITICAL
+- [x] 9.8 dead-man: stop snapshots 30h (clock-mock) → halt:global + CRITICAL
 - [ ] 9.9 go-live gate: every condition red→green transition rendered on /admin
 
 ### Dashboard (§6.21)

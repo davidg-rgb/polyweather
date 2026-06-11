@@ -1,0 +1,12 @@
+{
+  "name": "@weather-edge/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@supabase/ssr": "^0.6.1",
+    "@supabase/supabase-js": "^2.49.0",
+    "@weather-edge/core": "workspace:*",
+    "@weather-edge/io": "workspace:*"
+  }
+}
