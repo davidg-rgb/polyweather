@@ -206,8 +206,9 @@
 > **HOSTED DEPLOY IN PROGRESS (2026-06-11, Docker path skipped by operator decision — verification runs against the hosted stack instead):**
 > project `weather-edge` ref `lenysiqxihsmxljvyybt` (eu-north-1) CREATED via MCP; knitting-buddy paused to free the slot (restore anytime).
 > `.env.local` written (URL + anon key + generated CRON_SECRET + OPERATOR_EMAIL; DATABASE_URL awaits the password paste); `.env.functions` holds CRON_SECRET for `supabase secrets set`.
-> WAITING ON OPERATOR: (a) `npx supabase login`, (b) dashboard DB-password reset → paste into .env.local.
-> THEN (assistant continues): `db push` (0001–0023), `functions deploy` ×12 (--use-api, no Docker), `secrets set --env-file .env.functions`, vault seed via tsx script, cron verification, advisors check, Vercel deploy.
+> DONE so far: CLI authed; **all 12 Edge Functions DEPLOYED** (--use-api, no Docker; supabase/functions/import_map.json maps the workspace + npm bare specifiers; config.toml sets verify_jwt=false per function — they self-auth via x-cron-secret); CRON_SECRET set as a function secret from .env.functions.
+> WAITING ON OPERATOR: dashboard DB-password reset → paste into .env.local DATABASE_URL.
+> THEN (assistant continues): `db push --db-url` (0001–0023), vault seed (cron_secret + project_url) via tsx over DATABASE_URL, cron-registration verification, advisors check, live job smoke (health-monitor via x-cron-secret), Vercel deploy of apps/web.
 
 1. ~~Install Docker Desktop + Supabase CLI~~ **SKIPPED — hosted-direct deploy** (the §15 db-reset box's verification = `supabase db push` onto the empty hosted DB + the PGlite 2×-apply idempotency proof).
 2. **Create the hosted Supabase project** — **DONE** (`lenysiqxihsmxljvyybt`); migrations push in progress per the note above.

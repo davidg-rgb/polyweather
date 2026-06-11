@@ -23,3 +23,42 @@ site_url = "http://localhost:3000"
 [edge_runtime]
 enabled = true
 policy = "per_worker"
+
+# Every job authenticates itself via x-cron-secret (requireCronAuth, fails
+# closed) — pg_cron/pg_net calls carry no Supabase JWT (W11/ADR-10).
+
+[functions.discover-markets]
+verify_jwt = false
+
+[functions.snapshot-forecasts]
+verify_jwt = false
+
+[functions.snapshot-ensembles]
+verify_jwt = false
+
+[functions.fetch-actuals]
+verify_jwt = false
+
+[functions.metar-nowcast]
+verify_jwt = false
+
+[functions.build-distributions]
+verify_jwt = false
+
+[functions.poll-markets]
+verify_jwt = false
+
+[functions.run-calibration]
+verify_jwt = false
+
+[functions.grade-bets]
+verify_jwt = false
+
+[functions.daily-digest]
+verify_jwt = false
+
+[functions.health-monitor]
+verify_jwt = false
+
+[functions.execute-bet]
+verify_jwt = false

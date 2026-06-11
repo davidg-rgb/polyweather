@@ -1,0 +1,11 @@
+{
+  "imports": {
+    "@weather-edge/core": "../../packages/core/src/index.ts",
+    "@weather-edge/io": "../../packages/io/src/index.ts",
+    "@weather-edge/trading": "../../packages/trading/src/index.ts",
+    "zod": "npm:zod@3.25.76",
+    "date-fns": "npm:date-fns@4.4.0",
+    "date-fns/": "npm:/date-fns@4.4.0/",
+    "@date-fns/tz": "npm:@date-fns/tz@1.5.0"
+  }
+}
