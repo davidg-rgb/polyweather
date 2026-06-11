@@ -13,6 +13,7 @@ dist/
 
 # Local artifacts
 backups/
+reports/
 scripts/.cache/
 coverage/
 .DS_Store
