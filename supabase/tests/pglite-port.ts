@@ -60,6 +60,7 @@ const FN_ARGS: Record<string, string[]> = {
   attach_book_to_snapshot: ['p_bucket_id', 'p_book'],
   open_bets_exposure: [],
   current_bankroll: ['p_mode'],
+  note_bet_slack_delivery: ['p_bet_id', 'p_delivered'],
   upsert_recommendation: [
     'p_event_id', 'p_bucket_id', 'p_mode', 'p_our_q', 'p_best_ask', 'p_exec_ask', 'p_edge',
     'p_min_edge', 'p_fee_per_share', 'p_kelly_raw', 'p_kelly_frac', 'p_capped_frac',

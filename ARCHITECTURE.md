@@ -2304,7 +2304,7 @@ Wallet setup per GO-LIVE-CHECKLIST, POLY_PRIVATE_KEY in Edge secrets, goLiveGate
 - [x] `takerFeePerShare(0.34, 0.05)` = 0.01122 (docs worked example: 100 sh → $1.12)
 - [x] `takerFeeTotal` symmetric at p and 1−p
 - [x] `minEdgeRequired` — monotone components; uses observed spread/2 when > buffer floor
-- [ ] feeRate read from market_buckets.fee_rate (no hardcoded 0.05 outside config/defaults)
+- [x] feeRate read from market_buckets.fee_rate (no hardcoded 0.05 outside config/defaults)
 
 ### Module: core/distributions (§6.5)
 - [x] `normCdf` — |error| < 1e-7 against reference values
@@ -2367,7 +2367,7 @@ Wallet setup per GO-LIVE-CHECKLIST, POLY_PRIVATE_KEY in Edge secrets, goLiveGate
 ### Module: functions/_shared (§6.12)
 - [x] `runJob` — 401 without secret; 409 only when existing run is ok or young-running; **stale 'running' row taken over by CAS (attempt+1, started_at predicate — W16: two concurrent takeovers → exactly one proceeds)**; 202 fast path; failure → job_runs 'failed' + Slack CRITICAL
 - [x] `fetchJson` — retries 429/5xx with backoff; UpstreamError carries source+status; timeout enforced
-- [ ] `notifySlack` — sent=false insert → 2xx flips sent=true; **failed post does NOT consume the dedupe key**; resend sweep delivers it; Slack outage never throws; BET_REC delivery recorded on the bet
+- [x] `notifySlack` — sent=false insert → 2xx flips sent=true; **failed post does NOT consume the dedupe key**; resend sweep delivers it; Slack outage never throws; BET_REC delivery recorded on the bet
 - [x] `gradeEvent` — winner written once (idempotent re-run no-op); pnl math incl. fees; ledger unique per bet; Polymarket-winner mismatch → CRITICAL + flag; **ADR-16 scored-row selection appends to scored_for_leads[] for leads {0,1} — timeline tests use an AMERICAS city (NYC, created 02:01 UTC) and Wellington, not just Seoul (C7); quiet-market case: one row carries both leads (W18)**; RESOLUTION INFO emitted (deduped); streak breaker evaluated
 - [x] concurrent gradeEvent invocations (fetch-actuals + sweep) — winner-claim CAS admits exactly one grader; no double ledger entries, no double scored_for_leads appends, no double alerts (race test)
 
@@ -2419,23 +2419,23 @@ Wallet setup per GO-LIVE-CHECKLIST, POLY_PRIVATE_KEY in Edge secrets, goLiveGate
 - [x] bucket_probabilities.scored_for_leads[] appended only by gradeEvent; per (event, source, lead) exactly one row carries that lead
 - [x] calibration_scores.window_tag domain incl. 'backtest'/'nowcast'; zero-UUID pooled row carries bootstrap_p
 - [x] nowcast_lift populated by backfill-actuals; weekly refresh by run-calibration; missing row ⇒ truncation-only nowcast
-- [ ] edge_decile_stats view matches hand-computed deciles on seeded bets (W-2)
+- [x] edge_decile_stats view matches hand-computed deciles on seeded bets (W-2)
 - [x] bankroll_balance view sum equals manual ledger arithmetic; no stored running-balance column exists (W10)
 - [x] model_stats_history rows written on every stats_version increment
 - [x] edge_evaluations unique (event, bucket, hour); written hourly; queryable from /events page (F-038) — /events page rendering lands in P6
 - [x] pg_cron job commands read CRON_SECRET from Vault — `select command from cron.job` contains no literal secret (W11)
-- [ ] tmax columns: °F city observations carry units=e integers (spot-check vs WU page)
+- [x] tmax columns: °F city observations carry units=e integers (spot-check vs WU page)
 
 ### Data flows (§9)
 - [ ] 9.1 snapshot happy path E2E on live APIs; station-failure branch leaves partial stats + WARN
-- [ ] 9.2 discovery E2E; station-change fixture → suspend + verify round-trip re-enables
+- [x] 9.2 discovery E2E; station-change fixture → suspend + verify round-trip re-enables
 - [ ] 9.3 truth: provisional→finalized→graded E2E on a real resolved event; our winner == Polymarket winner; WU-key failure branch exercised (forced 401)
 - [ ] 9.4 edge→rec→approve→fill→resolve E2E in paper mode on a live market (through the execute-bet proxy)
 - [x] 9.4 race branch — concurrent approve + expire on one bet: exactly one CAS winner, loser 409, no double ledger entry
 - [ ] 9.10 digest→review loop renders end-to-end (J-1)
 - [ ] ADR-16 row-existence: discovery-seeded distribution exists before the lead-1 cutoff for a same-UTC-day Americas creation (NYC fixture timeline) and a UTC+12/13 city (Wellington)
 - [x] 9.5 calibration run updates stats + scores; drift halt fires on synthetic bad Brier
-- [ ] 9.6 nowcast: rising METAR max eliminates buckets in the stored distribution
+- [x] 9.6 nowcast: rising METAR max eliminates buckets in the stored distribution
 - [x] 9.7 backfill scripts resumable (kill mid-run, restart continues from cursor); budget sleeper engages
 - [x] 9.8 dead-man: stop snapshots 30h (clock-mock) → halt:global + CRITICAL
 - [x] 9.9 go-live gate: every condition red→green transition rendered on /admin
@@ -2457,10 +2457,10 @@ Wallet setup per GO-LIVE-CHECKLIST, POLY_PRIVATE_KEY in Edge secrets, goLiveGate
 - [x] smoke-live-apis — one assertion per integration; fails loudly on shape drift
 
 ### Docs
-- [ ] README quickstart works from clean clone (verified by following it)
-- [ ] RUNBOOK covers: WU key incident, station change, dead-man recovery, manual job triggers, backfill ops, Vault secret seeding, weekly backup schedule (F-037), monthly withdrawal-sweep procedure (F-036)
-- [ ] DATA-SOURCES / CALIBRATION / TRADING-MATH match implemented formulas (spot-check fee, Kelly, Brier examples)
-- [ ] GO-LIVE-CHECKLIST mirrors goLiveGate conditions verbatim
+- [x] README quickstart works from clean clone (verified by following it)
+- [x] RUNBOOK covers: WU key incident, station change, dead-man recovery, manual job triggers, backfill ops, Vault secret seeding, weekly backup schedule (F-037), monthly withdrawal-sweep procedure (F-036)
+- [x] DATA-SOURCES / CALIBRATION / TRADING-MATH match implemented formulas (spot-check fee, Kelly, Brier examples)
+- [x] GO-LIVE-CHECKLIST mirrors goLiveGate conditions verbatim
 
 
 

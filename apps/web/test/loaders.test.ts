@@ -198,6 +198,9 @@ describe('dashboard loader RPCs (0022, §6.21)', () => {
     expect(Number(v.equityCurve.at(-1)!.balance)).toBeCloseTo(1043.21, 2);
     expect(v.hitRateByEdgeDecile).toHaveLength(1);
     expect(Number(v.hitRateByEdgeDecile[0]!.hitRate)).toBe(1);
+    // hand-computed: edge 0.28 → width_bucket(0.28, 0, 0.5, 10) = 6; n = 1 resolved bet (W-2)
+    expect(Number(v.hitRateByEdgeDecile[0]!.decile)).toBe(6);
+    expect(Number(v.hitRateByEdgeDecile[0]!.n)).toBe(1);
   });
 
   it('system health: job runs, failures, alerts, data gaps (missing cells), storage counts', async () => {

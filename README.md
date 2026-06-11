@@ -20,15 +20,20 @@ is the source spec. Build progress and operator actions live in
 | `supabase/functions` | Deno Edge Functions (11 scheduled jobs + execute-bet) |
 | `supabase/tests` | Migration tests against embedded Postgres (PGlite) |
 | `apps/web` | Next.js dashboard + operator API |
-| `scripts/` | Local CLIs: seeding, backfill, simulation, smoke tests |
+| `scripts/` | Local CLIs: seed-stations, backfill-forecasts/actuals/market-history, simulate-historical-edge, backup-db, smoke-live-apis |
 | `research/` | Live-verified API ground truth — parsers must match these fixtures exactly |
+| `docs/` | DATA-SOURCES · CALIBRATION · TRADING-MATH · GO-LIVE-CHECKLIST (mirrors the gate verbatim) |
+| `RUNBOOK.md` | Incidents, manual triggers, backfill ops, backups, the F-036 monthly sweep |
 
-## Quickstart (current state: P0 scaffold)
+## Quickstart
 
 ```bash
 pnpm install
 pnpm typecheck     # strict TS across all packages
-pnpm test          # vitest: core unit tests + PGlite migration tests
+pnpm test          # vitest: 540+ tests — core math, PGlite-backed jobs/RPCs, web loaders, scripts
+pnpm dev           # the Next.js dashboard (needs .env.local — see .env.example)
+pnpm --filter @weather-edge/web build
+pnpm tsx scripts/smoke-live-apis.ts   # one live call per upstream, real parsers (12/12 PASS)
 ```
 
 The migration suite boots an embedded Postgres, applies the full migration
@@ -47,5 +52,9 @@ downsample cron.
 
 ## Status
 
-Build phase tracking, deviations, and the operator TODO list: [BUILD-STATE.md](./BUILD-STATE.md).
+**P0–P8 build-complete** — every module, job, page, and script implemented and
+tested; trading is paper-mode everywhere (live execution stays dormant behind
+the §6.20 gate). Remaining work is operator-gated: hosted deploy, full-universe
+backfill, the 60-day paper campaign (P9), then go-live (P10) — see the
+Operator TODO in [BUILD-STATE.md](./BUILD-STATE.md).
 Verification checklist: ARCHITECTURE.md §15 (boxes tick as items are proven by tests).

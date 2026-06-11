@@ -5,6 +5,8 @@
 
 ## Active Phase
 
+**BUILD COMPLETE — P0 through P8 (iter 30, 2026-06-11).** Every §15 box is ticked or documented-manual (the 8 remaining unticked boxes are hosted-stack verification clauses — consolidated checklist below in "Next Task"). 543 tests green; smoke-live-apis 12/12 LIVE PASS; docs accurate against code. P9 (60-day paper campaign) and P10 (go-live) are operator/calendar-gated — start procedures in Phase Gate Notes.
+
 **P7 — COMPLETE on the build side (iter 29).** All four §6.22 scripts shipped and §15-ticked; **scripts/smoke-live-apis.ts PASSES LIVE: 12/12 integrations OK** (Slack skipped pending the operator webhook — the one DONE-criterion item that needs operator input). The §14 P7 DoD's "≥6 months × ≥10 cities" backtest report is gated on the full-universe backfill (Operator TODO 5); the pipeline is proven end-to-end on fixture scope. Next phase: P8 docs/hardening.
 
 **P6 — Dashboard: code-complete (iter 26).** All 7 pages + 11 API routes + execute-bet proxy + auth built and `next build` green; loaders/recompute/shapers/gate-readout PGlite-tested (518 suite). The P6 DoD's "every loader renders real data" + "Playwright smoke on the 7 pages" clauses need the HOSTED stack (no local Supabase) — §15 '7 pages render' box left unticked with a manual note; everything else in the Dashboard §15 section is ticked. Next phase: P7 (backfill-market-history, simulate-historical-edge, backup-db, smoke-live-apis), then P8 docs/hardening.
@@ -19,6 +21,10 @@
 
 ## Completed
 
+- **P8 (iteration 30, 2026-06-11): hardening + docs — BUILD COMPLETE.**
+  - Implemented the missed §6.12 clause: BET_REC delivery status recorded on the bet — migration 0023 `note_bet_slack_delivery` + poll-markets wiring after the notify; tested true-path through the real tick + both values via the RPC. notifySlack §15 box fully ticked.
+  - Docs: RUNBOOK.md (incidents WU-key/station-change/dead-man/position-drift, manual triggers w/ curl, backfill ops, Vault seeding SQL, F-037 backup + restore drill, F-036 monthly sweep + attestations, the failure-drill log mapping every killed upstream to its suite test); docs/DATA-SOURCES.md (every endpoint + the live-verified quirks: best-LAST book ordering, single-model suffix drop, META_DIR table, WU runtime key, Cloudflare UA); docs/CALIBRATION.md (EMOS math, ADR-16 verbatim, Brier worked example, promotion/gate); docs/TRADING-MATH.md (fee 0.01122 worked case, the tick-1 Kelly walkthrough 0.366326→74sh→$19.98, cap ladder, settlement identity); docs/GO-LIVE-CHECKLIST.md (all 13 gate reasons VERBATIM + the P10 procedure incl. the rollback drill). README refreshed to build-complete state.
+  - §15 sweep: +10 boxes ticked — feeRate-from-DB (grep-verified: 0.05 only as ??-null fallback + the per-market-overridden cfg placeholder), notifySlack, edge_decile_stats (decile 6 + n pinned in loaders.test), units=e integers (live KORD unitsE fixture), 9.2 (prove-discovery-live PASS + suspend + verify-re-enable both tested), 9.6 (metar-nowcast monotone/rebuild + stored nowcast elimination), README/RUNBOOK/docs/GO-LIVE ×4. Remaining 8 = hosted-stack clauses → consolidated checklist (Next Task). Suite: 543 green.
 - **P7 close-out (iteration 29, 2026-06-11): backup-db + smoke-live-apis — LIVE PASS 12/12.**
   - `scripts/backup-db.ts` (F-037): pg_dump (plain, --no-owner/--no-privileges) → gzip → backups/{date}.sql.gz, newest 8 kept (same-day overwrites), empty-dump refusal; pgDump runner injected for tests. 3 tests: gzip round-trip restores exact bytes, 9-day retention sweep prunes to 8, zero-byte refusal. §15 box ticked (real pg_dump+psql restore drill = RUNBOOK at P8).
   - `scripts/smoke-live-apis.ts` (§6.22): 13 integrations, each through its REAL parser — Gamma active (parseGammaEvent on the page) + closed (outcomePrices decode), CLOB book (normalizeBook) + prices-history (parsePricesHistory), Open-Meteo multi-model daily / single-model previous-runs (bare-key quirk) / ensemble (≥20-member guard) / ERA5 archive / model meta.json, WU runtime key extraction + KORD obs (max 87°F — the live-verified case), aviationweather METAR, IEM daily, Slack webhook (skipped-with-note until the operator webhook exists). Failures name the drifted upstream; CLI exits 1. 3 mocked tests on the research fixtures (incl. drift-naming + no-fail-fast cascade + Slack 2xx contract). **LIVE RUN: 12/12 OK, 1 skipped (Slack) — the DONE criterion met.** §15 box ticked.
@@ -141,7 +147,19 @@
 
 ## Next Task
 
-**P8 — Hardening + docs (§14). The final build phase.**
+**NONE — the build loop is done. What remains is operator-gated.**
+
+**Hosted-stack verification checklist** (the documented-manual record for the
+8 remaining §15 boxes — run after Operator TODO 1–6, in order):
+1. `supabase db reset` applies 0001–0023 idempotently (§15 P0 box; PGlite-proven 2×-apply locally).
+2. 48h of cron operation green: snapshot-forecasts ≥95% cell coverage + gap-fill, snapshot-ensembles member arrays, fetch-actuals provisional→finalized on real days, metar-nowcast daytime batches, build-distributions champion+challenger rows (§15 boxes 6.14–6.16; every locally-provable clause already suite-tested).
+3. 9.1 snapshot E2E + 9.3 truth E2E on live data (winner == Polymarket winner on a real resolution).
+4. 9.4 approve→fill through the REAL deployed execute-bet proxy on a live market (predicate + handler matrix already proven; this is the wire check).
+5. 9.10: receive the daily digest in Slack, walk the J-1 review loop.
+6. ADR-16 row-existence timing: confirm discovery's seeded distribution lands before the lead-1 cutoff for one Americas + one UTC+12 creation wave.
+7. The 7 pages render real data; pin a Playwright smoke to them (§15 Dashboard box; next build + loader tests already prove the render tree + data shapes).
+
+**P8 — Hardening + docs (§14). The final build phase. [COMPLETED iter 30]**
 (1) Docs: README quickstart re-verified against the current tree (workspace layout, pnpm dev, scripts list); RUNBOOK.md (WU key incident, station change, dead-man recovery, manual job triggers via /admin or curl, backfill ops incl. the full-universe commands, Vault secret seeding, weekly backup-db schedule + the pg_dump/psql restore drill F-037, monthly withdrawal-sweep + ledgerReconciledAt attestation F-036); docs/DATA-SOURCES.md (every endpoint + params + quirks from research/ incl. the single-model suffix quirk, WU key extraction, META_DIR mapping, CLOB UA requirement); docs/CALIBRATION.md (EMOS math, ADR-16 scoring, promotion rules — spot-check Brier example against core); docs/TRADING-MATH.md (fee curve 0.01122 example, joint Kelly worked example from the poll-markets test values, edge/minEdge); docs/GO-LIVE-CHECKLIST.md mirroring goLiveGate reasons VERBATIM (§15 box).
 (2) Hardening sweep: §15 "Docs" boxes + any remaining unticked §15 items → ticked or documented-manual in BUILD-STATE (notably: feeRate-from-DB invariant box §6.4 — verify via grep that no 0.05 hardcode exists outside config/defaults + tick; retention/downsample cron verified = PGlite retention suite cross-ref; failure drills = cross-reference the existing per-upstream failure tests instead of duplicating; storage gauge = dash_system_health counts, already rendered).
 (3) Write the P9 (60-day paper campaign) and P10 (live enablement) start procedures into Phase Gate Notes.
@@ -199,4 +217,11 @@
 
 ## Phase Gate Notes
 
-- P9 (60-day paper campaign) and P10 (live enablement) are calendar/operator-gated; start procedures will be written here at P8 completion.
+**P9 — paper campaign (60+ days): start procedure.**
+1. Complete Operator TODO 1–6 (hosted stack live, cron firing, Slack webhook, dashboard deployed) + the hosted verification checklist above.
+2. Run the full-universe backfill (Operator TODO 5) so calibration starts warm, then `pnpm tsx scripts/simulate-historical-edge.ts --from <archive-start> --to <today> --out reports` for the baseline fidelity report (P7 DoD's ≥6mo × ≥10 cities run).
+3. Operate: J-2 approve/skip from Slack BET_REC → /events/[slug]; J-1 daily digest review; J-3 weekly audit (/calibration + /bets decile table + RUNBOOK F-037 backup).
+4. Config changes ONLY through /admin (audited). Never edit the DB directly.
+5. Exit criteria (§14, C5-honest): ≥60 out-of-sample days; pooled time-matched Brier vs market significant at p<0.05 (paired bootstrap) with point ≤0.95×; per-city ≤1.0× with n≥30; breakers quiet ≥14 days. The /admin gate readout shows the live state of every condition.
+
+**P10 — live enablement: follow docs/GO-LIVE-CHECKLIST.md verbatim** (wallet secrets into Edge Function secrets only; rollback drill BEFORE the first order; $20 month-one cap; first fill must reconcile to the cent or revert to paper).

@@ -161,6 +161,13 @@ describe('poll-markets pipeline (§6.17)', () => {
     expect((audit['capAudit'] as string[]).some((s) => s.includes('per-trade cap'))).toBe(true);
     expect((audit['config'] as Record<string, number>)['bankrollUsd']).toBe(1000);
     expect(audit['distRowId']).toBeTruthy();
+    // §6.12: BET_REC delivery status recorded on the bet
+    expect(audit['slack_delivered']).toBe(true);
+    const [betRow] = await rows<{ id: string }>(db, `select id from bets`);
+    await port.rpc('note_bet_slack_delivery', { p_bet_id: betRow!.id, p_delivered: false });
+    const [flipped] = await rows<{ audit: Record<string, unknown> }>(db, `select audit from bets`);
+    expect(flipped!.audit['slack_delivered']).toBe(false);
+    await port.rpc('note_bet_slack_delivery', { p_bet_id: betRow!.id, p_delivered: true });
 
     expect(alerts.filter((a) => a.kind === 'BET_REC' && a.severity === 'ACTION').length).toBe(1);
 

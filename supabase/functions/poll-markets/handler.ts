@@ -449,7 +449,7 @@ async function pollPass(
       else stats['refreshed']!++;
       if (rec?.was_insert || stakeChanged) {
         const band = Math.round(row.execAsk! * 20) / 20; // 5¢ price band for the dedupe key
-        await deps.notify({
+        const delivered = await deps.notify({
           kind: 'BET_REC', severity: 'ACTION',
           title: `${rec?.was_insert ? 'BET' : 'UPDATED'}: ${evCtx.slug} · ${bucket.label}`,
           body:
@@ -457,6 +457,10 @@ async function pollPass(
             `stake $${plan.stakeUsd.toFixed(2)} (${plan.shares} shares) · lead ${lead} · ${cfg.tradingMode}`,
           dedupeKey: `bet-rec:${bucket.bucketId}:${band}`,
         });
+        // §6.12: BET_REC additionally records delivery status on the bet.
+        if (rec) {
+          await db.rpc('note_bet_slack_delivery', { p_bet_id: rec.bet_id, p_delivered: delivered });
+        }
       }
     }
   }

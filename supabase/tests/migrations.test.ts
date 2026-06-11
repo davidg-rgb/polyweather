@@ -64,6 +64,7 @@ describe('migrations 0001–0010', () => {
       '0014_snapshot_rpcs.sql', '0015_truth_rpcs.sql', '0016_distribution_rpcs.sql',
       '0017_calibration_rpcs.sql', '0018_market_rpcs.sql', '0019_trading_rpcs.sql',
       '0020_support_rpcs.sql', '0021_operator_rpcs.sql', '0022_dashboard_rpcs.sql',
+      '0023_bet_delivery.sql',
     ]);
   });
 });
