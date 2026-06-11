@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { ClobShapeError, GammaShapeError } from '../src/errors.ts';
-import { normalizeBook, type RawClobBook } from '../src/polymarket/clob.ts';
+import { normalizeBook, parsePricesHistory, type RawClobBook } from '../src/polymarket/clob.ts';
 import {
   extractStationFromUrl,
   isZombieEvent,
@@ -267,5 +267,40 @@ describe('normalizeBook (§6.9)', () => {
     expect(() =>
       normalizeBook({ ...raw, asks: [{ price: 'abc', size: '1' }] }),
     ).toThrow(ClobShapeError);
+  });
+});
+
+describe('parsePricesHistory (§6.22 market-history backfill input)', () => {
+  const load = (file: string): unknown =>
+    JSON.parse(readFileSync(join(RESEARCH, file), 'utf8')) as unknown;
+
+  it('parses the original interval=1d capture: 41 ascending points', () => {
+    const pts = parsePricesHistory(load('clob-prices-history.json'));
+    expect(pts.length).toBe(41);
+    expect(pts[0]).toEqual({ t: 1781057404, p: 0.185 });
+    expect(pts.at(-1)).toEqual({ t: 1781082363, p: 0.335 });
+    for (let i = 0; i < pts.length - 1; i++) {
+      expect(pts[i]!.t).toBeLessThanOrEqual(pts[i + 1]!.t);
+    }
+  });
+
+  it('parses the interval=max resolved-winner capture: 305 points converging to 0.9995', () => {
+    const pts = parsePricesHistory(load('clob-prices-history-max-nyc-jun9-winner-80-81f.json'));
+    expect(pts.length).toBe(305);
+    expect(pts[0]).toEqual({ t: 1780885203, p: 0.245 });
+    expect(pts.at(-1)).toEqual({ t: 1781068806, p: 0.9995 });
+  });
+
+  it('parses the interval=max resolved-loser capture: converging to 0.0005', () => {
+    const pts = parsePricesHistory(load('clob-prices-history-max-nyc-jun9-loser-78-79f.json'));
+    expect(pts.at(-1)!.p).toBe(0.0005);
+  });
+
+  it('ClobShapeError on missing history array and non-numeric points', () => {
+    expect(() => parsePricesHistory(null)).toThrow(ClobShapeError);
+    expect(() => parsePricesHistory({})).toThrow(ClobShapeError);
+    expect(() => parsePricesHistory({ history: 'nope' })).toThrow(ClobShapeError);
+    expect(() => parsePricesHistory({ history: [{ t: 'x', p: 0.5 }] })).toThrow(ClobShapeError);
+    expect(() => parsePricesHistory({ history: [{ t: 1, p: null }] })).toThrow(ClobShapeError);
   });
 });

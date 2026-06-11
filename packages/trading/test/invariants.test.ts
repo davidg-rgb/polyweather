@@ -15,7 +15,10 @@ import { describe, expect, it } from 'vitest';
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const CODE_DIRS = ['packages', 'supabase', 'scripts', 'apps'];
 const EXTS = ['.ts', '.tsx', '.js', '.mjs', '.sql'];
-const SKIP_DIRS = new Set(['node_modules', 'dist', '.git', 'coverage']);
+// .next is web's gitignored build output — the server bundle legitimately
+// contains the compiled goLiveGate from the allowed importer; the invariant
+// guards the SOURCE tree.
+const SKIP_DIRS = new Set(['node_modules', 'dist', '.git', 'coverage', '.next']);
 
 function* walk(dir: string): Generator<string> {
   let entries: string[];

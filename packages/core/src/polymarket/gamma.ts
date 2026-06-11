@@ -36,6 +36,9 @@ export interface RawGammaEvent {
   slug: string;
   title: string;
   endDate?: string;
+  /** Present on closed-event payloads (research gamma-event-nyc-jun9-resolved fixture). */
+  closed?: boolean;
+  closedTime?: string;
   negRiskMarketID?: string;
   volume24hr?: number;
   liquidity?: number;

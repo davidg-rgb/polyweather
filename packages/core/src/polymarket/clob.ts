@@ -52,3 +52,37 @@ export function normalizeBook(raw: RawClobBook): NormalizedBook {
     lastTradePrice: raw.last_trade_price != null ? Number(raw.last_trade_price) : null,
   };
 }
+
+/** One trade/mark price point from GET /prices-history (epoch SECONDS). */
+export interface PricePoint {
+  t: number;
+  p: number;
+}
+
+/**
+ * Parse `GET /prices-history?market={token}&interval=…` → ascending PricePoint[]
+ * (research/clob-prices-history*.json: `{history:[{t: epoch_seconds, p: price}]}`).
+ * Consumed by backfill-market-history (§6.22) to reconstruct daily snapshots
+ * and pre-cutoff consensus (C2). ClobShapeError on a missing history array or
+ * a non-numeric point — an upstream-shape-change alert, never a guess.
+ */
+export function parsePricesHistory(raw: unknown): PricePoint[] {
+  const history = (raw as { history?: unknown } | null)?.history;
+  if (!Array.isArray(history)) {
+    throw new ClobShapeError('prices-history is missing the history array', {
+      shape: raw === null ? 'null' : typeof raw,
+    });
+  }
+  const points = history.map((pt) => {
+    const rawT = (pt as { t?: unknown } | null)?.t;
+    const rawP = (pt as { p?: unknown } | null)?.p;
+    const t = Number(rawT);
+    const p = Number(rawP);
+    // Number(null) is 0 — null/undefined are shape anomalies, never prices.
+    if (rawT == null || rawP == null || !Number.isFinite(t) || !Number.isFinite(p)) {
+      throw new ClobShapeError(`non-numeric prices-history point: ${JSON.stringify(pt).slice(0, 80)}`);
+    }
+    return { t, p };
+  });
+  return points.sort((a, b) => a.t - b.t);
+}
