@@ -63,12 +63,38 @@ full-universe sequence (hosted Pro project, `DATABASE_URL` in `.env.local`,
 ```bash
 pnpm tsx scripts/check-db.ts                              # pre-flight: DATABASE_URL connects (non-secret diagnostics)
 pnpm tsx scripts/seed-stations.ts
-pnpm tsx scripts/backfill-forecasts.ts --budget 8000
-pnpm tsx scripts/backfill-actuals.ts   --budget 8000
-pnpm tsx scripts/backfill-market-history.ts --limit 500   # repeat until eventsSeen exhausts
-# then run-calibration (cron or manual trigger) folds it into model_stats, and:
+# forecasts (Open-Meteo) + actuals (WU/IEM) hit different upstreams and have
+# SEPARATE per-script daily-budget rows — run them in PARALLEL (two terminals):
+pnpm tsx scripts/backfill-forecasts.ts --budget 8000     # ~2–3 budget-days
+pnpm tsx scripts/backfill-actuals.ts   --budget 8000     # in parallel; truth for the residuals
+pnpm tsx scripts/backfill-market-history.ts --limit 500  # repeat until eventsSeen exhausts
+# fold the backfill into model_stats — wait for the 11:30Z run-calibration cron,
+# or trigger it now (server-side secret; never echoes the value):
+curl -fsS -X POST "$SUPABASE_URL/functions/v1/run-calibration" -H "x-cron-secret: $CRON_SECRET"
+pnpm tsx scripts/check-p4-coverage.ts                    # P4 DoD gate: ≥90% cells / ≥40 stations / ≥12 months
 pnpm tsx scripts/simulate-historical-edge.ts --from 2025-06-01 --to 2026-06-01 --out reports
 ```
+
+**Multi-day, by design.** The free Open-Meteo tier paces forecasts to ~8000
+weighted calls/UTC-day (the budgeter sleeps to midnight, then resumes from the
+cursor). Total ≈ 3 days for forecasts, plus actuals in parallel. A paid
+`OPENMETEO_API_KEY` in `.env.local` raises throughput and switches to the
+customer- hosts automatically — the single lever that collapses the timeline.
+Run the backfills in a persistent terminal (they survive longer than a chat
+session); kill/re-run any time — they resume with zero refetch.
+
+**`check-p4-coverage` is the P4 DoD gate.** Reports `model_stats` cell coverage
+for the 5 core models (horizon ≥7d → cover leads 0–5) across coord stations ×
+leads 0–5 × both slots; exits 0 only when ≥90% cells / ≥40 stations / ≥12
+months. Run it after each calibration fold to watch coverage climb to PASS.
+
+**`check-db` is the DATABASE_URL doctor.** It prints the connection's wiring
+(host/port/user/db — never the password) and, on failure, the exact fix:
+SASL/auth → reset the DB password (dashboard → Project Settings → Database) and
+re-encode special chars; `Tenant or user not found` → the Supavisor pooler needs
+user `postgres.<ref>`; timeout on `db.<ref>.supabase.co` → that endpoint is
+IPv6-only, switch to the **Session pooler** host (`aws-*.pooler.supabase.com:5432`).
+Quote the value in `.env.local`: `DATABASE_URL="postgresql://…"`.
 
 **`check-db` is the DATABASE_URL doctor.** It prints the connection's wiring
 (host/port/user/db — never the password) and, on failure, the exact fix:
