@@ -73,6 +73,29 @@ re-asserts every shape live (run before deploys; 12/12 PASS 2026-06-11).
   international = country conventions (`iemNetworkFor`). Provenance recorded
   as `iem_fallback` (§7.7).
 
+## External comparison sources (WeatherAPI + OpenWeatherMap) — tracked separate
+
+Aggregator forecasts pulled purely to BENCHMARK accuracy vs the Open-Meteo
+models; stored in `source_forecasts` (NOT `forecast_snapshots`/`models`), so they
+never touch the trading blend or run-calibration. Scored against the same WU/IEM
+truth by `source_accuracy()` / `scripts/check-source-accuracy.ts`.
+
+- **WeatherAPI.com** — `GET api.weatherapi.com/v1/forecast.json?key=…&q={lat},{lon}&days=3`
+  → `forecast.forecastday[].day.maxtemp_c` (daily max already in the location's
+  local tz). Free tier: 3-day forecast, 1M calls/mo. Key = `WEATHERAPI_API_KEY`.
+- **OpenWeatherMap** — `GET api.openweathermap.org/data/2.5/forecast?lat=…&lon=…&appid=…&units=metric`
+  → `list[].main.temp_max` at 3-hourly steps (UTC `dt`); aggregate to a LOCAL-day
+  max per station tz. Free tier: 5-day/3-hour. Key = `OPENWEATHERMAP_API_KEY`.
+  New keys take ~1–2 h to activate (401 "Invalid API key" until then).
+- **PENDING live fixtures (parser-gated):** both keys returned 401 at capture
+  time (well-formed but provider-rejected → activation lag). Per the
+  fixtures-are-ground-truth rule, `core/weather/weatherapi.ts` +
+  `openweathermap.ts` + the `snapshot-source-forecasts` job are built once
+  `scripts/_capture-aux` (keys never printed) records real responses. The
+  storage + comparison rails (`source_forecasts`, `source_accuracy`,
+  `check-source-accuracy`) are done and tested and already rank the Open-Meteo
+  sources.
+
 ## Slack (alerts, ADR-11)
 
 - Incoming webhook; delivery counted ONLY on HTTP 2xx; a failed post never

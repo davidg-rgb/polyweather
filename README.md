@@ -20,7 +20,7 @@ is the source spec. Build progress and operator actions live in
 | `supabase/functions` | Deno Edge Functions (11 scheduled jobs + execute-bet) |
 | `supabase/tests` | Migration tests against embedded Postgres (PGlite) |
 | `apps/web` | Next.js dashboard + operator API |
-| `scripts/` | Local CLIs: check-db (DATABASE_URL doctor), check-p4-coverage (P4 DoD gate), seed-stations, backfill-forecasts/actuals/market-history, simulate-historical-edge, backup-db, smoke-live-apis. All auto-load `.env.local` (except smoke-live-apis, which keeps Slack opt-in) |
+| `scripts/` | Local CLIs: check-db (DATABASE_URL doctor), check-p4-coverage (P4 DoD gate), check-source-accuracy (cross-source forecast ranking), seed-stations, backfill-forecasts/actuals/market-history, simulate-historical-edge, backup-db, smoke-live-apis. All auto-load `.env.local` (except smoke-live-apis, which keeps Slack opt-in) |
 | `research/` | Live-verified API ground truth — parsers must match these fixtures exactly |
 | `docs/` | DATA-SOURCES · CALIBRATION · TRADING-MATH · GO-LIVE-CHECKLIST (mirrors the gate verbatim) |
 | `RUNBOOK.md` | Incidents, manual triggers, backfill ops, backups, the F-036 monthly sweep |

@@ -76,6 +76,7 @@ describe('migrations 0001–0010', () => {
       '0017_calibration_rpcs.sql', '0018_market_rpcs.sql', '0019_trading_rpcs.sql',
       '0020_support_rpcs.sql', '0021_operator_rpcs.sql', '0022_dashboard_rpcs.sql',
       '0023_bet_delivery.sql', '0024_fix_poll_known_events_buckets.sql',
+      '0025_source_forecasts.sql',
     ]);
   });
 });
@@ -87,6 +88,7 @@ describe('unique / natural keys (§7, §15)', () => {
     ['forecast_snapshots', ['icao', 'model', 'target_date', 'lead_days', 'snapshot_slot']],
     ['ensemble_snapshots', ['icao', 'model', 'target_date', 'snapshot_slot']],
     ['observations', ['icao', 'date_local']],
+    ['source_forecasts', ['icao', 'source', 'target_date', 'lead_days', 'snapshot_slot']],
     ['market_events', ['poly_event_id']],
     ['market_events', ['slug']],
     ['market_events', ['city_id', 'target_date', 'kind']],
