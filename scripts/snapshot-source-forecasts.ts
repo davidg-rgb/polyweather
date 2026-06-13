@@ -1,36 +1,32 @@
 /**
- * scripts/snapshot-source-forecasts — capture external-source daily-max
- * forecasts into source_forecasts (§ external-source accuracy tracking).
+ * scripts/snapshot-source-forecasts — local/manual capture of external-source
+ * daily-max forecasts into source_forecasts (§ external-source accuracy tracking).
  *
  * For every coord-seeded station, fetch each available comparison source's
- * daily-max forecast, derive the lead from the station-local target date, and
- * upsert into source_forecasts (slot = 10Z for an AM-UTC run, 22Z otherwise —
- * two captures/day, mirroring the Open-Meteo cadence). Sources are pluggable:
- * OpenWeatherMap is wired now; WeatherAPI joins once its key is valid and its
- * parser+fixture land. A source erroring on one station is skipped, not fatal.
+ * daily-max forecast and upsert into source_forecasts. The capture loop is the
+ * SHARED supabase/functions/_shared/source-capture.ts module — the exact code
+ * the autonomous snapshot-sources Edge Function runs twice a day — so this seed
+ * and the cron can never diverge. Sources are built from whatever keys are in
+ * .env.local (auto-loaded).
  *
- * Requires source_forecasts (migration 0025) on the target DB and the source
- * API keys in .env.local (auto-loaded). Run: pnpm tsx scripts/snapshot-source-forecasts.ts
+ * Requires source_forecasts (migration 0025) on the target DB. For ONGOING
+ * daily accumulation, deploy the snapshot-sources Edge Function and set
+ * OPENWEATHERMAP_API_KEY / WEATHERAPI_API_KEY as Edge Function secrets (see
+ * RUNBOOK § external-source collection); this script remains the manual seed /
+ * backfill path. Run: pnpm tsx scripts/snapshot-source-forecasts.ts
  */
 import { pathToFileURL } from 'node:url';
 import {
-  leadDays,
-  owmForecastUrl,
-  parseOwmDailyMax,
-  parseWeatherApiDailyMax,
-  weatherApiForecastUrl,
-} from '../packages/core/src/index.ts';
+  captureSourceForecasts,
+  sourcesFromKeys,
+  type SourceDef,
+} from '../supabase/functions/_shared/source-capture.ts';
 import { loadEnv } from './lib/load-env.ts';
 import { makeScriptDb } from './lib/script-db.ts';
 import type { ScriptDb } from './lib/script-db.ts';
 
+export type { SourceDef };
 export type Db = Pick<ScriptDb, 'query'>;
-
-export interface SourceDef {
-  source: string;
-  url: (coords: { lat: number; lon: number }) => string;
-  parse: (json: unknown, tz: string) => { targetDate: string; tmaxC: number }[];
-}
 
 export interface SnapshotSourceDeps {
   fetchJson: (url: string) => Promise<unknown>;
@@ -58,36 +54,12 @@ export async function snapshotSourceForecasts(db: Db, deps: SnapshotSourceDeps):
   const stations = await db.query<Station>(
     `select icao, lat::float8 as lat, lon::float8 as lon, tz from stations where lat is not null and lon is not null order by icao`,
   );
-  const slot: '10Z' | '22Z' = deps.now.getUTCHours() < 16 ? '10Z' : '22Z';
-
-  const rows: Record<string, unknown>[] = [];
-  const perSource: Record<string, number> = {};
-  let failures = 0;
-
-  for (const st of stations) {
-    for (const src of deps.sources) {
-      try {
-        const json = await deps.fetchJson(src.url({ lat: Number(st.lat), lon: Number(st.lon) }));
-        const days = src.parse(json, st.tz);
-        for (const d of days) {
-          const lead = leadDays(deps.now, d.targetDate, st.tz);
-          if (lead < 0 || lead > 16) continue;
-          rows.push({
-            icao: st.icao,
-            source: src.source,
-            target_date: d.targetDate,
-            lead_days: lead,
-            snapshot_slot: slot,
-            tmax_c: d.tmaxC,
-            captured_at: deps.now.toISOString(),
-          });
-          perSource[src.source] = (perSource[src.source] ?? 0) + 1;
-        }
-      } catch {
-        failures++;
-      }
-    }
-  }
+  const { rows, perSource, failures, slot } = await captureSourceForecasts(
+    stations.map((s) => ({ icao: s.icao, lat: Number(s.lat), lon: Number(s.lon), tz: s.tz })),
+    deps.sources,
+    deps.fetchJson,
+    deps.now,
+  );
 
   let written = 0;
   if (rows.length > 0) {
@@ -101,24 +73,7 @@ export async function snapshotSourceForecasts(db: Db, deps: SnapshotSourceDeps):
 
 /** Build the live source list from whatever API keys are present. */
 export function liveSources(env: NodeJS.ProcessEnv): SourceDef[] {
-  const sources: SourceDef[] = [];
-  const owmKey = env['OPENWEATHERMAP_API_KEY'];
-  if (owmKey) {
-    sources.push({
-      source: 'openweathermap',
-      url: (c) => owmForecastUrl(c, owmKey),
-      parse: parseOwmDailyMax,
-    });
-  }
-  const waKey = env['WEATHERAPI_API_KEY'];
-  if (waKey) {
-    sources.push({
-      source: 'weatherapi',
-      url: (c) => weatherApiForecastUrl(c, waKey),
-      parse: (json) => parseWeatherApiDailyMax(json), // date is already location-local; tz unused
-    });
-  }
-  return sources;
+  return sourcesFromKeys({ owm: env['OPENWEATHERMAP_API_KEY'], weatherapi: env['WEATHERAPI_API_KEY'] });
 }
 
 async function liveFetchJson(url: string): Promise<unknown> {

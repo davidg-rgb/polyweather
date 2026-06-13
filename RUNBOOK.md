@@ -96,13 +96,70 @@ user `postgres.<ref>`; timeout on `db.<ref>.supabase.co` → that endpoint is
 IPv6-only, switch to the **Session pooler** host (`aws-*.pooler.supabase.com:5432`).
 Quote the value in `.env.local`: `DATABASE_URL="postgresql://…"`.
 
-**`check-db` is the DATABASE_URL doctor.** It prints the connection's wiring
-(host/port/user/db — never the password) and, on failure, the exact fix:
-SASL/auth → reset the DB password (dashboard → Project Settings → Database) and
-re-encode special chars; `Tenant or user not found` → the Supavisor pooler needs
-user `postgres.<ref>`; timeout on `db.<ref>.supabase.co` → that endpoint is
-IPv6-only, switch to the **Session pooler** host (`aws-*.pooler.supabase.com:5432`).
-Quote the value in `.env.local`: `DATABASE_URL="postgresql://…"`.
+### `model_stats` is still 0 after a backfill? — the cursor race + the full re-fold
+
+`run-calibration` advances a forward-only cursor by observation `finalized_at`
+(`config.calibCursor`): each run folds only the pairs whose observation finalized
+since the last run. In **steady state** this is correct — a forecast is always
+captured days before its day's observation finalizes, so all leads are present
+when the obs is folded. But the **one-time full-universe backfill runs forecasts
+and actuals in parallel**, so an observation can finalize (and the daily 11:30Z
+cron can consume it past the cursor) *before* that station's forecast scope has
+landed — orphaning those pairs. Symptom: `statsUpserted: 0 / residualsAdded: 0`
+in the run-calibration job stats even though `forecast_snapshots` and finalized
+`observations` overlap richly.
+
+**The clean fix is one full re-fold once the backfill is complete** (all coord
+stations have both forecasts and actuals). Reset the cursor and re-run
+calibration — it deterministically rebuilds `model_stats` from every available
+pair (the bias fold is date-ordered; σ/MSE windows are date-bounded, not
+cursor-bounded):
+
+```bash
+# 1) reset the cursor so calibration re-pairs from the beginning
+psql "$DATABASE_URL" -c "delete from config where key = 'calibCursor';"
+# 2) trigger run-calibration; repeat until residualsAdded == 0 (each run drains
+#    up to 20k observations — the MAX_OBS_PER_RUN DoS guard — so a full universe
+#    needs ceil(totalObs / 20000) ≈ 2–3 triggers, or just wait that many 11:30Z crons)
+curl -fsS -X POST "$SUPABASE_URL/functions/v1/run-calibration" \
+  -H "x-cron-secret: $CRON_SECRET" -H "content-type: application/json" \
+  -d '{"periodKey":"run-calibration:manual:refold"}'
+pnpm tsx scripts/check-p4-coverage.ts                    # watch coverage climb to PASS
+```
+
+Do NOT bother chasing orphaned pairs mid-backfill — the daily cron keeps moving
+the cursor regardless; the final reset re-fold recovers everything in one pass.
+
+## External-source collection (snapshot-sources)
+
+External comparison sources (OpenWeatherMap, WeatherAPI.com) are captured into
+`source_forecasts`, **isolated from trading** — scored against the same WU/IEM
+truth by `source_accuracy` / `scripts/check-source-accuracy.ts` but never in
+`list_enabled_models`, the house blend, or `model_stats`. Two capture paths,
+one shared loop (`functions/_shared/source-capture.ts`):
+
+- **Autonomous (production):** the `snapshot-sources` Edge Function on pg_cron,
+  `25 10,22 * * *` UTC (10Z/22Z slots, just after the Open-Meteo snapshot). This
+  is what accrues daily history so the sources score in over time.
+- **Manual seed/backfill:** `pnpm tsx scripts/snapshot-source-forecasts.ts` (one
+  capture against `DATABASE_URL`; keys from `.env.local`).
+
+**Deploy + enable (operator, one-time):**
+
+```bash
+# 1) set the source keys as Edge Function secrets (NOT echoed; .env.functions or inline)
+supabase secrets set OPENWEATHERMAP_API_KEY=… WEATHERAPI_API_KEY=… --project-ref "$SUPABASE_REF"
+# 2) deploy the function (matches the rest of the stack: api bundler, no JWT)
+supabase functions deploy snapshot-sources --use-api --no-verify-jwt --project-ref "$SUPABASE_REF"
+# 3) apply migration 0026 to register the cron job (or via the management API / MCP apply_migration)
+```
+
+With **no keys set** the function still runs but writes nothing and raises a
+one-time `CONFIG` WARN (`snapshot-sources:no-keys`); if **every fetch fails**
+(dead key / outage) it raises a `SOURCE_FETCH` WARN (`snapshot-sources:all-failed`).
+Verify a tick: `select source, count(*), max(captured_at) from source_forecasts
+group by source;` should advance each slot. Rank the sources any time with
+`pnpm tsx scripts/check-source-accuracy.ts --leads`.
 
 ## Vault secret seeding (W11 — pg_cron reads these at run time)
 

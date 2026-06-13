@@ -16,8 +16,8 @@ is the source spec. Build progress and operator actions live in
 | Path | What |
 |---|---|
 | `packages/core` | Pure domain logic (parsing, math, calibration, Kelly) — no IO |
-| `supabase/migrations` | Schema 0001–0010 (reference → ingestion → markets → analytics → trading → ops → RLS → cron → seed) + RPC layers 0011–0024 (job/discovery/grading/snapshot/truth/distribution/calibration/market/trading/support/operator/dashboard RPCs + bet-delivery + poll-buckets fix) |
-| `supabase/functions` | Deno Edge Functions (11 scheduled jobs + execute-bet) |
+| `supabase/migrations` | Schema 0001–0010 (reference → ingestion → markets → analytics → trading → ops → RLS → cron → seed) + RPC layers 0011–0024 (job/discovery/grading/snapshot/truth/distribution/calibration/market/trading/support/operator/dashboard RPCs + bet-delivery + poll-buckets fix) + 0025 source-forecasts + 0026 snapshot-sources cron |
+| `supabase/functions` | Deno Edge Functions (12 scheduled jobs + execute-bet) |
 | `supabase/tests` | Migration tests against embedded Postgres (PGlite) |
 | `apps/web` | Next.js dashboard + operator API |
 | `scripts/` | Local CLIs: check-db (DATABASE_URL doctor), check-p4-coverage (P4 DoD gate), check-source-accuracy (cross-source forecast ranking), snapshot-source-forecasts (WeatherAPI/OWM capture), seed-stations, backfill-forecasts/actuals/market-history, simulate-historical-edge, backup-db, smoke-live-apis. All auto-load `.env.local` (except smoke-live-apis, which keeps Slack opt-in) |

@@ -77,6 +77,7 @@ describe('migrations 0001–0010', () => {
       '0020_support_rpcs.sql', '0021_operator_rpcs.sql', '0022_dashboard_rpcs.sql',
       '0023_bet_delivery.sql', '0024_fix_poll_known_events_buckets.sql',
       '0025_source_forecasts.sql',
+      '0026_cron_snapshot_sources.sql',
     ]);
   });
 });
@@ -317,7 +318,7 @@ describe('RLS (ADR-13, §11.5)', () => {
 });
 
 describe('pg_cron registrations (§7.22, W11)', () => {
-  it('registers all 12 jobs with the §7.22 schedules', async () => {
+  it('registers all 13 jobs with the §7.22 schedules', async () => {
     const jobs = await rows<{ jobname: string; schedule: string }>(
       db,
       `select jobname, schedule from cron.job order by jobname`,
@@ -326,6 +327,7 @@ describe('pg_cron registrations (§7.22, W11)', () => {
       'discover-markets': '10 2,4,5,11,17 * * *',
       'snapshot-forecasts': '15 10,22 * * *',
       'snapshot-ensembles': '35 10,22 * * *',
+      'snapshot-sources': '25 10,22 * * *',
       'build-distributions': '50 10,22 * * *',
       'poll-markets': '*/5 * * * *',
       'metar-nowcast': '*/15 * * * *',
@@ -336,7 +338,7 @@ describe('pg_cron registrations (§7.22, W11)', () => {
       'health-monitor': '*/30 * * * *',
       'snapshot-downsample': '0 3 * * *',
     };
-    expect(jobs.length).toBe(12);
+    expect(jobs.length).toBe(13);
     for (const j of jobs) {
       expect(j.schedule, `schedule for ${j.jobname}`).toBe(expected[j.jobname]);
     }

@@ -107,6 +107,7 @@ const FN_ARGS: Record<string, string[]> = {
   calib_scored_rows: ['p_days', 'p_today'],
   upsert_calibration_scores: ['p_rows'],
   rebuild_nowcast_lift: ['p_min_n', 'p_today'],
+  upsert_source_forecasts: ['p_rows'],
 };
 
 export function pglitePort(db: PGlite): DbPort {
