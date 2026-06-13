@@ -61,6 +61,7 @@ import {
 import { parseConfigRows } from '../packages/core/src/index.ts';
 import { addDaysISO, listDatesISO, splitList, type Db } from './lib/backfill.ts';
 import { makeScriptDb } from './lib/script-db.ts';
+import { loadEnv } from './lib/load-env.ts';
 
 export const SCRIPT = 'simulate-historical-edge';
 const SCORED_LEADS = [1, 0] as const;
@@ -655,6 +656,7 @@ export async function simulateHistoricalEdge(
 
 // CLI entry — only when executed directly (not when imported by tests).
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  loadEnv();
   const { values } = parseArgs({
     options: {
       from: { type: 'string' },

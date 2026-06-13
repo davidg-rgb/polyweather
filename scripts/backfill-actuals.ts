@@ -50,6 +50,7 @@ import {
   type Db,
 } from './lib/backfill.ts';
 import { makeScriptDb } from './lib/script-db.ts';
+import { loadEnv } from './lib/load-env.ts';
 
 export const SCRIPT = 'backfill-actuals';
 const DEFAULT_FROM = '2024-01-21';
@@ -324,6 +325,7 @@ export async function backfillActuals(
 
 // CLI entry — only when executed directly (not when imported by tests).
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  loadEnv();
   const { values } = parseArgs({
     options: {
       from: { type: 'string' },

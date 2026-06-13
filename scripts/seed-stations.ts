@@ -14,6 +14,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import tzlookup from 'tz-lookup';
 import { parseCsvWithHeader } from './lib/csv.ts';
 import { makeScriptDb, type ScriptDb } from './lib/script-db.ts';
+import { loadEnv } from './lib/load-env.ts';
 
 const AIRPORTS_CSV_URL = 'https://davidmegginson.github.io/ourairports-data/airports.csv';
 const CACHE_PATH = join(dirname(fileURLToPath(import.meta.url)), '.cache', 'airports.csv');
@@ -133,6 +134,7 @@ export async function fetchAirportsCsv(): Promise<string> {
 
 // CLI entry — only when executed directly (not when imported by tests).
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  loadEnv();
   const db = makeScriptDb();
   try {
     await seedStations({ db, fetchCsv: fetchAirportsCsv, log: console.log });

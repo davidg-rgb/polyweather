@@ -37,6 +37,7 @@ import {
   type Db,
 } from './lib/backfill.ts';
 import { makeScriptDb } from './lib/script-db.ts';
+import { loadEnv } from './lib/load-env.ts';
 
 export const SCRIPT = 'backfill-forecasts';
 export const PREVIOUS_RUNS_LEADS = [1, 2, 3, 4, 5, 6, 7];
@@ -232,6 +233,7 @@ export async function backfillForecasts(
 
 // CLI entry — only when executed directly (not when imported by tests).
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  loadEnv();
   const { values } = parseArgs({
     options: {
       from: { type: 'string' },

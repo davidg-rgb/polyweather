@@ -54,11 +54,14 @@ curl -X POST "$SUPABASE_URL/functions/v1/poll-markets" \
 
 All resumable via `backfill_progress` (kill-safe; re-run continues at the
 cursor) and budget-aware (the budgeter sleeps to UTC midnight when the daily
-weighted-call budget is spent). Run `seed-stations` first so every ICAO has
-coordinates. The full-universe sequence (hosted Pro project, `DATABASE_URL`
-in `.env.local`, ~3 days on the free Open-Meteo tier):
+weighted-call budget is spent). The CLIs auto-load `DATABASE_URL` (and
+`OPENMETEO_API_KEY`) from `.env.local` — no shell export needed; a real shell
+var still wins. Run `seed-stations` first so every ICAO has coordinates. The
+full-universe sequence (hosted Pro project, `DATABASE_URL` in `.env.local`,
+~3 days on the free Open-Meteo tier):
 
 ```bash
+pnpm tsx scripts/check-db.ts                              # pre-flight: DATABASE_URL connects (non-secret diagnostics)
 pnpm tsx scripts/seed-stations.ts
 pnpm tsx scripts/backfill-forecasts.ts --budget 8000
 pnpm tsx scripts/backfill-actuals.ts   --budget 8000
@@ -66,6 +69,14 @@ pnpm tsx scripts/backfill-market-history.ts --limit 500   # repeat until eventsS
 # then run-calibration (cron or manual trigger) folds it into model_stats, and:
 pnpm tsx scripts/simulate-historical-edge.ts --from 2025-06-01 --to 2026-06-01 --out reports
 ```
+
+**`check-db` is the DATABASE_URL doctor.** It prints the connection's wiring
+(host/port/user/db — never the password) and, on failure, the exact fix:
+SASL/auth → reset the DB password (dashboard → Project Settings → Database) and
+re-encode special chars; `Tenant or user not found` → the Supavisor pooler needs
+user `postgres.<ref>`; timeout on `db.<ref>.supabase.co` → that endpoint is
+IPv6-only, switch to the **Session pooler** host (`aws-*.pooler.supabase.com:5432`).
+Quote the value in `.env.local`: `DATABASE_URL="postgresql://…"`.
 
 ## Vault secret seeding (W11 — pg_cron reads these at run time)
 

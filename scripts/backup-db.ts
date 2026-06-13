@@ -12,6 +12,7 @@
 import { spawn } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { mkdirSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs';
+import { loadEnv } from './lib/load-env.ts';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { gzipSync } from 'node:zlib';
@@ -82,6 +83,7 @@ export function pgDump(databaseUrl: string): Promise<Buffer> {
 
 // CLI entry — only when executed directly (not when imported by tests).
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  loadEnv();
   const { values } = parseArgs({
     options: { dir: { type: 'string' }, keep: { type: 'string' } },
   });

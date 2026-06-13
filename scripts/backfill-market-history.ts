@@ -41,6 +41,7 @@ import {
 import { fetchJson as ioFetchJson } from '../packages/io/src/index.ts';
 import { getProgress, setProgress, type Db } from './lib/backfill.ts';
 import { makeScriptDb } from './lib/script-db.ts';
+import { loadEnv } from './lib/load-env.ts';
 
 export const SCRIPT = 'backfill-market-history';
 const PAGE_SIZE = 100;
@@ -311,6 +312,7 @@ export async function backfillMarketHistory(
 
 // CLI entry — only when executed directly (not when imported by tests).
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  loadEnv();
   const { values } = parseArgs({
     options: {
       from: { type: 'string' },
