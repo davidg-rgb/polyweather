@@ -300,3 +300,72 @@ describe('poll-markets pipeline (§6.17)', () => {
     expect(alerts.some((a) => a.kind === 'UNIVERSE_GROWTH' && a.severity === 'WARN')).toBe(true);
   });
 });
+
+// REGRESSION (§0024): a flagged event — a known city whose ladder fails
+// validateLadder, stored ladder_ok=false with ZERO market_buckets rows (the live
+// Lucknow Jun-13/14/15 events) — must not crash the tick. The RPC must return
+// buckets:[] (not null; jsonb_agg over zero rows is null), and the handler must
+// skip the bucketless event entirely (no snapshot/consensus/rec). Pre-fix this
+// failed poll-markets on EVERY tick: "TypeError: evCtx.buckets is not iterable".
+describe('poll-markets: flagged/bucketless events (§0024 regression)', () => {
+  let fdb: PGlite;
+  let fport: ReturnType<typeof pglitePort>;
+  const fctx = (now: Date): JobCtx => ({ db: fport, config: cfg, log: () => {}, startedAt: now });
+  const fdeps = (now: Date, page: RawGammaEvent[]): PollDeps => ({
+    fetchPage: async (offset) => (offset === 0 ? page : []),
+    fetchBook: async () => rawBook(0.27),
+    notify: async () => true,
+    now,
+    runId: crypto.randomUUID(),
+  });
+
+  beforeAll(async () => {
+    fdb = await freshDb();
+    fport = pglitePort(fdb);
+    // A healthy event (Seoul) through the real discovery path, then a FLAGGED
+    // event tied to the same city with ZERO buckets — exactly the Lucknow shape.
+    await discoverMarkets(fctx(new Date('2026-06-11T02:10:00Z')), {
+      fetchPage: async (offset) => (offset === 0 ? seoulPage() : []),
+      notify: async () => true,
+      todayUtcISO: '2026-06-11',
+    });
+    await fdb.exec(`
+      update cities set tz = 'Asia/Seoul', betting_enabled = true where slug = 'seoul';
+      update stations set tz = 'Asia/Seoul';
+      update city_stations set verified = true;
+      insert into market_events (poly_event_id, slug, city_id, target_date, unit, ladder_ok, closed)
+      select 'FLAG1', 'flagged-bucketless-jun20', c.id, '2026-06-20', 'C', false, false
+      from cities c where c.slug = 'seoul';
+    `);
+  });
+
+  afterAll(async () => {
+    await fdb.close();
+  });
+
+  it('poll_known_events returns buckets:[] (an array, not null) for a zero-bucket event', async () => {
+    const ctxRows = await fport.rpc<{ poly_event_id: string; ctx: { buckets: unknown } }>(
+      'poll_known_events',
+      { p_poly_ids: ['FLAG1'], p_champion: cfg.championSource },
+    );
+    expect(ctxRows.length).toBe(1);
+    expect(Array.isArray(ctxRows[0]!.ctx.buckets)).toBe(true);
+    expect(ctxRows[0]!.ctx.buckets).toHaveLength(0);
+  });
+
+  it('a bucketless event in the live universe is skipped — tick completes, healthy event still processed', async () => {
+    const flaggedRaw = structuredClone(seoulPage()[0]!);
+    flaggedRaw.id = 'FLAG1'; // same parseable raw, but its DB row has no buckets
+    const page = [seoulPage()[0]!, flaggedRaw];
+    const T = new Date('2026-06-11T12:03:00Z');
+    const stats = await pollMarkets(fctx(T), fdeps(T, page)); // pre-fix: threw here
+    expect(Number(stats['events'])).toBe(1); // only the healthy event; FLAG1 skipped pre-count
+    expect(Number(stats['snapshotsWritten'])).toBe(11); // 11 Seoul buckets; 0 from FLAG1
+    const flaggedRows = await rows(
+      fdb,
+      `select 1 from bucket_probabilities bp join market_events me on me.id = bp.event_id
+       where me.poly_event_id = 'FLAG1'`,
+    );
+    expect(flaggedRows.length).toBe(0); // no degenerate consensus row for the flagged event
+  });
+});

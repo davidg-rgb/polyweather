@@ -194,7 +194,14 @@ async function pollPass(
 
   for (const raw of live) {
     const evCtx = known.get(raw.id);
-    if (!evCtx || evCtx.closed || evCtx.graded) continue; // discovery owns ingestion of new events
+    // Skip closed/graded events (discovery owns ingestion of new events) AND
+    // flagged/bucketless events: a known city whose ladder fails validateLadder
+    // is stored ladder_ok=false with ZERO buckets (the Lucknow events). Such an
+    // event has no tradeable markets — nothing to snapshot, no consensus, no
+    // candidacy. Without this skip a bucketless event would fall through to the
+    // `for (const bucket of evCtx.buckets)` loops below (the §0024 crash) and,
+    // post-fix, would still write a degenerate empty-probs market_consensus row.
+    if (!evCtx || evCtx.closed || evCtx.graded || !evCtx.buckets?.length) continue;
     stats['events']!++;
 
     let parsed: ParsedEvent;
