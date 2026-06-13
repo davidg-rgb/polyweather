@@ -14,6 +14,7 @@ export * from './weather/openmeteo.ts';
 export * from './weather/wu.ts';
 export * from './weather/metar.ts';
 export * from './weather/iem.ts';
+export * from './weather/openweathermap.ts';
 export * from './calibration/emos.ts';
 export * from './calibration/scores.ts';
 export * from './distributions/gaussian.ts';

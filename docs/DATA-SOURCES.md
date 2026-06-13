@@ -80,21 +80,24 @@ models; stored in `source_forecasts` (NOT `forecast_snapshots`/`models`), so the
 never touch the trading blend or run-calibration. Scored against the same WU/IEM
 truth by `source_accuracy()` / `scripts/check-source-accuracy.ts`.
 
-- **WeatherAPI.com** — `GET api.weatherapi.com/v1/forecast.json?key=…&q={lat},{lon}&days=3`
-  → `forecast.forecastday[].day.maxtemp_c` (daily max already in the location's
-  local tz). Free tier: 3-day forecast, 1M calls/mo. Key = `WEATHERAPI_API_KEY`.
-- **OpenWeatherMap** — `GET api.openweathermap.org/data/2.5/forecast?lat=…&lon=…&appid=…&units=metric`
-  → `list[].main.temp_max` at 3-hourly steps (UTC `dt`); aggregate to a LOCAL-day
-  max per station tz. Free tier: 5-day/3-hour. Key = `OPENWEATHERMAP_API_KEY`.
-  New keys take ~1–2 h to activate (401 "Invalid API key" until then).
-- **PENDING live fixtures (parser-gated):** both keys returned 401 at capture
-  time (well-formed but provider-rejected → activation lag). Per the
-  fixtures-are-ground-truth rule, `core/weather/weatherapi.ts` +
-  `openweathermap.ts` + the `snapshot-source-forecasts` job are built once
-  `scripts/_capture-aux` (keys never printed) records real responses. The
-  storage + comparison rails (`source_forecasts`, `source_accuracy`,
-  `check-source-accuracy`) are done and tested and already rank the Open-Meteo
-  sources.
+- **OpenWeatherMap — DONE.** `GET api.openweathermap.org/data/2.5/forecast?lat=…&lon=…&appid=…&units=metric`
+  → `list[].main.temp_max` at 3-hourly steps (`dt` UTC epoch). `parseOwmDailyMax`
+  groups by station-LOCAL day and emits the max, but ONLY for days that sample
+  the afternoon peak window (local hour 12–17) so partial first/last days don't
+  understate the max. Free tier: 5-day/3-hour. Key = `OPENWEATHERMAP_API_KEY`
+  (new keys take ~1–2 h to activate — 401 "Invalid API key" until then). Ground
+  truth: `research/openweathermap_forecast_{RKSI,KORD}.json`.
+- **WeatherAPI.com — PENDING (key invalid).** `GET api.weatherapi.com/v1/forecast.json?key=…&q={lat},{lon}&days=3`
+  → `forecast.forecastday[].day.maxtemp_c` (daily max already in local tz). Free
+  tier: 3-day. Key = `WEATHERAPI_API_KEY`. The live key returns 401 code 2006
+  "invalid" (account/key not active); per the fixtures-are-ground-truth rule the
+  parser + wiring land once `scripts/_capture-aux` (keys never printed) records a
+  real response. `liveSources()` in `snapshot-source-forecasts.ts` is the seam —
+  one block to add when the key works.
+- The storage + comparison rails (`source_forecasts`, `source_accuracy`,
+  `scripts/check-source-accuracy.ts`) and the `snapshot-source-forecasts` job are
+  done and tested; OpenWeatherMap flows end-to-end. Live seeding waits only on
+  migration 0025 being applied to the hosted DB.
 
 ## Slack (alerts, ADR-11)
 

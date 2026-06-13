@@ -112,6 +112,13 @@ export class WuShapeError extends DataIntegrityError {
   }
 }
 
+/** Unexpected shape from an external comparison source (WeatherAPI / OpenWeatherMap). */
+export class SourceShapeError extends DataIntegrityError {
+  constructor(message: string, details?: ErrorDetails) {
+    super('ERR_SOURCE_SHAPE', message, details);
+  }
+}
+
 /** Unknown bucket label shape — the parser never guesses (§6.3). */
 export class BucketParseError extends DataIntegrityError {
   constructor(message: string, details?: ErrorDetails) {
