@@ -2406,7 +2406,7 @@ Wallet setup per GO-LIVE-CHECKLIST, POLY_PRIVATE_KEY in Edge secrets, goLiveGate
 - [x] All routes reject non-operator sessions (401) — RLS + email check
 
 ### Data models (§7)
-- [ ] Migrations 0001–0010 apply clean on empty DB and re-apply idempotently (db reset)
+- [ ] Migrations 0001–0024 apply clean on empty DB and re-apply idempotently (db reset)
 - [x] Every unique/natural key from §7 exists (cities.slug; city_stations one-current partial; forecast 5-col; ensemble 4-col; observations (icao,date); events (city,date,kind); buckets (event,idx); dist (event,source,hash); model_stats PK; scores PK; bets open-rec partial; ledger (bet,type); job_runs (job,period); alerts (dedupe,day))
 - [x] Indexes from §7.5/§7.11 present in migrations (verified by reading SQL, not prose)
 - [x] RLS: anon sees nothing; operator email reads all; writes service-role only (tested with anon client)

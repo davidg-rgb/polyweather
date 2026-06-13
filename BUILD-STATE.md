@@ -5,7 +5,7 @@
 
 ## Active Phase
 
-**BUILD COMPLETE — P0 through P8 (iter 30, 2026-06-11).** Every §15 box is ticked or documented-manual (the 12 remaining unticked boxes are hosted-stack verification clauses (the five §6.14–6.16 job boxes + db-reset + the six §9 live-E2E/Playwright items) — consolidated checklist below in "Next Task"). 543 tests green; smoke-live-apis 12/12 LIVE PASS; docs accurate against code. P9 (60-day paper campaign) and P10 (go-live) are operator/calendar-gated — start procedures in Phase Gate Notes.
+**BUILD COMPLETE — P0 through P8 (iter 30, 2026-06-11; RE-VERIFIED iter 31, 2026-06-13).** Every §15 box is ticked or documented-manual (the 12 remaining unticked boxes are hosted-stack verification clauses (the five §6.14–6.16 job boxes + db-reset + the six §9 live-E2E/Playwright items) — consolidated checklist below in "Next Task"). **iter-31 re-verification (2026-06-13): `pnpm typecheck` exit 0; `pnpm test` 550/550 green across 41 files; `pnpm tsx scripts/smoke-live-apis.ts` 12/12 LIVE integrations OK + Slack skipped (no live-API contract drift since 2026-06-11).** docs accurate against code. P9 (60-day paper campaign) and P10 (go-live) are operator/calendar-gated — start procedures in Phase Gate Notes.
 
 **P7 — COMPLETE on the build side (iter 29).** All four §6.22 scripts shipped and §15-ticked; **scripts/smoke-live-apis.ts PASSES LIVE: 12/12 integrations OK** (Slack skipped pending the operator webhook — the one DONE-criterion item that needs operator input). The §14 P7 DoD's "≥6 months × ≥10 cities" backtest report is gated on the full-universe backfill (Operator TODO 5); the pipeline is proven end-to-end on fixture scope. Next phase: P8 docs/hardening.
 
@@ -21,6 +21,10 @@
 
 ## Completed
 
+- **Iteration 31 (2026-06-13): BUILD-COMPLETE re-verification + contract-accuracy sweep.**
+  - Re-ran the full gate fresh (not trusting the prior-iteration claim — files are the state): `pnpm typecheck` exit 0; `pnpm test` **550/550 green** across 41 test files (the iter-30 543 + the iter-(poll-fix) 2 regression tests + 5 prior); `pnpm tsx scripts/smoke-live-apis.ts` **12/12 LIVE integrations OK** (gamma active/closed, CLOB book + prices-history, Open-Meteo multimodel/prevruns-single/ensemble/ERA5/model-meta, WU key+obs, METAR, IEM) + Slack intentionally skipped (no `SLACK_WEBHOOK_URL` in shell env ⇒ no outward-facing test post to the operator channel). No live-API contract drift since the 2026-06-11 PASS.
+  - Contract-accuracy fix: the migration chain grew to **0024** (poll-buckets fix), but four `db reset` verification references still read the as-planned/as-prior ranges. Corrected the stale *verification-instruction* references to the full as-built chain — ARCHITECTURE.md §15 box (`0001–0010`→`0001–0024`), BUILD-STATE hosted-checklist step 1 (`0001–0023`→`0001–0024`), README layout row (now names the 0011–0024 RPC layers) + hosted-step 2 (`0001–0010`→`0001–0024`). Left the two *historical-record* lines untouched (ARCHITECTURE §14 P0 roadmap + BUILD-STATE iter-1 log both correctly state P0 delivered 0001–0010).
+  - Confirmed all 12 unticked §15 boxes are hosted-stack/live-E2E/operator-gated (snapshot/ensembles/fetch-actuals/metar-nowcast/build-distributions live-run clauses, db-reset, §9.1/9.3/9.4/9.10 live-E2E, ADR-16 row-timing, 7-page Playwright) — none is non-gated build work. Loop DONE criterion met on everything buildable. Declared BUILD COMPLETE and stopped the loop.
 - **P8 (iteration 30, 2026-06-11): hardening + docs — BUILD COMPLETE.**
   - Implemented the missed §6.12 clause: BET_REC delivery status recorded on the bet — migration 0023 `note_bet_slack_delivery` + poll-markets wiring after the notify; tested true-path through the real tick + both values via the RPC. notifySlack §15 box fully ticked.
   - Docs: RUNBOOK.md (incidents WU-key/station-change/dead-man/position-drift, manual triggers w/ curl, backfill ops, Vault seeding SQL, F-037 backup + restore drill, F-036 monthly sweep + attestations, the failure-drill log mapping every killed upstream to its suite test); docs/DATA-SOURCES.md (every endpoint + the live-verified quirks: best-LAST book ordering, single-model suffix drop, META_DIR table, WU runtime key, Cloudflare UA); docs/CALIBRATION.md (EMOS math, ADR-16 verbatim, Brier worked example, promotion/gate); docs/TRADING-MATH.md (fee 0.01122 worked case, the tick-1 Kelly walkthrough 0.366326→74sh→$19.98, cap ladder, settlement identity); docs/GO-LIVE-CHECKLIST.md (all 13 gate reasons VERBATIM + the P10 procedure incl. the rollback drill). README refreshed to build-complete state.
@@ -151,7 +155,7 @@
 
 **Hosted-stack verification checklist** (the documented-manual record for the
 12 remaining §15 boxes — run after Operator TODO 1–6, in order):
-1. `supabase db reset` applies 0001–0023 idempotently (§15 P0 box; PGlite-proven 2×-apply locally).
+1. `supabase db reset` applies 0001–0024 idempotently (§15 P0 box; PGlite-proven 2×-apply locally).
 2. 48h of cron operation green: snapshot-forecasts ≥95% cell coverage + gap-fill, snapshot-ensembles member arrays, fetch-actuals provisional→finalized on real days, metar-nowcast daytime batches, build-distributions champion+challenger rows (§15 boxes 6.14–6.16; every locally-provable clause already suite-tested).
 3. 9.1 snapshot E2E + 9.3 truth E2E on live data (winner == Polymarket winner on a real resolution).
 4. 9.4 approve→fill through the REAL deployed execute-bet proxy on a live market (predicate + handler matrix already proven; this is the wire check).

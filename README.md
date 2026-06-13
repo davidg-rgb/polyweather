@@ -16,7 +16,7 @@ is the source spec. Build progress and operator actions live in
 | Path | What |
 |---|---|
 | `packages/core` | Pure domain logic (parsing, math, calibration, Kelly) — no IO |
-| `supabase/migrations` | Schema 0001–0010: reference → ingestion → markets → analytics → trading → ops → RLS → cron → seed |
+| `supabase/migrations` | Schema 0001–0010 (reference → ingestion → markets → analytics → trading → ops → RLS → cron → seed) + RPC layers 0011–0024 (job/discovery/grading/snapshot/truth/distribution/calibration/market/trading/support/operator/dashboard RPCs + bet-delivery + poll-buckets fix) |
 | `supabase/functions` | Deno Edge Functions (11 scheduled jobs + execute-bet) |
 | `supabase/tests` | Migration tests against embedded Postgres (PGlite) |
 | `apps/web` | Next.js dashboard + operator API |
@@ -46,7 +46,7 @@ downsample cron.
 ### Hosted Supabase (operator steps)
 
 1. Create the Supabase project (free tier carries P0–P3; Pro from P4 — R-4).
-2. `supabase link --project-ref <ref>` then `supabase db reset` (applies 0001–0010).
+2. `supabase link --project-ref <ref>` then `supabase db reset` (applies 0001–0024).
 3. Seed Vault secrets `cron_secret` and `project_url` (RUNBOOK; pg_cron commands read them at run time).
 4. Copy `.env.example` → `.env.local` and fill in project keys.
 
