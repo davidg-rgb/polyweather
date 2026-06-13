@@ -85,8 +85,18 @@ export const POOLED_CITY_ID = '00000000-0000-0000-0000-000000000000';
 export const POOLED_LEAD = -1;
 /** W19: backfill/gapfill residuals enter the σ/MSE window widened ×1.15. */
 const SEED_WIDEN = 1.15;
-/** DoS guard, not a routine page size — the cursor cuts at a finalized_at boundary. */
-const MAX_OBS_PER_RUN = 20_000;
+/**
+ * Per-run observation budget — the cursor cuts at a finalized_at boundary. NOT a
+ * routine page size in steady state (a day finalizes ~one obs/station), but it
+ * bounds the big full-universe backfill catch-up: each obs pairs with ~46
+ * forecast rows, and calib_new_pairs ships every pair's error as jsonb, so the
+ * payload the edge runtime must receive+fold scales with this cap. Lowered from
+ * 20_000 → 3_000 (≈8 MB/run) after a 7.9k-obs window built a 21 MB payload that
+ * tripped the SQL statement timeout (migration 0027 adds headroom too). The
+ * daily cron self-drains a backlog at ~3_000 obs/run; a post-backfill cursor
+ * reset re-folds the whole universe over ⌈totalObs / 3_000⌉ runs.
+ */
+const MAX_OBS_PER_RUN = 3_000;
 /** Lift quantiles need this many completed days per (station, hour) before overwriting. */
 const MIN_LIFT_DAYS = 10;
 /** No promotion suggestion on thin evidence (C5 spirit — mirrors the bootstrap's n<30 rule). */

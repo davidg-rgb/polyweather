@@ -78,6 +78,7 @@ describe('migrations 0001–0010', () => {
       '0023_bet_delivery.sql', '0024_fix_poll_known_events_buckets.sql',
       '0025_source_forecasts.sql',
       '0026_cron_snapshot_sources.sql',
+      '0027_calib_statement_timeout.sql',
     ]);
   });
 });

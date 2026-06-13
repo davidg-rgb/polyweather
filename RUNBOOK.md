@@ -110,17 +110,19 @@ in the run-calibration job stats even though `forecast_snapshots` and finalized
 `observations` overlap richly.
 
 **The clean fix is one full re-fold once the backfill is complete** (all coord
-stations have both forecasts and actuals). Reset the cursor and re-run
-calibration — it deterministically rebuilds `model_stats` from every available
-pair (the bias fold is date-ordered; σ/MSE windows are date-bounded, not
-cursor-bounded):
+stations have both forecasts and actuals). Reset the cursor and let calibration
+re-pair from scratch — it deterministically rebuilds `model_stats` from every
+available pair (the bias fold is date-ordered; σ/MSE windows are date-bounded,
+not cursor-bounded):
 
 ```bash
 # 1) reset the cursor so calibration re-pairs from the beginning
 psql "$DATABASE_URL" -c "delete from config where key = 'calibCursor';"
-# 2) trigger run-calibration; repeat until residualsAdded == 0 (each run drains
-#    up to 20k observations — the MAX_OBS_PER_RUN DoS guard — so a full universe
-#    needs ceil(totalObs / 20000) ≈ 2–3 triggers, or just wait that many 11:30Z crons)
+# 2) trigger run-calibration; repeat until residualsAdded == 0. Each run folds
+#    MAX_OBS_PER_RUN = 3000 observations (≈8 MB payload — bounded so the edge
+#    runtime never OOMs/times out), so a full universe drains over
+#    ceil(totalObs / 3000) triggers — or just let the 11:30Z cron self-drain it
+#    (~14 days for ~40k obs; warm enough well inside a 60-day paper campaign).
 curl -fsS -X POST "$SUPABASE_URL/functions/v1/run-calibration" \
   -H "x-cron-secret: $CRON_SECRET" -H "content-type: application/json" \
   -d '{"periodKey":"run-calibration:manual:refold"}'
@@ -128,7 +130,17 @@ pnpm tsx scripts/check-p4-coverage.ts                    # watch coverage climb 
 ```
 
 Do NOT bother chasing orphaned pairs mid-backfill — the daily cron keeps moving
-the cursor regardless; the final reset re-fold recovers everything in one pass.
+the cursor regardless; the final reset re-fold recovers everything.
+
+> **Why 3000 and not the whole window at once (found live 2026-06-13).** A
+> 7.9k-obs catch-up window made `calib_new_pairs` aggregate ~365k pairs into a
+> **21 MB** jsonb in ~7.2s, tripping the default ~8s `statement_timeout` — the
+> run failed and folded nothing (clean: the cursor only advances after a
+> successful upsert). Fix shipped: `MAX_OBS_PER_RUN` 20k→3k (bounds the payload)
+> + migration `0027` adds `statement_timeout` headroom on the two heavy calib
+> aggregations. **Both require deploying** — apply `0027` and redeploy
+> `run-calibration` (`supabase functions deploy run-calibration --use-api
+> --no-verify-jwt`) before the refold/cron will fold a large backlog.
 
 ## External-source collection (snapshot-sources)
 

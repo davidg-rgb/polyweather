@@ -16,7 +16,7 @@ is the source spec. Build progress and operator actions live in
 | Path | What |
 |---|---|
 | `packages/core` | Pure domain logic (parsing, math, calibration, Kelly) — no IO |
-| `supabase/migrations` | Schema 0001–0010 (reference → ingestion → markets → analytics → trading → ops → RLS → cron → seed) + RPC layers 0011–0024 (job/discovery/grading/snapshot/truth/distribution/calibration/market/trading/support/operator/dashboard RPCs + bet-delivery + poll-buckets fix) + 0025 source-forecasts + 0026 snapshot-sources cron |
+| `supabase/migrations` | Schema 0001–0010 (reference → ingestion → markets → analytics → trading → ops → RLS → cron → seed) + RPC layers 0011–0024 (job/discovery/grading/snapshot/truth/distribution/calibration/market/trading/support/operator/dashboard RPCs + bet-delivery + poll-buckets fix) + 0025 source-forecasts + 0026 snapshot-sources cron + 0027 calib statement-timeout |
 | `supabase/functions` | Deno Edge Functions (12 scheduled jobs + execute-bet) |
 | `supabase/tests` | Migration tests against embedded Postgres (PGlite) |
 | `apps/web` | Next.js dashboard + operator API |
