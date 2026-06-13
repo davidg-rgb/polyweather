@@ -91,9 +91,10 @@ async function upsertRows(
 ): Promise<number> {
   if (rows.length === 0) return 0;
   const payload = rows.map((r) => ({ ...r, snapshot_slot: 'backfill', source: 'backfill_prev_runs' }));
-  const [res] = await db.query<{ n: number }>(`select upsert_forecast_rows($1::jsonb) as n`, [
-    JSON.stringify(payload),
-  ]);
+  // Pass the RAW array — postgres-js detects the `$1::jsonb` cast and JSON-encodes
+  // it into a jsonb ARRAY. A pre-stringified string would double-encode to a jsonb
+  // string and jsonb_to_recordset would reject it (see scripts/lib/pglite-param.ts).
+  const [res] = await db.query<{ n: number }>(`select upsert_forecast_rows($1::jsonb) as n`, [payload]);
   return Number(res?.n ?? 0);
 }
 

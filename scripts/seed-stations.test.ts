@@ -3,6 +3,7 @@ import type { PGlite } from '@electric-sql/pglite';
 import { freshDb, rows } from '../supabase/tests/harness.ts';
 import { parseCsv, parseCsvWithHeader } from './lib/csv.ts';
 import { buildStationRows, seedStations } from './seed-stations.ts';
+import { toPgliteParam } from './lib/pglite-param.ts';
 
 const CSV = `"id","ident","type","name","latitude_deg","longitude_deg","elevation_ft","continent","iso_country","iso_region","municipality","scheduled_service","gps_code","iata_code","local_code","home_link","wikipedia_link","keywords"
 3849,"KORD","large_airport","Chicago O'Hare International Airport",41.9786,-87.9048,672,"NA","US","US-IL","Chicago","yes","KORD","ORD","ORD",,,"CHI"
@@ -57,9 +58,7 @@ describe('seedStations against PGlite', () => {
   it('fills coordinates, upgrades provisional tz, never clobbers operator tz, reports unmatched', async () => {
     const scriptDb = {
       query: async <T,>(sql: string, params: unknown[] = []): Promise<T[]> => {
-        const pgParams = params.map((p) =>
-          Array.isArray(p) ? `{${p.map((x) => `"${String(x)}"`).join(',')}}` : p,
-        );
+        const pgParams = params.map(toPgliteParam);
         return (await db.query<T>(sql, pgParams)).rows;
       },
     };

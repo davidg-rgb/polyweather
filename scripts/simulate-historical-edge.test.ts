@@ -32,6 +32,7 @@ import { freshDb, rows } from '../supabase/tests/harness.ts';
 import { backfillMarketHistory } from './backfill-market-history.ts';
 import { simulateHistoricalEdge, type SimReport } from './simulate-historical-edge.ts';
 import { listDatesISO, type Db } from './lib/backfill.ts';
+import { toPgliteParam } from './lib/pglite-param.ts';
 
 const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), '..', 'research');
 const fixture = <T,>(name: string): T => JSON.parse(readFileSync(join(FIXTURES, name), 'utf8')) as T;
@@ -69,9 +70,7 @@ beforeAll(async () => {
   db = await freshDb();
   scriptDb = {
     query: async <T,>(sql: string, params: unknown[] = []): Promise<T[]> => {
-      const pgParams = params.map((p) =>
-        Array.isArray(p) ? `{${p.map((x) => `"${String(x)}"`).join(',')}}` : p,
-      );
+      const pgParams = params.map(toPgliteParam);
       return (await db.query<T>(sql, pgParams)).rows;
     },
   };

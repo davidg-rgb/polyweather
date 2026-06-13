@@ -8,6 +8,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { PGlite } from '@electric-sql/pglite';
 import { freshDb, rows } from '../supabase/tests/harness.ts';
 import { listDatesISO, type Db } from './lib/backfill.ts';
+import { toPgliteParam } from './lib/pglite-param.ts';
 import { advancesFromObs, backfillActuals, SPARSE_MIN_OBS } from './backfill-actuals.ts';
 import { backfillForecasts } from './backfill-forecasts.ts';
 
@@ -22,9 +23,7 @@ beforeAll(async () => {
   db = await freshDb();
   scriptDb = {
     query: async <T,>(sql: string, params: unknown[] = []): Promise<T[]> => {
-      const pgParams = params.map((p) =>
-        Array.isArray(p) ? `{${p.map((x) => `"${String(x)}"`).join(',')}}` : p,
-      );
+      const pgParams = params.map(toPgliteParam);
       return (await db.query<T>(sql, pgParams)).rows;
     },
   };
