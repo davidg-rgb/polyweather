@@ -142,6 +142,40 @@ the cursor regardless; the final reset re-fold recovers everything.
 > `run-calibration` (`supabase functions deploy run-calibration --use-api
 > --no-verify-jwt`) before the refold/cron will fold a large backlog.
 
+## Analytics buildout — Phase 1 + 2a deploy (BLUEPRINT-analytics-buildout.md)
+
+Phase 1 (surface) + Phase 2a (capture instrument) are built + tested locally
+(typecheck 0, 597 green). All hosted effects are **operator-deploy-gated**; the
+code is safe to deploy now — the new poll-markets analytics audit lands DORMANT
+(writes 0 `edge_evaluations` until a `house_gaussian` champion exists, which
+needs the Phase-2 capture fix + Phase-3 de-gate). Steps:
+
+```bash
+# 1) apply migration 0029 (dash_events_list — additive, read-only, zero existing
+#    readers; safe). Via MCP apply_migration OR:
+supabase db push --project-ref "$SUPABASE_REF"      # or management API / MCP
+# 2) redeploy the three edge functions that changed (same bundler/no-JWT as the stack):
+supabase functions deploy poll-markets       --use-api --no-verify-jwt --project-ref "$SUPABASE_REF"
+supabase functions deploy snapshot-forecasts --use-api --no-verify-jwt --project-ref "$SUPABASE_REF"
+supabase functions deploy snapshot-ensembles --use-api --no-verify-jwt --project-ref "$SUPABASE_REF"
+# 3) redeploy the web app (Vercel) for /events + nav + calibration + event-page changes
+vercel --prod          # or the project's normal deploy trigger
+```
+
+**What to watch after deploy:**
+- `/events` lists all open events with collection-health + a `model?` chip (all
+  "pending" today — flips to "built" automatically once house rows appear).
+- **The capture instrument (ADR-19) pins the `stations:0` defect on the next
+  scheduled `snapshot-forecasts`/`snapshot-ensembles` fire (10Z/22Z):** read the
+  edge logs for the `'capture inputs'` line (the `{stations,models}` cardinality)
+  and the `db.ts` empty-result line `{"rpc":"list_active_stations","empty":true,
+  "dataWasNull":?}` — `dataWasNull:true` = PostgREST sent null (no rows over the
+  wire); `false` = an empty SETOF `[]`. A 0-station run now records
+  `job_runs.status='failed'` (retryable) + a Slack JOB_FAIL, NOT a silent `ok`.
+- This is **Phase 2a only** — it INSTRUMENTS the defect; the root fix (and HD-1
+  de-gate, migration 0028, `operator_resume('halt:global')`) is the next session
+  once the one hosted fire reveals the mechanism. See BUILD-STATE "NOT built".
+
 ## External-source collection (snapshot-sources)
 
 External comparison sources (OpenWeatherMap, WeatherAPI.com) are captured into

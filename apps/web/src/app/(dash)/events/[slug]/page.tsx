@@ -42,7 +42,15 @@ export default async function EventPage({ params }: { params: Promise<{ slug: st
       {winnerLabel ? <div className="ok-banner">resolved winner: <b>{winnerLabel}</b></div> : null}
       {!ev.ladderOk ? <div className="drift-banner">⚠ ladder flagged invalid — betting disabled for this event</div> : null}
 
-      <h2>Distributions — {championSource} vs market consensus</h2>
+      <h2>
+        {detail.houseDist === null ? (
+          <>
+            Distributions — market consensus <span className="chip amber">model pending</span>
+          </>
+        ) : (
+          <>Distributions — {championSource} vs market consensus</>
+        )}
+      </h2>
       <div className="panel">
         <DistributionOverlay
           labels={detail.ladder.map((l) => l.label)}
@@ -50,12 +58,19 @@ export default async function EventPage({ params }: { params: Promise<{ slug: st
           consensusProbs={detail.consensusDist?.probs ?? null}
           nowcast={detail.houseDist?.nowcast ?? false}
           winningIdx={ev.winningBucketIdx}
+          modelPending={!detail.houseDist && !!detail.consensusDist}
         />
-        <p className="muted small">
-          house: μ {fmtProb(detail.houseDist?.mu)} σ {fmtProb(detail.houseDist?.sigma)} · made{' '}
-          {fmtDateTime(detail.houseDist?.madeAt)} (lead {detail.houseDist?.lead ?? '—'}) · consensus made{' '}
-          {fmtDateTime(detail.consensusDist?.madeAt)}
-        </p>
+        {detail.houseDist === null ? (
+          <p className="muted small">
+            house distribution pending — model side (house_gaussian/house_ensemble) not yet built for this event
+          </p>
+        ) : (
+          <p className="muted small">
+            house: μ {fmtProb(detail.houseDist.mu)} σ {fmtProb(detail.houseDist.sigma)} · made{' '}
+            {fmtDateTime(detail.houseDist.madeAt)} (lead {detail.houseDist.lead ?? '—'}) · consensus made{' '}
+            {fmtDateTime(detail.consensusDist?.madeAt)}
+          </p>
+        )}
       </div>
 
       <h2>Edge — stored engine rows vs display recompute</h2>

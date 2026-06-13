@@ -79,6 +79,20 @@ export class UpstreamError extends AppError {
 }
 
 /**
+ * A job's required input universe is empty at runtime when it must not be —
+ * e.g. list_active_stations() returns 0 rows in the deployed isolate though the
+ * table is non-empty server-side (the #2 capture defect). Throwing — rather than
+ * recording a 0-row `ok` — makes runJob mark the period `failed` + retryable
+ * instead of permanently consuming it as `already_ran` (ADR-12, ADR-19).
+ * Internal-only; reaches job_runs + Slack via the runJob catch path.
+ */
+export class JobInputError extends AppError {
+  constructor(message: string, details?: ErrorDetails) {
+    super('ERR_JOB_INPUT', message, details);
+  }
+}
+
+/**
  * An upstream changed shape or internal math hit an impossible state.
  * Never silently swallowed: store flagged row OR fail run + alert.
  */

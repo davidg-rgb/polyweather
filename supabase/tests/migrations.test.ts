@@ -79,6 +79,10 @@ describe('migrations 0001–0010', () => {
       '0025_source_forecasts.sql',
       '0026_cron_snapshot_sources.sql',
       '0027_calib_statement_timeout.sql',
+      // 0028 is RESERVED for the Phase-3 analytics_decouple migration (not yet
+      // built); 0029 is the Phase-1 dashboard /events surfacing RPC. The gap is
+      // intentional — see 0029_dashboard_events_list.sql header.
+      '0029_dashboard_events_list.sql',
     ]);
   });
 });

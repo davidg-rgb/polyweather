@@ -14,11 +14,16 @@ import { serverDb } from '../../../lib/supabase.ts';
 
 export const dynamic = 'force-dynamic';
 
-const SOURCES = ['house_gaussian', 'house_ensemble'] as const;
-
 export default async function CalibrationPage(): Promise<ReactElement> {
   const v = await getCalibrationView(await serverDb());
   const bySource = (s: string) => v.scores.filter((r) => r.source === s);
+  // WEB-5 — derive the source list from the actually-scored rows instead of a
+  // hardcoded house-only const, so the 45 scored market_consensus reliability
+  // rows surface (they were hidden before). PROMOTABLE preserves the F-019
+  // invariant: market_consensus is the BASELINE, never a promotion target — only
+  // house_* challengers get a promote button.
+  const sources = [...new Set(v.scores.map((r) => r.source))].sort();
+  const PROMOTABLE = new Set(['house_gaussian', 'house_ensemble']);
 
   return (
     <div>
@@ -28,9 +33,13 @@ export default async function CalibrationPage(): Promise<ReactElement> {
 
       <h2>Reliability (stored reliability bins, n-weighted)</h2>
       <div className="panel grid cols-2">
-        {SOURCES.map((s) => (
-          <ReliabilityDiagram key={s} title={s} points={shapeReliability(bySource(s))} />
-        ))}
+        {sources.length === 0 ? (
+          <p className="muted">No scored sources yet — run-calibration fills this nightly.</p>
+        ) : (
+          sources.map((s) => (
+            <ReliabilityDiagram key={s} title={s} points={shapeReliability(bySource(s))} />
+          ))
+        )}
       </div>
 
       <h2>Champion promotion (F-019)</h2>
@@ -39,7 +48,7 @@ export default async function CalibrationPage(): Promise<ReactElement> {
           Promotion requires ≥60 out-of-sample days, paired bootstrap p &lt; 0.05 vs
           market_consensus, and a ≥5% better point estimate — re-checked server-side on click.
         </p>
-        {SOURCES.filter((s) => s !== v.champion).map((s) => (
+        {sources.filter((s) => s !== v.champion && PROMOTABLE.has(s)).map((s) => (
           <PromoteButton key={s} source={s} />
         ))}
       </div>

@@ -12,12 +12,15 @@ export function DistributionOverlay({
   consensusProbs,
   nowcast,
   winningIdx,
+  modelPending,
 }: {
   labels: string[];
   houseProbs: unknown[] | null;
   consensusProbs: unknown[] | null;
   nowcast?: boolean;
   winningIdx?: number | null;
+  /** WEB-6 — true when consensus is present but the house model isn't built yet. */
+  modelPending?: boolean;
 }): ReactElement {
   if (!houseProbs && !consensusProbs) {
     return <p className="muted small">No distributions stored yet for this event.</p>;
@@ -30,8 +33,13 @@ export function DistributionOverlay({
   const widthPct = (p: number): string => `${((p / max) * 100).toFixed(1)}%`;
   return (
     <div>
+      {modelPending ? (
+        <p className="chip amber">model distribution not built yet — showing market consensus only</p>
+      ) : null}
       <div className="legend">
-        <span><span className="swatch" style={{ background: 'var(--accent)' }} />house q</span>
+        {houseProbs ? (
+          <span><span className="swatch" style={{ background: 'var(--accent)' }} />house q</span>
+        ) : null}
         <span><span className="swatch" style={{ background: 'var(--muted)' }} />market p</span>
         {nowcast ? <span className="chip amber">nowcast-constrained</span> : null}
       </div>

@@ -473,6 +473,65 @@ async function pollPass(
   }
   stats['staleChampions'] = staleChampions;
 
+  // --- (3b) ANALYTICS EDGE PASS (EDGE-1 / DF-4A, ADR-18) -------------------------
+  // Compute the PURE model-vs-market edge (computeBucketEdges only — NO liquidity
+  // vetoes) for EVERY open event with a fresh champion, regardless of betting
+  // authorization, and merge into edgeRowsByEvent so step (8) records the
+  // analytics time-series (q vs execAsk per bucket per hour). `bettable` gates
+  // ONLY the bet/recommendation/expiry path above; verified/betting_enabled are
+  // live-trading gates (Issue #4) — this audit writes ONLY edge_evaluations (a
+  // read-only sink: no FK to bets, no path to bankroll), so no bet or fill can
+  // result. applyLiquidityFilters is deliberately NOT applied here: its
+  // station_unverified / volume_below_min / halted vetoes would mark every
+  // analytics row pass=false and poison the "did the model have an edge" signal;
+  // the dashboard display recompute (edge-display.ts) is also computeBucketEdges-
+  // only, so stored rows match it on q/execAsk/edge/minEdge (§15 no-drift).
+  //
+  // DORMANT until house_gaussian champions exist (Phase 2 capture fix + Phase 3
+  // de-gate): with 0 house rows today, evCtx.champion is null for every event and
+  // this loop is a no-op — it lights up automatically when the model side appears.
+  for (const [polyId, parsed] of parsedByPolyId) {
+    const evCtx = known.get(polyId)!;
+    if (edgeRowsByEvent.has(evCtx.eventId)) continue; // already computed in the candidate loop — keep those rows
+    if (evCtx.closed || evCtx.graded || !evCtx.buckets?.length) continue;
+    if (!evCtx.champion) continue;
+    if (deps.now.getTime() - new Date(evCtx.champion.madeAt).getTime() > CHAMPION_FRESH_MS) continue;
+    const lead = leadDays(deps.now, dateISO(evCtx.targetDate), evCtx.tz);
+    if (lead < 0 || lead > cfg.maxLeadDays) continue;
+
+    const q = evCtx.champion.probs.map(Number);
+    if (q.length !== evCtx.buckets.length) {
+      log('analytics edge skipped — champion/bucket length mismatch', {
+        slug: evCtx.slug, q: q.length, buckets: evCtx.buckets.length,
+      });
+      continue;
+    }
+    const ladder: BucketDef[] = evCtx.buckets.map((b) => ({ low: b.low, high: b.high, unit: evCtx.unit }));
+    const marketRows = evCtx.buckets.map((bucket) => {
+      const pb = bucket.polyMarketId
+        ? parsed.buckets.find((p) => p.marketId === bucket.polyMarketId)
+        : parsed.buckets[bucket.idx];
+      return {
+        feeRate: Number(bucket.feeRate ?? pb?.feeRate ?? 0.05),
+        spread: pb?.spread ?? null,
+        bestAsk: pb?.bestAsk ?? null,
+        bucket,
+      };
+    });
+    // The ≤15/cycle book budget is spent on candidates; non-candidate events
+    // fetch NO book → books=[null,...] → computeBucketEdges marks each row
+    // reasons=['no_book'], edge=null (honest: the model prob existed, no live
+    // book this tick — q-vs-mid is still recoverable from market_consensus).
+    const books: (NormalizedBook | null)[] = evCtx.buckets.map(() => null);
+    const edgeCfg = {
+      uncertaintyMargin: cfg.uncertaintyMargin, spreadBufferMin: cfg.spreadBufferMin,
+      feeRate: 0.05, probeStakeUsd: cfg.probeStakeUsd, maxSpread: cfg.maxSpread,
+      minEventVolumeUsd: cfg.minEventVolumeUsd, minHoursBeforeClose: cfg.minHoursBeforeClose,
+    };
+    const rows = computeBucketEdges(q, ladder, books, marketRows, edgeCfg);
+    edgeRowsByEvent.set(evCtx.eventId, { evCtx, rows });
+  }
+
   // --- (7) EXPIRY (ADR-09 CAS) ---------------------------------------------------
   const expiredLines: string[] = [];
   for (const evCtx of known.values()) {
@@ -509,7 +568,17 @@ async function pollPass(
   }
 
   // --- (8) HOURLY AUDIT (F-038) -----------------------------------------------
-  if (deps.now.getUTCMinutes() < 5 && edgeRowsByEvent.size > 0) {
+  // EDGE-2 / ADR-20 — persist on EVERY tick (the getUTCMinutes()<5 clock gate is
+  // gone). captured_hour stays hour-truncated, and persist_edge_evaluations'
+  // ON CONFLICT (event_id,bucket_idx,captured_hour) DO NOTHING makes every tick
+  // idempotent → exactly 1 row per (event,bucket,hour): the first tick of the
+  // hour inserts, later ticks no-op. This makes the audit RELIABLE, not denser
+  // (X-3b): the old gate wasn't "once an hour", it was "never on the real
+  // schedule" — the live poll cron is `15 10,22` (minute 15), which never
+  // satisfied minute<5, so the audit previously never fired on the schedule.
+  // (A genuinely sub-hour series would need captured_hour=tick-timestamp + a
+  // changed unique key + retention/read changes — a separate decision, ADR-20.)
+  if (edgeRowsByEvent.size > 0) {
     const hour = new Date(deps.now);
     hour.setUTCMinutes(0, 0, 0);
     const auditRows = [...edgeRowsByEvent.values()].flatMap(({ evCtx, rows }) =>

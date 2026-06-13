@@ -14,6 +14,7 @@ import type { PGlite } from '@electric-sql/pglite';
 import { parseConfigRows, type RawGammaEvent } from '../../../packages/core/src/index.ts';
 import { discoverMarkets } from '../../../supabase/functions/discover-markets/handler.ts';
 import { gradeEvent } from '../../../supabase/functions/_shared/grading.ts';
+import { getEventsList } from '../src/lib/loaders.ts';
 import { freshDb, rows } from '../../../supabase/tests/harness.ts';
 import { pglitePort } from '../../../supabase/tests/pglite-port.ts';
 
@@ -231,5 +232,93 @@ describe('dashboard loader RPCs (0022, §6.21)', () => {
     expect(wu.value).toContain('redacted');
     expect(v.unverifiedStations.some((s) => s.city === 'seoul')).toBe(true); // discovery left it unverified
     await db.query(`delete from config where key = 'wuApiKey'`);
+  });
+});
+
+// WEB-1/WEB-2 — the /events collection-health landing data path: the
+// dash_events_list RPC (0029) + the getEventsList loader. Its own fresh DB so the
+// open/closed and has-house counts are controlled (the shared seed above grades a
+// bet and would skew the roll-up).
+describe('events list — dash_events_list + getEventsList (WEB-1/2)', () => {
+  let edb: PGlite;
+  let eport: ReturnType<typeof pglitePort>;
+
+  beforeAll(async () => {
+    edb = await freshDb();
+    eport = pglitePort(edb);
+    await edb.exec(`select set_config('request.jwt.claims', '{"email":"${OPERATOR}"}', false)`);
+    // One open event via the REAL discovery path (ladder_ok, 11 buckets), then a
+    // house + consensus dist + a snapshot so it reads hasHouse/last*=set; plus a
+    // second BARE open event with no collection at all (hasHouse=false, all null).
+    await discoverMarkets(
+      { db: eport, config: parseConfigRows(await eport.getConfigRows()), log: () => {}, startedAt: new Date('2026-06-11T02:10:00Z') },
+      {
+        fetchPage: async (offset) => (offset === 0 ? [fixtureEvent('gamma-event-temperature-seoul-jun11.json')] : []),
+        notify: async () => true,
+        todayUtcISO: '2026-06-11',
+      },
+    );
+    const [ev] = await rows<{ id: string }>(edb, `select id from market_events`);
+    const [b0] = await rows<{ id: string }>(
+      edb, `select id from market_buckets where event_id = $1 order by bucket_idx limit 1`, [ev!.id],
+    );
+    await edb.exec(`
+      insert into bucket_probabilities (event_id, source, lead_days, nowcast, made_at, inputs_hash, probs)
+      values ('${ev!.id}', 'house_gaussian', 0, false, now(), 'el-house', array[0.1,0.1,0.1,0.1,0.05,0.15,0.1,0.1,0.05,0.05,0.05]::numeric[]),
+             ('${ev!.id}', 'market_consensus', 0, false, now(), 'el-mkt', array[0.1,0.1,0.1,0.1,0.05,0.15,0.1,0.1,0.05,0.05,0.05]::numeric[]);
+      insert into market_snapshots (bucket_id, best_bid, best_ask, mid, spread, captured_at)
+      values ('${b0!.id}', 0.10, 0.12, 0.11, 0.02, now());
+      insert into market_events (poly_event_id, slug, city_id, target_date, unit, ladder_ok, closed)
+      select 'BARE1', 'bare-open-jun20', city_id, '2026-06-20', 'C', true, false from market_events limit 1;
+    `);
+  });
+
+  afterAll(async () => {
+    await edb.close();
+  });
+
+  it('guard: a non-operator jwt is refused', async () => {
+    await edb.exec(`select set_config('request.jwt.claims', '{"email":"x@y.z"}', false)`);
+    try {
+      await expect(eport.rpc('dash_events_list', { p_champion: 'house_gaussian' })).rejects.toThrow(/ERR_FORBIDDEN/);
+    } finally {
+      await edb.exec(`select set_config('request.jwt.claims', '{"email":"${OPERATOR}"}', false)`);
+    }
+  });
+
+  it('getEventsList: both open events with per-event collection-health + roll-up counts', async () => {
+    const v = await getEventsList(eport);
+    expect(v.champion).toBe('house_gaussian');
+    expect(v.events).toHaveLength(2);
+    expect(Number(v.counts.open)).toBe(2);
+    expect(Number(v.counts.withHouse)).toBe(1);
+    expect(Number(v.counts.withConsensus)).toBe(1);
+    expect(Number(v.counts.withSnapshot)).toBe(1);
+    expect(Number(v.counts.withLadder)).toBe(2);
+
+    const seoul = v.events.find((e) => e.slug !== 'bare-open-jun20')!;
+    expect(seoul.hasHouse).toBe(true);
+    expect(seoul.lastConsensusAt).not.toBeNull();
+    expect(seoul.lastSnapshotAt).not.toBeNull();
+    expect(Number(seoul.nBuckets)).toBe(11);
+
+    const bare = v.events.find((e) => e.slug === 'bare-open-jun20')!;
+    expect(bare.hasHouse).toBe(false);
+    expect(bare.lastConsensusAt).toBeNull();
+    expect(bare.lastSnapshotAt).toBeNull();
+    expect(Number(bare.nBuckets)).toBe(0);
+  });
+
+  it('empty DB → loader returns [] with zeroed counts (null-tolerant default)', async () => {
+    const fresh = await freshDb();
+    try {
+      const fport = pglitePort(fresh);
+      await fresh.exec(`select set_config('request.jwt.claims', '{"email":"${OPERATOR}"}', false)`);
+      const v = await getEventsList(fport);
+      expect(v.events).toEqual([]);
+      expect(Number(v.counts.open)).toBe(0);
+    } finally {
+      await fresh.close();
+    }
   });
 });

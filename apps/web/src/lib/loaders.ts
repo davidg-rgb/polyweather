@@ -117,6 +117,58 @@ export async function getTodayOverview(db: WebDb): Promise<TodayOverview> {
   };
 }
 
+// --- /events (collection-health index, WEB-2) ------------------------------------
+
+export interface EventListRow {
+  slug: string;
+  city: string;
+  citySlug: string;
+  targetDate: string;
+  acceptingOrders: boolean;
+  ladderOk: boolean;
+  /** jsonb-string-safe numerics (file convention, cf. OpenRec.q) — page coerces with num(). */
+  nBuckets: unknown;
+  lastSnapshotAt: string | null;
+  lastConsensusAt: string | null;
+  hasHouse: boolean;
+  volume24h: unknown;
+}
+
+export interface EventsListView {
+  events: EventListRow[];
+  champion: string;
+  counts: {
+    open: unknown;
+    withSnapshot: unknown;
+    withConsensus: unknown;
+    withHouse: unknown;
+    withLadder: unknown;
+  };
+}
+
+const EMPTY_EVENTS_COUNTS = {
+  open: 0,
+  withSnapshot: 0,
+  withConsensus: 0,
+  withHouse: 0,
+  withLadder: 0,
+} as const;
+
+/**
+ * Load the open-events collection-health table for the /events landing
+ * (dash_events_list, 0029). Mirrors getCalibrationView's null-tolerant default
+ * (events=[]) so a fresh/empty DB renders the empty state, not a throw.
+ */
+export async function getEventsList(db: WebDb): Promise<EventsListView> {
+  const cfg = await loadConfig(db);
+  const v = await one<EventsListView>(db, 'dash_events_list', { p_champion: cfg.championSource });
+  return {
+    events: v?.events ?? [],
+    champion: v?.champion ?? cfg.championSource,
+    counts: v?.counts ?? { ...EMPTY_EVENTS_COUNTS },
+  };
+}
+
 // --- /events/[slug] --------------------------------------------------------------
 
 export interface EventBetRow {

@@ -250,6 +250,18 @@ Alternatives: score every row (rejected — apples to oranges); score at market-
 Decision: once filled, a position rides to resolution. The engine never sells; poll-markets displays current champion q on open positions and emits a WARN when q < ½ entry q (information, not action). Selling/exit logic (and maker resting orders) are live-phase enhancements behind the executor seam (§12).
 Why: paper-phase exit modeling doubles the fidelity problem (§11.4) for marginal learning value; the spec's "edge monitor on open positions" is satisfied by monitoring + alerting, with the policy stated instead of implied.
 
+### Analytics & Recommendation buildout (ADR-18 — ADR-21)
+
+> Full rationale, alternatives, and contracts: `BLUEPRINT-analytics-buildout.md` (reviewed in `REVIEW-analytics-buildout.md`, 0 critical / 0 warning). The pivot: this is an **analytics / decision-support** tool, not a trading bot — `verified`/`betting_enabled` gate the (out-of-scope) bet/fill path ONLY. Operator signed off ADR-18/20/21 on 2026-06-13.
+
+**ADR-18 — Analytics decoupled from the trading-authorization gate.** `house_gaussian`/`house_ensemble` distribution builds and the `edge_evaluations` model-vs-market audit (F-038) compute for every open, gradable, ladder-ok event regardless of `cs.verified`/`cities.betting_enabled` (those continue to gate the bet/fill path exclusively). Re-aligns the code with ADR-06 (symmetric scoring) and F-038 ("for every open event"). **Status: the AUDIT half is live (poll-markets EDGE-1/2/3 — the analytics edge pass runs over all open events with a champion, `bettable` gates the bet path only); the BUILD half (`list_buildable_events` dropping `cs.verified=true`, migration 0028) is Phase 3, NOT yet built.** Constraint (binds ADR-16): house rows under the relaxed gate are still stamped `made_at ≤ cutoff` per source, so widening the event set only ADDS matched pairs — never tilts the both-sources Brier.
+
+**ADR-19 — The capture `stations:0` defect is instrumented before it is fixed. Status: LIVE.** `snapshot-forecasts`/`snapshot-ensembles` treat a 0-row `list_active_stations()` at runtime as a loud, retryable `failed` (C1: `JobInputError` → runJob records `failed` + Slack JOB_FAIL, instead of a silent `ok` that permanently consumes the period as `already_ran`), and `db.ts` logs the raw PostgREST null-vs-`[]` discriminator on any empty SETOF (C2). One hosted fire then pins the mechanism deterministically. No speculative one-line fix shipped (the leading hypothesis is unproven; a co-equal candidate fits the same evidence).
+
+**ADR-20 — Edge audit: reliable-hourly cadence. Status: LIVE.** The `getUTCMinutes() < 5` clock gate is dropped; `edge_evaluations` persist every poll tick, idempotent on the hour-truncated `(event_id, bucket_idx, captured_hour)` natural key (`ON CONFLICT DO NOTHING`) → exactly one row per (event,bucket,hour). This makes the audit RELIABLE, not denser (X-3b): the live cron `15 10,22` (minute 15) never satisfied `minute < 5`, so the audit previously never fired on the real schedule. Sub-hour densification (operator-rejected for now) would need a tick-timestamp key + retention + read changes.
+
+**ADR-21 — Dashboard surfacing, `/events` the default landing. Status: LIVE.** New `/events` collection-health page (8th page; `dash_events_list` RPC 0029 + `getEventsList` loader) is the default landing (brand link + first in nav), data-driven `/calibration` sources (surfaces the 45 scored `market_consensus` reliability rows; promote buttons restricted to house_* per F-019), and an explicit "model pending" state on `/events/[slug]` + `/city/[slug]` + `DistributionOverlay`. Additive, in the existing RPC-per-page idiom.
+
 ---
 
 ## 4. Tech Stack
@@ -2441,7 +2453,7 @@ Wallet setup per GO-LIVE-CHECKLIST, POLY_PRIVATE_KEY in Edge secrets, goLiveGate
 - [x] 9.9 go-live gate: every condition red→green transition rendered on /admin
 
 ### Dashboard (§6.21)
-- [ ] 7 pages render with real data; Playwright smoke green
+- [ ] 8 pages render with real data; Playwright smoke green (the 7 P6 pages + `/events` collection-health landing, ADR-21)
 - [x] EdgeChart display recompute == stored edge rows (no silent drift between engine and UI)
 - [x] Reliability diagram + heatmap match calibration_scores fixtures
 - [x] Bet audit JSON fully visible on /events/[slug] (spec §15: derive stake from stored values)

@@ -31,6 +31,14 @@ export function supabasePort(client: SupabaseishClient): DbPort {
     async rpc<T>(fn: string, args: Record<string, unknown>): Promise<T[]> {
       const { data, error } = await client.rpc(fn, args);
       if (error) throw new ConfigError(`rpc ${fn} failed: ${error.message}`);
+      // C2 (ADR-19) diagnostic — when a call resolves to the fabricated-empty
+      // branch, record WHETHER PostgREST sent null (no rows over the wire) vs []
+      // (an empty SETOF). The #2 capture defect makes list_active_stations()
+      // return empty in the deployed isolate while returning 45 server-side; this
+      // one structured line on the next real fire pins null-vs-[] deterministically.
+      if (data === null || (Array.isArray(data) && data.length === 0)) {
+        console.log(JSON.stringify({ rpc: fn, empty: true, dataWasNull: data === null }));
+      }
       // PostgREST returns the BARE value for non-row-returning functions;
       // normalize to the [{ [fn]: value }] row shape every handler (and the
       // PGlite twin, which runs `select * from fn()`) consumes. Safe because

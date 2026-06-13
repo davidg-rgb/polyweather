@@ -369,3 +369,89 @@ describe('poll-markets: flagged/bucketless events (§0024 regression)', () => {
     expect(flaggedRows.length).toBe(0); // no degenerate consensus row for the flagged event
   });
 });
+
+// EDGE-1/EDGE-2/EDGE-3 (ADR-18/ADR-20) — the analytics edge audit, decoupled from
+// the trading gate. Two live bugs are fixed: (1) the poll cron is `15 10,22`
+// (minute 15), so the old getUTCMinutes()<5 gate meant the audit NEVER fired on
+// the real schedule; (2) the bet-path verified/betting_enabled gate kept
+// edge_evaluations empty for every unverified city (live: 0/45 verified). This
+// suite seeds an UNVERIFIED, betting-DISABLED but OPEN event with a fresh champion
+// and proves: (a) the audit fires at any minute, (b) for events the bet path skips,
+// (c) with MODEL-ONLY reasons (no station_unverified veto leaks in), (d) idempotent
+// per (event,bucket,hour) — reliable-hourly, not denser (X-3b).
+describe('poll-markets: analytics edge audit (EDGE-1/2/3, ADR-18/20)', () => {
+  let adb: PGlite;
+  let aport: ReturnType<typeof pglitePort>;
+  const actx = (now: Date): JobCtx => ({ db: aport, config: cfg, log: () => {}, startedAt: now });
+  const adeps = (now: Date, page: RawGammaEvent[], bookAsk: number): PollDeps => ({
+    fetchPage: async (offset) => (offset === 0 ? page : []),
+    fetchBook: async () => rawBook(bookAsk),
+    notify: async () => true,
+    now,
+    runId: crypto.randomUUID(),
+  });
+  const champion = (probs: number[], madeAt: string) =>
+    adb.query(
+      `insert into bucket_probabilities (event_id, source, lead_days, nowcast, made_at, inputs_hash, probs, mu_native, sigma_native, stats_version)
+       select me.id, 'house_gaussian', 0, false, $1::timestamptz, 'champ-' || $2::text, $3, 22.5, 1.4, 7
+       from market_events me where me.poly_event_id = '575039'`,
+      [madeAt, madeAt, `{${probs.join(',')}}`],
+    );
+
+  beforeAll(async () => {
+    adb = await freshDb();
+    aport = pglitePort(adb);
+    await discoverMarkets(actx(new Date('2026-06-11T02:10:00Z')), {
+      fetchPage: async (offset) => (offset === 0 ? seoulPage() : []),
+      notify: async () => true,
+      todayUtcISO: '2026-06-11',
+    });
+    // tz fixed so leads compute, but the station stays UNVERIFIED and the city
+    // stays betting-DISABLED — exactly the live 0/45-verified analytics case.
+    await adb.exec(`
+      update cities set tz = 'Asia/Seoul', betting_enabled = false where slug = 'seoul';
+      update stations set tz = 'Asia/Seoul';
+      update city_stations set verified = false;
+    `);
+    await champion(Q_STRONG, '2026-06-11T11:00:00Z');
+  });
+  afterAll(async () => {
+    await adb.close();
+  });
+
+  it('minute 30 (never <5): the audit STILL fires for the unverified open event — clock gate gone', async () => {
+    const T = new Date('2026-06-11T12:30:00Z'); // minute 30 → old gate blocked; Seoul 21:30, lead 0
+    const stats = await pollMarkets(actx(T), adeps(T, seoulPage(), 0.27));
+    expect(stats).toMatchObject({ recommendationsNew: 0, expired: 0 }); // bet path stays gated
+    expect(Number(stats['evaluationsPersisted'])).toBe(11); // …but analytics audited all 11 buckets
+  });
+
+  it('EDGE-3: rows carry MODEL-ONLY reasons — station_unverified never leaks; no bet written', async () => {
+    const evals = await rows<{ bucket_idx: number; pass: boolean; reasons: string[] }>(
+      adb, `select bucket_idx, pass, reasons from edge_evaluations order by bucket_idx`,
+    );
+    expect(evals.length).toBe(11);
+    for (const e of evals) {
+      expect(e.pass).toBe(false);
+      // No book is fetched for a non-candidate event (the ≤15/cycle budget is
+      // candidates-only) → honest reasons=['no_book']; crucially NOT the veto.
+      expect(e.reasons).toEqual(['no_book']);
+      expect(e.reasons).not.toContain('station_unverified');
+    }
+    expect((await rows(adb, `select 1 from bets`)).length).toBe(0); // the bet path never ran
+  });
+
+  it('idempotent within the UTC hour: a second minute-45 tick inserts nothing new', async () => {
+    const T = new Date('2026-06-11T12:45:00Z'); // same hour 12:00
+    const stats = await pollMarkets(actx(T), adeps(T, seoulPage(), 0.27));
+    expect(Number(stats['evaluationsPersisted'])).toBe(0); // ON CONFLICT (event,bucket,hour) DO NOTHING
+    expect((await rows(adb, `select 1 from edge_evaluations`)).length).toBe(11);
+  });
+
+  it('a new UTC hour adds exactly one fresh row set (reliable-hourly, not denser)', async () => {
+    const T = new Date('2026-06-11T13:30:00Z'); // hour 13:00; Seoul 22:30 still lead 0
+    const stats = await pollMarkets(actx(T), adeps(T, seoulPage(), 0.27));
+    expect(Number(stats['evaluationsPersisted'])).toBe(11);
+    expect((await rows(adb, `select 1 from edge_evaluations`)).length).toBe(22); // 2 hours × 11 buckets
+  });
+});

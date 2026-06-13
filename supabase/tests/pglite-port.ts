@@ -73,6 +73,7 @@ const FN_ARGS: Record<string, string[]> = {
   dash_event_detail: ['p_slug', 'p_champion'],
   dash_city_detail: ['p_slug', 'p_champion'],
   dash_calibration: ['p_champion'],
+  dash_events_list: ['p_champion'],
   dash_bets_ledger: ['p_mode'],
   dash_system_health: [],
   dash_admin_state: [],

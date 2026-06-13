@@ -12,6 +12,7 @@ import {
   FillRejected,
   GammaShapeError,
   GateError,
+  JobInputError,
   KellyDomainError,
   LadderGapError,
   NotFoundError,
@@ -83,6 +84,17 @@ describe('error taxonomy (§11.1)', () => {
     expect(e.httpStatus).toBe(422);
     expect(e.details).toMatchObject({ reason: 'stale_book' });
     expect(e.message).toContain('stale_book');
+  });
+
+  it('JobInputError (C1/ADR-19) is an internal AppError; e.name:e.message gives a clean Slack line', () => {
+    const e = new JobInputError('list_active_stations returned 0 rows at runtime');
+    expect(e).toBeInstanceOf(Error);
+    expect(e).toBeInstanceOf(AppError);
+    expect(e.name).toBe('JobInputError');
+    expect(e.code).toBe('ERR_JOB_INPUT');
+    expect(e.httpStatus).toBeUndefined(); // internal-only — never crosses an HTTP boundary
+    // runJob.ts formats `${e.name}: ${e.message}` into job_runs.error + the Slack body
+    expect(`${e.name}: ${e.message}`).toBe('JobInputError: list_active_stations returned 0 rows at runtime');
   });
 
   it('GateError carries reasons verbatim on the 503 path', () => {

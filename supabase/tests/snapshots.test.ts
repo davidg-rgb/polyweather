@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { PGlite } from '@electric-sql/pglite';
-import { UpstreamError } from '../../packages/core/src/index.ts';
+import { JobInputError, UpstreamError } from '../../packages/core/src/index.ts';
 import { snapshotEnsembles } from '../functions/snapshot-ensembles/handler.ts';
 import { snapshotForecasts } from '../functions/snapshot-forecasts/handler.ts';
 import type { Alert } from '../functions/_shared/slack.ts';
@@ -181,6 +181,59 @@ describe('snapshot-forecasts (§6.14)', () => {
       `select count(*)::int as n from forecast_snapshots where snapshot_slot = 'gapfill' and source = 'previous_runs'`,
     );
     expect(gapfill[0]!.n).toBeGreaterThan(0);
+  });
+});
+
+// C1 (ADR-19) — the deployed-isolate capture defect (#2) makes list_active_stations()
+// return 0 rows at runtime. A 0-row run must FAIL LOUD (retryable) rather than record
+// a silent `ok` that permanently consumes the period as already_ran. Both snapshot
+// handlers guard against it and emit the 'capture inputs' cardinality line first.
+describe('snapshot capture: empty-station guard (C1, ADR-19)', () => {
+  let edb: PGlite;
+  let eport: ReturnType<typeof pglitePort>;
+  const ectx = (logs: string[]): JobCtx => ({
+    db: eport,
+    config: { jobWallLimitSec: 150 } as JobCtx['config'],
+    log: (msg, extra) => logs.push(JSON.stringify({ msg, ...extra })),
+    startedAt: NOW,
+  });
+
+  beforeAll(async () => {
+    edb = await freshDb(); // NO cities/stations seeded → list_active_stations() returns []
+    eport = pglitePort(edb);
+  });
+  afterAll(async () => {
+    await edb.close();
+  });
+
+  it('snapshot-forecasts throws JobInputError (→ retryable failed) and never fetches a station', async () => {
+    const logs: string[] = [];
+    let fetched = false;
+    await expect(
+      snapshotForecasts(ectx(logs), {
+        fetchJson: async () => ((fetched = true), multiModel),
+        notify: async () => true,
+        slot: '10Z',
+        now: NOW,
+        omForecastBase: 'x://f',
+        omPreviousRunsBase: 'x://p',
+      }),
+    ).rejects.toBeInstanceOf(JobInputError);
+    expect(fetched).toBe(false); // threw before the per-station loop — no wasted upstream calls
+    expect(logs.some((l) => l.includes('capture inputs') && l.includes('"stations":0'))).toBe(true);
+  });
+
+  it('snapshot-ensembles throws the identical guard before the models fetch', async () => {
+    const logs: string[] = [];
+    await expect(
+      snapshotEnsembles(ectx(logs), {
+        fetchJson: async () => ensembleFx,
+        slot: '10Z',
+        now: NOW,
+        omEnsembleBase: 'x://e',
+      }),
+    ).rejects.toBeInstanceOf(JobInputError);
+    expect(logs.some((l) => l.includes('capture inputs') && l.includes('"stations":0'))).toBe(true);
   });
 });
 

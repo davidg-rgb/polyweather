@@ -2,6 +2,7 @@
  * snapshot-ensembles — per-member ensemble capture (ARCHITECTURE.md §6.14, I2).
  */
 import {
+  JobInputError,
   UpstreamError,
   ensembleUrl,
   leadDays,
@@ -29,6 +30,19 @@ export async function snapshotEnsembles(ctx: JobCtx, deps: EnsembleDeps): Promis
     'list_active_stations',
     {},
   );
+
+  // C1 (ADR-19) — same empty-station guard as snapshot-forecasts, placed BEFORE
+  // the models fetch: a 0-row station universe must fail loud + retryable, never
+  // record a silent `ok` that consumes the period as already_ran.
+  log('capture inputs', { stations: stations.length });
+  if (stations.length === 0) {
+    throw new JobInputError(
+      'list_active_stations returned 0 rows at runtime — refusing to record an empty ok run ' +
+        '(the period would be permanently consumed as already_ran). The universe is non-empty ' +
+        'server-side (45); this is the deployed-isolate capture defect (#2 / ADR-19).',
+    );
+  }
+
   const models = (await db.rpc<{ slug: string }>('list_enabled_models', { p_is_ensemble: true })).map(
     (m) => m.slug,
   );

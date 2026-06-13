@@ -11,6 +11,7 @@ import { requireOperator } from '../../lib/supabase.ts';
 export const dynamic = 'force-dynamic';
 
 const NAV = [
+  ['/events', 'events'], // WEB-4 / ADR-21 — analytics landing (open events + collection health), default landing
   ['/', 'today'],
   ['/calibration', 'calibration'],
   ['/bets', 'bets'],
@@ -23,7 +24,9 @@ export default async function DashLayout({ children }: { children: ReactNode }):
   return (
     <div className="shell">
       <nav className="topnav">
-        <span className="brand">⛅ Weather Edge</span>
+        <Link href="/events" className="brand">
+          ⛅ Weather Edge
+        </Link>
         {NAV.map(([href, label]) => (
           <Link key={href} href={href}>
             {label}

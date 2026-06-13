@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConfigError } from '../../../packages/core/src/index.ts';
 import { supabasePort } from './db.ts';
 
@@ -48,5 +48,38 @@ describe('supabasePort rpc normalization (PostgREST → PGlite-twin row shape)',
     const rows = [{ key: 'tradingMode', value: 'paper' }];
     expect(await supabasePort(clientReturning(rows)).getConfigRows()).toEqual(rows);
     expect(await supabasePort(clientReturning(null)).getConfigRows()).toEqual([]);
+  });
+});
+
+// C2 (ADR-19) — on the fabricated-empty branch the wrapper records WHETHER
+// PostgREST sent null (no rows over the wire) vs [] (an empty SETOF), so one
+// hosted fire of the #2 capture defect pins the mechanism. The null→[]
+// normalization itself is unchanged (covered above); this is purely the new line.
+describe('supabasePort rpc — C2 empty-result diagnostic (ADR-19)', () => {
+  let logs: string[] = [];
+  let spy: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    logs = [];
+    spy = vi.spyOn(console, 'log').mockImplementation((s: unknown) => {
+      logs.push(String(s));
+    });
+  });
+  afterEach(() => spy.mockRestore());
+  const diag = () => logs.map((l) => JSON.parse(l) as Record<string, unknown>).find((o) => o['empty'] === true);
+
+  it('null (no rows over the wire) logs dataWasNull:true', async () => {
+    await supabasePort(clientReturning(null)).rpc('list_active_stations', {});
+    expect(diag()).toMatchObject({ rpc: 'list_active_stations', empty: true, dataWasNull: true });
+  });
+
+  it('[] (empty SETOF) logs dataWasNull:false', async () => {
+    await supabasePort(clientReturning([])).rpc('list_active_stations', {});
+    expect(diag()).toMatchObject({ rpc: 'list_active_stations', empty: true, dataWasNull: false });
+  });
+
+  it('a non-empty SETOF and a bare scalar emit NO diagnostic line', async () => {
+    await supabasePort(clientReturning([{ icao: 'RKSI' }])).rpc('list_active_stations', {});
+    await supabasePort(clientReturning(7)).rpc('some_scalar_fn', {});
+    expect(diag()).toBeUndefined();
   });
 });

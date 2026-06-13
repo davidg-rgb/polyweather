@@ -2,6 +2,7 @@
  * snapshot-forecasts — multi-model forecast capture + gap-fill (ARCHITECTURE.md §6.14).
  */
 import {
+  JobInputError,
   UpstreamError,
   forecastUrl,
   leadDays,
@@ -41,6 +42,21 @@ export async function snapshotForecasts(ctx: JobCtx, deps: SnapshotDeps): Promis
   const models = (await db.rpc<{ slug: string }>('list_enabled_models', { p_is_ensemble: false })).map(
     (m) => m.slug,
   );
+
+  // C1 (ADR-19) — fail loud on an empty station universe. list_active_stations()
+  // returns 45 server-side, yet every scheduled isolate has reported stations:0
+  // (the #2 capture defect). Recording a 0-row `ok` permanently consumes the
+  // period as already_ran; throwing instead marks it failed + retryable, fires
+  // Slack JOB_FAIL, and the logged cardinality (with C2's null-vs-[] discriminator)
+  // pins the runtime mechanism on the next real fire.
+  log('capture inputs', { stations: stations.length, models: models.length });
+  if (stations.length === 0) {
+    throw new JobInputError(
+      'list_active_stations returned 0 rows at runtime — refusing to record an empty ok run ' +
+        '(the period would be permanently consumed as already_ran). The universe is non-empty ' +
+        'server-side (45); this is the deployed-isolate capture defect (#2 / ADR-19).',
+    );
+  }
 
   let rowsUpserted = 0;
   let stationsFailed = 0;

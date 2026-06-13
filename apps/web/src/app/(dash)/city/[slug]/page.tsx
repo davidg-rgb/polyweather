@@ -47,6 +47,7 @@ export default async function CityPage({ params }: { params: Promise<{ slug: str
               consensusProbs={openEvent.detail.consensusDist?.probs ?? null}
               nowcast={openEvent.detail.houseDist?.nowcast ?? false}
               winningIdx={openEvent.detail.event.winningBucketIdx}
+              modelPending={!openEvent.detail.houseDist && !!openEvent.detail.consensusDist}
             />
           </div>
         </>
