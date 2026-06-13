@@ -5,6 +5,38 @@
 
 ## Active Phase
 
+### ▶ NEXT STEP — Analytics buildout, Phase 2 → 3 (handoff 2026-06-13)
+
+Phase 1 (surface) + Phase 2a (capture instrument) SHIPPED + DEPLOYED this session
+(see Completed iter-40). Web is live on `weather-edge-two.vercel.app`; migration
+0029 applied. **The chain is half-built — here is exactly what's next, in order:**
+
+**STEP 1 — make Phase 2a actually fire on hosted (the edge fns still run OLD bundles):**
+```
+supabase functions deploy poll-markets       --use-api --no-verify-jwt --project-ref lenysiqxihsmxljvyybt
+supabase functions deploy snapshot-forecasts --use-api --no-verify-jwt --project-ref lenysiqxihsmxljvyybt
+supabase functions deploy snapshot-ensembles --use-api --no-verify-jwt --project-ref lenysiqxihsmxljvyybt
+```
+Then wait for ONE 10Z/22Z `snapshot-forecasts` fire and read the edge logs for the
+`'capture inputs' {stations,models}` line + `{"rpc":"list_active_stations","empty":true,"dataWasNull":?}`.
+A 0-station run now records `job_runs.status='failed'` (retryable) + Slack JOB_FAIL.
+
+**STEP 2 — Phase 2b, the ROOT fix (gated on STEP 1's evidence — ADR-19 "instrument before fix"):**
+- `dataWasNull:true` (PostgREST sent null / no rows over the wire) → the SETOF resolved null in the deployed isolate — chase the `waitUntil`-deferred resolution or a per-isolate role/URL/env edge.
+- `dataWasNull:false` (`[]` empty SETOF) → `list_active_stations()` genuinely saw 0 rows in that isolate — a visibility/search_path/cold-start-race issue. Fix the root cause; confirm a real fire writes `stations:45, rowsUpserted>0`, then clear the dead-man halt: `operator_resume('halt:global')` (it does NOT auto-clear — corrected).
+
+**STEP 3 — Phase 3, light up the model (depends on STEP 2 landing fresh non-backfill forecasts):**
+- Write + apply **migration 0028_analytics_decouple.sql** (HD-1: `list_buildable_events` drops `cs.verified=true`) — per BLUEPRINT §6.B. NOT YET WRITTEN. 0028 is reserved for exactly this.
+- Amend ARCHITECTURE.md §6.16 prose (~line 1142) "verified station" → "open, ungraded, ladder-ok event" (deferred until HD-1 lands so the doc stays true to code).
+- Result chain: fresh forecasts + HD-1 → `build-distributions` writes `house_gaussian` → champion exists → EDGE-1/2/3 (already shipped, dormant) starts recording `edge_evaluations` → `/events` model? chips flip pending→built → `/events/[slug]` EdgeChart renders.
+- Then DF-5: grow scored model-vs-market history via `simulate-historical-edge` (+ the `backfill-market-history` consensus prerequisite at HISTORICAL `made_at`, never `now()`).
+
+**Parallel ongoing:** P4 backfill is 9/46 stations (16.3%, FAIL) — relaunch both workers each session per the CLAUDE.md auto-resume rule until `check-p4-coverage` PASSes.
+
+**Restart-after-/clear prompt:** "Continue Polyweather analytics buildout — Phase 1+2a are shipped + deployed (web live, 0029 applied). Next: redeploy poll-markets/snapshot-forecasts/snapshot-ensembles edge fns, read the C1/C2 `capture inputs` + null-vs-[] evidence on one 10Z/22Z fire, root-fix the capture defect (Phase 2b), then Phase 3 (write/apply 0028 HD-1 de-gate → house_gaussian builds → EDGE audit lights up). Reference: BLUEPRINT-analytics-buildout.md + this NEXT STEP block."
+
+---
+
 **BUILD COMPLETE — P0 through P8 (iter 30, 2026-06-11; RE-VERIFIED iter 31, 2026-06-13).** Every §15 box is ticked or documented-manual (the 12 remaining unticked boxes are hosted-stack verification clauses (the five §6.14–6.16 job boxes + db-reset + the six §9 live-E2E/Playwright items) — consolidated checklist below in "Next Task"). **iter-31 re-verification (2026-06-13): `pnpm typecheck` exit 0; `pnpm test` 550/550 green across 41 files; `pnpm tsx scripts/smoke-live-apis.ts` 12/12 LIVE integrations OK + Slack skipped (no live-API contract drift since 2026-06-11).** docs accurate against code. P9 (60-day paper campaign) and P10 (go-live) are operator/calendar-gated — start procedures in Phase Gate Notes.
 
 **P7 — COMPLETE on the build side (iter 29).** All four §6.22 scripts shipped and §15-ticked; **scripts/smoke-live-apis.ts PASSES LIVE: 12/12 integrations OK** (Slack skipped pending the operator webhook — the one DONE-criterion item that needs operator input). The §14 P7 DoD's "≥6 months × ≥10 cities" backtest report is gated on the full-universe backfill (Operator TODO 5); the pipeline is proven end-to-end on fixture scope. Next phase: P8 docs/hardening.
