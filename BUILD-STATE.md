@@ -21,6 +21,11 @@
 
 ## Completed
 
+- **Iteration 38 (2026-06-13): WeatherAPI source COMPLETE — both external sources now live. FEATURE DONE.**
+  - Operator updated the WeatherAPI key → HTTP 200, fixtures captured (`research/weatherapi_forecast_{RKSI,KORD}.json`). Built `core/weather/weatherapi.ts` (`weatherApiForecastUrl` + `parseWeatherApiDailyMax` — `forecast.forecastday[].day.maxtemp_c`, date already location-local so no aggregation/tz needed) + barrel; wired into the `liveSources()` seam in `snapshot-source-forecasts.ts`. 4 hand-verified parser tests.
+  - **Both sources seeding live into hosted:** `snapshot-source-forecasts` wrote **377 rows (openweathermap 239 + weatherapi 138)**, slot 10Z, 0 failures. They score in vs the 8 NWP models as their forecast days (Jun 13–15/18) resolve over ~5 days.
+  - The external-source accuracy feature is COMPLETE: 2 sources captured + parsed + ingested + scored by the unified `source_accuracy`/`check-source-accuracy`, fully isolated from trading. Suite: typecheck 0, **581 green** (48 files).
+  - **Only follow-up: ongoing collection cadence.** The seed is one-shot; for daily accumulation, cron `snapshot-source-forecasts.ts` locally (twice/day) OR promote to an Edge Function on pg_cron (needs OPENWEATHERMAP_API_KEY + WEATHERAPI_API_KEY as Supabase Edge Function secrets). Operator decision — offered, not yet built.
 - **Iteration 37 (2026-06-13): source-accuracy LIVE on hosted — 0025 applied, OWM seeded, cross-source ranking working.**
   - Operator authorized → migration `0025_source_forecasts.sql` applied to hosted (MCP, success).
   - `pnpm tsx scripts/snapshot-source-forecasts.ts` ran live: 46 stations, **239 OpenWeatherMap rows seeded** into hosted source_forecasts (slot 10Z, 0 fetch failures). These are future-day forecasts (Jun 13–18) — they score in as the days resolve (~5 days), then OWM ranks vs the NWP models.

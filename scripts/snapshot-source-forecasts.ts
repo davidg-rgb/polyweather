@@ -13,7 +13,13 @@
  * API keys in .env.local (auto-loaded). Run: pnpm tsx scripts/snapshot-source-forecasts.ts
  */
 import { pathToFileURL } from 'node:url';
-import { leadDays, owmForecastUrl, parseOwmDailyMax } from '../packages/core/src/index.ts';
+import {
+  leadDays,
+  owmForecastUrl,
+  parseOwmDailyMax,
+  parseWeatherApiDailyMax,
+  weatherApiForecastUrl,
+} from '../packages/core/src/index.ts';
 import { loadEnv } from './lib/load-env.ts';
 import { makeScriptDb } from './lib/script-db.ts';
 import type { ScriptDb } from './lib/script-db.ts';
@@ -104,7 +110,14 @@ export function liveSources(env: NodeJS.ProcessEnv): SourceDef[] {
       parse: parseOwmDailyMax,
     });
   }
-  // WeatherAPI joins here once WEATHERAPI_API_KEY is valid and its parser lands.
+  const waKey = env['WEATHERAPI_API_KEY'];
+  if (waKey) {
+    sources.push({
+      source: 'weatherapi',
+      url: (c) => weatherApiForecastUrl(c, waKey),
+      parse: (json) => parseWeatherApiDailyMax(json), // date is already location-local; tz unused
+    });
+  }
   return sources;
 }
 
