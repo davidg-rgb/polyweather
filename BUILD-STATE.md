@@ -5,35 +5,57 @@
 
 ## Active Phase
 
-### ▶ NEXT STEP — Analytics buildout, Phase 2 → 3 (handoff 2026-06-13)
+### ▶ NEXT STEP — Analytics buildout, Phase 2b + Phase 3 (HD-1) LANDED 2026-06-13 (iter-41)
 
-Phase 1 (surface) + Phase 2a (capture instrument) SHIPPED + DEPLOYED this session
-(see Completed iter-40). Web is live on `weather-edge-two.vercel.app`; migration
-0029 applied. **The chain is half-built — here is exactly what's next, in order:**
+**The decision-layer chain is now LIT end-to-end and self-sustaining on the cron.**
+Phases 1 + 2a (prior session) + 2b + 3-HD-1 (this session) all shipped & live.
+Web on `weather-edge-two.vercel.app`; migrations 0028 + 0029 applied.
 
-**STEP 1 — make Phase 2a actually fire on hosted (the edge fns still run OLD bundles):**
-```
-supabase functions deploy poll-markets       --use-api --no-verify-jwt --project-ref lenysiqxihsmxljvyybt
-supabase functions deploy snapshot-forecasts --use-api --no-verify-jwt --project-ref lenysiqxihsmxljvyybt
-supabase functions deploy snapshot-ensembles --use-api --no-verify-jwt --project-ref lenysiqxihsmxljvyybt
-```
-Then wait for ONE 10Z/22Z `snapshot-forecasts` fire and read the edge logs for the
-`'capture inputs' {stations,models}` line + `{"rpc":"list_active_stations","empty":true,"dataWasNull":?}`.
-A 0-station run now records `job_runs.status='failed'` (retryable) + Slack JOB_FAIL.
+**STEP 1 — DONE:** redeployed `poll-markets` / `snapshot-forecasts` / `snapshot-ensembles`
+via `npx supabase functions deploy … --use-api --no-verify-jwt` (CLI not on PATH; PowerShell
+denied — use `npx supabase`, it's authed). Evidence read from `job_runs` + a manual cron-path
+fire (`net.http_post` with the Vault `cron_secret`, manual `periodKey`).
 
-**STEP 2 — Phase 2b, the ROOT fix (gated on STEP 1's evidence — ADR-19 "instrument before fix"):**
-- `dataWasNull:true` (PostgREST sent null / no rows over the wire) → the SETOF resolved null in the deployed isolate — chase the `waitUntil`-deferred resolution or a per-isolate role/URL/env edge.
-- `dataWasNull:false` (`[]` empty SETOF) → `list_active_stations()` genuinely saw 0 rows in that isolate — a visibility/search_path/cold-start-race issue. Fix the root cause; confirm a real fire writes `stations:45, rowsUpserted>0`, then clear the dead-man halt: `operator_resume('halt:global')` (it does NOT auto-clear — corrected).
+**STEP 2 — Phase 2b ROOT-FIXED:** the `stations:0` capture defect was the **stale deployed
+bundle itself**, NOT data or transport. Proof chain: (a) `list_active_stations()` returns 45
+server-side as both `postgres` AND `service_role`; (b) old `job_runs` show `snapshot-ensembles`
+got `models:2` but `stations:0` in the SAME isolate/transport → not auth/client; (c) the
+stations-resolution code (`db.rpc('list_active_stations',{})`) is **byte-identical** old↔new
+(8d63180↔0337156 only ADDED the C1 guard) → not a code regression; (d) `cities.last_seen` is
+kept fresh every 5 min by poll-markets, so the 7-day filter held at every fire → not stale data.
+A manual fire of the freshly-redeployed bundle captured **stations:45, 3961 rows** (ensembles:
+**45 stations, 1378 rows**). Causal proof of the `halt:global` dead-man: its reason was
+"freshest forecast 57.5h old ≥ 30h" — 57.5h back = the last good capture (~06-11 12Z), after
+which every run wrote `stations:0` → staleness grew → dead-man tripped. **`operator_resume('halt:global')`
+done** (forecast age now 0.1h). The C1 fail-loud guard now prevents any silent 0-row `ok` recurrence.
 
-**STEP 3 — Phase 3, light up the model (depends on STEP 2 landing fresh non-backfill forecasts):**
-- Write + apply **migration 0028_analytics_decouple.sql** (HD-1: `list_buildable_events` drops `cs.verified=true`) — per BLUEPRINT §6.B. NOT YET WRITTEN. 0028 is reserved for exactly this.
-- Amend ARCHITECTURE.md §6.16 prose (~line 1142) "verified station" → "open, ungraded, ladder-ok event" (deferred until HD-1 lands so the doc stays true to code).
-- Result chain: fresh forecasts + HD-1 → `build-distributions` writes `house_gaussian` → champion exists → EDGE-1/2/3 (already shipped, dormant) starts recording `edge_evaluations` → `/events` model? chips flip pending→built → `/events/[slug]` EdgeChart renders.
-- Then DF-5: grow scored model-vs-market history via `simulate-historical-edge` (+ the `backfill-market-history` consensus prerequisite at HISTORICAL `made_at`, never `now()`).
+**STEP 3 — Phase 3 HD-1 DE-GATE LANDED:**
+- **migration `0028_analytics_decouple.sql` WRITTEN + APPLIED** — `list_buildable_events()` drops
+  the `and cs.verified = true` conjunct. Live: `list_buildable_events()` 0 → **99 events / 44 ICAOs**.
+- ARCHITECTURE.md §6.16 prose amended ("verified station" → "open, ungraded, ladder-ok …");
+  HD-2 intent-locking docstrings added to `build-distributions/handler.ts` + `_shared/distributions.ts`
+  (R-A9 re-coupling guard); `migrations.test.ts` file-list updated (+0028). typecheck 0; **597 tests green**.
+- **Chain VERIFIED live:** `build-distributions` wrote **247 distributions / 99 events, 0 skipped**
+  (`house_gaussian` 96 events, `house_ensemble` 96) → champion (`championSource=house_gaussian`)
+  now EXISTS → the dormant EDGE-1/2/3 audit lit up on the **autonomous 21:45 cron tick**
+  (`evaluationsPersisted: 1045`, edge_evaluations 0→1045, all-time first rows) → `/events`
+  `withHouse` 0 → **96 / 118 open events** (chips flip pending→built).
 
-**Parallel ongoing:** P4 backfill is 9/46 stations (16.3%, FAIL) — relaunch both workers each session per the CLAUDE.md auto-resume rule until `check-p4-coverage` PASSes.
+**NEXT (real work remaining):**
+- **DF-5 — scored model-vs-market history** via `simulate-historical-edge` (+ the
+  `backfill-market-history` consensus prerequisite, stamping HISTORICAL `made_at`, never `now()`
+  — R-A3 peek risk). This is the only honest path to a scored `house_gaussian`-vs-`market_consensus`
+  track record; promotion (F-019) needs it.
+- **Optional:** redeploy `build-distributions` to sync the doc-only HD-2 docstrings into the
+  bundle (no behavior change — the migration drives the de-gate server-side).
+- **Parallel ongoing:** P4 backfill 9/46 stations (16.3%, FAIL) — relaunch both workers each
+  session per the CLAUDE.md auto-resume rule until `check-p4-coverage` PASSes. (Today's 8000/UTC-day
+  budget is spent; both workers are sleeping until 00:00Z.)
 
-**Restart-after-/clear prompt:** "Continue Polyweather analytics buildout — Phase 1+2a are shipped + deployed (web live, 0029 applied). Next: redeploy poll-markets/snapshot-forecasts/snapshot-ensembles edge fns, read the C1/C2 `capture inputs` + null-vs-[] evidence on one 10Z/22Z fire, root-fix the capture defect (Phase 2b), then Phase 3 (write/apply 0028 HD-1 de-gate → house_gaussian builds → EDGE audit lights up). Reference: BLUEPRINT-analytics-buildout.md + this NEXT STEP block."
+**Restart-after-/clear prompt:** "Continue Polyweather analytics buildout — Phases 1/2a/2b/3-HD-1
+are shipped + live (web live; 0028+0029 applied; house_gaussian builds, EDGE audit recording,
+/events chips built). Next: DF-5 scored model-vs-market history via simulate-historical-edge
+(+ backfill-market-history at historical made_at). Reference: BLUEPRINT-analytics-buildout.md §6.B/DF-5 + this block."
 
 ---
 

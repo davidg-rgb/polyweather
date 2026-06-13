@@ -3,6 +3,13 @@
  * house-probability builder (ARCHITECTURE.md §6.16, W3, W19, ADR-15/16).
  * Imported in-process by build-distributions, discover-markets (C7 seed) and
  * metar-nowcast (nowcast rebuild) — never over HTTP.
+ *
+ * This is PURE ANALYTICS: it writes bucket_probabilities and NEVER places a bet.
+ * The buildable set comes from list_buildable_events() (HD-1 / ADR-18 / migration
+ * 0028), which does NOT require operator verification — `city_stations.verified`
+ * and `cities.betting_enabled` gate only the bet/candidate path. Do not re-introduce
+ * a verified/betting_enabled check here or in the caller (R-A9): it re-zeroes the
+ * house build, exactly the bug 0028 fixed.
  */
 import {
   DistributionError,

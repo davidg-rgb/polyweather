@@ -1151,8 +1151,11 @@ Schedule: `50 10,22 * * *` + invoked in-process by metar-nowcast (target-day) an
 
 ```
 buildDistributions(ctx): Promise<JobStats>
-  Purpose: for every open market_event with a verified station and lead_days ∈ [0, 7]: call
-           buildDistributionForEvent for each enabled source.
+  Purpose: for every open, ungraded, ladder-ok market_event with a CURRENT station mapping
+           (operator verification NOT required — this is the pure-analytics house build,
+           decoupled from the trading gate by HD-1 / ADR-18 / migration 0028) and
+           lead_days ∈ [0, 7]: call buildDistributionForEvent for each enabled source.
+           `verified`/`betting_enabled` gate only the out-of-scope bet path.
   Called by: runJob; adminTriggerJob; runCalibration tail (§6.18).
   Calls: buildDistributionForEvent, db.queries.markets.
 
