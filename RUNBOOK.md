@@ -132,6 +132,63 @@ pnpm tsx scripts/check-p4-coverage.ts                    # watch coverage climb 
 Do NOT bother chasing orphaned pairs mid-backfill — the daily cron keeps moving
 the cursor regardless; the final reset re-fold recovers everything.
 
+### DF-5 — scored model-vs-market history (the no-peek backtest)
+
+Grows `calibration_scores(window_tag='backtest')`: a real `house_gaussian`-vs-
+`market_consensus` Brier track record built at the ADR-16 cutoffs, **no peeking**.
+NO code change — pure ops wiring of the already-tested `backfill-market-history`
+(the consensus prerequisite) + `simulate-historical-edge` (the scorer).
+
+```bash
+# 1) PREREQUISITE — synthesize historical market_consensus at pre-cutoff made_at.
+#    Gamma returns closed events OLDEST-first; --from skips pre-cutoff events
+#    BEFORE the (expensive, Cloudflare-fronted) prices-history fetch, so set it
+#    to the start of the CLOB-retained window (see note). Resumable per event.
+pnpm tsx scripts/backfill-market-history.ts --from 2026-05-13   # ~1300 events, ~60–90 min
+# 2) SCORE — walk-forward, information-time-matched; writes window_tag='backtest'
+#    + a CSV (fidelity / decile / equity) to reports/ (gitignored). --to = today-2.
+pnpm tsx scripts/simulate-historical-edge.ts --from 2026-05-13 --to <today-2> \
+      --source house_gaussian --out reports
+```
+
+**CLOB prices-history retention ≈ 30 days (the binding constraint).** Probed
+2026-06-14: April-2026 events return 0 points; May-16 returns 249, June-4 returns
+388 — each event's history spans only its ~2–3-day active life. So the honest
+backtest is **capped at ~30 days deep** — there is no older house-vs-market history
+to be had from Polymarket's API. The live `poll-markets` consensus already accrues
+forward from when capture went live (2026-06-12); `backfill-market-history` fills
+the ~30-day window *before* that which is still in CLOB retention. Set `--from` to
+~30 days before today; earlier events just skip (empty history → `leads skipped
+(no pre-cutoff)`, no consensus, ~1 wasted CLOB call each).
+
+**R-A3 (the central hazard) — the consensus `made_at` MUST be the historical
+pre-cutoff instant, never `now()`.** The script stamps `made_at =
+new Date(maxPricePointTime ≤ cutoff)` (backfill-market-history.ts:281,288), so a
+peek is impossible by construction. Spot-check after a run (closed events only —
+the live cron stops writing consensus once an event closes, so any lead∈{0,1}
+consensus row on a past target is purely backfill):
+
+```sql
+-- expect 0 violations and 0 rows stamped today
+select count(*) filter (where bp.made_at >
+         ((me.target_date::timestamp at time zone c.tz)
+            - make_interval(days => bp.lead_days::int)) + interval '2 min') as peeks,
+       count(*) filter (where bp.made_at::date = current_date)            as now_stamped
+from bucket_probabilities bp
+join market_events me on me.id = bp.event_id
+join cities c on c.id = me.city_id
+where bp.source='market_consensus' and bp.nowcast=false and bp.lead_days in (0,1)
+  and me.target_date between current_date - 5 and current_date - 2;
+```
+
+**The backtest is indicative-only.** `go_live_gate_inputs` reads ONLY
+`window_tag='60d'` (migration `0019`), so backtest rows never leak into the live
+go-live gate. The HONEST-FIDELITY note the scorer prints on every run holds: the
+consensus-mid proxy is not an executable book (no depth/spread/volume veto) — use
+the result for **gating direction** (is house even competitive with the market?),
+never as a go-live justification. F-019 promotion needs out-of-sample scored pairs;
+this is how they accrue.
+
 > **Why 3000 and not the whole window at once (found live 2026-06-13).** A
 > 7.9k-obs catch-up window made `calib_new_pairs` aggregate ~365k pairs into a
 > **21 MB** jsonb in ~7.2s, tripping the default ~8s `statement_timeout` — the

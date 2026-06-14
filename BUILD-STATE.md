@@ -5,7 +5,7 @@
 
 ## Active Phase
 
-### ▶ NEXT STEP — Analytics buildout, Phase 2b + Phase 3 (HD-1) LANDED 2026-06-13 (iter-41)
+### ▶ NEXT STEP — DF-5 scored model-vs-market history LANDED 2026-06-14 (iter-42); decision layer LIT (iter-41)
 
 **The decision-layer chain is now LIT end-to-end and self-sustaining on the cron.**
 Phases 1 + 2a (prior session) + 2b + 3-HD-1 (this session) all shipped & live.
@@ -41,11 +41,24 @@ done** (forecast age now 0.1h). The C1 fail-loud guard now prevents any silent 0
   (`evaluationsPersisted: 1045`, edge_evaluations 0→1045, all-time first rows) → `/events`
   `withHouse` 0 → **96 / 118 open events** (chips flip pending→built).
 
+**DF-5 — DONE 2026-06-14 (iter-42), ops-only (NO code change):** scored
+`house_gaussian`-vs-`market_consensus` history now LIVE in
+`calibration_scores(window_tag='backtest')` — **50 rows / 25 cities / 959 matched
+event-leads** over a 30-day window. **VERDICT: house is NOT market-beating yet** —
+n-weighted Brier **house 0.6494 vs market 0.6074** (market ~7% better-calibrated;
+house wins only **4/50** cells). So **do NOT promote house (F-019)** — it runs on
+prior-ladder σ until P4 densifies `model_stats`; re-run DF-5 after the refold to
+re-check. R-A3 verified (consensus `made_at` historical, 0 peeks). The honest ceiling
+is **~30 days** — CLOB prices-history retention is ~30d (April events return 0 points),
+so there is no deeper house-vs-market history to be had from Polymarket's API; the
+live poll-markets consensus accrues forward from here. Full procedure: RUNBOOK
+"DF-5 — scored model-vs-market history".
+
 **NEXT (real work remaining):**
-- **DF-5 — scored model-vs-market history** via `simulate-historical-edge` (+ the
-  `backfill-market-history` consensus prerequisite, stamping HISTORICAL `made_at`, never `now()`
-  — R-A3 peek risk). This is the only honest path to a scored `house_gaussian`-vs-`market_consensus`
-  track record; promotion (F-019) needs it.
+- **P4 calibration densification → then re-run DF-5.** Once `check-p4-coverage`
+  climbs (backfill → `model_stats` refold), re-run the DF-5 pair to see if a
+  calibrated house closes the ~7% Brier gap vs market. That's the gate to any
+  F-019 promotion.
 - **Optional:** redeploy `build-distributions` to sync the doc-only HD-2 docstrings into the
   bundle (no behavior change — the migration drives the de-gate server-side).
 - **Parallel ongoing:** P4 backfill 9/46 stations (16.3%, FAIL) until `check-p4-coverage` PASSes.
@@ -58,13 +71,14 @@ done** (forecast age now 0.1h). The C1 fail-loud guard now prevents any silent 0
   previous-runs-api`) — benign (~1 weighted call/failed scope, cursor-safe), relaunch when the
   window resets via the fixed rule. Endpoint itself is UP (probed 200).
 
-**Restart-after-/clear prompt:** "Continue Polyweather analytics buildout — Phases 1/2a/2b/3-HD-1
-are shipped + live (web live; 0028+0029 applied; house_gaussian builds, EDGE audit recording,
-/events chips built; c8da796 pushed; Vercel redeployed). FIRST, per the CLAUDE.md auto-resume rule,
-kill-before-launch the backfill (1 actuals likely already running; forecasts was rate-limited —
-relaunch if the window reset). Next real work: DF-5 scored model-vs-market history via
-simulate-historical-edge (+ backfill-market-history at historical made_at). Reference:
-BLUEPRINT-analytics-buildout.md §6.B/DF-5 + this block."
+**Restart-after-/clear prompt:** "Continue Polyweather — analytics buildout is COMPLETE through
+DF-5: Phases 1/2a/2b/3-HD-1 shipped + live (web live; 0028+0029 applied; house_gaussian builds,
+EDGE audit recording, /events chips built; Vercel redeployed) AND DF-5 scored history landed
+(calibration_scores window_tag='backtest', 50 rows/25 cities/959 pairs — house Brier 0.649 vs
+market 0.607, NOT market-beating yet, do not promote). FIRST, per the CLAUDE.md auto-resume rule,
+kill-before-launch the P4 backfill. Next real work: let P4 backfill → model_stats refold densify
+calibration, then RE-RUN the DF-5 pair (RUNBOOK 'DF-5 — scored model-vs-market history') to see if
+a calibrated house closes the ~7% Brier gap; that gates F-019 promotion."
 
 ---
 
@@ -84,6 +98,13 @@ BLUEPRINT-analytics-buildout.md §6.B/DF-5 + this block."
 
 ## Completed
 
+- **Iteration 42 (2026-06-14): DF-5 scored model-vs-market history LANDED — ops-only, NO code change. The decision layer now has an honest no-peek track record.**
+  - **What ran (both already-built, already-tested):** (1) `backfill-market-history --from 2026-05-13` against hosted — **1393 events ingested / 4453 seen, 2328 `market_consensus` rows + 45,594 `market_snapshots`, 458 leads skipped (no pre-cutoff), 410 parse-skipped, 1 errored** (best-effort). (2) `simulate-historical-edge --from 2026-05-13 --to 2026-06-12 --source house_gaussian` — walk-forward, information-time-matched → wrote `calibration_scores(window_tag='backtest')`.
+  - **RESULT (live in `calibration_scores`): 50 rows / 25 cities / 959 matched event-leads.** n-weighted Brier **house_gaussian 0.6494 vs market_consensus 0.6074** — the market is **~7% better-calibrated**; house beats market in only **4/50 cells** (ratio >1.0 nearly everywhere). The consensus-mid betting proxy printed +83% ($1000→$1829) at 49% max drawdown, but that's **indicative-only** (the HONEST-FIDELITY note: not an executable book) — the Brier verdict is the trustworthy signal. **VERDICT: do NOT promote house (F-019)** — it runs on prior-ladder σ (thin `model_stats`); re-run DF-5 after the P4 refold densifies calibration to see if the gap closes.
+  - **R-A3 (the central hazard) VERIFIED — consensus `made_at` is the historical pre-cutoff instant, never `now()`.** Code-proven (`backfill-market-history.ts:281,288` stamps `new Date(maxPricePointTime ≤ cutoff)`) AND empirically: for closed events (target 06-09→06-11, which the live cron no longer writes) all 80 lead∈{0,1} rows had made_at 06-07→06-09, **0 made_at > cutoff, 0 stamped today**.
+  - **KEY DATA FINDING — the honest history is capped at ~30 days.** CLOB prices-history retention ≈ 30d (probed: April-2026 events return 0 points; May-16 → 249, June-4 → 388; each event's history spans only its ~2-3-day active life). Gamma returns closed events OLDEST-first (offset 0 = Dec-2024 yearless slugs, total ~4449), so `--from` skips pre-cutoff events before the expensive Cloudflare-fronted prices-history fetch. Backfill forecasts fully cover May-13→June-12 (31 days × 24 cities), so the 30-day window is fully scorable. There is no deeper house-vs-market history to be had from Polymarket's API; live poll-markets consensus accrues forward from 2026-06-12.
+  - **Docs:** RUNBOOK gained a "DF-5 — scored model-vs-market history" procedure (command sequence, the ~30-day retention reality, the R-A3 spot-check SQL, the indicative-only caveat). No code/test changes (ops-only) — suite unchanged at 597 green.
+  - **Backfill ops (session-start rule):** killed 2 stacked P4 workers, relaunched one pair; today's Open-Meteo 8000/UTC-day budget was already spent (15,760 — by the duplicates), so both slept to 00:00Z (no P4 progress today, by design). P4 still 16.3% / 9 stations.
 - **Iteration 40 (2026-06-13): ANALYTICS-NOT-TRADING PIVOT — Phase 1 (surface) + Phase 2a (capture instrument) SHIPPED. typecheck 0, 597 green (48 files).**
   - **Context:** the prior multi-agent eval found the decision layer is DEAD — `house_gaussian` (the model's own probability) was NEVER written (live `bucket_probabilities` = 21,581 rows, 0 house, all `market_consensus`), so `edge_evaluations`/`bets` cascade to 0 and the dashboard surfaces only the empty bet-side. Root cause: a verified-gate + backfill-only-forecasts chain + a live capture defect (`snapshot-forecasts` reports `stations:0` every scheduled run though `list_active_stations()` returns 45). Build plan = `BLUEPRINT-analytics-buildout.md` (reviewed: 0 critical / 0 warning). **Operator sign-offs: ADR-18 = decouple (yes), ADR-20 = reliable-hourly, ADR-21 = /events default landing (yes).**
   - **Phase 2a — capture instrument (ADR-19, instrument-before-fix):** new `JobInputError` in `packages/core`; `snapshot-forecasts`/`snapshot-ensembles` now log a `'capture inputs' {stations,models}` line then throw `JobInputError` on a 0-row station universe → runJob records `failed` (retryable via `claim_job_run` taken_over) + Slack JOB_FAIL, instead of a silent `ok` that permanently consumed the period as `already_ran`. `_shared/db.ts` rpc wrapper logs `{rpc,empty:true,dataWasNull}` on any empty SETOF (the null-vs-`[]` discriminator) — one hosted fire now pins the mechanism deterministically. NO speculative fix shipped (the leading hypothesis is unproven). Tests: errors.test (JobInputError taxonomy), snapshots.test (both handlers throw + emit the cardinality line, never fetch a station), db.test (+3: dataWasNull true/false/none).
