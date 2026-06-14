@@ -5,7 +5,37 @@
 
 ## Active Phase
 
-### ▶ NEXT STEP — DF-5 scored model-vs-market history LANDED 2026-06-14 (iter-42); decision layer LIT (iter-41)
+### ▶ NEXT STEP — Phase-3 hardening BUILT (deploy-gated) + DF-5 model-gap DIAGNOSED 2026-06-14 (iter-43); DF-5 history LANDED (iter-42); decision layer LIT (iter-41)
+
+**iter-43 (this session, after DF-5):** answered the core thesis question + tied off the
+blueprint's last optional items. Builds are committed + suite-green; **two prod deploys are
+operator-gated (the auto-mode classifier denied the apply — correctly).**
+
+- **Phase A — DF-5 model-gap DIAGNOSED; NO fix shipped (on purpose).** Decomposed the
+  house-loses-to-market result (`DF5-FINDINGS.md`): the gap is a **forecasting-AIM deficit, not
+  calibration** — on the 898 *fully-calibrated* pairs house still loses 0.640 vs 0.602 (p(winner)
+  0.344 vs 0.373). Every now-buildable lever measured and marginal (informed cold-start weights
+  → 0.6492; prior-σ ×0.7 → 0.6461 but overfits the 30-day window; combined → 0.6468, never crosses
+  1.0). **Shipped nothing** — a 0.03% cosmetic change that needs operator sign-off to alter
+  documented cold-start behavior is a workaround, not a fix. **P4 will narrow the gap (thin cells),
+  not close it.** The real lever is forecasting-skill R&D (regime/recency-aware weighting, MOS
+  post-processing, better inputs) — explicitly NOT blending the market into the prior (defeats the
+  thesis). Caveat: `market_consensus` is the backfilled consensus-mid (gating-direction-only).
+- **Phase B — last optional Phase-3 items BUILT + TESTED (608 green), committed, DEPLOY-GATED:**
+  - **C3 / `clear_system_halt` (migration `0030`, commit `dca134b`)** — dead-man halt auto-recovery
+    (R-A6): RPC DELETEs `config['halt:'||scope]` ONLY when `config_audit` last-writer was `'system'`
+    (never an operator halt), audits `actor='system-recover'` (0030 widens the `config_audit.actor`
+    CHECK to admit it); health-monitor gains a recovery branch that clears `halt:global` once forecast
+    freshness recovers (gated on `forecastAgeH < staleForecastHaltH`, emits `DEAD_MAN_RECOVERED`).
+    **NEW autonomous prod behavior — breaker halts now self-resume; operator halts never do.**
+  - **DF-2/DF-3 / `get_build_inputs(p_allow_backfill)` (migration `0031`, commit `e6f086a`)** —
+    backward-compatible param (default false = bit-identical live path; true lifts the W19 backfill
+    exclusion). `buildDistributionForEvent` gains `opts.allowBackfill`. R-A3-guarded (true only for
+    `target_date >= today` or the offline scorer; no live caller passes true). Drops the 1-arg
+    overload then recreates the 2-arg (avoids ambiguity; 1-arg calls still resolve via the default).
+  - **DEPLOY-PENDING (operator must authorize — classifier blocks MCP apply):** apply `0030` + `0031`
+    to hosted; redeploy `health-monitor` (activates C3) + `build-distributions`/`discover-markets`/
+    `metar-nowcast` (lockstep with the 0031 signature — no behavior change, all pass default false).
 
 **The decision-layer chain is now LIT end-to-end and self-sustaining on the cron.**
 Phases 1 + 2a (prior session) + 2b + 3-HD-1 (this session) all shipped & live.
@@ -55,12 +85,17 @@ live poll-markets consensus accrues forward from here. Full procedure: RUNBOOK
 "DF-5 — scored model-vs-market history".
 
 **NEXT (real work remaining):**
-- **P4 calibration densification → then re-run DF-5.** Once `check-p4-coverage`
-  climbs (backfill → `model_stats` refold), re-run the DF-5 pair to see if a
-  calibrated house closes the ~7% Brier gap vs market. That's the gate to any
-  F-019 promotion.
-- **Optional:** redeploy `build-distributions` to sync the doc-only HD-2 docstrings into the
-  bundle (no behavior change — the migration drives the de-gate server-side).
+- **OPERATOR-GATED DEPLOY (iter-43 builds):** apply migrations `0030` + `0031` to hosted;
+  redeploy `health-monitor` (C3 recovery branch) + `build-distributions`/`discover-markets`/
+  `metar-nowcast` (0031 lockstep). All built + 608-green + committed (`dca134b`, `e6f086a`);
+  blocked only on prod-deploy authorization. (Also still pending from earlier: `build-distributions`
+  HD-2 docstring sync — folds into the same redeploy.)
+- **P4 calibration densification → then re-run DF-5.** Once `check-p4-coverage` climbs, re-run the
+  DF-5 pair — but per `DF5-FINDINGS.md`, expect it to **narrow, not close** the gap (thin cells lift
+  to thick-cell quality; thick cells already lose). NOT the path to F-019 promotion on its own.
+- **The real lever (forecasting-skill R&D, not a patch):** improve house AIM — regime/recency-aware
+  model weighting, MOS/quantile-mapping post-processing, or better station-level inputs. See
+  `DF5-FINDINGS.md`. This is the honest route to a market-beating house; do NOT blend the market in.
 - **Parallel ongoing:** P4 backfill 9/46 stations (16.3%, FAIL) until `check-p4-coverage` PASSes.
   **2026-06-14 cleanup:** found **3 actuals + 2 forecasts DUPLICATE workers** stacked from prior
   sessions — the auto-resume rule launched a pair each session WITHOUT killing prior ones (its
@@ -71,14 +106,15 @@ live poll-markets consensus accrues forward from here. Full procedure: RUNBOOK
   previous-runs-api`) — benign (~1 weighted call/failed scope, cursor-safe), relaunch when the
   window resets via the fixed rule. Endpoint itself is UP (probed 200).
 
-**Restart-after-/clear prompt:** "Continue Polyweather — analytics buildout is COMPLETE through
-DF-5: Phases 1/2a/2b/3-HD-1 shipped + live (web live; 0028+0029 applied; house_gaussian builds,
-EDGE audit recording, /events chips built; Vercel redeployed) AND DF-5 scored history landed
-(calibration_scores window_tag='backtest', 50 rows/25 cities/959 pairs — house Brier 0.649 vs
-market 0.607, NOT market-beating yet, do not promote). FIRST, per the CLAUDE.md auto-resume rule,
-kill-before-launch the P4 backfill. Next real work: let P4 backfill → model_stats refold densify
-calibration, then RE-RUN the DF-5 pair (RUNBOOK 'DF-5 — scored model-vs-market history') to see if
-a calibrated house closes the ~7% Brier gap; that gates F-019 promotion."
+**Restart-after-/clear prompt:** "Continue Polyweather — analytics buildout COMPLETE through DF-5;
+iter-43 added the diagnosis + the last optional hardening. FIRST, per the CLAUDE.md auto-resume
+rule, kill-before-launch the P4 backfill. THEN, if the operator authorizes the prod deploy:
+apply migrations 0030 (clear_system_halt) + 0031 (get_build_inputs p_allow_backfill) and redeploy
+health-monitor + build-distributions/discover-markets/metar-nowcast (built+608-green+committed
+dca134b/e6f086a, deploy-gated). Key truth from DF5-FINDINGS.md: house LOSES to market on Brier
+(0.649 vs 0.607) and it's a forecasting-AIM deficit, NOT calibration — P4 will narrow not close it;
+do NOT promote (F-019) and do NOT chase calibration/cosmetic-weight fixes. The real lever is
+forecasting-skill R&D (regime/recency-aware weighting, MOS post-processing, better inputs)."
 
 ---
 
