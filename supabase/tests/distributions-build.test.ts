@@ -203,57 +203,129 @@ describe('buildDistributions job (§6.16)', () => {
   });
 });
 
-describe('DF-2/DF-3: get_build_inputs p_allow_backfill (0031) — opt-in, backward-compatible', () => {
-  // An event whose ONLY forecast rows are backfill-slot, so the false→true delta is observable.
-  let bfEvent: string;
+describe('DF-2/DF-3: get_build_inputs p_allow_backfill (0031/0033) — opt-in + R-A3 structural guard', () => {
+  // The SQL guard (FIX 5, 0033) keys off `current_date`, so target dates are computed RELATIVE to it
+  // to stay robust to the wall clock: a PAST target (yesterday) must EXCLUDE backfill rows even with
+  // the flag true; a FUTURE target (tomorrow) must INCLUDE them. buildDistributionForEvent's lead
+  // check uses deps.now, so for the future-target build we pass a deps.now anchored to that date.
+  let pastBfEvent: string; // target = yesterday → backfill must stay excluded under allowBackfill
+  let futureBfEvent: string; // target = tomorrow → backfill admitted under allowBackfill
+  let tieEvent: string; // target = today, both a live and a backfill row per model → live wins (FIX 6)
+  let yday: string;
+  let tmrw: string;
+  let today: string;
+
+  const dateAdd = async (deltaDays: number): Promise<string> => {
+    const [r] = await rows<{ d: string }>(db, `select (current_date + ${deltaDays})::text as d`);
+    return r!.d;
+  };
+  // deps with a now anchored so leadDays(now, target, Asia/Seoul) is in [0, maxLeadDays].
+  const depsAt = (now: Date) => ({ notify: async (a: Alert) => (alerts.push(a), true), now });
+
   beforeAll(async () => {
-    bfEvent = await seedCityEvent('jeju', 'RKPC', '2026-06-12');
-    await db.exec(`
-      insert into forecast_snapshots (icao, model, target_date, lead_days, tmax_c, snapshot_slot, source, captured_at) values
-        ('RKPC', 'ecmwf_ifs025', '2026-06-12', 1, 21.0, 'backfill', 'backfill_prev_runs', '2026-06-11T09:00:00Z'),
-        ('RKPC', 'gfs_seamless',  '2026-06-12', 1, 22.0, 'backfill', 'backfill_prev_runs', '2026-06-11T09:00:00Z'),
-        ('RKPC', 'icon_seamless', '2026-06-12', 1, 23.0, 'backfill', 'backfill_prev_runs', '2026-06-11T09:00:00Z');
-      insert into ensemble_snapshots (icao, model, target_date, lead_days, snapshot_slot, members_c, n_members, captured_at)
-        values ('RKPC', 'ecmwf_ifs025_ens', '2026-06-12', 1, 'backfill',
-                (select array_agg(20 + (i % 5)::numeric) from generate_series(1, 30) i), 30, '2026-06-11T09:00:00Z');
-    `);
+    yday = await dateAdd(-1);
+    tmrw = await dateAdd(1);
+    today = await dateAdd(0);
+
+    pastBfEvent = await seedCityEvent('jeju', 'RKPC', yday);
+    futureBfEvent = await seedCityEvent('sokcho', 'RKSC', tmrw);
+    tieEvent = await seedCityEvent('daejeon', 'RKTU', today);
+
+    // Backfill-only rows for the PAST and FUTURE events (captured recently = the backfill run instant).
+    for (const [icao, ev, target] of [['RKPC', pastBfEvent, yday], ['RKSC', futureBfEvent, tmrw]] as const) {
+      await db.query(
+        `insert into forecast_snapshots (icao, model, target_date, lead_days, tmax_c, snapshot_slot, source, captured_at) values
+          ($1, 'ecmwf_ifs025', $2::date, 1, 21.0, 'backfill', 'backfill_prev_runs', now()),
+          ($1, 'gfs_seamless',  $2::date, 1, 22.0, 'backfill', 'backfill_prev_runs', now()),
+          ($1, 'icon_seamless', $2::date, 1, 23.0, 'backfill', 'backfill_prev_runs', now())`,
+        [icao, target],
+      );
+      await db.query(
+        `insert into ensemble_snapshots (icao, model, target_date, lead_days, snapshot_slot, members_c, n_members, captured_at)
+         values ($1, 'ecmwf_ifs025_ens', $2::date, 1, 'backfill',
+                 (select array_agg(20 + (i % 5)::numeric) from generate_series(1, 30) i), 30, now())`,
+        [icao, target],
+      );
+      void ev;
+    }
+
+    // FIX 6 tie fixture: a LIVE row (older captured_at) AND a backfill row (NEWER captured_at) for the
+    // SAME model/target (today). The backfill is more recently RUN, but live must still be chosen.
+    await db.query(
+      `insert into forecast_snapshots (icao, model, target_date, lead_days, tmax_c, snapshot_slot, source, captured_at) values
+        ('RKTU', 'ecmwf_ifs025', $1::date, 0, 21.0, '10Z',      'forecast_api',       now() - interval '2 hours'),
+        ('RKTU', 'ecmwf_ifs025', $1::date, 0, 99.0, 'backfill',  'backfill_prev_runs', now())`,
+      [today],
+    );
+    await db.query(
+      `insert into ensemble_snapshots (icao, model, target_date, lead_days, snapshot_slot, members_c, n_members, captured_at) values
+        ('RKTU', 'ecmwf_ifs025_ens', $1::date, 0, '10Z',     (select array_agg(20 + (i % 5)::numeric) from generate_series(1,30) i), 30, now() - interval '2 hours'),
+        ('RKTU', 'ecmwf_ifs025_ens', $1::date, 0, 'backfill', (select array_agg(80 + (i % 5)::numeric) from generate_series(1,30) i), 30, now())`,
+      [today],
+    );
   });
 
   it('default (p_allow_backfill omitted/false) excludes backfill rows — W19 path bit-identical', async () => {
     // Direct RPC, single arg → PostgREST/PGlite resolves the default false.
     const [r0] = await rows<{ get_build_inputs: { forecasts: unknown[]; ensembles: unknown[] } }>(
-      db, `select get_build_inputs('${bfEvent}'::uuid) as get_build_inputs`,
+      db, `select get_build_inputs('${futureBfEvent}'::uuid) as get_build_inputs`,
     );
     expect(r0!.get_build_inputs.forecasts).toEqual([]);
     expect(r0!.get_build_inputs.ensembles).toEqual([]);
     // Explicit false matches.
     const [rFalse] = await rows<{ get_build_inputs: { forecasts: unknown[] } }>(
-      db, `select get_build_inputs('${bfEvent}'::uuid, false) as get_build_inputs`,
+      db, `select get_build_inputs('${futureBfEvent}'::uuid, false) as get_build_inputs`,
     );
     expect(rFalse!.get_build_inputs.forecasts).toEqual([]);
   });
 
-  it('p_allow_backfill=true INCLUDES backfill-slot rows as the latest-per-model row', async () => {
+  it('p_allow_backfill=true on a TODAY/FUTURE target INCLUDES backfill rows (latest-per-model)', async () => {
     const [rTrue] = await rows<{
       get_build_inputs: { forecasts: { model: string; slot: string }[]; ensembles: { model: string }[] };
-    }>(db, `select get_build_inputs('${bfEvent}'::uuid, true) as get_build_inputs`);
+    }>(db, `select get_build_inputs('${futureBfEvent}'::uuid, true) as get_build_inputs`);
     const fc = rTrue!.get_build_inputs.forecasts;
     expect(fc).toHaveLength(3);
     expect(fc.every((f) => f.slot === 'backfill')).toBe(true);
     expect(rTrue!.get_build_inputs.ensembles).toHaveLength(1);
   });
 
-  it('buildDistributionForEvent forwards allowBackfill ⇒ builds from backfill; default skips', async () => {
+  it('FIX 5 (R-A3): p_allow_backfill=true on a PAST target_date EXCLUDES backfill rows (no ADR-16 peek)', async () => {
+    // The flag is true but target_date < current_date → the structural guard suppresses backfill.
+    const [rTrue] = await rows<{ get_build_inputs: { forecasts: unknown[]; ensembles: unknown[] } }>(
+      db, `select get_build_inputs('${pastBfEvent}'::uuid, true) as get_build_inputs`,
+    );
+    expect(rTrue!.get_build_inputs.forecasts).toEqual([]);
+    expect(rTrue!.get_build_inputs.ensembles).toEqual([]);
+  });
+
+  it('FIX 6: on a tie (live + newer-run backfill for the same model/target), the LIVE row is chosen', async () => {
+    const [r] = await rows<{
+      get_build_inputs: { forecasts: { model: string; slot: string; tmaxC: number }[]; ensembles: { model: string; members: number[] }[] };
+    }>(db, `select get_build_inputs('${tieEvent}'::uuid, true) as get_build_inputs`);
+    const fc = r!.get_build_inputs.forecasts;
+    expect(fc).toHaveLength(1);
+    expect(fc[0]!.slot).toBe('10Z'); // live preferred over the more-recently-run backfill (99.0)
+    expect(Number(fc[0]!.tmaxC)).toBe(21.0);
+    const ens = r!.get_build_inputs.ensembles;
+    expect(ens).toHaveLength(1);
+    // The live ensemble members (20-24 band), not the backfill members (80-84 band), are returned.
+    expect(Math.max(...ens[0]!.members.map(Number))).toBeLessThan(30);
+  });
+
+  it('buildDistributionForEvent forwards allowBackfill on a FUTURE target ⇒ builds; default skips', async () => {
+    // deps.now anchored to the eve of the future target so leadDays(now, tmrw, tz) is in range.
+    const evening = new Date(`${today}T11:00:00Z`); // ~20:00 Asia/Seoul → tomorrow is lead 1
+    const fdeps = depsAt(evening);
+
     // Default opts → forecasts=[] → nothing written.
-    const off = await buildDistributionForEvent(port, cfg, bfEvent, deps);
+    const off = await buildDistributionForEvent(port, cfg, futureBfEvent, fdeps);
     expect(off).toEqual({ written: 0, skipped: 0 });
-    const offRows = await rows(db, `select 1 from bucket_probabilities where event_id = '${bfEvent}'`);
-    expect(offRows).toHaveLength(0);
+    expect(await rows(db, `select 1 from bucket_probabilities where event_id = '${futureBfEvent}'`)).toHaveLength(0);
 
     // allowBackfill:true → backfill rows feed the build → house rows written.
-    const on = await buildDistributionForEvent(port, cfg, bfEvent, deps, { allowBackfill: true });
+    const on = await buildDistributionForEvent(port, cfg, futureBfEvent, fdeps, { allowBackfill: true });
     expect(on.written).toBeGreaterThanOrEqual(1);
-    const hg = await rows(db, `select 1 from bucket_probabilities where event_id = '${bfEvent}' and source = 'house_gaussian'`);
+    const hg = await rows(db, `select 1 from bucket_probabilities where event_id = '${futureBfEvent}' and source = 'house_gaussian'`);
     expect(hg).toHaveLength(1);
   });
 });
