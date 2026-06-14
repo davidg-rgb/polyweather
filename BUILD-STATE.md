@@ -5,9 +5,38 @@
 
 ## Active Phase
 
-### ▶ NEXT STEP — Code-review of iter-43 → 10 findings ALL FIXED + DEPLOYED 2026-06-14 (iter-44); Phase-3 hardening + DF-5 diagnosis (iter-43); DF-5 history (iter-42); decision layer LIT (iter-41)
+### ▶ NEXT STEP — RPC-lockdown sweep BUILT + DEPLOYED + VERIFIED 2026-06-14 (iter-45, closes the iter-44 OPEN THREAD); code-review fixes (iter-44); Phase-3 hardening + DF-5 diagnosis (iter-43); DF-5 history (iter-42)
 
-**iter-44 (this session): ran the code-review protocol on the iter-43 build (7 finder
+**iter-45 (this session): closed the iter-44 OPEN THREAD — the entire internal
+SECURITY DEFINER RPC layer was anon-exposed. BUILT + TESTED + DEPLOYED + VERIFIED.**
+- **The hole (real, was live on prod):** every public function defaults EXECUTE to PUBLIC
+  (anon/authenticated inherit via PostgREST) and ~80 are SECURITY DEFINER → they BYPASS RLS.
+  So anyone with the publishable anon key could POST `/rest/v1/rpc/<fn>` and drive
+  `settle_bets` / `upsert_forecast_rows` / `finalize_observation` / `set_config_value`
+  (rewrite ANY config incl. `tradingMode`/`operatorEmail`) / `fill_bet_with_caps` /
+  `claim_event_winner` past row-level security. Only `operator_*` self-guard; the
+  service-role-internal writers had NO guard. Mitigated today only by paper-mode + obscurity.
+  iter-44 had locked just `apply_halt`/`clear_system_halt` (and 0023 `note_bet_slack_delivery`).
+- **The fix — migration `0034_lockdown_internal_rpcs.sql` (commit `9dd3355`):** a catalog-driven
+  sweep (provably complete, idempotent; skips trigger + extension fns): REVOKE every plain public
+  function from `public, anon, authenticated`; re-GRANT `service_role` on ALL (Edge Functions
+  untouched); keep the EXACT 23-RPC dashboard surface on `authenticated`; keep `is_operator` on
+  `authenticated` (the 0008 `to authenticated` RLS policies call it AS the querying role — revoking
+  re-breaks every operator-gated read; the invariant test caught this regression mid-build); keep
+  `health_check` on `anon` (the NO-auth `/api/health` probe).
+- **Web surface enumerated 3 ways + cross-checked:** apps/web routes.ts/prod.ts `.rpc` literals +
+  loaders.ts `dash_*` (via `one()`) + trading `goLiveGate` (`go_live_gate_inputs`). The web imports
+  ONLY `goLiveGate` from trading and execute-bet is a PROXY, so the 4 trading-execution RPCs
+  (`fill_bet_with_caps`/`note_resting_order`/`set_bet_execution_failed`/`current_bankroll`) correctly
+  stay `service_role`-only.
+- **DEPLOYED + VERIFIED LIVE (operator-authorized; the auto-classifier had denied the unprompted
+  apply — correctly):** applied `0034` to hosted. Live grant state: **93 swept, anon-exposed 92→1
+  (`health_check` only), authenticated 24 (23 surface + `is_operator`), service_role retained on all
+  93, internal writers locked from anon+authenticated.** `GET /api/health` still 200 (`{"db":"ok"}`).
+  New regression-proof invariant test (8 cases) asserts the end-state both ways (under- AND
+  over-revoke). Suite **633 green**, typecheck **0**.
+
+**iter-44 (prior session): ran the code-review protocol on the iter-43 build (7 finder
 angles + adversarial verify) — it caught 3 CONFIRMED bugs in the just-deployed
 health-monitor auto-recovery. ALL 10 findings + cleanup FIXED, TESTED (625 green),
 and DEPLOYED.**
@@ -131,18 +160,19 @@ live poll-markets consensus accrues forward from here. Full procedure: RUNBOOK
   window resets via the fixed rule. Endpoint itself is UP (probed 200).
 
 **Restart-after-/clear prompt:** "Continue Polyweather — analytics buildout COMPLETE through DF-5;
-iter-43 (hardening) + iter-44 (code-review fixes) are ALL BUILT + DEPLOYED + VERIFIED. Migrations
-0028–0033 applied (0026 intentionally NOT — snapshot-sources); edge fns current; suite 625 green,
-typecheck 0; main = 8faa341. NO pending deploys. FIRST, per the CLAUDE.md auto-resume rule,
-kill-before-launch the P4 backfill (both workers were running, sleeping to 00:00Z; forecasts spent
-its full 8000 today). Key truth from DF5-FINDINGS.md: house LOSES to market on Brier (0.649 vs
-0.607) — a forecasting-AIM deficit, NOT calibration. P4 will narrow not close it; do NOT promote
-(F-019), do NOT chase calibration/cosmetic-weight fixes. NEXT real work: (a) let P4 → model_stats
-refold → re-run the DF-5 pair (RUNBOOK 'DF-5'), OR (b) start the forecasting-skill R&D track
-(regime/recency-aware weighting, MOS post-processing, better inputs). OPEN THREAD (flagged, not
-done): the other unguarded internal RPCs (claim_job_run, mark_alert_sent, complete_job_run, …) are
-the same anon-exposed class iter-44 fixed for apply_halt/clear_system_halt — a one-migration
-`revoke … from public/anon/authenticated` sweep would close it."
+iter-43 (hardening) + iter-44 (code-review fixes) + iter-45 (RPC-lockdown sweep) are ALL BUILT +
+DEPLOYED + VERIFIED. Migrations 0028–0034 applied (0026 intentionally NOT — snapshot-sources); edge
+fns current; suite 633 green, typecheck 0; main = iter-45 (fix `9dd3355` + this docs commit). NO pending deploys. FIRST,
+per the CLAUDE.md auto-resume rule, kill-before-launch the P4 backfill (both workers sleeping to
+00:00Z; today's 8000 budget spent). Key truth from DF5-FINDINGS.md: house LOSES to market on Brier
+(0.649 vs 0.607) — a forecasting-AIM deficit, NOT calibration. P4 will narrow not close it; do NOT
+promote (F-019), do NOT chase calibration/cosmetic-weight fixes. NEXT real work: (a) let P4 →
+model_stats refold → re-run the DF-5 pair (RUNBOOK 'DF-5'), OR (b) start the forecasting-skill R&D
+track (regime/recency-aware weighting, MOS post-processing, better inputs). The iter-44 OPEN THREAD
+(unguarded internal RPCs anon-exposed) is now CLOSED by 0034 — the whole RPC layer is locked to
+service_role + the 23-RPC dashboard surface (authenticated) + is_operator + health_check (anon);
+NEW rule: any future RPC must ship its own `revoke … from public, anon, authenticated; grant execute
+to service_role [, authenticated]` (the 0034 invariant test fails otherwise)."
 
 ---
 
