@@ -86,8 +86,10 @@ describe('migrations 0001–0010', () => {
       '0028_analytics_decouple.sql',
       '0029_dashboard_events_list.sql',
       // 0030 = Phase-3 C3/R-A6 dead-man halt auto-recovery (clear_system_halt RPC +
-      // health-monitor recovery branch).
+      // health-monitor recovery branch); 0031 = Phase-3 DF-2/3 get_build_inputs
+      // p_allow_backfill opt-in param (default-false keeps the live build bit-identical).
       '0030_clear_system_halt.sql',
+      '0031_get_build_inputs_allow_backfill.sql',
     ]);
   });
 });

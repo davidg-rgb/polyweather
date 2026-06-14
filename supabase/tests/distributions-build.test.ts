@@ -202,3 +202,58 @@ describe('buildDistributions job (§6.16)', () => {
     expect(ulsanRows.length).toBe(0);
   });
 });
+
+describe('DF-2/DF-3: get_build_inputs p_allow_backfill (0031) — opt-in, backward-compatible', () => {
+  // An event whose ONLY forecast rows are backfill-slot, so the false→true delta is observable.
+  let bfEvent: string;
+  beforeAll(async () => {
+    bfEvent = await seedCityEvent('jeju', 'RKPC', '2026-06-12');
+    await db.exec(`
+      insert into forecast_snapshots (icao, model, target_date, lead_days, tmax_c, snapshot_slot, source, captured_at) values
+        ('RKPC', 'ecmwf_ifs025', '2026-06-12', 1, 21.0, 'backfill', 'backfill_prev_runs', '2026-06-11T09:00:00Z'),
+        ('RKPC', 'gfs_seamless',  '2026-06-12', 1, 22.0, 'backfill', 'backfill_prev_runs', '2026-06-11T09:00:00Z'),
+        ('RKPC', 'icon_seamless', '2026-06-12', 1, 23.0, 'backfill', 'backfill_prev_runs', '2026-06-11T09:00:00Z');
+      insert into ensemble_snapshots (icao, model, target_date, lead_days, snapshot_slot, members_c, n_members, captured_at)
+        values ('RKPC', 'ecmwf_ifs025_ens', '2026-06-12', 1, 'backfill',
+                (select array_agg(20 + (i % 5)::numeric) from generate_series(1, 30) i), 30, '2026-06-11T09:00:00Z');
+    `);
+  });
+
+  it('default (p_allow_backfill omitted/false) excludes backfill rows — W19 path bit-identical', async () => {
+    // Direct RPC, single arg → PostgREST/PGlite resolves the default false.
+    const [r0] = await rows<{ get_build_inputs: { forecasts: unknown[]; ensembles: unknown[] } }>(
+      db, `select get_build_inputs('${bfEvent}'::uuid) as get_build_inputs`,
+    );
+    expect(r0!.get_build_inputs.forecasts).toEqual([]);
+    expect(r0!.get_build_inputs.ensembles).toEqual([]);
+    // Explicit false matches.
+    const [rFalse] = await rows<{ get_build_inputs: { forecasts: unknown[] } }>(
+      db, `select get_build_inputs('${bfEvent}'::uuid, false) as get_build_inputs`,
+    );
+    expect(rFalse!.get_build_inputs.forecasts).toEqual([]);
+  });
+
+  it('p_allow_backfill=true INCLUDES backfill-slot rows as the latest-per-model row', async () => {
+    const [rTrue] = await rows<{
+      get_build_inputs: { forecasts: { model: string; slot: string }[]; ensembles: { model: string }[] };
+    }>(db, `select get_build_inputs('${bfEvent}'::uuid, true) as get_build_inputs`);
+    const fc = rTrue!.get_build_inputs.forecasts;
+    expect(fc).toHaveLength(3);
+    expect(fc.every((f) => f.slot === 'backfill')).toBe(true);
+    expect(rTrue!.get_build_inputs.ensembles).toHaveLength(1);
+  });
+
+  it('buildDistributionForEvent forwards allowBackfill ⇒ builds from backfill; default skips', async () => {
+    // Default opts → forecasts=[] → nothing written.
+    const off = await buildDistributionForEvent(port, cfg, bfEvent, deps);
+    expect(off).toEqual({ written: 0, skipped: 0 });
+    const offRows = await rows(db, `select 1 from bucket_probabilities where event_id = '${bfEvent}'`);
+    expect(offRows).toHaveLength(0);
+
+    // allowBackfill:true → backfill rows feed the build → house rows written.
+    const on = await buildDistributionForEvent(port, cfg, bfEvent, deps, { allowBackfill: true });
+    expect(on.written).toBeGreaterThanOrEqual(1);
+    const hg = await rows(db, `select 1 from bucket_probabilities where event_id = '${bfEvent}' and source = 'house_gaussian'`);
+    expect(hg).toHaveLength(1);
+  });
+});

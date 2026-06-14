@@ -55,14 +55,27 @@ const sha256Hex = async (s: string): Promise<string> => {
 const slotOf = (slot: string, capturedAt: string): '10Z' | '22Z' =>
   slot === '10Z' || slot === '22Z' ? slot : new Date(capturedAt).getUTCHours() < 16 ? '10Z' : '22Z';
 
+/**
+ * @param opts.allowBackfill — forward p_allow_backfill to get_build_inputs (DF-2/0031). Default
+ *   false keeps the LIVE build bit-identical (backfill rows excluded, W19).
+ *
+ *   R-A3 GUARD: backfill rows carry captured_at = the recent backfill RUN instant, NOT the
+ *   historical forecast issue time. allowBackfill=true is therefore NOT information-time-matched
+ *   for PAST target dates — using it on a resolved event peeks at information the model could not
+ *   have had and corrupts ADR-16 time-matching / any later score_distributions grade. Pass true
+ *   ONLY when target_date >= today (seeding present/future open events) OR from the offline scorer.
+ *   No live caller (build-distributions / discover-markets / metar-nowcast) passes it.
+ */
 export async function buildDistributionForEvent(
   db: DbPort,
   cfg: AppConfig,
   eventId: string,
   deps: BuildDeps,
+  opts: { allowBackfill?: boolean } = {},
 ): Promise<{ written: number; skipped: number }> {
   const [raw] = await db.rpc<{ get_build_inputs: BuildInputs | null }>('get_build_inputs', {
     p_event_id: eventId,
+    p_allow_backfill: opts.allowBackfill ?? false,
   });
   const inp = raw?.get_build_inputs;
   const out = { written: 0, skipped: 0 };
