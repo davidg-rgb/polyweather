@@ -131,14 +131,18 @@ live poll-markets consensus accrues forward from here. Full procedure: RUNBOOK
   window resets via the fixed rule. Endpoint itself is UP (probed 200).
 
 **Restart-after-/clear prompt:** "Continue Polyweather — analytics buildout COMPLETE through DF-5;
-iter-43 added the diagnosis + the last optional hardening. FIRST, per the CLAUDE.md auto-resume
-rule, kill-before-launch the P4 backfill. THEN, if the operator authorizes the prod deploy:
-apply migrations 0030 (clear_system_halt) + 0031 (get_build_inputs p_allow_backfill) and redeploy
-health-monitor + build-distributions/discover-markets/metar-nowcast (built+608-green+committed
-dca134b/e6f086a, deploy-gated). Key truth from DF5-FINDINGS.md: house LOSES to market on Brier
-(0.649 vs 0.607) and it's a forecasting-AIM deficit, NOT calibration — P4 will narrow not close it;
-do NOT promote (F-019) and do NOT chase calibration/cosmetic-weight fixes. The real lever is
-forecasting-skill R&D (regime/recency-aware weighting, MOS post-processing, better inputs)."
+iter-43 (hardening) + iter-44 (code-review fixes) are ALL BUILT + DEPLOYED + VERIFIED. Migrations
+0028–0033 applied (0026 intentionally NOT — snapshot-sources); edge fns current; suite 625 green,
+typecheck 0; main = 8faa341. NO pending deploys. FIRST, per the CLAUDE.md auto-resume rule,
+kill-before-launch the P4 backfill (both workers were running, sleeping to 00:00Z; forecasts spent
+its full 8000 today). Key truth from DF5-FINDINGS.md: house LOSES to market on Brier (0.649 vs
+0.607) — a forecasting-AIM deficit, NOT calibration. P4 will narrow not close it; do NOT promote
+(F-019), do NOT chase calibration/cosmetic-weight fixes. NEXT real work: (a) let P4 → model_stats
+refold → re-run the DF-5 pair (RUNBOOK 'DF-5'), OR (b) start the forecasting-skill R&D track
+(regime/recency-aware weighting, MOS post-processing, better inputs). OPEN THREAD (flagged, not
+done): the other unguarded internal RPCs (claim_job_run, mark_alert_sent, complete_job_run, …) are
+the same anon-exposed class iter-44 fixed for apply_halt/clear_system_halt — a one-migration
+`revoke … from public/anon/authenticated` sweep would close it."
 
 ---
 
