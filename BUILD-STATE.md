@@ -191,9 +191,12 @@ promote (F-019), do NOT chase calibration/cosmetic-weight fixes. NEXT real work:
 model_stats refold → re-run the DF-5 pair (RUNBOOK 'DF-5'), OR (b) CONTINUE the forecasting-skill R&D
 track — see `FORECASTING-RD.md`: probes #1 (MOS) + #2 (recency/concentrate reweighting) are DONE +
 REJECTED (the cheap levers are exhausted; the live inverse-MSE blend is near the point-skill ceiling).
-Next probes: #3 regime-conditional weighting (condition on model-disagreement/season, NOT recency),
-#4 intraday nowcast beyond lead 0, and DF5 lever 3 better inputs (the likeliest real lever). Use the
-`scripts/research/mos-pointskill.ts` harness to measure each as a yes/no. The iter-44 OPEN THREAD
+Next 3 levers are spec'd as runnable work-orders in `FORECASTING-RD-HANDOFF.md` (WO-3 regime
+weighting [data-ready], WO-4 nowcast beyond lead 0 [check intraday history first], WO-L3 better inputs
+[run the L3-b residual-structure diagnostic first — it decides if any input/feature lever can work]).
+Run as a continuous loop (order L3-b → WO-3 → WO-4 → L3-a → L3-c) or parallel worktree workflows; each
+forks the `scripts/research/mos-pointskill.ts` harness, obeys its methodology contract, and logs a
+verdict to FORECASTING-RD.md — ready for review, NOT auto-shipped (F-019). The iter-44 OPEN THREAD
 (unguarded internal RPCs anon-exposed) is now CLOSED by 0034 — the whole RPC layer is locked to
 service_role + the 23-RPC dashboard surface (authenticated) + is_operator + health_check (anon);
 NEW rule: any future RPC must ship its own `revoke … from public, anon, authenticated; grant execute
