@@ -48,14 +48,23 @@ done** (forecast age now 0.1h). The C1 fail-loud guard now prevents any silent 0
   track record; promotion (F-019) needs it.
 - **Optional:** redeploy `build-distributions` to sync the doc-only HD-2 docstrings into the
   bundle (no behavior change — the migration drives the de-gate server-side).
-- **Parallel ongoing:** P4 backfill 9/46 stations (16.3%, FAIL) — relaunch both workers each
-  session per the CLAUDE.md auto-resume rule until `check-p4-coverage` PASSes. (Today's 8000/UTC-day
-  budget is spent; both workers are sleeping until 00:00Z.)
+- **Parallel ongoing:** P4 backfill 9/46 stations (16.3%, FAIL) until `check-p4-coverage` PASSes.
+  **2026-06-14 cleanup:** found **3 actuals + 2 forecasts DUPLICATE workers** stacked from prior
+  sessions — the auto-resume rule launched a pair each session WITHOUT killing prior ones (its
+  "detached procs are reaped" premise was wrong: `run_in_background` cmd windows persist across
+  sessions). **Fixed in CLAUDE.md → now kill-before-launch** (`wmic … '%backfill-%' call terminate`,
+  then launch one pair). Consolidated to **1 actuals worker** (productive). **Forecasts is DOWN**
+  on purpose: a fresh-day fast wake trips Open-Meteo's free-tier rate limit (`retries exhausted …
+  previous-runs-api`) — benign (~1 weighted call/failed scope, cursor-safe), relaunch when the
+  window resets via the fixed rule. Endpoint itself is UP (probed 200).
 
 **Restart-after-/clear prompt:** "Continue Polyweather analytics buildout — Phases 1/2a/2b/3-HD-1
 are shipped + live (web live; 0028+0029 applied; house_gaussian builds, EDGE audit recording,
-/events chips built). Next: DF-5 scored model-vs-market history via simulate-historical-edge
-(+ backfill-market-history at historical made_at). Reference: BLUEPRINT-analytics-buildout.md §6.B/DF-5 + this block."
+/events chips built; c8da796 pushed; Vercel redeployed). FIRST, per the CLAUDE.md auto-resume rule,
+kill-before-launch the backfill (1 actuals likely already running; forecasts was rate-limited —
+relaunch if the window reset). Next real work: DF-5 scored model-vs-market history via
+simulate-historical-edge (+ backfill-market-history at historical made_at). Reference:
+BLUEPRINT-analytics-buildout.md §6.B/DF-5 + this block."
 
 ---
 
