@@ -192,3 +192,43 @@ constraint (ADR-15) — so this CONFIRMS that path is the valuable one and shows
 
 Caveat: this is point-RMSE; the Brier/edge-vs-market confirmation needs the 30-day market-overlap re-run
 with a late-hour build. But the magnitude (NWP 1.18 → nowcast 0.65 at h15) is large and physical.
+
+## WO-L3-a — blend the existing external sources. VERDICT: BLOCKED (data too thin).
+
+`source_forecasts` depth: openweathermap 6 days (2026-06-13→18, 46 stations), weatherapi 4 days
+(2026-06-13→16). They accrue ~1 day/day from the iter-39 cron, and most target dates aren't resolved yet.
+Far below the ≥30-day walk-forward bar. **Revisit ≈ mid-July 2026** once ~30+ resolved days exist. (Lower
+priority now — WO-4 shows the edge is the intraday signal, not a better multi-day blend member.)
+
+## WO-L3-c — scout a better free deterministic source. SHORTLIST (not integrated).
+
+From the vault free-API directory (`_public-apis/lookup.py weather|forecast`):
+- **NWS — api.weather.gov (no-auth, HTTPS, CORS).** Human-augmented MOS point forecasts for US airports;
+  daily max via the gridpoint endpoint. The best free "input the grid misses" for our ~12 US stations
+  (KORD/KSEA/KSFO/KLAX/…). Top candidate.
+- **Pirate Weather (no-auth, HTTPS).** Dark Sky-style global daily-high — a global secondary source.
+- Already in system: OpenWeatherMap, WeatherAPI. Regional-only: Aemet (ES), HG Weather (BR), QWeather.
+- AviationWeather/NOAA (no-auth) gives TAFs — station-level but aviation-shaped (not a clean daily tmax).
+
+Vet ToS/coverage before any integration. Priority LOWERED by WO-4: a better source improves the lead-0
+PRIOR the nowcast refines (could compound), but it is not the headline lever.
+
+---
+
+# Round 2 — conclusion
+
+Five experiments, one winner. The multi-day NWP blend is a dead end for beating the market — **four
+independent confirmations** (probe #1 MOS, #2 reweighting, L3-b residual-structure R²=0.6%, WO-3 regime)
+that it sits at its point-skill ceiling. **The edge is the late-day intraday nowcast (WO-4):** the
+running-max + lift nearly halves point error vs NWP by mid-afternoon (h15: 1.18 → 0.65°C, +45%; the
+walk-forward gate +29%). The market-beating thesis should refocus from forecasting the day to **capturing
+the day as it happens, late, and betting on it.**
+
+**Ready for operator review.** Recommended, in priority order:
+1. **Productionize WO-4** (sketch above): audit lead-0 build/bet TIMING vs local afternoon; sharpen the
+   running-max constraint by local hour; then re-run the 30-day market-overlap Brier with a late-hour
+   nowcast-weighted lead-0 build to test it against `market_consensus` directly. ← the live lever.
+2. **Secondary:** revisit WO-L3-a (ext-source blend) + a possible NWS integration after ~30 days of
+   source/obs accrual, to tighten the lead-0 prior the nowcast refines.
+3. **Closed:** MOS, reweighting, regime weighting, feature-correction — do not revisit on the current
+   NWP inputs.

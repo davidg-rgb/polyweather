@@ -15,9 +15,12 @@
 
 | WO | Lever | Data-ready NOW? | Effort | Verdict |
 |----|-------|-----------------|--------|---------|
-| **WO-3** | Regime-conditional weighting | ✅ YES (same data as #1/#2) | M | _TODO_ |
-| **WO-4** | Intraday nowcast beyond lead 0 | ⚠️ CHECK FIRST (intraday history likely thin) | M | _TODO_ |
-| **WO-L3** | Better inputs | ◑ PARTIAL (ext-source history thin; residual-structure analysis ready) | L | _TODO_ |
+| **WO-3** | Regime-conditional weighting | ✅ YES | M | ❌ REJECTED (season −0.05%, disagreement −0.02%; skill ranking regime-stable) |
+| **WO-4** | Intraday nowcast beyond lead 0 | ✅ YES (182d×45st, not thin) | M | ✅ **WORKS** (h15: NWP 1.18→0.65°C +45%; gate +29%) — the live lever |
+| **WO-L3** | Better inputs | ◑ PARTIAL | L | L3-b ❌ no structure (R²0.6%) · L3-a ⛔ BLOCKED (data thin) · L3-c 📋 shortlist (NWS, Pirate) |
+
+**Round-2 complete — see `FORECASTING-RD.md` "Round 2". Headline: the market-beating edge is the
+late-day intraday nowcast (WO-4), not the NWP blend (4 independent rejections). Ready for review.**
 
 ## Methodology contract — EVERY work-order MUST obey (these are why #1/#2 are trustworthy)
 

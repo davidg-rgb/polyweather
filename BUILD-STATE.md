@@ -5,7 +5,29 @@
 
 ## Active Phase
 
-### ▶ NEXT STEP — forecasting-skill R&D STARTED 2026-06-14 (iter-46, MOS+reweighting REJECTED); RPC-lockdown sweep DEPLOYED (iter-45); code-review fixes (iter-44); DF-5 diagnosis (iter-43)
+### ▶ NEXT STEP — forecasting-skill R&D ROUND 2 COMPLETE 2026-06-14 (iter-47, WO-4 nowcast WORKS — the edge is the late-day intraday signal); R&D started (iter-46); RPC-lockdown DEPLOYED (iter-45); DF-5 diagnosis (iter-43)
+
+**iter-47 (this session): ran the forecasting-skill R&D loop (3 work-orders, FORECASTING-RD-HANDOFF).
+ONE winner. Full log: `FORECASTING-RD.md` Round 2. All committed; NO model change shipped (ready for review).**
+- **WO-L3-b (residual structure): NO exploitable structure (R² 0.60%).** The live blend residual is
+  effectively irreducible NWP error → feature/MOS correction DEAD (3rd confirmation after #1/#2).
+- **WO-3 (regime-conditional weighting): REJECTED** (season −0.05%, disagreement −0.02%). Skill ranking
+  is regime-stable. 4th confirmation the multi-day NWP blend is at its ceiling and loses to market.
+- **WO-4 (intraday nowcast beyond lead 0): WORKS — the first positive lever, and a big one.** Running-max
+  + walk-forward lift nearly HALVES point error vs the NWP blend by mid-afternoon (local h15: NWP 1.18°C
+  → nowcast 0.65°C, +45%; walk-forward gate +29%). 182 days × 45 stations. (Fixed a unit bug:
+  `intraday_advances.max_tenths_c` stores °C despite the name.)
+- **WO-L3-a (ext-source blend): BLOCKED** (OWM 6 days / WeatherAPI 4 days — revisit ~mid-July).
+  **WO-L3-c (free-source scout): SHORTLIST** — NWS api.weather.gov (US, human-MOS, no-auth) + Pirate Weather.
+- **THE REFRAME (headline):** the market-beating edge is **capturing the day as it happens, late, and
+  betting on it** — NOT forecasting it days out (the NWP blend is a measured dead end). Productionization
+  sketch for WO-4 (operator review, NOT shipped): (1) audit lead-0 build/bet TIMING vs local afternoon —
+  highest leverage; (2) sharpen the running-max constraint by local hour; (3) re-run the 30-day market
+  overlap with a late-hour nowcast-weighted lead-0 build to test it vs market_consensus directly.
+
+**iter-46: started the forecasting-skill R&D track (the DF-5 market-beating
+lever). Built the measurement harness + ran probes #1/#2 — both REJECTED with large-n evidence.
+Full log: `FORECASTING-RD.md`. Committed `de06b81`; NO model change shipped (per DF-5).**
 
 **iter-46 (this session): started the forecasting-skill R&D track (the DF-5 market-beating
 lever). Built the measurement harness + ran probes #1/#2 — both REJECTED with large-n evidence.
