@@ -5,7 +5,31 @@
 
 ## Active Phase
 
-### ▶ NEXT STEP — Phase-3 hardening BUILT (deploy-gated) + DF-5 model-gap DIAGNOSED 2026-06-14 (iter-43); DF-5 history LANDED (iter-42); decision layer LIT (iter-41)
+### ▶ NEXT STEP — Code-review of iter-43 → 10 findings ALL FIXED + DEPLOYED 2026-06-14 (iter-44); Phase-3 hardening + DF-5 diagnosis (iter-43); DF-5 history (iter-42); decision layer LIT (iter-41)
+
+**iter-44 (this session): ran the code-review protocol on the iter-43 build (7 finder
+angles + adversarial verify) — it caught 3 CONFIRMED bugs in the just-deployed
+health-monitor auto-recovery. ALL 10 findings + cleanup FIXED, TESTED (625 green),
+and DEPLOYED.**
+- **The 3 CONFIRMED (were live on prod):** (1) recovery cleared ANY system `halt:global`
+  on forecast-freshness alone → would auto-clear a still-valid **calibration-drift** halt
+  (the exact breaker DF-5 makes likely); (2) `apply_halt` clobbered an operator halt
+  (re-audit `actor='system'`) → `clear_system_halt` could then delete the operator's
+  deliberate stop; (3) `clear_system_halt`/`apply_halt` were **anon-callable** (no guard,
+  no revoke).
+- **Fixes (migrations `0032`+`0033`, edited `0030`; commits `c907a4f`+`3ab6f22`, pushed):**
+  reason-aware recovery (`clear_system_halt(p_scope, p_reason_prefixes[])` — clears only
+  `dead-man:forecast`/`dead-man:price`-tagged halts; drift/P&L never auto-cleared);
+  `apply_halt` no-ops under a live operator halt; both RPCs revoked from anon/authenticated
+  + granted service_role; `get_build_inputs` structurally blocks the R-A3 peek (backfill
+  only for `target_date >= today`) + prefers live over backfill; recovery call moved+wrapped
+  + skipped when no halt + reason-scoped dedupe; `config_audit(key,created_at)` index; 0030
+  DO-block simplified; test `asRole`/`afterEach` cleanup.
+- **DEPLOYED + VERIFIED (operator-authorized):** `0032`+`0033` applied to hosted; redeployed
+  `health-monitor`, `run-calibration`, `build-distributions`, `discover-markets`,
+  `metar-nowcast`. Verified live: clear_system_halt 1 overload (1-arg dropped), anon/authd
+  EXECUTE = false, service_role = true, index present, get_build_inputs default path
+  non-null (no regression). Suite 625 green, typecheck 0.
 
 **iter-43 (this session, after DF-5):** answered the core thesis question + tied off the
 blueprint's last optional items. Builds are committed + suite-green; **two prod deploys are
