@@ -131,3 +131,19 @@ correction is capped at <0.6% — DEAD (a third, independent confirmation of #1/
 means a genuinely BETTER SOURCE, not a feature** → L3-c is the live branch. Caveat for WO-3: regime
 weighting reallocates weight by regime-specific *skill ranking* (a different mechanism than predicting
 the residual from a regime feature), so it is still measured — but this result lowers its prior.
+
+## WO-3 — regime-conditional weighting. VERDICT: REJECTED.
+
+Script `scripts/research/wo3-regime-weighting.ts` (+ `.test.ts`). Per-(model, lead, regime) skill
+windows; regime weights shrunk toward the global inverse-MSE by n/(n+12); correction held at baseline.
+Walk-forward, 45 stations, 8,775 builds.
+
+| regime arm | overall RMSE Δ vs live |
+|---|---|
+| `regime_season` (DJF/MAM/JJA/SON) | **−0.05%** (neutral) |
+| `regime_disagreement` (rolling spread terciles) | **−0.02%** (neutral) |
+
+Both neutral, far below the +1.5% bar; per-station deltas are tiny and mixed (KORD +0.08/+0.20%, KSEA
+−0.29/0.00%, KSFO +0.15/−0.21%). **The model skill RANKING is regime-stable** — conditioning weights on
+season or model-disagreement does not move μ-aim. This is the *fourth* independent confirmation (after
+#1 MOS, #2 reweighting, L3-b structure) that the existing-NWP-input branch is exhausted.
