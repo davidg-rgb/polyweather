@@ -95,6 +95,10 @@ describe('migrations 0001–0010', () => {
       // structural backfill guard (target_date>=current_date) + live-over-backfill tie-break.
       '0032_halt_lifecycle_hardening.sql',
       '0033_get_build_inputs_ra3_guard.sql',
+      // 0034 = internal-RPC lockdown sweep — revoke the whole SECURITY DEFINER RPC layer from
+      // public/anon/authenticated, keeping service_role everywhere + the exact dashboard surface on
+      // authenticated + health_check on anon. Generalises the 0023/0032 per-function revokes.
+      '0034_lockdown_internal_rpcs.sql',
     ]);
   });
 });
@@ -523,6 +527,106 @@ describe('FIX 3: halt RPCs are service-role-internal (revoked from anon/authenti
   it('public (PUBLIC pseudo-role) cannot EXECUTE either RPC', async () => {
     expect(await lacksExecute('public.apply_halt(text, text)', 'public')).toBe(true);
     expect(await lacksExecute('public.clear_system_halt(text, text[])', 'public')).toBe(true);
+  });
+});
+
+describe('0034: internal-RPC lockdown — anon/authenticated revoked except the web surface', () => {
+  // Mirrors the migration's allow-lists. The migration is the source of truth; this set is the
+  // contract the dashboard depends on (apps/web routes.ts/prod.ts/.rpc + loaders.ts dash_* +
+  // trading goLiveGate). Drift in either direction fails a test below.
+  const WEB_AUTHENTICATED = new Set([
+    'dash_today_overview', 'dash_events_list', 'dash_event_detail', 'dash_city_detail',
+    'dash_calibration', 'dash_bets_ledger', 'dash_system_health', 'dash_admin_state',
+    'go_live_gate_inputs',
+    'operator_halt', 'operator_resume', 'operator_update_config', 'operator_verify_station',
+    'operator_set_champion', 'operator_skip_bet', 'operator_manual_bet',
+    'operator_record_external_fill', 'operator_export_rows',
+    'bet_for_execution', 'promotion_check_rows',
+    'claim_alert', 'mark_alert_sent', 'health_check',
+  ]);
+  const WEB_ANON = new Set(['health_check']);
+  // is_operator is not a dashboard RPC — it is the helper the 0008 `to authenticated` RLS policies
+  // call AS the querying role, so authenticated must retain EXECUTE or operator-gated reads throw.
+  const RLS_HELPERS = new Set(['is_operator']);
+  const AUTHENTICATED_OK = new Set([...WEB_AUTHENTICATED, ...RLS_HELPERS]);
+
+  interface Grant {
+    proname: string;
+    anon_can: boolean;
+    authd_can: boolean;
+    svc_can: boolean;
+  }
+  let grants: Grant[];
+
+  beforeAll(async () => {
+    // The same surface the migration sweeps: plain public functions, minus trigger + extension fns.
+    grants = await rows<Grant>(
+      db,
+      `select p.proname,
+              has_function_privilege('anon', p.oid, 'EXECUTE') as anon_can,
+              has_function_privilege('authenticated', p.oid, 'EXECUTE') as authd_can,
+              has_function_privilege('service_role', p.oid, 'EXECUTE') as svc_can
+       from pg_proc p
+       join pg_namespace n on n.oid = p.pronamespace
+       where n.nspname = 'public'
+         and p.prokind = 'f'
+         and p.prorettype <> 'pg_catalog.trigger'::regtype
+         and not exists (select 1 from pg_depend d where d.objid = p.oid and d.deptype = 'e')`,
+    );
+  });
+
+  it('sweeps a meaningful surface (the full RPC layer, >70 functions)', () => {
+    expect(grants.length).toBeGreaterThan(70);
+  });
+
+  it('UNDER-revoke guard: no RPC is anon-EXECUTE-able except the /api/health probe', () => {
+    const leaks = grants.filter((g) => g.anon_can && !WEB_ANON.has(g.proname)).map((g) => g.proname).sort();
+    expect(leaks).toEqual([]);
+  });
+
+  it('UNDER-revoke guard: no RPC is authenticated-EXECUTE-able outside the dashboard surface', () => {
+    const leaks = grants
+      .filter((g) => g.authd_can && !AUTHENTICATED_OK.has(g.proname))
+      .map((g) => g.proname)
+      .sort();
+    expect(leaks).toEqual([]);
+  });
+
+  it('OVER-revoke guard: is_operator stays authenticated-executable (the 0008 RLS policies need it)', () => {
+    // Revoking this re-breaks every `for select to authenticated using (is_operator())` policy —
+    // operator-gated table reads would raise "permission denied for function is_operator".
+    expect(grants.find((g) => g.proname === 'is_operator')?.authd_can).toBe(true);
+  });
+
+  it('OVER-revoke guard: every dashboard-surface RPC keeps authenticated EXECUTE', () => {
+    const present = new Map(grants.map((g) => [g.proname, g]));
+    const broken = [...WEB_AUTHENTICATED]
+      .filter((n) => present.has(n) && !present.get(n)!.authd_can)
+      .sort();
+    expect(broken).toEqual([]);
+  });
+
+  it('service_role retains EXECUTE on every swept function (Edge Functions unaffected)', () => {
+    const lost = grants.filter((g) => !g.svc_can).map((g) => g.proname).sort();
+    expect(lost).toEqual([]);
+  });
+
+  it('health_check stays anon-callable (the out-of-band uptime probe runs as anon)', () => {
+    expect(grants.find((g) => g.proname === 'health_check')?.anon_can).toBe(true);
+  });
+
+  it('representative service-role-internal writers are fully locked from anon + authenticated', () => {
+    const writers = [
+      'settle_bets', 'fill_bet_with_caps', 'finalize_observation', 'upsert_forecast_rows',
+      'claim_job_run', 'complete_job_run', 'claim_event_winner', 'score_distributions',
+    ];
+    for (const fn of writers) {
+      const g = grants.find((x) => x.proname === fn);
+      expect(g, `${fn} should exist in the public RPC layer`).toBeTruthy();
+      expect(g!.anon_can, `${fn} must NOT be anon-executable`).toBe(false);
+      expect(g!.authd_can, `${fn} must NOT be authenticated-executable`).toBe(false);
+      expect(g!.svc_can, `${fn} must stay service_role-executable`).toBe(true);
+    }
   });
 });
 
