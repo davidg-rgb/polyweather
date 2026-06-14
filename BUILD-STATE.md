@@ -5,9 +5,29 @@
 
 ## Active Phase
 
-### ▶ NEXT STEP — RPC-lockdown sweep BUILT + DEPLOYED + VERIFIED 2026-06-14 (iter-45, closes the iter-44 OPEN THREAD); code-review fixes (iter-44); Phase-3 hardening + DF-5 diagnosis (iter-43); DF-5 history (iter-42)
+### ▶ NEXT STEP — forecasting-skill R&D STARTED 2026-06-14 (iter-46, MOS+reweighting REJECTED); RPC-lockdown sweep DEPLOYED (iter-45); code-review fixes (iter-44); DF-5 diagnosis (iter-43)
 
-**iter-45 (this session): closed the iter-44 OPEN THREAD — the entire internal
+**iter-46 (this session): started the forecasting-skill R&D track (the DF-5 market-beating
+lever). Built the measurement harness + ran probes #1/#2 — both REJECTED with large-n evidence.
+Full log: `FORECASTING-RD.md`. Committed `de06b81`; NO model change shipped (per DF-5).**
+- **Harness `scripts/research/mos-pointskill.ts` (+ `.test.ts`, 7 tests):** offline, read-only,
+  controlled walk-forward A/B over the backfill — scores ladder-free **point error in °C** (the aim
+  proxy) over the FULL 28-month backfill (NOT the 30-day market window → dodges the overfit trap DF-5
+  flagged). One variable per arm; `baseline` = the live model exactly. Validated: baseline blend
+  lead-1 RMSE **1.33°C** beats the best single model (icon 1.46°C). 45 stations, 8,775 build-days.
+- **Probe #1 — regression MOS (per-model slope+intercept): REJECTED.** Uniform MOS worsens the blend
+  (overall −3.32%; shrunk −1.95%). Per-model it HELPS the weak models (gfs +3.8/+6.3/+5.1%) and HURTS
+  the strong ones (icon −5.2/−4.6/−2.9%) — and inverse-MSE already down-weights gfs / up-weights icon,
+  so MOS improves what the blend ignores and degrades what it leans on. Aim deficit ≠ per-model bias.
+- **Probe #2 — recency / concentration reweighting: REJECTED.** recency (10d half-life) −0.01%
+  (neutral — skill ranking is stable, recency adds variance not signal); concentrate (1/MSE²) −0.43%
+  (loses diversification). The live inverse-MSE blend is near the point-skill ceiling of these inputs.
+- **CONCLUSION:** the two cheap/tunable levers (correction + reweighting) are exhausted; the gap is
+  STRUCTURAL. Remaining (none disproven): **probe #3 regime-conditional weighting** (the untested half
+  of DF5 lever 1 — condition on model-disagreement/season, NOT recency), **probe #4 intraday nowcast
+  beyond lead 0**, and **DF5 lever 3 better inputs** (the likeliest real lever). See FORECASTING-RD.md.
+
+**iter-45: closed the iter-44 OPEN THREAD — the entire internal
 SECURITY DEFINER RPC layer was anon-exposed. BUILT + TESTED + DEPLOYED + VERIFIED.**
 - **The hole (real, was live on prod):** every public function defaults EXECUTE to PUBLIC
   (anon/authenticated inherit via PostgREST) and ~80 are SECURITY DEFINER → they BYPASS RLS.
@@ -160,15 +180,20 @@ live poll-markets consensus accrues forward from here. Full procedure: RUNBOOK
   window resets via the fixed rule. Endpoint itself is UP (probed 200).
 
 **Restart-after-/clear prompt:** "Continue Polyweather — analytics buildout COMPLETE through DF-5;
-iter-43 (hardening) + iter-44 (code-review fixes) + iter-45 (RPC-lockdown sweep) are ALL BUILT +
-DEPLOYED + VERIFIED. Migrations 0028–0034 applied (0026 intentionally NOT — snapshot-sources); edge
-fns current; suite 633 green, typecheck 0; main = iter-45 (fix `9dd3355` + this docs commit). NO pending deploys. FIRST,
+iter-43 (hardening) + iter-44 (code-review fixes) + iter-45 (RPC-lockdown sweep) + iter-46
+(forecasting-skill R&D start) are ALL BUILT + VERIFIED (iter-45 also DEPLOYED). Migrations 0028–0034
+applied (0026 intentionally NOT — snapshot-sources); edge fns current; suite 640 green, typecheck 0;
+main = iter-46 (`de06b81`, local — may be unpushed; check `git status`). NO pending deploys. FIRST,
 per the CLAUDE.md auto-resume rule, kill-before-launch the P4 backfill (both workers sleeping to
 00:00Z; today's 8000 budget spent). Key truth from DF5-FINDINGS.md: house LOSES to market on Brier
 (0.649 vs 0.607) — a forecasting-AIM deficit, NOT calibration. P4 will narrow not close it; do NOT
 promote (F-019), do NOT chase calibration/cosmetic-weight fixes. NEXT real work: (a) let P4 →
-model_stats refold → re-run the DF-5 pair (RUNBOOK 'DF-5'), OR (b) start the forecasting-skill R&D
-track (regime/recency-aware weighting, MOS post-processing, better inputs). The iter-44 OPEN THREAD
+model_stats refold → re-run the DF-5 pair (RUNBOOK 'DF-5'), OR (b) CONTINUE the forecasting-skill R&D
+track — see `FORECASTING-RD.md`: probes #1 (MOS) + #2 (recency/concentrate reweighting) are DONE +
+REJECTED (the cheap levers are exhausted; the live inverse-MSE blend is near the point-skill ceiling).
+Next probes: #3 regime-conditional weighting (condition on model-disagreement/season, NOT recency),
+#4 intraday nowcast beyond lead 0, and DF5 lever 3 better inputs (the likeliest real lever). Use the
+`scripts/research/mos-pointskill.ts` harness to measure each as a yes/no. The iter-44 OPEN THREAD
 (unguarded internal RPCs anon-exposed) is now CLOSED by 0034 — the whole RPC layer is locked to
 service_role + the 23-RPC dashboard surface (authenticated) + is_operator + health_check (anon);
 NEW rule: any future RPC must ship its own `revoke … from public, anon, authenticated; grant execute
