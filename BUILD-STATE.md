@@ -5,25 +5,32 @@
 
 ## Active Phase
 
-### ▶ NEXT STEP — forecasting-skill R&D ROUND 2 COMPLETE 2026-06-14 (iter-47, WO-4 nowcast WORKS — the edge is the late-day intraday signal); R&D started (iter-46); RPC-lockdown DEPLOYED (iter-45); DF-5 diagnosis (iter-43)
+### ▶ NEXT STEP — forecasting-skill R&D ROUND 2 COMPLETE + REVIEWED 2026-06-14 (iter-47, WO-4 point-skill real but TRADING edge FALSIFIED by adversarial review — market prices it faster; NEXT = WO-5 latency study or pivot); R&D started (iter-46); RPC-lockdown DEPLOYED (iter-45)
 
-**iter-47 (this session): ran the forecasting-skill R&D loop (3 work-orders, FORECASTING-RD-HANDOFF).
-ONE winner. Full log: `FORECASTING-RD.md` Round 2. All committed; NO model change shipped (ready for review).**
+**iter-47 (this session): ran the forecasting-skill R&D loop (3 work-orders) AND an adversarial review
+of the findings. Full log: `FORECASTING-RD.md` (Round 2 + "Round-2 review"). All committed + pushed; NO
+model change shipped. THE REVIEW IS THE HEADLINE — it falsified the one positive lever's trading value.**
 - **WO-L3-b (residual structure): NO exploitable structure (R² 0.60%).** The live blend residual is
   effectively irreducible NWP error → feature/MOS correction DEAD (3rd confirmation after #1/#2).
 - **WO-3 (regime-conditional weighting): REJECTED** (season −0.05%, disagreement −0.02%). Skill ranking
   is regime-stable. 4th confirmation the multi-day NWP blend is at its ceiling and loses to market.
-- **WO-4 (intraday nowcast beyond lead 0): WORKS — the first positive lever, and a big one.** Running-max
-  + walk-forward lift nearly HALVES point error vs the NWP blend by mid-afternoon (local h15: NWP 1.18°C
-  → nowcast 0.65°C, +45%; walk-forward gate +29%). 182 days × 45 stations. (Fixed a unit bug:
-  `intraday_advances.max_tenths_c` stores °C despite the name.)
+- **WO-4 (intraday nowcast beyond lead 0): real POINT-SKILL, but trading edge FALSIFIED.** Running-max +
+  walk-forward lift nearly halves point error vs OUR NWP by mid-afternoon (h15: NWP 1.18°C → nowcast
+  0.65°C, +45%). 182d × 45 stations; unit verified (`max_tenths_c` is °C). BUT the adversarial review
+  built the missing comparison — nowcast vs the MARKET (234k order-book snapshots): **market RMSE 0.40°C
+  at h15 ≈ the unrealizable oracle (0.43°C), BEATING our nowcast (0.65°C).** The market prices the same
+  METARs faster + better → +45% is vs our stale forecast, NOT a tradable edge. Productionization sketch
+  (bet-timing/constraint) is SUPERSEDED. ("build later" only helps if the market is slower — it's faster.)
 - **WO-L3-a (ext-source blend): BLOCKED** (OWM 6 days / WeatherAPI 4 days — revisit ~mid-July).
   **WO-L3-c (free-source scout): SHORTLIST** — NWS api.weather.gov (US, human-MOS, no-auth) + Pirate Weather.
-- **THE REFRAME (headline):** the market-beating edge is **capturing the day as it happens, late, and
-  betting on it** — NOT forecasting it days out (the NWP blend is a measured dead end). Productionization
-  sketch for WO-4 (operator review, NOT shipped): (1) audit lead-0 build/bet TIMING vs local afternoon —
-  highest leverage; (2) sharpen the running-max constraint by local hour; (3) re-run the 30-day market
-  overlap with a late-hour nowcast-weighted lead-0 build to test it vs market_consensus directly.
+- **THE REVISED HEADLINE (post-review):** the market-beating thesis is FALSIFIED on every signal we have —
+  the NWP blend is at its ceiling (4 rejections) AND the intraday nowcast is already priced by a faster,
+  more accurate market. The market appears EFFICIENT w.r.t. both NWP + intraday info by mid-afternoon.
+- **NEXT STEP (handed off → `FORECASTING-RD-HANDOFF.md` WO-5, for next session): the decisive close-out —**
+  a METAR-latency / market-staleness study: is the market STALE in the minutes right after a new running-max
+  METAR prints (a tradable latency window), or efficient there too? Prior is LOW (probably no edge). If
+  negative → PIVOT (lean on the analytics value, seek out-of-market info, or shelve live trading). Do NOT
+  productionize WO-4 on current evidence. (Parallel micro-task: clean corrupt obs rows — EPWA 88°C, KHOU 71°C.)
 
 **iter-46: started the forecasting-skill R&D track (the DF-5 market-beating
 lever). Built the measurement harness + ran probes #1/#2 — both REJECTED with large-n evidence.
@@ -202,23 +209,22 @@ live poll-markets consensus accrues forward from here. Full procedure: RUNBOOK
   window resets via the fixed rule. Endpoint itself is UP (probed 200).
 
 **Restart-after-/clear prompt:** "Continue Polyweather — analytics buildout COMPLETE through DF-5;
-iter-43 (hardening) + iter-44 (code-review fixes) + iter-45 (RPC-lockdown sweep) + iter-46
-(forecasting-skill R&D start) are ALL BUILT + VERIFIED (iter-45 also DEPLOYED). Migrations 0028–0034
-applied (0026 intentionally NOT — snapshot-sources); edge fns current; suite 640 green, typecheck 0;
-main = iter-46 (`de06b81`, local — may be unpushed; check `git status`). NO pending deploys. FIRST,
-per the CLAUDE.md auto-resume rule, kill-before-launch the P4 backfill (both workers sleeping to
-00:00Z; today's 8000 budget spent). Key truth from DF5-FINDINGS.md: house LOSES to market on Brier
-(0.649 vs 0.607) — a forecasting-AIM deficit, NOT calibration. P4 will narrow not close it; do NOT
-promote (F-019), do NOT chase calibration/cosmetic-weight fixes. NEXT real work: (a) let P4 →
-model_stats refold → re-run the DF-5 pair (RUNBOOK 'DF-5'), OR (b) CONTINUE the forecasting-skill R&D
-track — see `FORECASTING-RD.md`: probes #1 (MOS) + #2 (recency/concentrate reweighting) are DONE +
-REJECTED (the cheap levers are exhausted; the live inverse-MSE blend is near the point-skill ceiling).
-Next 3 levers are spec'd as runnable work-orders in `FORECASTING-RD-HANDOFF.md` (WO-3 regime
-weighting [data-ready], WO-4 nowcast beyond lead 0 [check intraday history first], WO-L3 better inputs
-[run the L3-b residual-structure diagnostic first — it decides if any input/feature lever can work]).
-Run as a continuous loop (order L3-b → WO-3 → WO-4 → L3-a → L3-c) or parallel worktree workflows; each
-forks the `scripts/research/mos-pointskill.ts` harness, obeys its methodology contract, and logs a
-verdict to FORECASTING-RD.md — ready for review, NOT auto-shipped (F-019). The iter-44 OPEN THREAD
+iter-43/44/45 (hardening + code-review + RPC-lockdown, all DEPLOYED) + iter-46/47 (forecasting-skill
+R&D rounds 1+2 + adversarial review) all BUILT + VERIFIED + PUSHED. Migrations 0028–0034 applied; edge
+fns current; suite 651 green, typecheck 0; main = iter-47 (`19c02de` + the review docs commit). NO
+pending deploys. FIRST, per the CLAUDE.md auto-resume rule, kill-before-launch the P4 backfill (both
+workers sleeping to 00:00Z; today's 8000 budget spent). THE BIG PICTURE after the R&D: the
+market-beating thesis is FALSIFIED on every signal we have. The multi-day NWP blend is at its point-skill
+ceiling — FOUR rejected levers (probe #1 MOS, #2 reweighting, WO-3 regime, L3-b residual-structure
+R²=0.6%). The intraday nowcast (WO-4) has real point-skill (+45% vs OUR NWP at local h15) BUT the
+adversarial review FALSIFIED its trading value: the MARKET prices the same METARs faster + more
+accurately (market RMSE 0.40°C ≈ oracle 0.43°C at h15, beating our nowcast 0.65°C). So the market is
+EFFICIENT w.r.t. both NWP + intraday info by mid-afternoon. Do NOT productionize WO-4. NEXT (the decisive
+close-out, spec'd in `FORECASTING-RD-HANDOFF.md` WO-5): a METAR-latency / market-staleness study — is the
+market stale in the MINUTES right after a new running-max METAR prints (a tradable latency window), or
+efficient there too? Prior LOW. If negative → PIVOT (lean on analytics value / out-of-market info / shelve
+live trading). Full evidence + the corrected conclusion are in `FORECASTING-RD.md` (read 'Round-2 review').
+The R&D harness lives in `scripts/research/` (mos-pointskill, l3b, wo3, wo4 — all tested). The iter-44 OPEN THREAD
 (unguarded internal RPCs anon-exposed) is now CLOSED by 0034 — the whole RPC layer is locked to
 service_role + the 23-RPC dashboard surface (authenticated) + is_operator + health_check (anon);
 NEW rule: any future RPC must ship its own `revoke … from public, anon, authenticated; grant execute

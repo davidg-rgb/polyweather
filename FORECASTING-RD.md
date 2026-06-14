@@ -148,7 +148,12 @@ Both neutral, far below the +1.5% bar; per-station deltas are tiny and mixed (KO
 season or model-disagreement does not move μ-aim. This is the *fourth* independent confirmation (after
 #1 MOS, #2 reweighting, L3-b structure) that the existing-NWP-input branch is exhausted.
 
-## WO-4 — intraday nowcast beyond lead 0. VERDICT: WORKS (the first positive lever, and a big one).
+## WO-4 — intraday nowcast beyond lead 0. VERDICT: real POINT-SKILL, but NOT a tradable edge.
+
+> ⚠️ **CORRECTED by the Round-2 adversarial review (below).** WO-4 proves the nowcast beats *our NWP
+> forecast*; it does NOT beat the *market*, which prices the same intraday METARs faster and more
+> accurately. Read the "Round-2 review" section before acting on anything in this WO. The point-skill
+> numbers below stand; the "the system's REAL edge is the late-day intraday signal" framing does NOT.
 
 Script `scripts/research/wo4-nowcast-value.ts` (+ `.test.ts`). Data: `intraday_advances` (running max by
 local hour) spans **182 days × 45 stations** — NOT blocked. Walk-forward: NWP lead-0 build μ (baseline
@@ -232,3 +237,52 @@ the day as it happens, late, and betting on it.**
    source/obs accrual, to tighten the lead-0 prior the nowcast refines.
 3. **Closed:** MOS, reweighting, regime weighting, feature-correction — do not revisit on the current
    NWP inputs.
+
+---
+
+# Round-2 review (adversarial) — CORRECTS the WO-4 trading claim
+
+An independent adversarial audit (read-only) pressure-tested the round-2 findings, focused on WO-4 (the
+one we'd act on). Verdict: **WO-4's methodology is SOUND but its trading framing is FALSIFIED.**
+
+- **Methodology sound, no leakage.** Walk-forward ordering verified line-by-line (score-before-fold; lift
+  from prior days only; M_h is legitimately same-day-observed; the gate uses only info available at hour h).
+- **Unit assumption confirmed (not just one sample).** `intraday_advances.max_tenths_c` is °C: source is
+  `metar.ts` (°C, may carry tenths) into a `numeric(4,1)` column; live range −23→41 over 19,287 rows;
+  cross-checks against obs hold for both C- and F-unit stations. "Do not /10" is correct.
+- **THE DISPOSITIVE FINDING — the nowcast does NOT beat the market.** WO-4 compared nowcast to *our pre-day
+  NWP*, never to the market. The reviewer built the missing comparison from `market_snapshots` (234k
+  intraday order-book mids, 88 resolved station-days), market-implied μ by station-local hour vs obs:
+
+  | local hour | **market RMSE** | nowcast RMSE | NWP RMSE | oracle-min (unrealizable) |
+  |---|---|---|---|---|
+  | 13 | **0.68** | 1.16 | 1.18 | 0.68 |
+  | 14 | **0.56** | 0.90 | 1.23 | 0.55 |
+  | 15 | **0.40** | 0.65 | 1.18 | 0.43 |
+  | 16 | **0.33** | — | — | — |
+
+  By early afternoon **the market is more accurate than the nowcast and is essentially AT the oracle
+  ceiling** — it has already priced the same running-max METARs (its participants observe them too).
+  Arriving at h15 with a 0.65°C estimate to trade a 0.40°C market makes you the sucker, not the sharp.
+- **Rejections (#1/#2/#3/L3-b) sound** — harness validated (blend 1.33 < icon 1.46), controlled-variable
+  discipline genuine; the market comparison *reinforces* them (the NWP blend really is at its ceiling).
+- **Sample caveat:** late hours have thinner intraday n (the `n<100` guard is on the pooled hour, not
+  per-station), so the h15 point-skill magnitude could shift; the *market* comparison is robust across 88
+  station-days. (Data-hygiene aside: a few obs rows are physically impossible — EPWA 88°C, KHOU 71°C — likely
+  F-as-C corruption; negligible at large-n but worth a cleanup pass.)
+
+## Revised conclusion (supersedes the Round-2 conclusion above)
+
+The market-beating thesis is now **falsified on every signal we have**: the multi-day NWP blend is at its
+ceiling (4 rejections), and the intraday nowcast — the one signal that beats our own forecast — is **already
+priced by a faster, more accurate market**. On this evidence the market is **efficient with respect to both
+NWP and intraday information** by mid-afternoon. The WO-4 productionization sketch (bet-timing, constraint
+tuning) is **SUPERSEDED** — "build later" only helps if the market is *slower* than us at digesting METARs,
+and the snapshot data says it is *faster*.
+
+The single decisive question that remains (the only place a tradable edge could still live): **is the market
+STALE in the minutes immediately after a new running-max METAR prints** — a latency window before it
+reprices — that we could systematically trade? That is the recommended next step (WO-5 in the handoff). If
+it is also negative, the honest conclusion is **no durable trading edge from these signals → pivot** (lean
+on the analytics/insight value, or seek genuinely out-of-market information). Do not productionize WO-4 on
+the current evidence.

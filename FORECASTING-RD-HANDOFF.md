@@ -165,3 +165,56 @@ All three work-orders have a dated verdict in `FORECASTING-RD.md`:
 Each verdict committed. Any lever that clears the success bar carries a productionization proposal —
 **staged for operator review, not shipped** (DF-5 / F-019). Then ping the operator: "forecasting-skill
 R&D round 2 complete — N/3 levers measured, M promising, ready for review."
+
+**ROUND-2 STATUS: COMPLETE + REVIEWED.** 4 rejected, WO-4 found real point-skill but the adversarial
+review FALSIFIED its trading value (the market prices the intraday signal faster + more accurately — see
+`FORECASTING-RD.md` "Round-2 review"). One decisive question remains → WO-5 below.
+
+---
+
+# WO-5 (NEXT SESSION) — METAR-latency / market-staleness study. The decisive close-out.
+
+**Why this is THE next step.** The round-2 review showed the market is at the information ceiling by
+mid-afternoon ON AVERAGE (market RMSE 0.40°C ≈ oracle 0.43°C at h15). But that average is over capture
+times *within* each hour — it does NOT resolve the sub-hour dynamics right after a NEW running-max METAR
+prints. The ONLY place a tradable edge could still live: a **latency window** in the minutes after a new
+max prints, before the market reprices. If we can ingest the METAR and act faster than the market adjusts,
+that gap is the edge. This experiment proves it exists or closes the trading thesis.
+
+**Prior after the review: LOW (probably no edge).** Treat this as a close-out / falsification test, not a
+hopeful build. Be ready for a negative result and the pivot it implies.
+
+**Method (read-only, the data is all there):**
+1. **New-max events.** From `intraday_advances`, a new-max event = a row where `max_tenths_c` (°C, NOT
+   tenths — see the unit note) strictly exceeds the running max so far that day. `created_at` ≈ the poll/
+   print time. ~19k advance rows over 182 days × 45 stations.
+2. **Market trajectory around each event.** From `market_snapshots` (10-min cadence, ~234k rows, ~30-day
+   overlap with intraday: 2026-05-14→06-14) build the market-implied μ (price-weighted bucket midpoint via
+   `market_buckets` low/high) as a time series per event. Measure the market mid at t0 (the print), and at
+   t0+10/20/30/60 min.
+3. **The gap.** At t0, does the market mid already reflect the new max (i.e., is it ≥ the new running max,
+   which is a hard floor on the day's tmax)? If the market mid implies a tmax BELOW the just-printed running
+   max for several minutes, that is a provable, exploitable mispricing (the day cannot end below its current
+   max). Quantify: frequency, magnitude (vs spread+fee from `market_buckets.fee_rate`), and persistence
+   (how many minutes until the mid clears the new max).
+4. **Tradability gate.** A positive result needs the gap to (a) exceed spread + taker fee, (b) persist
+   longer than our reaction latency (poll cadence is 5 min live; snapshot resolution here is 10 min — so
+   sub-10-min lags are invisible at this data granularity → state that ceiling honestly), and (c) recur
+   often enough to matter. Report all three.
+
+**Success / decision.** If a systematic, fee-clearing, multi-minute lag exists → the edge is latency
+arbitrage on new-max prints; sketch the execution path (fast METAR ingest → immediate limit order above the
+stale mid) for operator review, and flag the infra bar (sub-10-min reaction, liquidity, competing bots). If
+NOT → the trading thesis is closed on these signals: **pivot.** Options to put to the operator: (a) lean on
+the system's analytics/insight value (it's a good measurement instrument even if not a profitable trader),
+(b) seek genuinely out-of-market information (a paid/faster data feed, microclimate sensors), or (c) shelve
+live trading. Either way, log the verdict in `FORECASTING-RD.md` and update BUILD-STATE.
+
+**Methodology contract:** same as the round-2 WOs (walk-forward where applicable, honest data-check first,
+read-only, verdict-not-ship). Fork the harness only for the NWP μ if needed; most of this is direct
+`market_snapshots` × `intraday_advances` time-series work.
+
+**Parallel data-hygiene micro-task (cheap, do alongside):** a few `observations` rows are physically
+impossible (EPWA tmax 88°C, KHOU 71°C — likely °F stored as °C). Find them (`select … where tmax_c > 55 or
+tmax_c < -60`), confirm they're corrupt, and propose a fix/guard. Negligible for the large-n R&D but they
+pollute per-station tails.
