@@ -147,3 +147,48 @@ Both neutral, far below the +1.5% bar; per-station deltas are tiny and mixed (KO
 −0.29/0.00%, KSFO +0.15/−0.21%). **The model skill RANKING is regime-stable** — conditioning weights on
 season or model-disagreement does not move μ-aim. This is the *fourth* independent confirmation (after
 #1 MOS, #2 reweighting, L3-b structure) that the existing-NWP-input branch is exhausted.
+
+## WO-4 — intraday nowcast beyond lead 0. VERDICT: WORKS (the first positive lever, and a big one).
+
+Script `scripts/research/wo4-nowcast-value.ts` (+ `.test.ts`). Data: `intraday_advances` (running max by
+local hour) spans **182 days × 45 stations** — NOT blocked. Walk-forward: NWP lead-0 build μ (baseline
+blend of lead-1 forecasts) vs the nowcast `running_max_h + median(obs − running_max_h)` (lift refit
+walk-forward, no lookahead), by local hour, 9,486 (station,day,hour) samples. (`max_tenths_c` is a
+misnomer — it stores °C; verified KORD 2026-06-01 h14 = 22.2 == 72°F.)
+
+| local hour | NWP RMSE | nowcast RMSE (Δ%) | gate RMSE (Δ%) | oracle-min |
+|---|---|---|---|---|
+| 0–10 (morning) | ~1.17 | 2.0–4.2 (−75…−230%) | ~neutral | ~0.9–1.1 |
+| 12 | 1.205 | 1.445 (−20%) | 1.122 (**+6.8%**) | 0.780 |
+| 13 | 1.179 | 1.161 (+1.5%) | 0.991 (**+16.0%**) | 0.677 |
+| 14 | 1.227 | 0.897 (+26.9%) | 0.915 (**+25.5%**) | 0.552 |
+| 15 | 1.180 | **0.652 (+44.7%)** | 0.833 (**+29.4%**) | 0.428 |
+
+**The same-day intraday running-max + lift nearly HALVES the point error vs the NWP blend by mid-afternoon.**
+The `gate` variant — use the nowcast only when the running max already EXCEEDS μ_NWP (a hard, provable
+"the day WILL beat the forecast" lower-bound) — is walk-forward-safe and positive from ~noon, reaching
++25–29% at h14–15. The morning hours are correctly negative (the running max is far from the daily max
+and the lift is uncertain). oracle-min (per-sample best of NWP/nowcast, an unrealizable ceiling) shows
+0.43°C at h15 — there is a lot of capturable value.
+
+**This reframes the thesis.** DF-5 + probes #1–3 + L3-b proved the multi-day NWP blend is at its
+point-skill ceiling and loses to market. WO-4 shows the system's REAL edge is the **late-day intraday
+signal**, which the NWP path doesn't carry. The production lead-0 build already applies a running-max
+constraint (ADR-15) — so this CONFIRMS that path is the valuable one and shows the value is strongly
+**hour-dependent (concentrated after ~13:00 local)**.
+
+### Productionization sketch (for operator review — NOT auto-shipped)
+
+1. **Bet/build timing is the lever.** The nowcast edge at h15 (+45% point-skill) dwarfs h10 (−75%). The
+   value is only capturable if the lead-0 build/bet runs at/after the local afternoon. Audit the 22Z
+   slot's local-hour alignment per station; consider a late same-day build/bet pass closer to market
+   close for stations whose afternoon lags 22Z. **This is the highest-leverage, lowest-risk change.**
+2. **Sharpen the lead-0 distribution toward the nowcast at late hours.** The current
+   `applyRunningMaxConstraint` may be too soft; the data says by h14–15 the nowcast should dominate the
+   NWP prior. Re-evaluate the constraint's weight as a function of local hour.
+3. **Refocus the market-beating R&D** from the NWP blend (dead end) to the late-day intraday capture +
+   its timing. Re-run the 30-day market-overlap Brier with a late-hour, nowcast-weighted lead-0 build to
+   see if THIS beats `market_consensus` where the NWP blend did not.
+
+Caveat: this is point-RMSE; the Brier/edge-vs-market confirmation needs the 30-day market-overlap re-run
+with a late-hour build. But the magnitude (NWP 1.18 → nowcast 0.65 at h15) is large and physical.
