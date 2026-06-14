@@ -104,3 +104,30 @@ construction, defeats the thesis).
 Two levers measured and killed with large-n walk-forward evidence; the harness now makes every future
 lever a fast yes/no. The market-beating path is **regime-conditional skill or better inputs**, not
 tuning the blend. Do not promote (F-019); do not spend cycles on MOS or reweighting.
+
+---
+
+# Round 2 — handoff work-orders (`FORECASTING-RD-HANDOFF.md`)
+
+Driven as the continuous loop (order L3-b → WO-3 → WO-4 → L3-a → L3-c). Each verdict committed.
+
+## WO-L3-b — residual-structure diagnostic. VERDICT: NO exploitable structure → feature/MOS lever DEAD.
+
+The decider: does the live blend residual `(μ − obs)` carry structure an observable feature could
+explain? Script `scripts/research/l3b-residual-structure.ts` (+ `.test.ts`), walk-forward over the full
+backfill, 45 stations, **8,775 builds**.
+
+- **Residual: mean +0.025°C (≈0 → bias-corrected ✓), std 1.5655°C** (= the baseline blend RMSE — validates).
+- **Per-feature Pearson |corr| with the residual — all tiny:** disagreement **0.0745** (strongest),
+  anomaly 0.017, season_sin 0.005, season_cos 0.003, lead 0.004.
+- **Multivariate in-sample R² of residual on ALL features: 0.60%** — and that is the *upper* bound on
+  exploitable variance (OOS would be less).
+- **Per-station residual means all ≈0** (−0.07…+0.17): the blend's per-station-per-model bias correction
+  already works; no station-level bias survives. Residual std is per-station forecast difficulty
+  (EHAM 0.85, KMIA 0.86 easy; KORD 2.04 hard) — irreducible, not bias.
+
+**Verdict: the residual is effectively irreducible NWP error.** Any feature-based or MOS-style
+correction is capped at <0.6% — DEAD (a third, independent confirmation of #1/#2). **Lever-3 therefore
+means a genuinely BETTER SOURCE, not a feature** → L3-c is the live branch. Caveat for WO-3: regime
+weighting reallocates weight by regime-specific *skill ranking* (a different mechanism than predicting
+the residual from a regime feature), so it is still measured — but this result lowers its prior.

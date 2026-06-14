@@ -79,10 +79,10 @@ interface ModelWindow {
   os: number[]; // trailing observations (°C), aligned with fs
 }
 
-type Arm = 'baseline' | 'mos' | 'mos_shrunk';
+export type Arm = 'baseline' | 'mos' | 'mos_shrunk';
 const ARMS: Arm[] = ['baseline', 'mos', 'mos_shrunk'];
 
-class StationModel {
+export class StationModel {
   private readonly win = new Map<string, ModelWindow>(); // key = `${model}|${lead}`
 
   constructor(private readonly cfg: AppConfig, private readonly shrinkK: number) {}
