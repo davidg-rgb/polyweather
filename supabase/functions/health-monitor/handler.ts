@@ -9,6 +9,9 @@
  * (3) ALERT RESEND (ADR-11): unsent alerts_log rows older than 10 min re-post.
  * (4) Dead-man data checks: newest forecast/market snapshot ages through
  *     evaluateBreakers → halt + CRITICAL.
+ * (4b) AUTO-RECOVERY (C3/R-A6): when forecast freshness is CURRENTLY below the
+ *     staleForecastHaltH threshold AND a SYSTEM-authored halt:global persists,
+ *     clear_system_halt('global') lifts it (NEVER an operator halt) + WARN.
  * (5) Open-Meteo model meta sampled — a model stuck >24h ⇒ WARN.
  * (6) Tomorrow-events sanity: ≥80% of active cities must have tomorrow's event.
  */
@@ -49,7 +52,7 @@ export async function healthMonitor(ctx: JobCtx, deps: HealthDeps): Promise<JobS
   const { db, config: cfg, log } = ctx;
   const nowMs = deps.now.getTime();
   const stats = {
-    staleJobs: 0, reaped: 0, resent: 0, deadManHalts: 0,
+    staleJobs: 0, reaped: 0, resent: 0, deadManHalts: 0, recoveredHalts: 0,
     modelAnomalies: 0, tomorrowCoverage: 1,
   };
 
@@ -140,6 +143,30 @@ export async function healthMonitor(ctx: JobCtx, deps: HealthDeps): Promise<JobS
       body: `${halt.reason} — halt written; resume from /admin once the pipeline recovers.`,
       dedupeKey: `dead-man:${halt.scope}:${halt.reason.split(' ').slice(0, 2).join('-')}`,
     });
+  }
+
+  // --- (4b) dead-man halt AUTO-RECOVERY (C3 / R-A6) --------------------------------
+  // The apply path (above) only STOPS re-applying once forecasts go fresh — the existing
+  // halt:global row persists, leaving poll-markets halted() true indefinitely. When forecast
+  // freshness is CURRENTLY healthy (info-time-matched: below the SAME staleForecastHaltH
+  // threshold the breaker uses) and no global halt was applied THIS pass, attempt to lift a
+  // SYSTEM-authored halt:global. clear_system_halt refuses to clear an operator halt
+  // (config_audit.actor='admin-ui'), so this never undoes a deliberate operator stop.
+  const appliedGlobalHaltThisPass = halts.some((h) => h.scope === 'global');
+  if (!appliedGlobalHaltThisPass && forecastAgeH < cfg.staleForecastHaltH) {
+    const [cleared] = await db.rpc<{ clear_system_halt: boolean }>('clear_system_halt', {
+      p_scope: 'global',
+    });
+    if (cleared?.clear_system_halt) {
+      stats.recoveredHalts++;
+      await deps.notify({
+        kind: 'DEAD_MAN_RECOVERED',
+        severity: 'WARN',
+        title: 'Dead-man halt auto-cleared: global',
+        body: `forecast freshness recovered (${forecastAgeH.toFixed(1)}h < ${cfg.staleForecastHaltH}h dead-man threshold) — system-authored halt:global lifted automatically (C3/R-A6). Trading recommendations resume.`,
+        dedupeKey: `dead-man-recovered:global:${sixHourBucket}`,
+      });
+    }
   }
 
   if (Number(df.activeCities) > 0) {

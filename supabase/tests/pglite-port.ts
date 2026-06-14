@@ -32,6 +32,7 @@ const FN_ARGS: Record<string, string[]> = {
   score_distributions: ['p_event_id', 'p_winner_idx', 'p_cutoff_lead0', 'p_cutoff_lead1'],
   city_loss_streaks: [],
   apply_halt: ['p_scope', 'p_reason'],
+  clear_system_halt: ['p_scope'],
   list_active_stations: [],
   list_enabled_models: ['p_is_ensemble'],
   upsert_forecast_rows: ['p_rows'],

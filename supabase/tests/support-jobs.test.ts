@@ -356,6 +356,70 @@ describe('health-monitor (§6.19)', () => {
     expect(ofKind('DEAD_MAN')).toHaveLength(2);
     expect(await rows(db, `select 1 from config where key = 'halt:global'`)).toHaveLength(1);
     await db.query(`delete from config where key = 'halt:global'`);
+    await db.query(`delete from config_audit where key = 'halt:global'`);
+  });
+
+  it('C3/R-A6 auto-recovery: fresh forecast + SYSTEM halt:global ⇒ clears it + WARN', async () => {
+    alerts = [];
+    // System dead-man halt persists from a prior stale pass (apply_halt → actor='system').
+    await port.rpc('apply_halt', { p_scope: 'global', p_reason: 'dead-man from prior pass' });
+    // Forecast freshness recovers (< 30h staleForecastHaltH); a price snapshot too (else the
+    // price dead-man re-applies a global halt this pass and recovery is correctly suppressed).
+    await db.exec(`
+      delete from forecast_snapshots; delete from market_snapshots;
+      insert into forecast_snapshots (icao, model, target_date, lead_days, tmax_c, snapshot_slot, source, captured_at)
+      values ('RKSI', 'ecmwf_ifs025', '2026-06-12', 1, 21.5, '10Z', 'forecast_api', now());
+      insert into market_snapshots (bucket_id, best_ask, captured_at)
+      select id, 0.3, now() from market_buckets limit 1;
+    `);
+    const stats = await healthMonitor(await freshCtx(new Date()), hdeps());
+    expect(stats.deadManHalts).toBe(0); // nothing stale this pass
+    expect(stats.recoveredHalts).toBe(1);
+    expect(await rows(db, `select 1 from config where key = 'halt:global'`)).toHaveLength(0);
+    expect(ofKind('DEAD_MAN_RECOVERED')).toHaveLength(1);
+    expect(ofKind('DEAD_MAN_RECOVERED')[0]!.title).toContain('global');
+    // Auditing went through clear_system_halt → actor='system-recover'.
+    const [aud] = await rows<{ actor: string }>(
+      db, `select actor from config_audit where key = 'halt:global' order by created_at desc, id desc limit 1`,
+    );
+    expect(aud!.actor).toBe('system-recover');
+    await db.query(`delete from config_audit where key = 'halt:global'`);
+  });
+
+  it('C3/R-A6: does NOT clear while still stale (forecast missing ⇒ halt re-applied, not lifted)', async () => {
+    alerts = [];
+    await port.rpc('apply_halt', { p_scope: 'global', p_reason: 'dead-man persists' });
+    await db.exec(`delete from forecast_snapshots; delete from market_snapshots;`); // age = Infinity
+    const stats = await healthMonitor(await freshCtx(new Date()), hdeps());
+    expect(stats.recoveredHalts).toBe(0); // still stale ⇒ recovery branch is gated off
+    expect(stats.deadManHalts).toBe(2); // forecast + price dead-man re-fire instead
+    expect(await rows(db, `select 1 from config where key = 'halt:global'`)).toHaveLength(1);
+    expect(ofKind('DEAD_MAN_RECOVERED')).toHaveLength(0);
+    await db.query(`delete from config where key = 'halt:global'`);
+    await db.query(`delete from config_audit where key = 'halt:global'`);
+  });
+
+  it('C3/R-A6: NEVER clears an OPERATOR halt even when fresh (config_audit.actor=admin-ui)', async () => {
+    alerts = [];
+    // Operator-authored halt (operator_halt → actor='admin-ui'); set the operator JWT claim.
+    await db.exec(
+      `select set_config('request.jwt.claims', '${JSON.stringify({ email: 'david.geborek@gmail.com' })}', false)`,
+    );
+    await db.exec(`select public.operator_halt('global', 'deliberate operator stop')`);
+    await db.exec(`select set_config('request.jwt.claims', '', false)`);
+    await db.exec(`
+      delete from forecast_snapshots; delete from market_snapshots;
+      insert into forecast_snapshots (icao, model, target_date, lead_days, tmax_c, snapshot_slot, source, captured_at)
+      values ('RKSI', 'ecmwf_ifs025', '2026-06-12', 1, 21.5, '10Z', 'forecast_api', now());
+      insert into market_snapshots (bucket_id, best_ask, captured_at)
+      select id, 0.3, now() from market_buckets limit 1;
+    `);
+    const stats = await healthMonitor(await freshCtx(new Date()), hdeps());
+    expect(stats.recoveredHalts).toBe(0); // operator halt is never auto-cleared
+    expect(await rows(db, `select 1 from config where key = 'halt:global'`)).toHaveLength(1);
+    expect(ofKind('DEAD_MAN_RECOVERED')).toHaveLength(0);
+    await db.query(`delete from config where key = 'halt:global'`);
+    await db.query(`delete from config_audit where key = 'halt:global'`);
   });
 
   it('ADR-11 resend: delivers unsent alerts older than 10 min and flips sent on 2xx only', async () => {

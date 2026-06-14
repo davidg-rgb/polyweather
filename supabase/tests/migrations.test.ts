@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import type { PGlite } from '@electric-sql/pglite';
 import { asRole, freshDb, hasUniqueIndex, migrationFiles, rows } from './harness.ts';
 
@@ -85,6 +85,9 @@ describe('migrations 0001–0010', () => {
       // (0029 first) — see each file's header.
       '0028_analytics_decouple.sql',
       '0029_dashboard_events_list.sql',
+      // 0030 = Phase-3 C3/R-A6 dead-man halt auto-recovery (clear_system_halt RPC +
+      // health-monitor recovery branch).
+      '0030_clear_system_halt.sql',
     ]);
   });
 });
@@ -321,6 +324,65 @@ describe('RLS (ADR-13, §11.5)', () => {
     );
     expect(inserted.length).toBe(1);
     await db.exec(`delete from config where key = 'rls-test'`);
+  });
+});
+
+describe('clear_system_halt (0030 — C3 / R-A6 dead-man auto-recovery)', () => {
+  afterEach(async () => {
+    await db.exec(`delete from config_audit where key = 'halt:global'`);
+    await db.exec(`delete from config where key = 'halt:global'`);
+  });
+
+  it('deletes a SYSTEM-authored halt and returns true', async () => {
+    await db.exec(`select public.apply_halt('global', 'dead-man test')`); // actor='system'
+    const [r] = await rows<{ clear_system_halt: boolean }>(db, `select public.clear_system_halt('global')`);
+    expect(r!.clear_system_halt).toBe(true);
+    expect(await rows(db, `select 1 from config where key = 'halt:global'`)).toHaveLength(0);
+  });
+
+  it('REFUSES to delete an OPERATOR-authored halt (actor=admin-ui) and returns false', async () => {
+    // operator_halt writes config + config_audit actor='admin-ui' (it self-guards via
+    // operator_guard → is_operator → auth.jwt(); set the operator email claim for the call).
+    await db.exec(
+      `select set_config('request.jwt.claims', '${JSON.stringify({ email: 'david.geborek@gmail.com' })}', false)`,
+    );
+    await db.exec(`select public.operator_halt('global', 'operator stop')`);
+    await db.exec(`select set_config('request.jwt.claims', '', false)`);
+
+    const [r] = await rows<{ clear_system_halt: boolean }>(db, `select public.clear_system_halt('global')`);
+    expect(r!.clear_system_halt).toBe(false);
+    // The operator halt is untouched.
+    expect(await rows(db, `select 1 from config where key = 'halt:global'`)).toHaveLength(1);
+  });
+
+  it('REFUSES when the LAST writer was the operator even if the FIRST was the system', async () => {
+    await db.exec(`select public.apply_halt('global', 'system applied')`); // actor='system'
+    // Operator subsequently re-authors the same halt → last writer is admin-ui. In production
+    // these are separate invocations at distinct wall-clock times; created_at strictly orders
+    // them (config_audit's PK is a random uuid, not monotonic, so created_at is the discriminator).
+    await db.exec(
+      `insert into config_audit (key, old_value, new_value, actor, created_at)
+       values ('halt:global', 'system applied', 'operator override', 'admin-ui', now() + interval '1 second')`,
+    );
+    const [r] = await rows<{ clear_system_halt: boolean }>(db, `select public.clear_system_halt('global')`);
+    expect(r!.clear_system_halt).toBe(false);
+    expect(await rows(db, `select 1 from config where key = 'halt:global'`)).toHaveLength(1);
+  });
+
+  it('returns false when no halt exists (idempotent no-op)', async () => {
+    const [r] = await rows<{ clear_system_halt: boolean }>(db, `select public.clear_system_halt('global')`);
+    expect(r!.clear_system_halt).toBe(false);
+  });
+
+  it('audits the deletion with actor=system-recover (the widened 0007 check admits it)', async () => {
+    await db.exec(`select public.apply_halt('global', 'dead-man test')`);
+    await db.exec(`select public.clear_system_halt('global')`);
+    const audit = await rows<{ actor: string; new_value: string }>(
+      db,
+      `select actor, new_value from config_audit where key = 'halt:global' order by created_at desc, id desc limit 1`,
+    );
+    expect(audit[0]!.actor).toBe('system-recover');
+    expect(audit[0]!.new_value).toBe('auto-recovered');
   });
 });
 
