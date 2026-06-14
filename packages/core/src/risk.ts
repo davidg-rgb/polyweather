@@ -13,6 +13,21 @@ export interface BreakerStats {
 }
 
 /**
+ * Stable, machine-identifiable reason PREFIXES for the two DEAD-MAN (data-staleness)
+ * global halts. health-monitor's auto-recovery (clear_system_halt, migration 0032) keys
+ * off these: ONLY a live halt:global whose stored reason STARTS WITH one of these prefixes
+ * is auto-cleared on freshness recovery. The P&L, drawdown, rolling-Brier and
+ * calibration-drift (run-calibration) halts deliberately DO NOT carry this prefix, so a
+ * still-valid risk/drift halt is never silently auto-resumed (FIX 1 / R-A6).
+ *
+ * These strings are a contract — clear_system_halt is invoked with exactly these values
+ * (see health-monitor handler) and the prefix match is a `starts-with`. Do not reword
+ * without updating that consumer and migration 0032.
+ */
+export const DEAD_MAN_FORECAST_REASON_PREFIX = 'dead-man:forecast';
+export const DEAD_MAN_PRICE_REASON_PREFIX = 'dead-man:price';
+
+/**
  * Pure evaluation of every circuit-breaker rule (F-027); returns the halts to
  * apply. Each rule fires AT exactly its threshold: 8 consecutive losses,
  * −5% day, 25% drawdown, rolling Brier 0.30, forecast staleness 30h, price
@@ -56,14 +71,14 @@ export function evaluateBreakers(
   if (stats.freshestForecastAgeH >= cfg.staleForecastHaltH) {
     halts.push({
       scope: 'global',
-      reason: `freshest forecast ${stats.freshestForecastAgeH}h old ≥ ${cfg.staleForecastHaltH}h (dead-man)`,
+      reason: `${DEAD_MAN_FORECAST_REASON_PREFIX}: freshest forecast ${stats.freshestForecastAgeH}h old ≥ ${cfg.staleForecastHaltH}h (dead-man)`,
     });
   }
 
   if (stats.freshestPriceAgeMin >= cfg.stalePriceHaltMin) {
     halts.push({
       scope: 'global',
-      reason: `freshest price ${stats.freshestPriceAgeMin}min old ≥ ${cfg.stalePriceHaltMin}min`,
+      reason: `${DEAD_MAN_PRICE_REASON_PREFIX}: freshest price ${stats.freshestPriceAgeMin}min old ≥ ${cfg.stalePriceHaltMin}min`,
     });
   }
 

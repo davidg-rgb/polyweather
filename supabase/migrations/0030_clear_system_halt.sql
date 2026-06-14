@@ -22,22 +22,15 @@
 
 -- The system recovery actor needs a config_audit slot. The 0007 CHECK allowed only
 -- ('admin-ui','system'); widen it to admit 'system-recover' (the auto-recovery writer).
--- Idempotent: drop the named/old constraint if present, then re-add the widened one.
-do $$
-declare
-  v_name text;
-begin
-  select conname into v_name
-  from pg_constraint
-  where conrelid = 'public.config_audit'::regclass and contype = 'c'
-    and pg_get_constraintdef(oid) ilike '%actor%';
-  if v_name is not null then
-    execute format('alter table public.config_audit drop constraint %I', v_name);
-  end if;
-  alter table public.config_audit
-    add constraint config_audit_actor_check
-    check (actor in ('admin-ui', 'system', 'system-recover'));
-end $$;
+-- The constraint name is DETERMINISTIC: 0007 declares the inline `check (actor in (...))`
+-- on config_audit, which Postgres names `config_audit_actor_check`. Drop-if-exists then
+-- re-add the widened form (FIX 4: replaces a fragile `ilike '%actor%'` DO-block discovery
+-- that lacked STRICT/LIMIT and could silently target the wrong CHECK on a future schema).
+-- Idempotent across a full-chain re-apply; end-state is identical.
+alter table public.config_audit drop constraint if exists config_audit_actor_check;
+alter table public.config_audit
+  add constraint config_audit_actor_check
+  check (actor in ('admin-ui', 'system', 'system-recover'));
 
 -- System auto-recovery: delete a breaker-applied halt + audit (actor 'system-recover').
 -- Returns true only when a SYSTEM-authored halt existed and was removed; false when no

@@ -11,7 +11,7 @@
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import type { PGlite } from '@electric-sql/pglite';
 import { parseConfigRows, type RawGammaEvent } from '../../packages/core/src/index.ts';
 import { discoverMarkets } from '../functions/discover-markets/handler.ts';
@@ -21,7 +21,7 @@ import { healthMonitor, type HealthDeps } from '../functions/health-monitor/hand
 import { gradeEvent } from '../functions/_shared/grading.ts';
 import { resendUnsentAlerts, type Alert } from '../functions/_shared/slack.ts';
 import type { JobCtx } from '../functions/_shared/runJob.ts';
-import { freshDb, rows } from './harness.ts';
+import { asRole, freshDb, rows } from './harness.ts';
 import { pglitePort } from './pglite-port.ts';
 
 const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'research');
@@ -299,6 +299,14 @@ describe('health-monitor (§6.19)', () => {
     ...over,
   });
 
+  // Finding E: consolidate the per-test halt teardown (every halt-related case left a
+  // `delete from config` / `delete from config_audit` pair) into one afterEach, mirroring
+  // migrations.test.ts. Each test now sets up its own halt; this tears it down uniformly.
+  afterEach(async () => {
+    await db.exec(`delete from config_audit where key = 'halt:global'`);
+    await db.exec(`delete from config where key = 'halt:global'`);
+  });
+
   it('W7 staleness matrix + running-young rule + reaper + model-stuck + tomorrow sanity (fresh data ⇒ no dead-man)', async () => {
     alerts = [];
     await db.exec(`
@@ -355,14 +363,17 @@ describe('health-monitor (§6.19)', () => {
     expect(stats.deadManHalts).toBe(2); // forecast ≥30h AND price ≥30min (both vacuously infinite)
     expect(ofKind('DEAD_MAN')).toHaveLength(2);
     expect(await rows(db, `select 1 from config where key = 'halt:global'`)).toHaveLength(1);
-    await db.query(`delete from config where key = 'halt:global'`);
-    await db.query(`delete from config_audit where key = 'halt:global'`);
   });
 
-  it('C3/R-A6 auto-recovery: fresh forecast + SYSTEM halt:global ⇒ clears it + WARN', async () => {
+  it('C3/R-A6 auto-recovery: fresh forecast + SYSTEM dead-man halt:global ⇒ clears it + WARN', async () => {
     alerts = [];
-    // System dead-man halt persists from a prior stale pass (apply_halt → actor='system').
-    await port.rpc('apply_halt', { p_scope: 'global', p_reason: 'dead-man from prior pass' });
+    // System dead-man halt persists from a prior stale pass (apply_halt → actor='system'). The reason
+    // carries the machine-identifiable dead-man:forecast prefix the breaker emits (risk.ts contract);
+    // clear_system_halt is reason-aware now (FIX 1) and only clears reasons starting with a dead-man tag.
+    await port.rpc('apply_halt', {
+      p_scope: 'global',
+      p_reason: 'dead-man:forecast: freshest forecast 31h old ≥ 30h (dead-man)',
+    });
     // Forecast freshness recovers (< 30h staleForecastHaltH); a price snapshot too (else the
     // price dead-man re-applies a global halt this pass and recovery is correctly suppressed).
     await db.exec(`
@@ -378,35 +389,133 @@ describe('health-monitor (§6.19)', () => {
     expect(await rows(db, `select 1 from config where key = 'halt:global'`)).toHaveLength(0);
     expect(ofKind('DEAD_MAN_RECOVERED')).toHaveLength(1);
     expect(ofKind('DEAD_MAN_RECOVERED')[0]!.title).toContain('global');
-    // Auditing went through clear_system_halt → actor='system-recover'.
-    const [aud] = await rows<{ actor: string }>(
-      db, `select actor from config_audit where key = 'halt:global' order by created_at desc, id desc limit 1`,
+    // Auditing went through clear_system_halt → actor='system-recover' (assert by actor, not "newest":
+    // apply + recover audits can share created_at in-test and id is a random uuid → ordering ties).
+    const recover = await rows<{ actor: string }>(
+      db, `select actor from config_audit where key = 'halt:global' and actor = 'system-recover'`,
     );
-    expect(aud!.actor).toBe('system-recover');
-    await db.query(`delete from config_audit where key = 'halt:global'`);
+    expect(recover).toHaveLength(1);
+  });
+
+  it('FIX 1: does NOT clear a SYSTEM calibration-drift halt:global even when data is fresh', async () => {
+    alerts = [];
+    // run-calibration's auto-halt writes actor='system' with a NON-dead-man reason. Recovery is
+    // reason-aware, so a still-valid drift halt must survive a fresh-data health pass.
+    await port.rpc('apply_halt', {
+      p_scope: 'global',
+      p_reason: 'calibration drift: champion ≥ market_consensus on both 30d and 60d pooled windows',
+    });
+    await db.exec(`
+      delete from forecast_snapshots; delete from market_snapshots;
+      insert into forecast_snapshots (icao, model, target_date, lead_days, tmax_c, snapshot_slot, source, captured_at)
+      values ('RKSI', 'ecmwf_ifs025', '2026-06-12', 1, 21.5, '10Z', 'forecast_api', now());
+      insert into market_snapshots (bucket_id, best_ask, captured_at)
+      select id, 0.3, now() from market_buckets limit 1;
+    `);
+    const stats = await healthMonitor(await freshCtx(new Date()), hdeps());
+    expect(stats.recoveredHalts).toBe(0); // drift halt is not a dead-man halt → never auto-cleared
+    expect(await rows(db, `select 1 from config where key = 'halt:global'`)).toHaveLength(1);
+    expect(ofKind('DEAD_MAN_RECOVERED')).toHaveLength(0);
+  });
+
+  it('C3/R-A6: a SYSTEM dead-man:price halt clears once price freshness recovers', async () => {
+    alerts = [];
+    await port.rpc('apply_halt', {
+      p_scope: 'global',
+      p_reason: 'dead-man:price: freshest price 45min old ≥ 30min',
+    });
+    await db.exec(`
+      delete from forecast_snapshots; delete from market_snapshots;
+      insert into forecast_snapshots (icao, model, target_date, lead_days, tmax_c, snapshot_slot, source, captured_at)
+      values ('RKSI', 'ecmwf_ifs025', '2026-06-12', 1, 21.5, '10Z', 'forecast_api', now());
+      insert into market_snapshots (bucket_id, best_ask, captured_at)
+      select id, 0.3, now() from market_buckets limit 1;
+    `);
+    const stats = await healthMonitor(await freshCtx(new Date()), hdeps());
+    expect(stats.recoveredHalts).toBe(1);
+    expect(await rows(db, `select 1 from config where key = 'halt:global'`)).toHaveLength(0);
+    expect(ofKind('DEAD_MAN_RECOVERED')).toHaveLength(1);
   });
 
   it('C3/R-A6: does NOT clear while still stale (forecast missing ⇒ halt re-applied, not lifted)', async () => {
     alerts = [];
-    await port.rpc('apply_halt', { p_scope: 'global', p_reason: 'dead-man persists' });
+    await port.rpc('apply_halt', {
+      p_scope: 'global',
+      p_reason: 'dead-man:forecast: freshest forecast 99h old ≥ 30h (dead-man)',
+    });
     await db.exec(`delete from forecast_snapshots; delete from market_snapshots;`); // age = Infinity
     const stats = await healthMonitor(await freshCtx(new Date()), hdeps());
     expect(stats.recoveredHalts).toBe(0); // still stale ⇒ recovery branch is gated off
     expect(stats.deadManHalts).toBe(2); // forecast + price dead-man re-fire instead
     expect(await rows(db, `select 1 from config where key = 'halt:global'`)).toHaveLength(1);
     expect(ofKind('DEAD_MAN_RECOVERED')).toHaveLength(0);
-    await db.query(`delete from config where key = 'halt:global'`);
-    await db.query(`delete from config_audit where key = 'halt:global'`);
+  });
+
+  it('FIX 8: a healthy pass with NO halt:global never calls clear_system_halt', async () => {
+    alerts = [];
+    // No halt present; data is fresh. The recovery branch must skip the RPC entirely.
+    await db.exec(`
+      delete from forecast_snapshots; delete from market_snapshots;
+      delete from config where key = 'halt:global';
+      insert into forecast_snapshots (icao, model, target_date, lead_days, tmax_c, snapshot_slot, source, captured_at)
+      values ('RKSI', 'ecmwf_ifs025', '2026-06-12', 1, 21.5, '10Z', 'forecast_api', now());
+      insert into market_snapshots (bucket_id, best_ask, captured_at)
+      select id, 0.3, now() from market_buckets limit 1;
+    `);
+    let clearCalls = 0;
+    const spyPort = {
+      ...port,
+      rpc: <T,>(fn: string, args: Record<string, unknown>): Promise<T[]> => {
+        if (fn === 'clear_system_halt') clearCalls++;
+        return port.rpc<T>(fn, args);
+      },
+    };
+    const ctx = { ...(await freshCtx(new Date())), db: spyPort };
+    const stats = await healthMonitor(ctx, hdeps());
+    expect(stats.recoveredHalts).toBe(0);
+    expect(clearCalls).toBe(0); // FIX 8: no round-trip when no halt exists
+  });
+
+  it('FIX 7: a throwing clear_system_halt does NOT prevent WARN checks / job completion', async () => {
+    alerts = [];
+    // A live system dead-man halt + fresh data would normally trigger the recovery RPC; make it throw.
+    await port.rpc('apply_halt', {
+      p_scope: 'global',
+      p_reason: 'dead-man:forecast: freshest forecast 31h old ≥ 30h (dead-man)',
+    });
+    await db.exec(`
+      delete from forecast_snapshots; delete from market_snapshots;
+      insert into forecast_snapshots (icao, model, target_date, lead_days, tmax_c, snapshot_slot, source, captured_at)
+      values ('RKSI', 'ecmwf_ifs025', '2026-06-12', 1, 21.5, '10Z', 'forecast_api', now());
+      insert into market_snapshots (bucket_id, best_ask, captured_at)
+      select id, 0.3, now() from market_buckets limit 1;
+      -- seoul betting-enabled (activeCities>0) but with NO event for tomorrow ⇒ coverage 0 < 0.8 ⇒ WARN.
+      update cities set betting_enabled = true where slug = 'seoul';
+    `);
+    const throwingPort = {
+      ...port,
+      rpc: <T,>(fn: string, args: Record<string, unknown>): Promise<T[]> => {
+        if (fn === 'clear_system_halt') throw new Error('injected clear_system_halt failure');
+        return port.rpc<T>(fn, args);
+      },
+    };
+    const ctx = { ...(await freshCtx(new Date())), db: throwingPort };
+    // The pass must COMPLETE (return stats) despite the recovery throw, and the tomorrow-coverage
+    // WARN check (which runs BEFORE recovery) must still have fired.
+    const stats = await healthMonitor(ctx, hdeps());
+    expect(stats.recoveredHalts).toBe(0); // recovery threw → not counted, but the pass survived
+    expect(ofKind('TOMORROW_COVERAGE')).toHaveLength(1); // the WARN check ran (not skipped by the throw)
+    // The halt is untouched (clear never succeeded); afterEach tears down halt:global.
+    expect(await rows(db, `select 1 from config where key = 'halt:global'`)).toHaveLength(1);
   });
 
   it('C3/R-A6: NEVER clears an OPERATOR halt even when fresh (config_audit.actor=admin-ui)', async () => {
     alerts = [];
-    // Operator-authored halt (operator_halt → actor='admin-ui'); set the operator JWT claim.
-    await db.exec(
-      `select set_config('request.jwt.claims', '${JSON.stringify({ email: 'david.geborek@gmail.com' })}', false)`,
+    // Operator-authored halt (operator_halt → actor='admin-ui'); asRole sets the operator JWT claim
+    // AND the role, then restores both — no manual set_config triple (finding D).
+    await asRole(db, 'service_role', { email: 'david.geborek@gmail.com' }, () =>
+      rows(db, `select public.operator_halt('global', 'deliberate operator stop')`),
     );
-    await db.exec(`select public.operator_halt('global', 'deliberate operator stop')`);
-    await db.exec(`select set_config('request.jwt.claims', '', false)`);
     await db.exec(`
       delete from forecast_snapshots; delete from market_snapshots;
       insert into forecast_snapshots (icao, model, target_date, lead_days, tmax_c, snapshot_slot, source, captured_at)
@@ -418,8 +527,6 @@ describe('health-monitor (§6.19)', () => {
     expect(stats.recoveredHalts).toBe(0); // operator halt is never auto-cleared
     expect(await rows(db, `select 1 from config where key = 'halt:global'`)).toHaveLength(1);
     expect(ofKind('DEAD_MAN_RECOVERED')).toHaveLength(0);
-    await db.query(`delete from config where key = 'halt:global'`);
-    await db.query(`delete from config_audit where key = 'halt:global'`);
   });
 
   it('ADR-11 resend: delivers unsent alerts older than 10 min and flips sent on 2xx only', async () => {

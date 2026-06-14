@@ -15,7 +15,11 @@
  * (5) Open-Meteo model meta sampled — a model stuck >24h ⇒ WARN.
  * (6) Tomorrow-events sanity: ≥80% of active cities must have tomorrow's event.
  */
-import { evaluateBreakers } from '../../../packages/core/src/index.ts';
+import {
+  DEAD_MAN_FORECAST_REASON_PREFIX,
+  DEAD_MAN_PRICE_REASON_PREFIX,
+  evaluateBreakers,
+} from '../../../packages/core/src/index.ts';
 import { resendUnsentAlerts } from '../_shared/slack.ts';
 import type { Alert } from '../_shared/slack.ts';
 import type { JobCtx, JobStats } from '../_shared/runJob.ts';
@@ -144,30 +148,8 @@ export async function healthMonitor(ctx: JobCtx, deps: HealthDeps): Promise<JobS
       dedupeKey: `dead-man:${halt.scope}:${halt.reason.split(' ').slice(0, 2).join('-')}`,
     });
   }
-
-  // --- (4b) dead-man halt AUTO-RECOVERY (C3 / R-A6) --------------------------------
-  // The apply path (above) only STOPS re-applying once forecasts go fresh — the existing
-  // halt:global row persists, leaving poll-markets halted() true indefinitely. When forecast
-  // freshness is CURRENTLY healthy (info-time-matched: below the SAME staleForecastHaltH
-  // threshold the breaker uses) and no global halt was applied THIS pass, attempt to lift a
-  // SYSTEM-authored halt:global. clear_system_halt refuses to clear an operator halt
-  // (config_audit.actor='admin-ui'), so this never undoes a deliberate operator stop.
+  // The breaker fired a global halt this pass ⇒ recovery is suppressed (FIX 1/R-A6, gate below).
   const appliedGlobalHaltThisPass = halts.some((h) => h.scope === 'global');
-  if (!appliedGlobalHaltThisPass && forecastAgeH < cfg.staleForecastHaltH) {
-    const [cleared] = await db.rpc<{ clear_system_halt: boolean }>('clear_system_halt', {
-      p_scope: 'global',
-    });
-    if (cleared?.clear_system_halt) {
-      stats.recoveredHalts++;
-      await deps.notify({
-        kind: 'DEAD_MAN_RECOVERED',
-        severity: 'WARN',
-        title: 'Dead-man halt auto-cleared: global',
-        body: `forecast freshness recovered (${forecastAgeH.toFixed(1)}h < ${cfg.staleForecastHaltH}h dead-man threshold) — system-authored halt:global lifted automatically (C3/R-A6). Trading recommendations resume.`,
-        dedupeKey: `dead-man-recovered:global:${sixHourBucket}`,
-      });
-    }
-  }
 
   if (Number(df.activeCities) > 0) {
     stats.tomorrowCoverage = Number(df.tomorrowEventCities) / Number(df.activeCities);
@@ -201,6 +183,58 @@ export async function healthMonitor(ctx: JobCtx, deps: HealthDeps): Promise<JobS
     } catch (e) {
       log('model meta sample failed — skipped', { model: m.slug, error: String(e) });
     }
+  }
+
+  // --- (4b) dead-man halt AUTO-RECOVERY (C3 / R-A6) --------------------------------
+  // Placed LAST (FIX 7): the tomorrow-coverage + model-stuck WARN checks above must run even if the
+  // recovery RPC throws, so recovery is the final step AND is wrapped so a failure logs+continues
+  // (recovery failure must never fail the whole health pass).
+  //
+  // The apply path (§4) only STOPS re-applying once data goes fresh — the existing halt:global row
+  // persists, leaving poll-markets halted() true indefinitely. Lift a SYSTEM-authored dead-man halt
+  // only when: no global halt was applied THIS pass, forecast freshness is CURRENTLY healthy
+  // (info-time-matched to the SAME staleForecastHaltH threshold), AND price freshness is healthy too
+  // (else the price dead-man re-fires and clearing would race it). clear_system_halt is REASON-AWARE
+  // (FIX 1): we pass ONLY the dead-man forecast/price prefixes, so a calibration-drift / P&L /
+  // operator halt — whose reason carries no such prefix — is never auto-cleared. FIX 8: skip the
+  // RPC round-trip entirely unless a halt:global is actually present in the config fetched here.
+  try {
+    // The config was fetched at job start; re-reading the raw rows here is the cheapest way to learn
+    // BOTH whether a halt:global is present (FIX 8 — skip the clear RPC otherwise) and its stored
+    // reason (FIX 10 — to key the recovery alert by episode, before the row is deleted).
+    const haltGlobalRow = (await db.getConfigRows()).find((r) => r.key === 'halt:global');
+    const dataFresh = forecastAgeH < cfg.staleForecastHaltH && priceAgeMin < cfg.stalePriceHaltMin;
+    if (haltGlobalRow && !appliedGlobalHaltThisPass && dataFresh) {
+      // The dead-man reason tag, matching the DEAD_MAN apply alert's dedupeKey construction
+      // (reason.split(' ').slice(0,2).join('-')). Parsed from the stored JSON value's `reason`.
+      let haltReason = '';
+      try {
+        haltReason = String((JSON.parse(haltGlobalRow.value) as { reason?: unknown }).reason ?? '');
+      } catch {
+        haltReason = '';
+      }
+      const reasonTag = haltReason.split(' ').slice(0, 2).join('-');
+      const [cleared] = await db.rpc<{ clear_system_halt: boolean }>('clear_system_halt', {
+        p_scope: 'global',
+        p_reason_prefixes: [DEAD_MAN_FORECAST_REASON_PREFIX, DEAD_MAN_PRICE_REASON_PREFIX],
+      });
+      if (cleared?.clear_system_halt) {
+        stats.recoveredHalts++;
+        await deps.notify({
+          kind: 'DEAD_MAN_RECOVERED',
+          severity: 'WARN',
+          title: 'Dead-man halt auto-cleared: global',
+          body: `data freshness recovered (forecast ${forecastAgeH.toFixed(1)}h < ${cfg.staleForecastHaltH}h, price ${priceAgeMin.toFixed(0)}min < ${cfg.stalePriceHaltMin}min dead-man thresholds) — system-authored halt:global lifted automatically (C3/R-A6). Trading recommendations resume.`,
+          // FIX 10: key by the recovered dead-man EPISODE (scope + reason tag, mirroring the DEAD_MAN
+          // apply key) + the 6h bucket, so a forecast-outage recovery and a later price-outage recovery
+          // are distinct alerts instead of being swallowed by a single global-only key.
+          dedupeKey: `dead-man-recovered:global:${reasonTag}:${sixHourBucket}`,
+        });
+      }
+    }
+  } catch (e) {
+    // Recovery is best-effort: never let a transient clear_system_halt failure fail the health pass.
+    log('dead-man auto-recovery skipped (clear_system_halt failed)', { error: String(e) });
   }
 
   log('health pass complete', stats);

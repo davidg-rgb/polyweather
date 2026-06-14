@@ -3,7 +3,13 @@ import { mulberry32 } from '../src/calibration/scores.ts';
 import { KellyDomainError } from '../src/errors.ts';
 import { takerFeePerShare } from '../src/fees.ts';
 import { applyKellyFraction, applyRiskCaps, jointKellyStakes } from '../src/kelly.ts';
-import { clusterOf, evaluateBreakers, exposureSummary } from '../src/risk.ts';
+import {
+  DEAD_MAN_FORECAST_REASON_PREFIX,
+  DEAD_MAN_PRICE_REASON_PREFIX,
+  clusterOf,
+  evaluateBreakers,
+  exposureSummary,
+} from '../src/risk.ts';
 import type { RiskConfig } from '../src/types.ts';
 
 const riskCfg: RiskConfig = {
@@ -192,6 +198,41 @@ describe('evaluateBreakers (§6.8, F-027) — each rule at exactly its threshold
     expect(evaluateBreakers({ ...quiet, freshestForecastAgeH: 30 }, riskCfg)[0]!.reason).toContain('dead-man');
     expect(evaluateBreakers({ ...quiet, freshestPriceAgeMin: 29 }, riskCfg)).toEqual([]);
     expect(evaluateBreakers({ ...quiet, freshestPriceAgeMin: 30 }, riskCfg).length).toBe(1);
+  });
+
+  it('FIX 1: dead-man halt reasons carry the stable machine-identifiable prefixes; risk halts do NOT', () => {
+    // Forecast staleness → dead-man:forecast prefix.
+    const fcReason = evaluateBreakers({ ...quiet, freshestForecastAgeH: 30 }, riskCfg)[0]!.reason;
+    expect(fcReason.startsWith(DEAD_MAN_FORECAST_REASON_PREFIX)).toBe(true);
+    expect(fcReason.startsWith(DEAD_MAN_PRICE_REASON_PREFIX)).toBe(false);
+
+    // Price staleness → dead-man:price prefix.
+    const priceReason = evaluateBreakers({ ...quiet, freshestPriceAgeMin: 30 }, riskCfg)[0]!.reason;
+    expect(priceReason.startsWith(DEAD_MAN_PRICE_REASON_PREFIX)).toBe(true);
+    expect(priceReason.startsWith(DEAD_MAN_FORECAST_REASON_PREFIX)).toBe(false);
+
+    // The two prefixes are distinct and neither is a prefix of the other (exact-tag safety:
+    // 'dead-man:price' must not match a 'dead-man:forecast' starts-with and vice-versa).
+    expect(DEAD_MAN_FORECAST_REASON_PREFIX.startsWith(DEAD_MAN_PRICE_REASON_PREFIX)).toBe(false);
+    expect(DEAD_MAN_PRICE_REASON_PREFIX.startsWith(DEAD_MAN_FORECAST_REASON_PREFIX)).toBe(false);
+
+    // P&L, drawdown and rolling-Brier halts must NOT share the dead-man prefix (so they are
+    // never auto-cleared by the forecast/price recovery branch).
+    const riskHalts = evaluateBreakers(
+      {
+        ...quiet,
+        dailyPnlPct: -0.06,
+        drawdownPct: 0.3,
+        rollingBrierByCity: new Map([['lon', 0.31]]),
+        consecutiveLossesByCityLead: new Map([['nyc:1', 8]]),
+      },
+      riskCfg,
+    );
+    for (const h of riskHalts) {
+      expect(h.reason.startsWith(DEAD_MAN_FORECAST_REASON_PREFIX)).toBe(false);
+      expect(h.reason.startsWith(DEAD_MAN_PRICE_REASON_PREFIX)).toBe(false);
+      expect(h.reason.startsWith('dead-man:')).toBe(false);
+    }
   });
 
   it('multiple simultaneous breaches all fire', () => {

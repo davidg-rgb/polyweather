@@ -90,6 +90,11 @@ describe('migrations 0001–0010', () => {
       // p_allow_backfill opt-in param (default-false keeps the live build bit-identical).
       '0030_clear_system_halt.sql',
       '0031_get_build_inputs_allow_backfill.sql',
+      // 0032 = halt-lifecycle hardening (reason-aware clear_system_halt + operator-aware apply_halt +
+      // revokes/grants on both + config_audit(key,created_at) index); 0033 = get_build_inputs R-A3
+      // structural backfill guard (target_date>=current_date) + live-over-backfill tie-break.
+      '0032_halt_lifecycle_hardening.sql',
+      '0033_get_build_inputs_ra3_guard.sql',
     ]);
   });
 });
@@ -160,6 +165,7 @@ describe('secondary indexes (§7.5 / §7.11)', () => {
     ['forecast_snapshots', 'forecast_snapshots_model_target_idx'],
     ['forecast_snapshots', 'forecast_snapshots_target_lead_idx'],
     ['market_snapshots', 'market_snapshots_bucket_time_idx'],
+    ['config_audit', 'config_audit_key_created_idx'], // 0032 FIX 9 — last-writer lookup
   ] as const;
 
   for (const [table, index] of expected) {
@@ -329,36 +335,73 @@ describe('RLS (ADR-13, §11.5)', () => {
   });
 });
 
-describe('clear_system_halt (0030 — C3 / R-A6 dead-man auto-recovery)', () => {
+describe('clear_system_halt (0030/0032 — reason-aware C3 / R-A6 dead-man auto-recovery)', () => {
+  // The dead-man reason prefixes the health-monitor passes (packages/core risk.ts contract).
+  const FC = 'dead-man:forecast';
+  const PR = 'dead-man:price';
+  const DEAD_MAN = [FC, PR];
+  const pgArray = (xs: string[]) => `array[${xs.map((x) => `'${x}'`).join(',')}]::text[]`;
+  const clear = async (scope: string, prefixes: string[]) =>
+    rows<{ clear_system_halt: boolean }>(
+      db,
+      `select public.clear_system_halt('${scope}', ${pgArray(prefixes)})`,
+    );
+
   afterEach(async () => {
     await db.exec(`delete from config_audit where key = 'halt:global'`);
     await db.exec(`delete from config where key = 'halt:global'`);
   });
 
-  it('deletes a SYSTEM-authored halt and returns true', async () => {
-    await db.exec(`select public.apply_halt('global', 'dead-man test')`); // actor='system'
-    const [r] = await rows<{ clear_system_halt: boolean }>(db, `select public.clear_system_halt('global')`);
+  it('deletes a SYSTEM dead-man halt whose reason matches a prefix and returns true', async () => {
+    await db.exec(`select public.apply_halt('global', '${FC}: freshest forecast 31h old')`); // actor='system'
+    const [r] = await clear('global', DEAD_MAN);
     expect(r!.clear_system_halt).toBe(true);
     expect(await rows(db, `select 1 from config where key = 'halt:global'`)).toHaveLength(0);
   });
 
-  it('REFUSES to delete an OPERATOR-authored halt (actor=admin-ui) and returns false', async () => {
-    // operator_halt writes config + config_audit actor='admin-ui' (it self-guards via
-    // operator_guard → is_operator → auth.jwt(); set the operator email claim for the call).
+  it('FIX 1: does NOT clear a SYSTEM calibration-drift halt even when its writer is system', async () => {
+    // run-calibration applies actor='system' with a NON-dead-man reason; recovery must leave it.
     await db.exec(
-      `select set_config('request.jwt.claims', '${JSON.stringify({ email: 'david.geborek@gmail.com' })}', false)`,
+      `select public.apply_halt('global', 'calibration drift: champion ≥ market_consensus on both 30d and 60d pooled windows')`,
     );
-    await db.exec(`select public.operator_halt('global', 'operator stop')`);
-    await db.exec(`select set_config('request.jwt.claims', '', false)`);
-
-    const [r] = await rows<{ clear_system_halt: boolean }>(db, `select public.clear_system_halt('global')`);
+    const [r] = await clear('global', DEAD_MAN);
     expect(r!.clear_system_halt).toBe(false);
-    // The operator halt is untouched.
+    expect(await rows(db, `select 1 from config where key = 'halt:global'`)).toHaveLength(1);
+  });
+
+  it('FIX 1: does NOT clear a SYSTEM P&L / drawdown halt (no dead-man prefix)', async () => {
+    await db.exec(`select public.apply_halt('global', 'drawdown 30.0% ≥ 25%')`);
+    const [r] = await clear('global', DEAD_MAN);
+    expect(r!.clear_system_halt).toBe(false);
+    expect(await rows(db, `select 1 from config where key = 'halt:global'`)).toHaveLength(1);
+  });
+
+  it('FIX 1: prefix match is a starts-with — a price dead-man clears under the price prefix', async () => {
+    await db.exec(`select public.apply_halt('global', '${PR}: freshest price 31min old ≥ 30min')`);
+    // Passing ONLY the forecast prefix must NOT clear a price halt (exact, distinct tags).
+    const [no] = await clear('global', [FC]);
+    expect(no!.clear_system_halt).toBe(false);
+    expect(await rows(db, `select 1 from config where key = 'halt:global'`)).toHaveLength(1);
+    // Passing the price prefix clears it.
+    const [yes] = await clear('global', [PR]);
+    expect(yes!.clear_system_halt).toBe(true);
+    expect(await rows(db, `select 1 from config where key = 'halt:global'`)).toHaveLength(0);
+  });
+
+  it('REFUSES to delete an OPERATOR-authored halt (actor=admin-ui) and returns false', async () => {
+    // operator_halt self-guards via operator_guard → is_operator → auth.jwt(); asRole sets the
+    // operator email claim AND the role, then restores — no manual set_config triple (finding D).
+    await asRole(db, 'service_role', { email: 'david.geborek@gmail.com' }, () =>
+      rows(db, `select public.operator_halt('global', '${FC}: looks like a dead-man reason')`),
+    );
+    // Even with a reason that WOULD match a prefix, an operator (admin-ui) last-writer is untouchable.
+    const [r] = await clear('global', DEAD_MAN);
+    expect(r!.clear_system_halt).toBe(false);
     expect(await rows(db, `select 1 from config where key = 'halt:global'`)).toHaveLength(1);
   });
 
   it('REFUSES when the LAST writer was the operator even if the FIRST was the system', async () => {
-    await db.exec(`select public.apply_halt('global', 'system applied')`); // actor='system'
+    await db.exec(`select public.apply_halt('global', '${FC}: system applied')`); // actor='system'
     // Operator subsequently re-authors the same halt → last writer is admin-ui. In production
     // these are separate invocations at distinct wall-clock times; created_at strictly orders
     // them (config_audit's PK is a random uuid, not monotonic, so created_at is the discriminator).
@@ -366,25 +409,120 @@ describe('clear_system_halt (0030 — C3 / R-A6 dead-man auto-recovery)', () => 
       `insert into config_audit (key, old_value, new_value, actor, created_at)
        values ('halt:global', 'system applied', 'operator override', 'admin-ui', now() + interval '1 second')`,
     );
-    const [r] = await rows<{ clear_system_halt: boolean }>(db, `select public.clear_system_halt('global')`);
+    const [r] = await clear('global', DEAD_MAN);
     expect(r!.clear_system_halt).toBe(false);
     expect(await rows(db, `select 1 from config where key = 'halt:global'`)).toHaveLength(1);
   });
 
   it('returns false when no halt exists (idempotent no-op)', async () => {
-    const [r] = await rows<{ clear_system_halt: boolean }>(db, `select public.clear_system_halt('global')`);
+    const [r] = await clear('global', DEAD_MAN);
     expect(r!.clear_system_halt).toBe(false);
   });
 
   it('audits the deletion with actor=system-recover (the widened 0007 check admits it)', async () => {
-    await db.exec(`select public.apply_halt('global', 'dead-man test')`);
-    await db.exec(`select public.clear_system_halt('global')`);
-    const audit = await rows<{ actor: string; new_value: string }>(
+    await db.exec(`select public.apply_halt('global', '${FC}: freshest forecast 31h old')`);
+    const [r] = await clear('global', DEAD_MAN);
+    expect(r!.clear_system_halt).toBe(true); // the clear succeeded → it appended the recover audit
+    // The widened 0007 CHECK admits 'system-recover'; exactly one such audit row was written, and
+    // its new_value marks the auto-recovery. (Assert by actor, not by "newest row": the apply audit
+    // and the recover audit can share created_at in-test, and id is a random uuid → ordering ties.)
+    const recover = await rows<{ new_value: string }>(
+      db,
+      `select new_value from config_audit where key = 'halt:global' and actor = 'system-recover'`,
+    );
+    expect(recover).toHaveLength(1);
+    expect(recover[0]!.new_value).toBe('auto-recovered');
+    expect(await rows(db, `select 1 from config where key = 'halt:global'`)).toHaveLength(0);
+  });
+
+  it('the 0030 single-arg clear_system_halt(text) overload is dropped (0032)', async () => {
+    const overloads = await rows<{ nargs: number }>(
+      db,
+      `select pronargs as nargs from pg_proc where proname = 'clear_system_halt'
+         and pronamespace = 'public'::regnamespace`,
+    );
+    // Exactly one overload remains: the 2-arg (text, text[]) form.
+    expect(overloads.map((o) => o.nargs).sort()).toEqual([2]);
+  });
+});
+
+describe('FIX 2: apply_halt does not clobber a live operator halt (0032)', () => {
+  afterEach(async () => {
+    await db.exec(`delete from config_audit where key = 'halt:global'`);
+    await db.exec(`delete from config where key = 'halt:global'`);
+  });
+
+  it('a system apply_halt over a live OPERATOR halt is a no-op (last writer stays admin-ui, reason kept)', async () => {
+    await asRole(db, 'service_role', { email: 'david.geborek@gmail.com' }, () =>
+      rows(db, `select public.operator_halt('global', 'deliberate operator stop')`),
+    );
+    const before = await rows<{ value: string }>(db, `select value from config where key = 'halt:global'`);
+
+    await db.exec(`select public.apply_halt('global', 'dead-man:forecast: stale pipeline')`);
+
+    // The stored reason is unchanged (operator's reason survives).
+    const after = await rows<{ value: string }>(db, `select value from config where key = 'halt:global'`);
+    expect(after[0]!.value).toBe(before[0]!.value);
+    // The last config_audit writer is STILL admin-ui (no system re-audit row appended).
+    const [lastAudit] = await rows<{ actor: string }>(
+      db,
+      `select actor from config_audit where key = 'halt:global' order by created_at desc, id desc limit 1`,
+    );
+    expect(lastAudit!.actor).toBe('admin-ui');
+
+    // A subsequent reason-aware clear therefore still refuses (the operator halt is protected).
+    const [r] = await rows<{ clear_system_halt: boolean }>(
+      db,
+      `select public.clear_system_halt('global', array['dead-man:forecast','dead-man:price']::text[])`,
+    );
+    expect(r!.clear_system_halt).toBe(false);
+    expect(await rows(db, `select 1 from config where key = 'halt:global'`)).toHaveLength(1);
+  });
+
+  it('a system apply_halt with no prior halt still works (reason written, actor=system)', async () => {
+    await db.exec(`select public.apply_halt('global', 'dead-man:forecast: freshest forecast 31h old')`);
+    const [audit] = await rows<{ actor: string; new_value: string }>(
       db,
       `select actor, new_value from config_audit where key = 'halt:global' order by created_at desc, id desc limit 1`,
     );
-    expect(audit[0]!.actor).toBe('system-recover');
-    expect(audit[0]!.new_value).toBe('auto-recovered');
+    expect(audit!.actor).toBe('system');
+    expect(audit!.new_value).toContain('dead-man:forecast');
+    expect(await rows(db, `select 1 from config where key = 'halt:global'`)).toHaveLength(1);
+  });
+});
+
+describe('FIX 3: halt RPCs are service-role-internal (revoked from anon/authenticated, 0032)', () => {
+  const lacksExecute = async (signature: string, role: string): Promise<boolean> => {
+    const [r] = await rows<{ has: boolean }>(
+      db,
+      `select has_function_privilege('${role}', '${signature}', 'EXECUTE') as has`,
+    );
+    return r!.has === false;
+  };
+
+  it('apply_halt(text, text): anon + authenticated lack EXECUTE; service_role has it', async () => {
+    expect(await lacksExecute('public.apply_halt(text, text)', 'anon')).toBe(true);
+    expect(await lacksExecute('public.apply_halt(text, text)', 'authenticated')).toBe(true);
+    const [svc] = await rows<{ has: boolean }>(
+      db,
+      `select has_function_privilege('service_role', 'public.apply_halt(text, text)', 'EXECUTE') as has`,
+    );
+    expect(svc!.has).toBe(true);
+  });
+
+  it('clear_system_halt(text, text[]): anon + authenticated lack EXECUTE; service_role has it', async () => {
+    expect(await lacksExecute('public.clear_system_halt(text, text[])', 'anon')).toBe(true);
+    expect(await lacksExecute('public.clear_system_halt(text, text[])', 'authenticated')).toBe(true);
+    const [svc] = await rows<{ has: boolean }>(
+      db,
+      `select has_function_privilege('service_role', 'public.clear_system_halt(text, text[])', 'EXECUTE') as has`,
+    );
+    expect(svc!.has).toBe(true);
+  });
+
+  it('public (PUBLIC pseudo-role) cannot EXECUTE either RPC', async () => {
+    expect(await lacksExecute('public.apply_halt(text, text)', 'public')).toBe(true);
+    expect(await lacksExecute('public.clear_system_halt(text, text[])', 'public')).toBe(true);
   });
 });
 
