@@ -5,7 +5,14 @@
 
 ## Active Phase
 
-### ▶ NEXT STEP — TRADING THESIS CLOSED 2026-06-15 (iter-48, WO-5 market-staleness study = NO TRADABLE EDGE; the market is efficient w.r.t. the hard running-max floor → decision: PIVOT, operator to pick analytics-lean / out-of-market-info / shelve); R&D round-2 reviewed (iter-47); RPC-lockdown DEPLOYED (iter-45)
+### ▶ NEXT STEP — PIVOT TO ANALYTICS VALUE (operator chose 2026-06-15). Trading thesis CLOSED by WO-5 (iter-48, market efficient w.r.t. the hard running-max floor). The product is now forecast-skill + calibration + model-vs-market insight; trading machinery stays DORMANT. First analytics deliverable TBD (candidate: promote the forecast-skill / market-efficiency story to a first-class public surface, demote `bets`). R&D round-2 reviewed (iter-47); RPC-lockdown DEPLOYED (iter-45)
+
+> **PIVOT DECISION (2026-06-15):** after WO-5 closed the trading thesis, the operator chose **lean into
+> analytics value** (over seek-out-of-market-info / shelve). Polyweather is now an analytics & forecasting
+> instrument, not a taker. Existing dashboard surface: `(dash)` home, `calibration`, `city/[slug]`,
+> `events`, `system` (analytics) + `bets` (trading — now dormant). Next: scope the first analytics-lean
+> deliverable (e.g. a polished forecast-skill + market-efficiency view as the product's headline). See the
+> updated project `CLAUDE.md` header and `FORECASTING-RD.md` WO-5 for the rationale.
 
 **iter-48 (this session): ran WO-5 — the METAR-latency / market-staleness study, the decisive close-out.
 VERDICT: NO TRADABLE EDGE → the trading thesis is CLOSED on every signal this system can see. Read-only;

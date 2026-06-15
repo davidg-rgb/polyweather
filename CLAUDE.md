@@ -1,10 +1,21 @@
 # Polyweather — Project Context
 
-Weather-edge prediction-market trading system. Predicts daily Tmax for ~46 global
-airport stations from a calibrated multi-model NWP ensemble, prices temperature
-prediction markets against it, and trades the edge. Stack: **Supabase** (Postgres +
-edge functions + pg_cron) + **Vercel** dashboard, TypeScript monorepo
-(`packages/core|io|trading`, `supabase/functions`, `scripts/*` run via `pnpm tsx`).
+Weather prediction-market **analytics & forecasting** system. Predicts daily Tmax for
+~46 global airport stations from a calibrated multi-model NWP ensemble, prices
+temperature prediction markets against it, and measures forecast skill + market
+efficiency. Stack: **Supabase** (Postgres + edge functions + pg_cron) + **Vercel**
+dashboard, TypeScript monorepo (`packages/core|io|trading`, `supabase/functions`,
+`scripts/*` run via `pnpm tsx`).
+
+> **STRATEGIC PIVOT (2026-06-15): the live-trading thesis is CLOSED.** R&D falsified a
+> tradable edge on every signal the system can see — the multi-day NWP blend is at its
+> point-skill ceiling (4 rejected levers), the intraday nowcast is already priced by a
+> faster/more-accurate market, and WO-5 (`FORECASTING-RD.md`) proved the market is
+> efficient w.r.t. the hard running-max floor (no latency window). **The product is now
+> the analytics/insight value** (calibrated forecast skill, model-vs-market scoring,
+> market-efficiency measurement), per the operator's decision. The trading machinery
+> (`packages/trading`, the `bets` surface) stays built but DORMANT — do not invest in
+> taker-edge work without new out-of-market information.
 
 - Hosted Supabase ref: `lenysiqxihsmxljvyybt` (eu-north-1) · Prod: `weather-edge-two.vercel.app`
 - Canonical docs: `BUILD-STATE.md` (status + Operator TODO), `RUNBOOK.md` (ops),
