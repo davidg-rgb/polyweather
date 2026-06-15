@@ -10,12 +10,14 @@ import { requireOperator } from '../../lib/supabase.ts';
 
 export const dynamic = 'force-dynamic';
 
+// Analytics-first nav (2026-06-15 pivot): the overview is the default landing; the (dormant) bet ledger
+// is demoted to the end. Order = analytics → ops → dormant trading → admin.
 const NAV = [
-  ['/events', 'events'], // WEB-4 / ADR-21 — analytics landing (open events + collection health), default landing
-  ['/', 'today'],
+  ['/', 'overview'], // analytics home — forecast skill vs. market + the measured-efficiency verdict
+  ['/events', 'events'], // open events + collection health (WEB-4 / ADR-21)
   ['/calibration', 'calibration'],
-  ['/bets', 'bets'],
   ['/system', 'system'],
+  ['/bets', 'bets'], // dormant — trading thesis closed; kept for the historical ledger
   ['/admin', 'admin'],
 ] as const;
 
@@ -24,7 +26,7 @@ export default async function DashLayout({ children }: { children: ReactNode }):
   return (
     <div className="shell">
       <nav className="topnav">
-        <Link href="/events" className="brand">
+        <Link href="/" className="brand">
           ⛅ Weather Edge
         </Link>
         {NAV.map(([href, label]) => (

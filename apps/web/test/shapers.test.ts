@@ -7,7 +7,7 @@
 import { describe, expect, it } from 'vitest';
 import { latestEdgeEvalRows, type StoredEdgeEval } from '../src/lib/edge-display.ts';
 import { fmtAgo, fmtDate, fmtDateTime, fmtPct, fmtProb, fmtUsd, num } from '../src/lib/format.ts';
-import { heatmapKey, shapeHeatmap, shapeReliability } from '../src/lib/shapers.ts';
+import { heatmapKey, shapeHeatmap, shapeReliability, summarizeForecastSkill } from '../src/lib/shapers.ts';
 
 describe('shapeReliability (§6.6 reliability payloads)', () => {
   it('n-weighted merge across rows; bins sorted; junk skipped', () => {
@@ -109,5 +109,53 @@ describe('format helpers', () => {
     expect(fmtAgo('2026-06-11T07:48:00Z', now)).toBe('4h 12m ago');
     expect(fmtAgo('2026-06-08T12:00:00Z', now)).toBe('3d ago');
     expect(fmtAgo(null, now)).toBe('—');
+  });
+});
+
+describe('summarizeForecastSkill (analytics landing house-vs-market headline)', () => {
+  it('n-weights champion per-city cells; pooled rows & other sources excluded', () => {
+    const s = summarizeForecastSkill(
+      [
+        // champion, two cities — ours BEATS market in one, LOSES in the other
+        { source: 'house_gaussian', city: 'chicago', brier: 0.18, brierMarket: 0.2, ece: 0.02, sharpness: 0.3, n: 100 },
+        { source: 'house_gaussian', city: 'london', brier: 0.25, brierMarket: 0.22, ece: 0.04, sharpness: 0.25, n: 100 },
+        // pooled gate row — must NOT be counted (would double-count)
+        { source: 'house_gaussian', city: null, brier: 0.01, brierMarket: 0.99, ece: 0, sharpness: 0, n: 999 },
+        // other source — ignored
+        { source: 'market_consensus', city: 'chicago', brier: 0.1, brierMarket: 0.2, ece: 0.01, sharpness: 0.3, n: 100 },
+      ],
+      'house_gaussian',
+    );
+    expect(s.nCells).toBe(2);
+    expect(s.totalN).toBe(200);
+    expect(s.meanBrier).toBeCloseTo(0.215, 6); // (0.18+0.25)/2, equal n
+    expect(s.meanBrierMarket).toBeCloseTo(0.21, 6); // (0.2+0.22)/2
+    expect(s.skillVsMarket).toBeCloseTo((0.21 - 0.215) / 0.21, 6); // negative → market beats us
+    expect(s.skillVsMarket!).toBeLessThan(0);
+    expect(s.beatRate).toBeCloseTo(0.5, 6); // 1 of 2 cells we beat the market
+    expect(s.meanEce).toBeCloseTo(0.03, 6);
+  });
+
+  it('skips cells missing either brier; null summary when nothing comparable', () => {
+    const s = summarizeForecastSkill(
+      [
+        { source: 'house_gaussian', city: 'a', brier: 0.2, brierMarket: null, ece: null, sharpness: null, n: 50 },
+        { source: 'house_gaussian', city: 'b', brier: null, brierMarket: 0.2, ece: null, sharpness: null, n: 50 },
+      ],
+      'house_gaussian',
+    );
+    expect(s.nCells).toBe(0);
+    expect(s.meanBrier).toBeNull();
+    expect(s.skillVsMarket).toBeNull();
+    expect(s.beatRate).toBeNull();
+  });
+
+  it('coerces numeric-string (jsonb) values', () => {
+    const s = summarizeForecastSkill(
+      [{ source: 'house_gaussian', city: 'a', brier: '0.15', brierMarket: '0.20', ece: '0.01', sharpness: '0.3', n: '40' }],
+      'house_gaussian',
+    );
+    expect(s.skillVsMarket).toBeCloseTo(0.25, 6); // we beat market by 25%
+    expect(s.beatRate).toBe(1);
   });
 });
