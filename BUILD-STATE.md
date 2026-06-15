@@ -5,9 +5,36 @@
 
 ## Active Phase
 
-### ▶ NEXT STEP — forecasting-skill R&D ROUND 2 COMPLETE + REVIEWED 2026-06-14 (iter-47, WO-4 point-skill real but TRADING edge FALSIFIED by adversarial review — market prices it faster; NEXT = WO-5 latency study or pivot); R&D started (iter-46); RPC-lockdown DEPLOYED (iter-45)
+### ▶ NEXT STEP — TRADING THESIS CLOSED 2026-06-15 (iter-48, WO-5 market-staleness study = NO TRADABLE EDGE; the market is efficient w.r.t. the hard running-max floor → decision: PIVOT, operator to pick analytics-lean / out-of-market-info / shelve); R&D round-2 reviewed (iter-47); RPC-lockdown DEPLOYED (iter-45)
 
-**iter-47 (this session): ran the forecasting-skill R&D loop (3 work-orders) AND an adversarial review
+**iter-48 (this session): ran WO-5 — the METAR-latency / market-staleness study, the decisive close-out.
+VERDICT: NO TRADABLE EDGE → the trading thesis is CLOSED on every signal this system can see. Read-only;
+NO model/prod change. Full writeup: `FORECASTING-RD.md` "WO-5". Committed this session.**
+- **The airtight test ("dead mass"):** once a running-max METAR is public, every market bucket entirely
+  below it is logically dead (P=0, fair price 0). Built `scripts/research/wo5-market-staleness.ts`
+  (+`.test.ts`, 15 cases): reconstructs each market book per poll (forward-fill — snapshots are
+  delta-deduped) and sums the price on dead buckets, vs the running-max floor known at that instant.
+- **Scope:** 2026-05-13→06-15 intraday×market overlap — 756 station-days, 754 with a public floor, 18,049
+  polls (15,517 coherent). Far larger than the review's 88.
+- **Result:** on coherent books the **realizable (bid) dead mass median is 0.0000** (mean 0.0056, p99 0.06);
+  only **1.39%** of polls clear the 0.05 fee on the bid. The gross *mid* dead mass (~1.3¢) is **flat across
+  the latency bins — no decay** (fresh 0.0138 → ≥6h 0.0097), so it's illiquid leftover-quote noise, NOT a
+  repricing lag. A latency window would be fresh-elevated-then-decaying; it isn't.
+- **Three handoff assumptions corrected:** (1) `intraday_advances.created_at` is the BACKFILL time, not the
+  print time (95% backfilled) → print-time proxy = `(date_local,local_hour)+tz` end-of-hour; (2)
+  `market_snapshots` are delta-deduped → per-bucket forward-fill required; (3) timing resolution ~1h/~10min
+  → sub-10-min windows invisible (and below our 5-min live reaction latency too). Stated honestly.
+- **Adversarial objection pre-empted:** the coherence filter does NOT hide a stale market — a stale (not-yet-
+  repriced) book is *coherent* and would show as high fresh dead mass *with* a bid; the dropped incoherent
+  books are mid-transition (market already reacting) and carry no bid (e.g. FACT 2026-05-19 raw mass 3.40,
+  best_bid null on all dead buckets). Bid metric + coherence filter independently kill the phantom.
+- **DECISION (operator):** PIVOT. Options in `FORECASTING-RD.md` WO-5 — (a) lean on analytics/insight value,
+  (b) seek out-of-market info (faster/paid feed, microclimate sensing), (c) shelve live trading.
+- **Data-hygiene micro-task DONE:** exactly 2 impossible obs rows (EPWA 2024-12-16 88°C, KHOU 2024-05-17
+  160°F=71°C; both `provenance='wu'`, no METAR cross-check, both 2024 → zero WO-5 effect). Proposed guard
+  staged for operator (null the 2 ids + flag; reject ingest °C outside [−60,55]) — NOT auto-applied (prod data).
+
+**iter-47: ran the forecasting-skill R&D loop (3 work-orders) AND an adversarial review
 of the findings. Full log: `FORECASTING-RD.md` (Round 2 + "Round-2 review"). All committed + pushed; NO
 model change shipped. THE REVIEW IS THE HEADLINE — it falsified the one positive lever's trading value.**
 - **WO-L3-b (residual structure): NO exploitable structure (R² 0.60%).** The live blend residual is

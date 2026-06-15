@@ -286,3 +286,80 @@ reprices — that we could systematically trade? That is the recommended next st
 it is also negative, the honest conclusion is **no durable trading edge from these signals → pivot** (lean
 on the analytics/insight value, or seek genuinely out-of-market information). Do not productionize WO-4 on
 the current evidence.
+
+---
+
+# WO-5 — METAR-latency / market-staleness study. VERDICT: NO TRADABLE EDGE → trading thesis CLOSED.
+
+> Script `scripts/research/wo5-market-staleness.ts` (+ `.test.ts`, 15 cases). Read-only. The decisive
+> close-out from the handoff. Window 2026-05-13 → 2026-06-15 (the intraday × market_snapshots overlap):
+> **756 station-days, 754 with a public running-max floor, 18,049 market polls (15,517 on a coherent book).**
+
+**The airtight test — "dead mass".** A `highest` market resolves on the bucket containing the official
+daily max, which is ALWAYS ≥ any individual METAR running max. So the instant a running max M becomes
+public, every bucket whose whole labeled range is below M is **logically dead — P(win)=0, fair price 0.**
+Any market price there is a provable mispricing. We reconstruct each market's full book at every poll
+(forward-fill, because snapshots are delta-deduped) and sum the price on dead buckets:
+- `mid` dead mass = gross (quoted midpoint), `bid` dead mass = **realizable** (what you could actually SELL into).
+- Conditioned on **minutes since the new running max became public** — a latency window ⇒ elevated-fresh, decaying.
+
+**Three data-truths that broke the handoff's stated assumptions (corrected in the script header):**
+1. `intraday_advances.created_at` is the BACKFILL insert time, **not** the print time (95% of rows bulk-
+   inserted 2026-06-12+; created_at spans 3 days, date_local ~182). Print-time proxy = `(date_local,
+   local_hour)+tz` → **end of local hour H** (conservative: the H:51 METAR is definitely public by then).
+2. `market_snapshots` are **delta-deduped** (a poll writes only changed buckets) → the book at time t needs
+   a per-bucket forward-fill, not a group-by `captured_at`.
+3. Timing resolution is **~1 h** (print side) / **~10 min** (snapshot side) → a sub-10-min latency window is
+   **invisible here** — stated honestly, and it is also below our 5-min live reaction latency.
+
+**Results (coherent books, sumMid≈1 — the market's real quoted state):**
+
+| metric | mean | p50 | p90 | p99 | max | share > fee(0.05) |
+|---|---|---|---|---|---|---|
+| **mid** dead mass (gross) | 0.0125 | 0.0030 | 0.0310 | 0.1115 | 0.976 | — |
+| **bid** dead mass (realizable) | 0.0056 | **0.0000** | 0.0160 | 0.0600 | 0.956 | **1.39%** |
+
+The latency conditioning is **flat — no decay** (the decisive shape):
+
+| minutes since new max | n | mid-mean | bid-mean | bid-p99 |
+|---|---|---|---|---|
+| [0,60) fresh ≤1h | 6321 | 0.0138 | 0.0060 | 0.0730 |
+| [60,120) 1–2h | 2613 | 0.0128 | 0.0058 | 0.0630 |
+| [120,360) 2–6h | 4161 | 0.0118 | 0.0056 | 0.0600 |
+| [360,∞) ≥6h | 2422 | 0.0097 | 0.0039 | 0.0470 |
+
+**Reading it:** the realizable (bid) dead mass median is **exactly 0** — the market gives you *nothing to sell
+into* on logically-dead buckets — and only 1.39% of polls clear the fee on the bid. The residual ~1.3¢ of
+gross *mid* dead mass does **not** decay with time-since-print (flat across all bins), so it is illiquid
+leftover-quote noise, **not** a repricing lag. A latency edge would be fresh-elevated-then-decaying; it isn't.
+
+**Why the coherence filter does NOT hide the edge (the obvious adversarial objection, pre-empted):** a market
+that is *stale* — hasn't repriced after a print — is a **coherent** book (still sums to ~1, just at the old
+distribution with dead buckets still priced high). I would catch that as a high-dead-mass coherent fresh poll
+*with* a bid to sell into. The books I drop (sumMid∉[0.9,1.1]) are mid-*transition* reconstructions where the
+favourite already updated to ~1 but the dead lows hadn't yet been written down to 0 — i.e. the market is
+*already reacting*, and those dead lows carry **no bid** anyway (e.g. FACT 2026-05-19 raw dead mass 3.40,
+best_bid null on all 10 dead buckets). Both the coherence filter and the bid metric independently kill the
+phantom; the conclusion survives either lens.
+
+**VERDICT: NO TRADABLE EDGE.** The market has already zeroed logically-dead buckets before our coarsest
+observable instant, with no bid to hit and no latency structure. At ~1 h / ~10 min resolution the market is
+**efficient with respect to the hard running-max floor.** Combined with the four rejected NWP levers and the
+Round-2 finding that the market beats our nowcast on point error, **the trading thesis is closed on every
+signal this system can see.** Any surviving edge lives in the sub-10-min window after a print — below both
+this data's resolution and our live reaction latency — and even there carries no bid. **Pivot.**
+
+**Pivot options for the operator (decision needed):**
+- **(a) Lean on the analytics/insight value.** The system is a strong measurement instrument (calibrated
+  ensemble, scored model-vs-market history, market-efficiency findings) even if not a profitable taker.
+- **(b) Seek genuinely out-of-market information** — a paid/faster data feed or microclimate sensing that the
+  crowd doesn't already price (the only thing that beats an efficient market is information it doesn't have).
+- **(c) Shelve live trading.** Keep the pipeline warm; revisit only if market microstructure changes
+  (illiquid new stations, a faster feed, or a sub-10-min execution path materialises).
+
+**Data-hygiene micro-task (done):** exactly **2** physically-impossible `observations` rows exist — `EPWA
+2024-12-16` tmax 88°C and `KHOU 2024-05-17` tmax_wu_native 160°F (=71°C); both `provenance='wu'`, no METAR
+cross-check (`tmax_metar_tenths_c` null), both 2024 (outside the market window, so zero effect on WO-5, but
+they pollute per-station tails). Proposed guard (staged for operator, not auto-applied — prod data):
+`update observations set tmax_wu_native=null, divergence_flags = array_append(divergence_flags,'impossible_tmax')`
+for those two ids, plus an ingest sanity check rejecting derived °C outside [−60, 55].

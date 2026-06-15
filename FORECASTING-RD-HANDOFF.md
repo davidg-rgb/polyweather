@@ -168,11 +168,23 @@ R&D round 2 complete — N/3 levers measured, M promising, ready for review."
 
 **ROUND-2 STATUS: COMPLETE + REVIEWED.** 4 rejected, WO-4 found real point-skill but the adversarial
 review FALSIFIED its trading value (the market prices the intraday signal faster + more accurately — see
-`FORECASTING-RD.md` "Round-2 review"). One decisive question remains → WO-5 below.
+`FORECASTING-RD.md` "Round-2 review"). One decisive question remained → WO-5 below.
+
+**WO-5 STATUS: ✅ DONE 2026-06-15 — NO TRADABLE EDGE → trading thesis CLOSED → PIVOT (operator decision).**
+The market is efficient w.r.t. the hard running-max floor (754 station-days; realizable bid dead mass
+median 0.0000; no latency decay). See `FORECASTING-RD.md` "WO-5" and the DONE banner on the WO-5 spec below.
 
 ---
 
-# WO-5 (NEXT SESSION) — METAR-latency / market-staleness study. The decisive close-out.
+# WO-5 — METAR-latency / market-staleness study. The decisive close-out. ✅ DONE 2026-06-15 → NO TRADABLE EDGE.
+
+> **VERDICT: NO TRADABLE EDGE — the trading thesis is CLOSED on every signal this system can see.** The
+> market is efficient w.r.t. the hard running-max floor (realizable bid dead mass median 0.0000; no latency
+> decay; 754 station-days). Full writeup + tables: `FORECASTING-RD.md` "WO-5". Script
+> `scripts/research/wo5-market-staleness.ts` (+`.test.ts`). Decision now belongs to the operator: PIVOT to
+> (a) analytics-lean, (b) out-of-market information, or (c) shelve live trading. The spec below is retained
+> for the record; the data-truth corrections it needed (created_at is backfill-time, snapshots are
+> delta-deduped, ~1h/~10min resolution) are documented in the script header and the findings doc.
 
 **Why this is THE next step.** The round-2 review showed the market is at the information ceiling by
 mid-afternoon ON AVERAGE (market RMSE 0.40°C ≈ oracle 0.43°C at h15). But that average is over capture
