@@ -35,6 +35,14 @@ export function fmtTemp(v: unknown, unit: string): string {
   return n === null ? '—' : `${n}°${unit}`;
 }
 
+/** Signed delta at `dp` decimals: fmtDelta(1.2)='+1.2', fmtDelta(-0.3)='-0.3', null='—'. */
+export function fmtDelta(v: unknown, dp = 1): string {
+  const n = num(v);
+  if (n === null) return '—';
+  const s = n.toFixed(dp); // toFixed already carries the leading '-'
+  return n > 0 ? `+${s}` : s;
+}
+
 /** ISO/date-ish → 'YYYY-MM-DD'. */
 export function fmtDate(v: unknown): string {
   if (!v) return '—';

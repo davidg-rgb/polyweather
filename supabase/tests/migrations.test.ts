@@ -107,6 +107,9 @@ describe('migrations 0001–0010', () => {
       '0036_grading_sweep_window_and_today_market.sql',
       // 0037 = operator_export_predictions — prediction-vs-actual CSV (always °C); own revoke/grant.
       '0037_operator_export_predictions.sql',
+      // 0038 = dash_station_predictions — /city prediction-vs-actual + forecast-skill panel (always °C,
+      // on-page complement to 0037's CSV); own post-0034 revoke/grant, added to WEB_AUTHENTICATED below.
+      '0038_dashboard_station_predictions.sql',
     ]);
   });
 });
@@ -545,7 +548,7 @@ describe('0034: internal-RPC lockdown — anon/authenticated revoked except the 
   const WEB_AUTHENTICATED = new Set([
     'dash_today_overview', 'dash_events_list', 'dash_event_detail', 'dash_city_detail',
     'dash_calibration', 'dash_bets_ledger', 'dash_system_health', 'dash_admin_state',
-    'dash_station_observations',
+    'dash_station_observations', 'dash_station_predictions',
     'go_live_gate_inputs',
     'operator_halt', 'operator_resume', 'operator_update_config', 'operator_verify_station',
     'operator_set_champion', 'operator_skip_bet', 'operator_manual_bet',

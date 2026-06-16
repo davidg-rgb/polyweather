@@ -355,6 +355,75 @@ export async function getStationObservations(
   }
 }
 
+// --- /city/[slug] prediction-vs-actual + forecast skill (0038) -------------------
+
+export interface StationPredictionRow {
+  /** date_local (jsonb date → 'YYYY-MM-DD'). */
+  date: string;
+  /** All °C, numeric-string-safe (file convention) — page coerces with num()/fmtTemp()/fmtDelta(). */
+  actualC: unknown;
+  fcPlus1C: unknown;
+  fcPlus2C: unknown;
+  fcPlus3C: unknown;
+  /** Signed error = actual − forecast (null when that lead had no forecast). */
+  errPlus1: unknown;
+  errPlus2: unknown;
+  errPlus3: unknown;
+  nModels: unknown;
+  provenance: string | null;
+}
+
+/** Per-lead forecast skill over full finalized history (MAE/bias in °C; null when n=0). */
+export interface LeadSkill {
+  n: unknown;
+  mae: unknown;
+  bias: unknown;
+}
+
+export interface StationPredictionsView {
+  icao: string;
+  /** Always 'C' — this is the always-°C verification view (matches the 0037 export). */
+  unit: string;
+  /** The window actually applied (after defaulting + clamping in the RPC). */
+  window: { from: string; to: string; limit: unknown };
+  /** Full finalized history (NOT windowed) — so skill + span stay visible while rows filter. */
+  summary: {
+    n: unknown;
+    withForecast: unknown;
+    firstDate: string | null;
+    lastDate: string | null;
+    lead1: LeadSkill;
+    lead2: LeadSkill;
+    lead3: LeadSkill;
+  };
+  rows: StationPredictionRow[];
+}
+
+/**
+ * Prediction-vs-actual + forecast skill for the city's current station
+ * (dash_station_predictions, 0038). Null `from`/`to`/`limit` let the RPC apply its
+ * own defaults (last 90 days, ≤120 rows). Returns null for an unknown city / no
+ * current station mapping — and degrades to null (not a thrown 500) if the RPC itself
+ * errors, so this additive section can never take down the rest of the /city page
+ * (incl. when the page deploys ahead of the 0038 RPC).
+ */
+export async function getStationPredictions(
+  db: WebDb,
+  slug: string,
+  opts: { from?: string; to?: string; limit?: number } = {},
+): Promise<StationPredictionsView | null> {
+  try {
+    return await one<StationPredictionsView>(db, 'dash_station_predictions', {
+      p_slug: slug,
+      p_from: opts.from ?? null,
+      p_to: opts.to ?? null,
+      p_limit: opts.limit ?? null,
+    });
+  } catch {
+    return null;
+  }
+}
+
 // --- /calibration --------------------------------------------------------------------
 
 export interface CalibrationScoreRow {

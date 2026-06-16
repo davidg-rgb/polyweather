@@ -71,6 +71,13 @@ beforeAll(async () => {
     values ('${eventId}', 5, date_trunc('hour', now()), 0.55, 0.27, 0.28, 0.0735, true, '{}');
     insert into intraday_max (icao, date_local, max_tenths_c, max_native, n_obs, last_obs_at)
     select cs.icao, '2026-06-11', 20.3, 20, 14, now() from city_stations cs where cs.valid_to is null;
+    -- RKSI forecasts for 2026-06-11 so dash_station_predictions (0038) has real pred↔actual pairs:
+    -- lead1 mean = (20.0+24.0)/2 = 22.0 (n=2) → err 0; lead2 = 19.0 → err +3; lead3 = 25.4 → err −3.4.
+    insert into forecast_snapshots (icao, model, target_date, lead_days, tmax_c, snapshot_slot, source, captured_at) values
+      ('RKSI', 'gfs_seamless', '2026-06-11', 1, 20.0, '10Z', 'forecast_api', now()),
+      ('RKSI', 'ecmwf_ifs025', '2026-06-11', 1, 24.0, '10Z', 'forecast_api', now()),
+      ('RKSI', 'jma_seamless', '2026-06-11', 2, 19.0, '10Z', 'forecast_api', now()),
+      ('RKSI', 'gfs_seamless', '2026-06-11', 3, 25.4, '10Z', 'forecast_api', now());
     insert into calibration_scores (city_id, source, lead_days, window_tag, brier, brier_market, ece, sharpness, reliability, n_events)
     select c.id, 'house_gaussian', 1, '30d', 0.15, 0.20, 0.03, 0.6, '[{"bin":0.5,"hit":0.52,"n":40}]'::jsonb, 40 from cities c where c.slug = 'seoul';
     insert into job_runs (job, period_key, status, started_at, finished_at, duration_ms)
@@ -218,6 +225,57 @@ describe('dashboard loader RPCs (0022, §6.21)', () => {
       p_slug: 'nope', p_from: null, p_to: null, p_limit: null,
     });
     expect(none).toBeNull();
+  });
+
+  it('station predictions (0038): full-history skill summary (MAE/bias per lead) + windowed pred-vs-actual, always °C', async () => {
+    interface Lead { n: number; mae: number; bias: number }
+    interface Pred {
+      icao: string;
+      unit: string;
+      window: { from: string; to: string; limit: number };
+      summary: { n: number; withForecast: number; firstDate: string; lastDate: string; lead1: Lead; lead2: Lead; lead3: Lead };
+      rows: {
+        date: string; actualC: number; fcPlus1C: number; fcPlus2C: number; fcPlus3C: number;
+        errPlus1: number; errPlus2: number; errPlus3: number; nModels: number; provenance: string;
+      }[];
+    }
+    const v = await one<Pred>('dash_station_predictions', { p_slug: 'seoul', p_from: null, p_to: null, p_limit: null });
+    expect(v.icao).toBe('RKSI');
+    expect(v.unit).toBe('C'); // always-°C verification view
+    expect(Number(v.summary.n)).toBe(1); // one finalized actual date (2026-06-11)
+    expect(Number(v.summary.withForecast)).toBe(1);
+
+    const row = v.rows.find((r) => r.date.slice(0, 10) === '2026-06-11')!;
+    expect(row).toBeTruthy();
+    expect(Number(row.actualC)).toBe(22);
+    expect(Number(row.fcPlus1C)).toBe(22); // mean(20.0, 24.0)
+    expect(Number(row.nModels)).toBe(2);
+    expect(Number(row.errPlus1)).toBe(0); // 22 − 22
+    expect(Number(row.fcPlus2C)).toBe(19);
+    expect(Number(row.errPlus2)).toBe(3); // 22 − 19
+    expect(Number(row.errPlus3)).toBeCloseTo(-3.4, 1); // 22 − 25.4
+
+    // Per-lead skill is computed from those same rounded errors.
+    expect(Number(v.summary.lead1.n)).toBe(1);
+    expect(Number(v.summary.lead1.mae)).toBe(0);
+    expect(Number(v.summary.lead2.mae)).toBe(3);
+    expect(Number(v.summary.lead2.bias)).toBe(3);
+    expect(Number(v.summary.lead3.mae)).toBeCloseTo(3.4, 2);
+    expect(Number(v.summary.lead3.bias)).toBeCloseTo(-3.4, 2);
+
+    // A pre-history window returns zero rows, but the skill summary still spans ALL finalized history.
+    const empty = await one<Pred>('dash_station_predictions', {
+      p_slug: 'seoul', p_from: '2020-01-01', p_to: '2020-12-31', p_limit: null,
+    });
+    expect(empty.rows).toHaveLength(0);
+    expect(Number(empty.summary.withForecast)).toBe(1);
+    expect(Number(empty.summary.lead2.mae)).toBe(3);
+
+    // Unknown city → null (loader renders the "no data" empty state).
+    const gone = await one<Pred | null>('dash_station_predictions', {
+      p_slug: 'nope', p_from: null, p_to: null, p_limit: null,
+    });
+    expect(gone).toBeNull();
   });
 
   it('calibration: scores with reliability payloads + the current champion', async () => {

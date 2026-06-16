@@ -9,8 +9,8 @@ import type { ReactElement } from 'react';
 import { CalibrationHeatmap } from '../../../../components/CalibrationHeatmap.tsx';
 import { DistributionOverlay } from '../../../../components/DistributionOverlay.tsx';
 import { VerifyStationButton } from '../../../../components/controls.tsx';
-import { fmtDate, fmtProb, fmtTemp, fmtUsd, num } from '../../../../lib/format.ts';
-import { getCityDetail, getStationObservations } from '../../../../lib/loaders.ts';
+import { fmtDate, fmtDelta, fmtProb, fmtTemp, fmtUsd, num } from '../../../../lib/format.ts';
+import { getCityDetail, getStationObservations, getStationPredictions } from '../../../../lib/loaders.ts';
 import { shapeHeatmap } from '../../../../lib/shapers.ts';
 import { serverDb } from '../../../../lib/supabase.ts';
 
@@ -21,21 +21,48 @@ export default async function CityPage({
   searchParams,
 }: {
   params: Promise<{ slug: string }>;
-  searchParams: Promise<{ obsFrom?: string; obsTo?: string; obsLimit?: string }>;
+  searchParams: Promise<{
+    obsFrom?: string;
+    obsTo?: string;
+    obsLimit?: string;
+    predFrom?: string;
+    predTo?: string;
+    predLimit?: string;
+  }>;
 }): Promise<ReactElement> {
   const { slug } = await params;
   const sp = await searchParams;
   const db = await serverDb();
-  const [view, obs] = await Promise.all([
+  const [view, obs, pred] = await Promise.all([
     getCityDetail(db, slug),
     getStationObservations(db, slug, {
       from: sp.obsFrom || undefined,
       to: sp.obsTo || undefined,
       limit: sp.obsLimit ? Number(sp.obsLimit) : undefined,
     }),
+    getStationPredictions(db, slug, {
+      from: sp.predFrom || undefined,
+      to: sp.predTo || undefined,
+      limit: sp.predLimit ? Number(sp.predLimit) : undefined,
+    }),
   ]);
   if (!view) notFound();
   const { city, openEvent } = view;
+
+  // Forecast error → at-a-glance accuracy class: on-target green, way-off red.
+  const errClass = (v: unknown): string => {
+    const n = num(v);
+    if (n === null) return '';
+    const a = Math.abs(n);
+    return a <= 1.5 ? 'pos' : a >= 3 ? 'neg' : '';
+  };
+  const skillRows = pred
+    ? [
+        { lead: '+1d', s: pred.summary.lead1 },
+        { lead: '+2d', s: pred.summary.lead2 },
+        { lead: '+3d', s: pred.summary.lead3 },
+      ]
+    : [];
 
   return (
     <div>
@@ -187,6 +214,106 @@ export default async function CityPage({
                           ))
                         )}
                       </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </>
+        )}
+      </div>
+
+      <h2>Forecast vs actual — daily Tmax (°C)</h2>
+      <div className="panel">
+        {!pred ? (
+          <p className="muted">No prediction-vs-actual data available for this city yet.</p>
+        ) : (
+          <>
+            <p className="muted small">
+              station <span className="mono">{pred.icao}</span> ·{' '}
+              {num(pred.summary.withForecast) ?? 0} / {num(pred.summary.n) ?? 0} finalized date(s) have a
+              forecast
+              {pred.summary.firstDate ? (
+                <>
+                  {' '}· {fmtDate(pred.summary.firstDate)} → {fmtDate(pred.summary.lastDate)}
+                </>
+              ) : null}{' '}
+              · cross-model mean vs recorded actual, error = actual − forecast
+            </p>
+
+            <table style={{ width: 'auto', margin: '8px 0 12px' }}>
+              <thead>
+                <tr>
+                  <th>lead</th>
+                  <th className="num">MAE °C</th>
+                  <th className="num">bias °C</th>
+                  <th className="num">n</th>
+                </tr>
+              </thead>
+              <tbody>
+                {skillRows.map(({ lead, s }) => (
+                  <tr key={lead}>
+                    <td className="mono">{lead}</td>
+                    <td className={`num ${errClass(s.mae)}`}>
+                      {num(s.mae) === null ? '—' : num(s.mae)!.toFixed(2)}
+                    </td>
+                    <td className="num">{fmtDelta(s.bias, 2)}</td>
+                    <td className="num">{num(s.n) ?? 0}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+
+            <form method="get" className="form-row" style={{ margin: '8px 0 12px' }}>
+              <label className="small muted">
+                from <input type="date" name="predFrom" defaultValue={fmtDate(pred.window.from)} />
+              </label>
+              <label className="small muted">
+                to <input type="date" name="predTo" defaultValue={fmtDate(pred.window.to)} />
+              </label>
+              <label className="small muted">
+                limit{' '}
+                <input
+                  type="number"
+                  name="predLimit"
+                  min={1}
+                  max={400}
+                  defaultValue={String(num(pred.window.limit) ?? 120)}
+                  style={{ width: 72 }}
+                />
+              </label>
+              <button type="submit">view range</button>
+            </form>
+
+            {pred.rows.length === 0 ? (
+              <p className="muted">No finalized prediction-vs-actual pairs in this date range.</p>
+            ) : (
+              <table>
+                <thead>
+                  <tr>
+                    <th>date</th>
+                    <th className="num">actual</th>
+                    <th className="num">fc +1d</th>
+                    <th className="num">Δ+1</th>
+                    <th className="num">fc +2d</th>
+                    <th className="num">Δ+2</th>
+                    <th className="num">fc +3d</th>
+                    <th className="num">Δ+3</th>
+                    <th className="num">models</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {pred.rows.map((p) => (
+                    <tr key={p.date}>
+                      <td>{fmtDate(p.date)}</td>
+                      <td className="num">{fmtTemp(p.actualC, 'C')}</td>
+                      <td className="num">{fmtTemp(p.fcPlus1C, 'C')}</td>
+                      <td className={`num ${errClass(p.errPlus1)}`}>{fmtDelta(p.errPlus1)}</td>
+                      <td className="num">{fmtTemp(p.fcPlus2C, 'C')}</td>
+                      <td className={`num ${errClass(p.errPlus2)}`}>{fmtDelta(p.errPlus2)}</td>
+                      <td className="num">{fmtTemp(p.fcPlus3C, 'C')}</td>
+                      <td className={`num ${errClass(p.errPlus3)}`}>{fmtDelta(p.errPlus3)}</td>
+                      <td className="num">{num(p.nModels) ?? 0}</td>
                     </tr>
                   ))}
                 </tbody>

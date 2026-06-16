@@ -79,6 +79,7 @@ const FN_ARGS: Record<string, string[]> = {
   dash_system_health: [],
   dash_admin_state: [],
   dash_station_observations: ['p_slug', 'p_from', 'p_to', 'p_limit'],
+  dash_station_predictions: ['p_slug', 'p_from', 'p_to', 'p_limit'],
   operator_skip_bet: ['p_bet_id', 'p_reason'],
   operator_halt: ['p_scope', 'p_reason'],
   operator_resume: ['p_halt_key'],
