@@ -54,16 +54,41 @@ interface LiveBet {
 }
 
 const GRACE_MS = 3 * 3_600_000; // local midnight + 3h
+/**
+ * Safety-net horizon (0036): only sweep events whose target day is within this many days of
+ * `now`. Inline grading (fetch-actuals) grades on finalization and truth lands within ~2 days,
+ * so a 4-day net catches anything inline grading genuinely missed — WITHOUT force-grading the
+ * hundreds of long-closed historical events the §6.22 backfill retroactively made "gradeable".
+ */
+const SWEEP_WINDOW_DAYS = 4;
 const dateISO = (v: unknown): string =>
   typeof v === 'string' ? v.slice(0, 10) : new Date(v as string).toISOString().slice(0, 10);
 
 export async function gradeBetsSweep(ctx: JobCtx, deps: GradeBetsDeps): Promise<JobStats> {
   const { db, config: cfg, log } = ctx;
-  const stats = { candidates: 0, graded: 0, truthBehindMarket: 0, reconciledBets: 0, drifts: 0 };
+  const stats = { candidates: 0, graded: 0, truthBehindMarket: 0, reconciledBets: 0, drifts: 0, deferred: 0 };
 
   // --- (1) + (2): the sweep ---------------------------------------------------
-  const targets = await db.rpc<{ event_id: string; ctx: SweepCtx }>('sweep_grading_targets', {});
+  // Bound the sweep to the recent safety-net window (0036) so it never tries to grade the
+  // backfill-resurrected historical backlog in one run and get reaped (ADR-12).
+  const since = new Date(deps.now.getTime() - SWEEP_WINDOW_DAYS * 86_400_000).toISOString().slice(0, 10);
+  const targets = await db.rpc<{ event_id: string; ctx: SweepCtx }>('sweep_grading_targets', { p_since: since });
+
+  // Belt-and-suspenders: stop processing before the job wall limit so a future backlog spike
+  // degrades to a clean partial run (next run continues) instead of an isolate kill + reap.
+  const sweepStart = Date.now();
+  const budgetMs = Math.max(30, cfg.jobWallLimitSec - 30) * 1000;
+  let i = 0;
   for (const t of targets) {
+    if (Date.now() - sweepStart > budgetMs) {
+      stats.deferred = targets.length - i;
+      log('sweep wall-budget reached — remaining targets deferred to next run', {
+        processed: i,
+        deferred: stats.deferred,
+      });
+      break;
+    }
+    i++;
     const { endUtc } = localDayWindow(t.ctx.tz, dateISO(t.ctx.targetDate));
     if (deps.now.getTime() < endUtc.getTime() + GRACE_MS) continue; // day not over + grace
     stats.candidates++;

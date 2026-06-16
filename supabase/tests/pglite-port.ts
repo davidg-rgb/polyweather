@@ -90,7 +90,7 @@ const FN_ARGS: Record<string, string[]> = {
   operator_set_champion: ['p_source'],
   operator_export_rows: ['p_from', 'p_to', 'p_mode'],
   health_check: [],
-  sweep_grading_targets: [],
+  sweep_grading_targets: ['p_since'],
   live_bets_for_reconciliation: [],
   digest_data: ['p_mode', 'p_champion'],
   job_freshness: [],

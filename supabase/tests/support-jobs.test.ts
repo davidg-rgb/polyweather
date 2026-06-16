@@ -149,6 +149,15 @@ afterAll(async () => {
 });
 
 describe('grade-bets sweep (§6.19)', () => {
+  it('0036 window: sweep_grading_targets honours p_since (excludes events before the window)', async () => {
+    // Both seeded events are ungraded + past, so the unbounded sweep returns them…
+    const all = await port.rpc('sweep_grading_targets', { p_since: null });
+    expect(all.length).toBeGreaterThanOrEqual(2);
+    // …but a p_since after every fixture date filters them all out (the backfill-backlog guard).
+    const windowed = await port.rpc('sweep_grading_targets', { p_since: '2026-07-01' });
+    expect(windowed).toHaveLength(0);
+  });
+
   it('respects the local-midnight+3h grace: nothing graded one hour after Seoul close', async () => {
     alerts = [];
     // Seoul 2026-06-11 ends 15:00Z; +3h grace ⇒ eligible from 18:00Z.

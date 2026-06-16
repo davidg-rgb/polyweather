@@ -102,6 +102,9 @@ describe('migrations 0001–0010', () => {
       // 0035 = /city per-station daily-Tmax inspector (dash_station_observations) — ships its own
       // post-0034 revoke/grant; added to WEB_AUTHENTICATED below.
       '0035_dashboard_station_observations.sql',
+      // 0036 = grade-bets sweep recency window (sweep_grading_targets gains p_since; bounds the
+      // backfill-resurrected backlog) + dash_city_detail "today's market" hardening.
+      '0036_grading_sweep_window_and_today_market.sql',
     ]);
   });
 });
