@@ -14,6 +14,7 @@ export const dynamic = 'force-dynamic';
 // is demoted to the end. Order = analytics → ops → dormant trading → admin.
 const NAV = [
   ['/', 'overview'], // analytics home — forecast skill vs. market + the measured-efficiency verdict
+  ['/amsterdam', 'amsterdam'], // the one-accurate-city paper-trade head-to-head (analytics deliverable)
   ['/events', 'events'], // open events + collection health (WEB-4 / ADR-21)
   ['/calibration', 'calibration'],
   ['/system', 'system'],

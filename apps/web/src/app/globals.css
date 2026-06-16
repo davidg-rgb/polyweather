@@ -176,3 +176,4 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
 .heatcell { font-family: var(--mono); font-size: 0.76rem; text-align: center; border-radius: 3px; padding: 0.25rem 0.3rem; }
 
 svg.spark { display: block; }
+svg.equity { display: block; max-width: 100%; height: auto; }

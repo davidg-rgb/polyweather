@@ -14,6 +14,21 @@
 > deliverable (e.g. a polished forecast-skill + market-efficiency view as the product's headline). See the
 > updated project `CLAUDE.md` header and `FORECASTING-RD.md` WO-5 for the rationale.
 
+**iter-49 (2026-06-16): SHIPPED the first analytics deliverable — the Amsterdam paper-trade head-to-head.**
+Per the operator directive, `$10/day` of fictitious money rides our predicted whole-°C bucket at FOUR
+intraday lock hours (**13/14/15/16 local**) under identical rules; each arm records the live market odds at
+placement and logs win/loss + net P&L once the day resolves to the WU EHAM high — the four cumulative sums
+race to answer "best time of day" / "who gains the most after 14 days". **Best-time finding:** exact-bucket
+hit climbs 50%→64%→86%→100% across 13→16:00, but the market re-prices our bucket in lockstep (ask ≈ hit
+rate) — confirming WO-5 efficiency; 15:00 is the confident sweet spot (86%, odds still ~0.82). Built: engine
+`packages/core/src/sim/amsterdam.ts` (pure, planners; +20 tests), migration `0039` (table + 4 service-role
+RPCs + `dash_amsterdam_sim` + 15:30Z cron), Edge Function `amsterdam-paper-trade` (place+grade, +8
+integration tests), backfill `scripts/amsterdam-sim.ts`, `/amsterdam` dashboard (leaderboard + EquityChart +
+evidence + bet log). **Suite 710 green, typecheck 0, next build green.** Design: `AMSTERDAM-SIM.md`. NOT
+trading (the dormant `bets` surface is untouched). **Go-live is operator-gated** (the auto-classifier denied
+the unprompted prod apply): apply `0039` → deploy `amsterdam-paper-trade` → `pnpm tsx scripts/amsterdam-sim.ts`
+→ push web (Vercel). See `AMSTERDAM-SIM.md` §3 / RUNBOOK "Amsterdam paper-sim".
+
 **iter-48 (this session): ran WO-5 — the METAR-latency / market-staleness study, the decisive close-out.
 VERDICT: NO TRADABLE EDGE → the trading thesis is CLOSED on every signal this system can see. Read-only;
 NO model/prod change. Full writeup: `FORECASTING-RD.md` "WO-5". Committed this session.**

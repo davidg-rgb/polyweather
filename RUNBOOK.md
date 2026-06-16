@@ -301,6 +301,26 @@ go-live gate (≤35d / current-quarter checks).
 pnpm tsx scripts/smoke-live-apis.ts   # exits 1 naming any drifted upstream
 ```
 
+## Amsterdam paper-sim — go-live + operate (analytics deliverable; see AMSTERDAM-SIM.md)
+
+Operator-gated (hosted DDL/deploys need per-action authorization). One time:
+
+```bash
+# 1) apply migration 0039 (amsterdam_paper_bets + place/grade RPCs + dash_amsterdam_sim + the 15:30Z cron)
+supabase db push --project-ref "$SUPABASE_REF"   # or the SQL editor / MCP apply_migration
+# 2) deploy the daily place+grade job (self-auth via x-cron-secret, like every job)
+supabase functions deploy amsterdam-paper-trade --use-api --no-verify-jwt --project-ref "$SUPABASE_REF"
+# 3) seed the curve from history (idempotent; the cron carries it forward after)
+pnpm tsx scripts/amsterdam-sim.ts
+# 4) redeploy the web app (Vercel) for the /amsterdam page + nav
+vercel --prod
+```
+
+Then `/amsterdam` is live and self-updating (15:30 UTC daily: places today's four arms at
+13/14/15/16 local, grades pending days once their EHAM obs finalizes). Inspect / extend any time:
+`pnpm tsx scripts/amsterdam-sim.ts --analyze-only`. **Turn it off:**
+`select cron.unschedule('amsterdam-paper-trade');` (data + dashboard remain; no new bets placed).
+
 ## Failure-drill log (each upstream killed under test)
 
 Every upstream's failure path is exercised by the committed suite — re-run

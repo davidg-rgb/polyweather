@@ -1,5 +1,13 @@
 # AMSTERDAM BUILD-OUT — the "one accurate city" deliverable
 
+> **✅ DELIVERED (2026-06-16): the $10/day paper-trade head-to-head.** The accuracy finding below was
+> turned into a live, self-scoring product — `$10/day` on our predicted bucket at **13/14/15/16 local**,
+> racing to see which hour gains the most after ~14 days, scored against the real Polymarket market.
+> Engine `packages/core/src/sim/amsterdam.ts` (+ planners), migration `0039` (table + RPCs + cron),
+> Edge Function `amsterdam-paper-trade`, backfill `scripts/amsterdam-sim.ts`, dashboard `/amsterdam`.
+> Full design + the best-time finding: **`AMSTERDAM-SIM.md`**. Suite 710 green. Go-live is
+> operator-gated (apply `0039` + deploy the function + run the seed — see AMSTERDAM-SIM.md §3 / RUNBOOK).
+
 > **Handoff doc.** The operator reframed the analytics-pivot goal (BUILD-STATE "PIVOT TO
 > ANALYTICS VALUE", 2026-06-15) to a concrete, falsifiable target: **get a solid, close-to-true
 > daily-Tmax prediction rate on ONE city.** This session picked the city (Amsterdam/EHAM),

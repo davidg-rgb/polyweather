@@ -113,6 +113,11 @@ const FN_ARGS: Record<string, string[]> = {
   upsert_calibration_scores: ['p_rows'],
   rebuild_nowcast_lift: ['p_min_n', 'p_today'],
   upsert_source_forecasts: ['p_rows'],
+  amsterdam_sim_place_inputs: ['p_target', 'p_now'],
+  amsterdam_sim_record: ['p_rows'],
+  amsterdam_sim_grade_inputs: [],
+  amsterdam_sim_settle: ['p_settlements'],
+  dash_amsterdam_sim: [],
 };
 
 export function pglitePort(db: PGlite): DbPort {

@@ -424,6 +424,123 @@ export async function getStationPredictions(
   }
 }
 
+// --- /amsterdam paper-trade simulation (0039) -----------------------------------------
+
+export interface ArmStanding {
+  hour: number;
+  nBets: unknown;
+  nGraded: unknown;
+  nPending: unknown;
+  nWon: unknown;
+  staked: unknown;
+  pnl: unknown;
+  roi: unknown;
+  hitRate: unknown;
+  avgAsk: unknown;
+  pnlAtCompare: unknown;
+  isLeader: boolean;
+}
+
+export interface SimBetRow {
+  date: string;
+  hour: number;
+  predictedC: unknown;
+  label: string | null;
+  ask: unknown;
+  runMaxC: unknown;
+  status: string;
+  won: boolean | null;
+  pnl: unknown;
+  actualC: unknown;
+}
+
+export interface SimLatestRow {
+  predictedC: unknown;
+  label: string | null;
+  ask: unknown;
+  runMaxC: unknown;
+  status: string;
+  won: boolean | null;
+  pnl: unknown;
+  actualC: unknown;
+}
+
+export interface AmsterdamSimView {
+  config: { primaryHour: number; armHours: number[]; compareDays: number; stakeUsd: number };
+  coverage: { firstDate: string | null; lastDate: string | null; nDays: unknown; nGradedDays: unknown; nPending: unknown };
+  arms: ArmStanding[];
+  leaderHour: number | null;
+  /** Cumulative net P&L per arm, carried forward onto the shared date axis (null before an arm's first bet). */
+  chart: { dates: string[]; byHour: Record<number, (number | null)[]> };
+  betLog: SimBetRow[];
+  latest: { date: string | null; byHour: Record<number, SimLatestRow> };
+}
+
+interface SimEquityPoint {
+  date: string;
+  cum: unknown;
+}
+interface SimPayload {
+  config: AmsterdamSimView['config'];
+  coverage: AmsterdamSimView['coverage'];
+  arms: Omit<ArmStanding, 'isLeader'>[];
+  leader: { hour: number; pnl: unknown; nGraded: unknown } | null;
+  equityByArm: Record<string, SimEquityPoint[]>;
+  betLog: SimBetRow[];
+  latest: { date: string | null; byHour: Record<string, SimLatestRow> };
+}
+
+/**
+ * The Amsterdam paper-trade head-to-head (dash_amsterdam_sim, 0039) for /amsterdam. Aligns each arm's
+ * cumulative equity onto the union date axis (carry-forward) so the four lines share an x-scale. Degrades
+ * to null (not a thrown 500) if the RPC errors — the page can deploy ahead of the 0039 RPC.
+ */
+export async function getAmsterdamSim(db: WebDb): Promise<AmsterdamSimView | null> {
+  let v: SimPayload | null;
+  try {
+    v = await one<SimPayload>(db, 'dash_amsterdam_sim', {});
+  } catch {
+    return null;
+  }
+  if (!v) return null;
+
+  const leaderHour = v.leader?.hour ?? null;
+  const arms: ArmStanding[] = (v.arms ?? [])
+    .map((a) => ({ ...a, isLeader: a.hour === leaderHour }))
+    .sort((a, b) => a.hour - b.hour);
+
+  // Shared, sorted union of every arm's bet dates → carry the last-known cum forward per arm.
+  const dateSet = new Set<string>();
+  for (const pts of Object.values(v.equityByArm ?? {})) for (const p of pts) dateSet.add(String(p.date).slice(0, 10));
+  const dates = [...dateSet].sort();
+  const byHour: Record<number, (number | null)[]> = {};
+  for (const [hourStr, pts] of Object.entries(v.equityByArm ?? {})) {
+    const sorted = [...pts].sort((a, b) => String(a.date).localeCompare(String(b.date)));
+    let i = 0;
+    let last: number | null = null;
+    byHour[Number(hourStr)] = dates.map((d) => {
+      while (i < sorted.length && String(sorted[i]!.date).slice(0, 10) <= d) {
+        last = Number(sorted[i]!.cum);
+        i++;
+      }
+      return last;
+    });
+  }
+
+  const latestByHour: Record<number, SimLatestRow> = {};
+  for (const [h, row] of Object.entries(v.latest?.byHour ?? {})) latestByHour[Number(h)] = row;
+
+  return {
+    config: v.config,
+    coverage: v.coverage,
+    arms,
+    leaderHour,
+    chart: { dates, byHour },
+    betLog: v.betLog ?? [],
+    latest: { date: v.latest?.date ?? null, byHour: latestByHour },
+  };
+}
+
 // --- /calibration --------------------------------------------------------------------
 
 export interface CalibrationScoreRow {

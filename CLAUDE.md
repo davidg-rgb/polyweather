@@ -21,6 +21,11 @@ dashboard, TypeScript monorepo (`packages/core|io|trading`, `supabase/functions`
 - Canonical docs: `BUILD-STATE.md` (status + Operator TODO), `RUNBOOK.md` (ops),
   `REQUIREMENTS.md`, `ARCHITECTURE.md`. Tests: `pnpm test`, `pnpm typecheck`.
 - Build is COMPLETE (P0–P8). Remaining work is operator/deploy-gated — see BUILD-STATE.
+- **Headline analytics deliverable (2026-06-16): the Amsterdam paper-trade head-to-head** —
+  `$10/day` on our predicted bucket at 13/14/15/16 local, racing to find the best time to bet,
+  scored against the real market. Engine `packages/core/src/sim/amsterdam.ts`, migration `0039`,
+  Edge Function `amsterdam-paper-trade`, `/amsterdam` page, seed `scripts/amsterdam-sim.ts`. NOT
+  trading. Design + go-live: **`AMSTERDAM-SIM.md`**.
 
 ---
 

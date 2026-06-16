@@ -110,6 +110,9 @@ describe('migrations 0001–0010', () => {
       // 0038 = dash_station_predictions — /city prediction-vs-actual + forecast-skill panel (always °C,
       // on-page complement to 0037's CSV); own post-0034 revoke/grant, added to WEB_AUTHENTICATED below.
       '0038_dashboard_station_predictions.sql',
+      // 0039 = Amsterdam paper-trade sim (amsterdam_paper_bets + 4 service-role place/grade RPCs +
+      // dash_amsterdam_sim on authenticated, added to WEB_AUTHENTICATED below) + the daily cron.
+      '0039_amsterdam_paper_sim.sql',
     ]);
   });
 });
@@ -549,6 +552,7 @@ describe('0034: internal-RPC lockdown — anon/authenticated revoked except the 
     'dash_today_overview', 'dash_events_list', 'dash_event_detail', 'dash_city_detail',
     'dash_calibration', 'dash_bets_ledger', 'dash_system_health', 'dash_admin_state',
     'dash_station_observations', 'dash_station_predictions',
+    'dash_amsterdam_sim',
     'go_live_gate_inputs',
     'operator_halt', 'operator_resume', 'operator_update_config', 'operator_verify_station',
     'operator_set_champion', 'operator_skip_bet', 'operator_manual_bet',
@@ -643,7 +647,7 @@ describe('0034: internal-RPC lockdown — anon/authenticated revoked except the 
 });
 
 describe('pg_cron registrations (§7.22, W11)', () => {
-  it('registers all 13 jobs with the §7.22 schedules', async () => {
+  it('registers all 14 jobs with the §7.22 schedules', async () => {
     const jobs = await rows<{ jobname: string; schedule: string }>(
       db,
       `select jobname, schedule from cron.job order by jobname`,
@@ -662,8 +666,9 @@ describe('pg_cron registrations (§7.22, W11)', () => {
       'daily-digest': '0 7 * * *',
       'health-monitor': '*/30 * * * *',
       'snapshot-downsample': '0 3 * * *',
+      'amsterdam-paper-trade': '30 15 * * *',
     };
-    expect(jobs.length).toBe(13);
+    expect(jobs.length).toBe(14);
     for (const j of jobs) {
       expect(j.schedule, `schedule for ${j.jobname}`).toBe(expected[j.jobname]);
     }
