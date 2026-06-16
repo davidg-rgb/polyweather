@@ -33,6 +33,13 @@ export const ConfigSchema = z.object({
   sigmaFloorC: z.number().min(0).default(0.45),
   /** °C prior σ ladder, lead 0..7. */
   priorSigmaByLead: z.array(z.number().positive()).length(8).default([1.6, 1.9, 2.3, 2.7, 3.1, 3.5, 3.9, 4.3]),
+  /**
+   * Operator denylist of city slugs discover-markets must never (re)create. Polymarket lists
+   * temperature markets for cities whose resolution-source URL yields no parseable station
+   * (e.g. istanbul, hong-kong) — these have NO forecast/analytics value and would otherwise be
+   * re-discovered every run. Operator-managed (editable via /admin config). Default: none.
+   */
+  ignoredCitySlugs: z.array(z.string()).default([]),
   breakerConsecLosses: z.number().int().positive().default(8),
   breakerDailyLossPct: z.number().min(0).max(1).default(0.05),
   breakerDrawdownPct: z.number().min(0).max(1).default(0.25),
@@ -58,7 +65,7 @@ export const ConfigSchema = z.object({
 export type AppConfig = z.infer<typeof ConfigSchema>;
 
 const STRING_KEYS = new Set(['championSource', 'tradingMode', 'wuApiKey', 'wuKeyFetchedAt']);
-const ARRAY_KEYS = new Set(['priorSigmaByLead']);
+const ARRAY_KEYS = new Set(['priorSigmaByLead', 'ignoredCitySlugs']);
 
 /**
  * Merge DB config rows over the defaults and validate. Keys outside the

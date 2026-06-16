@@ -50,7 +50,7 @@ const MONTH_NUM: Record<string, number> = {
 };
 
 export async function discoverMarkets(ctx: JobCtx, deps: DiscoverDeps): Promise<JobStats> {
-  const { db, log } = ctx;
+  const { db, config: cfg, log } = ctx;
   const stats = {
     eventsSeen: 0,
     eventsNew: 0,
@@ -60,6 +60,7 @@ export async function discoverMarkets(ctx: JobCtx, deps: DiscoverDeps): Promise<
     parseFailures: 0,
     distributionsSeeded: 0,
     closedByUs: 0,
+    ignored: 0,
   };
 
   const events: RawGammaEvent[] = [];
@@ -72,6 +73,7 @@ export async function discoverMarkets(ctx: JobCtx, deps: DiscoverDeps): Promise<
     if (page.length < PAGE_SIZE) break;
   }
 
+  const ignoredCities = new Set(cfg.ignoredCitySlugs ?? []);
   const seenPolyIds: string[] = [];
   for (const ev of events) {
     stats.eventsSeen++;
@@ -81,6 +83,13 @@ export async function discoverMarkets(ctx: JobCtx, deps: DiscoverDeps): Promise<
     }
 
     const citySlug = slugCityRe.exec(ev.slug)?.[1];
+    // Operator denylist: never (re)create a station-less, analytics-useless city. Checked BEFORE
+    // get_city_state/parse and deliberately NOT added to seenPolyIds, so any straggler rows get
+    // closed by close_stale_events below rather than kept alive.
+    if (citySlug && ignoredCities.has(citySlug)) {
+      stats.ignored++;
+      continue;
+    }
     const states = citySlug
       ? await db.rpc<CityState>('get_city_state', { p_slug: citySlug })
       : [];

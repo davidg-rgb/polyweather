@@ -46,10 +46,10 @@ function makeDeps(pages: RawGammaEvent[][], alerts: Alert[], seeded?: string[]) 
   };
 }
 
-function makeCtx(): JobCtx {
+function makeCtx(ignoredCitySlugs: string[] = []): JobCtx {
   return {
     db: port,
-    config: { jobWallLimitSec: 150 } as JobCtx['config'],
+    config: { jobWallLimitSec: 150, ignoredCitySlugs } as JobCtx['config'],
     log: () => {},
     startedAt: new Date(),
   };
@@ -180,5 +180,20 @@ describe('discover-markets (§6.13)', () => {
   it('zombie events never reach the database', async () => {
     const jinan = await rows(db, `select 1 from cities where slug = 'jinan'`);
     expect(jinan.length).toBe(0);
+  });
+
+  it('operator denylist (ignoredCitySlugs): a listed city is skipped — counted ignored, no rows added', async () => {
+    const londonCount = async () =>
+      (await rows<{ n: number }>(
+        db,
+        `select count(*)::int as n from market_events me join cities c on c.id = me.city_id where c.slug = 'london'`,
+      ))[0]!.n;
+    const before = await londonCount();
+    expect(before).toBeGreaterThanOrEqual(1); // london was ingested by the universe pass above
+
+    const a: Alert[] = [];
+    const s = await discoverMarkets(makeCtx(['london']), makeDeps([page1, page2], a));
+    expect(s['ignored'] as number).toBeGreaterThanOrEqual(1); // every london event in the feed skipped
+    expect(await londonCount()).toBe(before); // denylisted → not (re)created
   });
 });

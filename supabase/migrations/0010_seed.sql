@@ -56,6 +56,7 @@ insert into public.config (key, value) values
   ('sigmaMinN',              '8'),
   ('sigmaFloorC',            '0.45'),
   ('priorSigmaByLead',       '[1.6,1.9,2.3,2.7,3.1,3.5,3.9,4.3]'),
+  ('ignoredCitySlugs',       '[]'),
   ('breakerConsecLosses',    '8'),
   ('breakerDailyLossPct',    '0.05'),
   ('breakerDrawdownPct',     '0.25'),
