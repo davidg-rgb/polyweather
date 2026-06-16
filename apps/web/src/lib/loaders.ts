@@ -296,6 +296,65 @@ export async function getCityDetail(db: WebDb, slug: string): Promise<CityDetail
   return { city, openEvent };
 }
 
+// --- /city/[slug] observations inspector (0035) ----------------------------------
+
+export interface StationObservationRow {
+  /** date_local (jsonb date → 'YYYY-MM-DD'). */
+  date: string;
+  /** numeric-string-safe (file convention) — page coerces with num()/fmtTemp(). */
+  tmaxNative: unknown;
+  unit: string;
+  nObs: unknown;
+  provenance: string | null;
+  metarNative: unknown;
+  iemF: unknown;
+  era5C: unknown;
+  flags: string[];
+  finalized: boolean;
+}
+
+export interface StationObservationsView {
+  icao: string;
+  unit: string;
+  /** The window actually applied (after defaulting + clamping in the RPC). */
+  window: { from: string; to: string; limit: unknown };
+  /** Full-history coverage (NOT windowed) — so the span stays visible while rows filter. */
+  summary: {
+    n: unknown;
+    firstDate: string | null;
+    lastDate: string | null;
+    wu: unknown;
+    iem: unknown;
+    flagged: unknown;
+    finalized: unknown;
+  };
+  rows: StationObservationRow[];
+}
+
+/**
+ * Daily-Tmax history for the city's current station (dash_station_observations, 0035).
+ * Null `from`/`to`/`limit` let the RPC apply its own defaults (last 90 days, ≤120 rows).
+ * Returns null for an unknown city / no current station mapping — and degrades to null
+ * (not a thrown 500) if the RPC itself errors, so this additive section can never take
+ * down the rest of the /city page (incl. when the page deploys ahead of the 0035 RPC).
+ */
+export async function getStationObservations(
+  db: WebDb,
+  slug: string,
+  opts: { from?: string; to?: string; limit?: number } = {},
+): Promise<StationObservationsView | null> {
+  try {
+    return await one<StationObservationsView>(db, 'dash_station_observations', {
+      p_slug: slug,
+      p_from: opts.from ?? null,
+      p_to: opts.to ?? null,
+      p_limit: opts.limit ?? null,
+    });
+  } catch {
+    return null;
+  }
+}
+
 // --- /calibration --------------------------------------------------------------------
 
 export interface CalibrationScoreRow {

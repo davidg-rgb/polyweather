@@ -10,15 +10,30 @@ import { CalibrationHeatmap } from '../../../../components/CalibrationHeatmap.ts
 import { DistributionOverlay } from '../../../../components/DistributionOverlay.tsx';
 import { VerifyStationButton } from '../../../../components/controls.tsx';
 import { fmtDate, fmtProb, fmtTemp, fmtUsd, num } from '../../../../lib/format.ts';
-import { getCityDetail } from '../../../../lib/loaders.ts';
+import { getCityDetail, getStationObservations } from '../../../../lib/loaders.ts';
 import { shapeHeatmap } from '../../../../lib/shapers.ts';
 import { serverDb } from '../../../../lib/supabase.ts';
 
 export const dynamic = 'force-dynamic';
 
-export default async function CityPage({ params }: { params: Promise<{ slug: string }> }): Promise<ReactElement> {
+export default async function CityPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ slug: string }>;
+  searchParams: Promise<{ obsFrom?: string; obsTo?: string; obsLimit?: string }>;
+}): Promise<ReactElement> {
   const { slug } = await params;
-  const view = await getCityDetail(await serverDb(), slug);
+  const sp = await searchParams;
+  const db = await serverDb();
+  const [view, obs] = await Promise.all([
+    getCityDetail(db, slug),
+    getStationObservations(db, slug, {
+      from: sp.obsFrom || undefined,
+      to: sp.obsTo || undefined,
+      limit: sp.obsLimit ? Number(sp.obsLimit) : undefined,
+    }),
+  ]);
   if (!view) notFound();
   const { city, openEvent } = view;
 
@@ -85,6 +100,100 @@ export default async function CityPage({ params }: { params: Promise<{ slug: str
             ))}
           </tbody>
         </table>
+      </div>
+
+      <h2>Observations — daily Tmax collected</h2>
+      <div className="panel">
+        {!obs ? (
+          <p className="muted">No collected observations available for this city yet.</p>
+        ) : (
+          <>
+            <p className="muted small">
+              station <span className="mono">{obs.icao}</span> · {num(obs.summary.n) ?? 0} date(s) collected
+              {obs.summary.firstDate ? (
+                <>
+                  {' '}· {fmtDate(obs.summary.firstDate)} → {fmtDate(obs.summary.lastDate)}
+                </>
+              ) : null}
+              {' '}· WU {num(obs.summary.wu) ?? 0} / IEM {num(obs.summary.iem) ?? 0} ·{' '}
+              {num(obs.summary.flagged) ?? 0} flagged · {num(obs.summary.finalized) ?? 0} finalized
+            </p>
+            <form method="get" className="form-row" style={{ margin: '8px 0 12px' }}>
+              <label className="small muted">
+                from{' '}
+                <input type="date" name="obsFrom" defaultValue={fmtDate(obs.window.from)} />
+              </label>
+              <label className="small muted">
+                to <input type="date" name="obsTo" defaultValue={fmtDate(obs.window.to)} />
+              </label>
+              <label className="small muted">
+                limit{' '}
+                <input
+                  type="number"
+                  name="obsLimit"
+                  min={1}
+                  max={400}
+                  defaultValue={String(num(obs.window.limit) ?? 120)}
+                  style={{ width: 72 }}
+                />
+              </label>
+              <button type="submit">view range</button>
+            </form>
+            {obs.rows.length === 0 ? (
+              <p className="muted">No observations collected in this date range.</p>
+            ) : (
+              <table>
+                <thead>
+                  <tr>
+                    <th>date</th>
+                    <th className="num">Tmax</th>
+                    <th className="num">n obs</th>
+                    <th>source</th>
+                    <th className="num">METAR</th>
+                    <th className="num">IEM °F</th>
+                    <th className="num">ERA5 °C</th>
+                    <th>flags</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {obs.rows.map((o) => (
+                    <tr key={o.date}>
+                      <td>
+                        {fmtDate(o.date)}
+                        {o.finalized ? null : (
+                          <span className="chip amber small" style={{ marginLeft: 6 }}>prov</span>
+                        )}
+                      </td>
+                      <td className="num">{fmtTemp(o.tmaxNative, o.unit)}</td>
+                      <td className="num">{num(o.nObs) ?? '—'}</td>
+                      <td className="small">
+                        {o.provenance === 'iem_fallback' ? (
+                          <span className="chip amber">iem</span>
+                        ) : o.provenance === 'wu' ? (
+                          <span className="mono">wu</span>
+                        ) : (
+                          <span className="muted">—</span>
+                        )}
+                      </td>
+                      <td className="num">{fmtTemp(o.metarNative, o.unit)}</td>
+                      <td className="num">{num(o.iemF) ?? '—'}</td>
+                      <td className="num">{num(o.era5C) ?? '—'}</td>
+                      <td>
+                        {o.flags.length === 0 ? (
+                          <span className="muted">—</span>
+                        ) : (
+                          o.flags.map((f) => (
+                            <span key={f} className="chip amber" style={{ marginRight: 4 }}>{f}</span>
+                          ))
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </>
+        )}
       </div>
 
       <h2>Calibration heatmap (model_stats)</h2>

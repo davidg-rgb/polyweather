@@ -179,6 +179,47 @@ describe('dashboard loader RPCs (0022, §6.21)', () => {
     expect(v.divergenceLog[0]!.flags).toContain('metar-missing');
   });
 
+  it('station observations (0035): full-history summary + windowed daily Tmax for the current station', async () => {
+    interface Obs {
+      icao: string;
+      unit: string;
+      window: { from: string; to: string; limit: number };
+      summary: { n: number; firstDate: string; lastDate: string; flagged: number; finalized: number };
+      rows: {
+        date: string; tmaxNative: number; unit: string; nObs: number;
+        provenance: string; flags: string[]; finalized: boolean;
+      }[];
+    }
+    const v = await one<Obs>('dash_station_observations', { p_slug: 'seoul', p_from: null, p_to: null, p_limit: null });
+    expect(v.icao).toBe('RKSI');
+    expect(Number(v.summary.n)).toBeGreaterThanOrEqual(1);
+    const row = v.rows.find((r) => r.date.slice(0, 10) === '2026-06-11')!;
+    expect(row).toBeTruthy();
+    expect(Number(row.tmaxNative)).toBe(22);
+    expect(Number(row.nObs)).toBe(30);
+    expect(row.flags).toContain('metar-missing');
+    expect(row.finalized).toBe(true);
+
+    // A pre-history window returns zero rows, but the summary still spans ALL of history.
+    const empty = await one<Obs>('dash_station_observations', {
+      p_slug: 'seoul', p_from: '2020-01-01', p_to: '2020-12-31', p_limit: null,
+    });
+    expect(empty.rows).toHaveLength(0);
+    expect(Number(empty.summary.n)).toBeGreaterThanOrEqual(1);
+
+    // The row limit is honoured (and clamped to ≥1).
+    const capped = await one<Obs>('dash_station_observations', {
+      p_slug: 'seoul', p_from: null, p_to: null, p_limit: 1,
+    });
+    expect(capped.rows.length).toBeLessThanOrEqual(1);
+
+    // Unknown city → null (the loader renders the "no station mapped" empty state).
+    const none = await one<Obs | null>('dash_station_observations', {
+      p_slug: 'nope', p_from: null, p_to: null, p_limit: null,
+    });
+    expect(none).toBeNull();
+  });
+
   it('calibration: scores with reliability payloads + the current champion', async () => {
     interface Calib { scores: { city: string | null; reliability: unknown }[]; champion: string }
     const v = await one<Calib>('dash_calibration', { p_champion: 'house_gaussian' });

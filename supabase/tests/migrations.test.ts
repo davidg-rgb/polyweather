@@ -99,6 +99,9 @@ describe('migrations 0001–0010', () => {
       // public/anon/authenticated, keeping service_role everywhere + the exact dashboard surface on
       // authenticated + health_check on anon. Generalises the 0023/0032 per-function revokes.
       '0034_lockdown_internal_rpcs.sql',
+      // 0035 = /city per-station daily-Tmax inspector (dash_station_observations) — ships its own
+      // post-0034 revoke/grant; added to WEB_AUTHENTICATED below.
+      '0035_dashboard_station_observations.sql',
     ]);
   });
 });
@@ -537,6 +540,7 @@ describe('0034: internal-RPC lockdown — anon/authenticated revoked except the 
   const WEB_AUTHENTICATED = new Set([
     'dash_today_overview', 'dash_events_list', 'dash_event_detail', 'dash_city_detail',
     'dash_calibration', 'dash_bets_ledger', 'dash_system_health', 'dash_admin_state',
+    'dash_station_observations',
     'go_live_gate_inputs',
     'operator_halt', 'operator_resume', 'operator_update_config', 'operator_verify_station',
     'operator_set_champion', 'operator_skip_bet', 'operator_manual_bet',
