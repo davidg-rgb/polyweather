@@ -10,6 +10,7 @@ import type { ReactElement } from 'react';
 import {
   ConfigEditor,
   ExportForm,
+  ExportPredictionsForm,
   HaltForm,
   ManualBetForm,
   ResumeForm,
@@ -134,6 +135,15 @@ export default async function AdminPage(): Promise<ReactElement> {
       <h2>Export (K4 / Skatteverket, R-16)</h2>
       <div className="panel">
         <ExportForm />
+      </div>
+
+      <h2>Export — prediction vs actual (always °C, data verification)</h2>
+      <div className="panel">
+        <p className="muted small">
+          Per station-date: recorded actual + cross-model mean forecast made +1/+2/+3 days earlier, with
+          per-lead error. Leave ICAO blank for the whole fleet.
+        </p>
+        <ExportPredictionsForm />
       </div>
 
       <h2>Config (validated against the schema; every change audited)</h2>

@@ -20,6 +20,7 @@ import { pglitePort } from '../../../supabase/tests/pglite-port.ts';
 import type { ApiDeps, WebAlert } from '../src/lib/api/deps.ts';
 import {
   adminExport,
+  adminExportPredictions,
   adminHalt,
   adminManualBet,
   adminPromoteSource,
@@ -427,6 +428,21 @@ describe('admin routes (§8.2 contracts)', () => {
     expect(lines.some((l) => l.startsWith('resolution,') && l.includes('22°C'))).toBe(true);
     const resolution = lines.find((l) => l.startsWith('resolution,') && l.includes('22°C'))!;
     expect(resolution.split(',').at(-1)).not.toBe(''); // pnl_usd present on resolutions
+  });
+
+  it('export-predictions: bad range 400; valid → text/csv with the always-°C header + RKSI row', async () => {
+    expect((await adminExportPredictions(req({ from: 'nope', to: '2026-06-12' }), deps())).status).toBe(400);
+    expect((await adminExportPredictions(req({ from: '2026-06-13', to: '2026-06-12' }), deps())).status).toBe(400);
+
+    const res = await adminExportPredictions(req({ from: '2026-06-01', to: '2026-06-30' }), deps());
+    expect(res.status).toBe(200);
+    expect(res.headers.get('Content-Type')).toBe('text/csv');
+    const lines = (await res.text()).split('\n');
+    expect(lines[0]).toBe('icao,city,date,actual_c,fc_plus1_c,fc_plus2_c,fc_plus3_c,err_plus1,err_plus2,err_plus3,n_models,provenance');
+    // the seeded RKSI 2026-06-11 finalized observation (22°C) appears with its actual in °C
+    const rksi = lines.find((l) => l.startsWith('RKSI,'));
+    expect(rksi, 'RKSI row present').toBeTruthy();
+    expect(rksi!.split(',')[3]).toBe('22'); // actual_c (already °C)
   });
 
   it('health: 200 with the newest job run; 503 when the DB is unreachable', async () => {

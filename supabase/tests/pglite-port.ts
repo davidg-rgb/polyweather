@@ -89,6 +89,7 @@ const FN_ARGS: Record<string, string[]> = {
   promotion_check_rows: ['p_candidate'],
   operator_set_champion: ['p_source'],
   operator_export_rows: ['p_from', 'p_to', 'p_mode'],
+  operator_export_predictions: ['p_from', 'p_to', 'p_icao'],
   health_check: [],
   sweep_grading_targets: ['p_since'],
   live_bets_for_reconciliation: [],

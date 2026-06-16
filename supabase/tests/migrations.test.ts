@@ -105,6 +105,8 @@ describe('migrations 0001–0010', () => {
       // 0036 = grade-bets sweep recency window (sweep_grading_targets gains p_since; bounds the
       // backfill-resurrected backlog) + dash_city_detail "today's market" hardening.
       '0036_grading_sweep_window_and_today_market.sql',
+      // 0037 = operator_export_predictions — prediction-vs-actual CSV (always °C); own revoke/grant.
+      '0037_operator_export_predictions.sql',
     ]);
   });
 });
@@ -547,7 +549,7 @@ describe('0034: internal-RPC lockdown — anon/authenticated revoked except the 
     'go_live_gate_inputs',
     'operator_halt', 'operator_resume', 'operator_update_config', 'operator_verify_station',
     'operator_set_champion', 'operator_skip_bet', 'operator_manual_bet',
-    'operator_record_external_fill', 'operator_export_rows',
+    'operator_record_external_fill', 'operator_export_rows', 'operator_export_predictions',
     'bet_for_execution', 'promotion_check_rows',
     'claim_alert', 'mark_alert_sent', 'health_check',
   ]);

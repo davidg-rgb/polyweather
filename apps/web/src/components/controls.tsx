@@ -362,3 +362,52 @@ export function ExportForm(): ReactElement {
     </div>
   );
 }
+
+// --- prediction-vs-actual CSV (always °C; data verification) -------------------------------
+
+export function ExportPredictionsForm(): ReactElement {
+  const [f, setF] = useState({ from: '', to: '', icao: '' });
+  const [msg, setMsg] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const download = async (): Promise<void> => {
+    setBusy(true);
+    setMsg(null);
+    try {
+      const body: Record<string, unknown> = { from: f.from, to: f.to };
+      if (f.icao) body['icao'] = f.icao;
+      const res = await fetch('/api/admin/export-predictions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (res.status !== 200) {
+        const r = { status: res.status, body: (await res.json()) as Record<string, unknown> };
+        setMsg(errText(r));
+        return;
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const aEl = document.createElement('a');
+      aEl.href = url;
+      aEl.download = `predictions-vs-actual-C-${f.icao || 'all'}-${f.from}_${f.to}.csv`;
+      aEl.click();
+      URL.revokeObjectURL(url);
+      setMsg('downloaded');
+    } catch (e) {
+      setMsg(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="form-row">
+      <input style={{ width: 120 }} placeholder="from YYYY-MM-DD" value={f.from} onChange={(e) => setF((p) => ({ ...p, from: e.target.value }))} />
+      <input style={{ width: 120 }} placeholder="to YYYY-MM-DD" value={f.to} onChange={(e) => setF((p) => ({ ...p, to: e.target.value }))} />
+      <input style={{ width: 90 }} placeholder="ICAO (all)" value={f.icao} onChange={(e) => setF((p) => ({ ...p, icao: e.target.value.toUpperCase() }))} />
+      <button disabled={busy || !f.from || !f.to} onClick={() => void download()}>
+        export CSV (°C)
+      </button>
+      {msg ? <span className={msg === 'downloaded' ? 'form-ok' : 'form-error'}>{msg}</span> : null}
+    </div>
+  );
+}

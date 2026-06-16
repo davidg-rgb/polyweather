@@ -378,6 +378,48 @@ export async function adminExport(req: Request, deps: ApiDeps): Promise<Response
   return new Response(csv, { status: 200, headers: { 'Content-Type': 'text/csv' } });
 }
 
+// --- [POST] /api/admin/export-predictions — prediction-vs-actual CSV, always °C -----
+const PRED_CSV_COLUMNS = [
+  'icao', 'city', 'date', 'actual_c', 'fc_plus1_c', 'fc_plus2_c', 'fc_plus3_c',
+  'err_plus1', 'err_plus2', 'err_plus3', 'n_models', 'provenance',
+] as const;
+
+export async function adminExportPredictions(req: Request, deps: ApiDeps): Promise<Response> {
+  const denied = await requireOperator(deps);
+  if (denied) return denied;
+  const body = await readBody(req);
+  const from = body['from'];
+  const to = body['to'];
+  const icao = body['icao'];
+  if (
+    typeof from !== 'string' || !DATE_RE.test(from) ||
+    typeof to !== 'string' || !DATE_RE.test(to) || from > to ||
+    (icao !== undefined && icao !== '' && typeof icao !== 'string')
+  ) {
+    return json(400, { error: 'ERR_VALIDATION' });
+  }
+
+  const lines = await deps.db.rpc<{ line: Record<string, unknown> }>('operator_export_predictions', {
+    p_from: from, p_to: to, p_icao: icao ? String(icao).toUpperCase() : null,
+  });
+  const esc = (v: unknown): string => {
+    if (v === null || v === undefined) return '';
+    const s = String(v);
+    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const keyOf: Record<(typeof PRED_CSV_COLUMNS)[number], string> = {
+    icao: 'icao', city: 'city', date: 'date', actual_c: 'actualC',
+    fc_plus1_c: 'fcPlus1C', fc_plus2_c: 'fcPlus2C', fc_plus3_c: 'fcPlus3C',
+    err_plus1: 'errPlus1', err_plus2: 'errPlus2', err_plus3: 'errPlus3',
+    n_models: 'nModels', provenance: 'provenance',
+  };
+  const csv = [
+    PRED_CSV_COLUMNS.join(','),
+    ...lines.map((r) => PRED_CSV_COLUMNS.map((c) => esc(r.line[keyOf[c]])).join(',')),
+  ].join('\n');
+  return new Response(csv, { status: 200, headers: { 'Content-Type': 'text/csv' } });
+}
+
 // --- [GET] /api/health — the out-of-band uptime probe (R-18); NO auth ---------------
 export async function healthCheck(_req: Request, deps: ApiDeps): Promise<Response> {
   try {
