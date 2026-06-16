@@ -71,9 +71,9 @@ async function place(db: ScriptDb, date: string, nowIso: string): Promise<number
   if (!input || input.arms.length === 0) return 0;
   const placements = planPlacements(input);
   if (placements.length === 0) return 0;
-  const rec = await db.query<{ n: number }>(`select public.amsterdam_sim_record($1::jsonb) as n`, [
-    JSON.stringify(placements),
-  ]);
+  // Pass the RAW array — postgres-js detects the `$1::jsonb` cast and JSON-encodes it (a
+  // JSON.stringify here would double-encode into a scalar string → "cannot extract elements").
+  const rec = await db.query<{ n: number }>(`select public.amsterdam_sim_record($1::jsonb) as n`, [placements]);
   return Number(rec[0]?.n ?? 0);
 }
 
@@ -82,9 +82,7 @@ async function grade(db: ScriptDb): Promise<number> {
   const pending = g[0]?.v ?? [];
   if (pending.length === 0) return 0;
   const settlements = planSettlements(pending);
-  const s = await db.query<{ n: number }>(`select public.amsterdam_sim_settle($1::jsonb) as n`, [
-    JSON.stringify(settlements),
-  ]);
+  const s = await db.query<{ n: number }>(`select public.amsterdam_sim_settle($1::jsonb) as n`, [settlements]);
   return Number(s[0]?.n ?? 0);
 }
 
