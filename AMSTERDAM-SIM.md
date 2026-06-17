@@ -117,6 +117,12 @@ pnpm typecheck
 # Re-run the backtest and quote what it PRINTS (don't trust a stale literal):
 pnpm tsx scripts/amsterdam-nowcast-backtest.ts    # per-arm hit/MAE/within-1 + McNemar p
 
+# Best-buy curve (AMSTERDAM-EV-MODEL.md Deliverable 2): edge(t)/EV(t) over the 5-min buy-time grid with CIs.
+# Faithful best_ask curve is ~5 days (best_ask only exists since ~June 12); --price mid extends to ~14 days
+# (optimistic, non-executable). The live arm h is grid point (h+1):00.
+pnpm tsx scripts/amsterdam-best-buy.ts                       # faithful (executable best_ask)
+pnpm tsx scripts/amsterdam-best-buy.ts --price mid          # extended mid-history (optimistic upper bound)
+
 # Seed history + see the decision table and leaderboard (idempotent on the unique (date,arm) key — it
 # extends history forward; it does NOT re-predict already-placed bets, see the mixed-regime caveat above)
 pnpm tsx scripts/amsterdam-sim.ts                 # seed all simulable days + grade + print

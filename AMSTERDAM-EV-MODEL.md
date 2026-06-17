@@ -1,6 +1,11 @@
 # AMSTERDAM-EV-MODEL — handoff: best-buy-timing model (5-min odds × prediction skill)
 
-> **Status: HANDOFF** (written 2026-06-17, session cleared after). Two deliverables, in order:
+> **Status: BOTH DELIVERABLES BUILT (2026-06-17).** Code is local, suite green (743), typecheck 0, web build
+> green. The only remaining steps are the operator-gated go-live for Deliverable 1 (apply migration `0042` to
+> hosted + push → Vercel — read-only RPC, no redeploy) and the standing P4 calibCursor drain (separate). See
+> the SESSION UPDATE block below for exactly what shipped and the decisions resolved.
+>
+> Original two deliverables, in order:
 > 1. **NEAR-TERM (≈1 session):** an **EV-with-confidence-interval + hit−ask-gap-by-arm** panel on `/amsterdam`,
 >    so the best-buy sweet spot reveals itself with honest uncertainty as `n` grows.
 > 2. **BIGGER (research + build):** a **continuous-time best-buy model** — track every 5-min odds point,
@@ -8,6 +13,59 @@
 >    *same* timeslot, and pinpoint the buy position with the most long-term upside.
 >
 > Read `AMSTERDAM-SIM.md` first (the live sim + the forecast-aware nowcast). This doc is the next step.
+
+---
+
+## SESSION UPDATE — 2026-06-17 (both deliverables built)
+
+**Deliverable 1 — EV/edge CI panel: DONE (code).**
+- **Core stats seam** `packages/core/src/sim/stats.ts` (17 unit tests): `wilsonInterval` (small-n-safe hit-rate
+  CI), `meanConfidenceInterval` (paired hit−ask gap, mean ± 1.96·SE), `bootstrapMeanCi` (heavy-tailed EV/$1,
+  seeded percentile bootstrap reusing `mulberry32`), and `armEdgeStats((won,ask)[])` — the one place the three
+  estimators are wired to data, so the loader AND the best-buy backtest score identically.
+- **Migration `0042_amsterdam_edge_ci.sql`** — create-or-replace `dash_amsterdam_sim` adding a `betsByArm`
+  payload (graded `(won, ask)` per arm). Read-only, additive, no new surface. Added to `migrations.test.ts`.
+- **Loader** `getAmsterdamSim` computes the per-arm CI bundle in TS from `betsByArm` via `armEdgeStats`
+  (degrades to NaN CIs if the payload is absent — the page can deploy ahead of the RPC). 5 new loader tests.
+- **Page** `/amsterdam` "Best time of day" table now shows hit (Wilson CI), edge ± CI (the headline), EV/$1 ±
+  CI, each colour-coded by whether its CI **clears zero** (✚ real edge / straddles 0 = efficient null); arms
+  with `nGraded < 10` are greyed "too few to call".
+- **Pending (operator-gated):** apply `0042` to hosted (MCP `apply_migration`) → push → Vercel. No Edge redeploy.
+
+**Deliverable 2 — best-buy curve: DONE.** `scripts/amsterdam-best-buy.ts` sweeps a 5-min buy-time grid, scoring
+`edge(t)`/`EV(t)` with CIs and `n(t)` over all resolved days, reusing the engine seam (`nowcastBasisC` +
+`predictedBucketIdx`) and `armEdgeStats`. **No look-ahead, faithful to the live arms:** running max through the
+last *completed* local hour `h_eff = hour(t)−1`, ask forward-filled `≤ t` — which makes **live arm `h` ≡ grid
+point `(h+1):00`** (the arm locks odds at end-of-hour `h`), so the 4 arms are the model's *pre-registered*
+reference points. `t*` is reported only among `n ≥ --min-n` points, with a loud multiple-comparisons caveat.
+
+**Odds-backtrack depth — RESOLVED (probed live, first-move #2):**
+- Polymarket `/prices-history` is a **dead end** for deepening the backtrack: each daily temperature token
+  retains only **~2–3 days** around its target, **0 points** for events older than ~5 weeks, at a coarsest
+  **10-min fidelity** (`fidelity=1`/`=5` both collapse to 10-min; `interval=1m` → HTTP 400).
+- **Our own `market_snapshots` archive is the deepest + finest source** (2026-05-14→present, ~5-min,
+  delta-deduped). So **there is no deeper odds to fetch** — the §2.4 deep-backfill idea is moot.
+- **Sharper finding than expected:** `best_ask` (the *executable* price) only exists **since ~2026-06-12** — older
+  snapshots stored `mid` only. So the *faithful* (best_ask) curve is **~5 resolved days**; a `--price mid` mode
+  (`coalesce(best_ask, mid)`) extends it to **~14 days** but `mid < ask` ⇒ its edge is an **optimistic, non-
+  executable upper bound** (it shows a fat universal edge precisely *because* mid understates cost — a clean
+  illustration of why the executable-ask curve, where edge erodes toward 0 as certainty rises, is the real test).
+
+**Decisions resolved (the §5 open questions):**
+- *Backfill deeper odds into a table, or query on the fly?* → **Neither/moot.** No deeper odds exist; the script
+  reads `market_snapshots` directly. Nothing to backfill.
+- *Multiple-comparisons when picking `t*`?* → Handled: `t*` gated to `n ≥ min-n`, the 4 live arms are the
+  pre-registered hypotheses (the scan is exploratory), and the output prints the caveat + how many points clear 0.
+- *Hourly vs half-hourly prediction (30-min METAR ingestion)?* → **Stay hourly for now (recommended).** The
+  faithful curve shows the edge is monotone-decreasing across the *hours* (the market re-prices our accuracy),
+  and the within-hour 5-min variation is an **ask** effect, not a prediction effect — a finer (half-hourly)
+  prediction only matters if `t*` lands on an hour boundary with a suspected sub-hour edge. It doesn't yet
+  (n too small to call). Revisit after ~30 dense days if a boundary effect appears.
+
+**First read on the data we have (thin — do not over-read):** on the faithful best_ask curve (n=5), edge is
+strongly positive early (14:00 ≈ +0.56 [+0.45,+0.68]) and **erodes to ~0 by 16:00–17:00** as the market prices
+in our rising certainty — the WO-5 efficiency signature, now visible *with its CI*. `t*` is **not called** (every
+point has n < 10). The live `/amsterdam` panel is the accruing version; firm read at ~30 dense days (~mid-July).
 
 ---
 

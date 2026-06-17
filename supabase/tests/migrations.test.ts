@@ -119,6 +119,10 @@ describe('migrations 0001–0010', () => {
       // 0041 = trailing-window bias (review follow-up) — amsterdam_sim_place_inputs' bias becomes the last
       // 30 finalized pairs instead of an all-history mean; refreshes two stale 0039 column comments.
       '0041_amsterdam_nowcast_trailing_bias.sql',
+      // 0042 = edge/EV confidence intervals — dash_amsterdam_sim gains a betsByArm payload (graded (won,
+      // ask) per arm) so the loader computes per-arm hit/edge/EV CIs via core/sim/stats (read-only,
+      // additive, no new surface). dash_amsterdam_sim stays in WEB_AUTHENTICATED (unchanged signature).
+      '0042_amsterdam_edge_ci.sql',
     ]);
   });
 });

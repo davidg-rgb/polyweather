@@ -249,6 +249,14 @@ describe('dash_amsterdam_sim — the head-to-head read', () => {
     expect(Array.isArray(out.betLog)).toBe(true);
     expect((out.betLog as unknown[]).length).toBeGreaterThanOrEqual(4);
 
+    // 0042: betsByArm carries the graded (won, ask) rows per arm — the CI input. 2026-06-10 graded all
+    // four; 2026-06-09 is still pending (no obs) and must NOT appear (graded only).
+    const betsByArm = out.betsByArm as Record<string, { won: boolean; ask: number }[]>;
+    expect(Object.keys(betsByArm).sort()).toEqual(['13', '14', '15', '16']);
+    expect(betsByArm['15']).toEqual([{ won: true, ask: 0.8 }]); // 22°C @0.80 won
+    expect(betsByArm['13']).toEqual([{ won: false, ask: 0.3 }]); // 19°C @0.30 lost
+    expect(betsByArm['16']!.every((r) => r.won === true)).toBe(true);
+
     const coverage = out.coverage as { nDays: number; nGradedDays: number };
     expect(Number(coverage.nDays)).toBe(2);
     expect(Number(coverage.nGradedDays)).toBe(1);

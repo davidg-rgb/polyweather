@@ -33,6 +33,41 @@ const statusChip = (status: string): ReactElement => {
   return <span className={`chip ${cls}`}>{status}</span>;
 };
 
+/** Below this many graded bets a CI is too wide to read — the arm is annotated "too few to call". */
+const MIN_CREDIBLE_N = 10;
+
+/** Signed fixed-dp value, '—' when absent. */
+const fmtSigned = (v: unknown, dp = 2): string => {
+  const n = num(v);
+  return n === null ? '—' : `${n >= 0 ? '+' : ''}${n.toFixed(dp)}`;
+};
+
+/**
+ * The honest "off zero?" verdict for a CI: 'pos' when the whole interval is above 0 (a real positive
+ * edge), 'neg' when entirely below, else 'flat' (straddles 0 → indistinguishable from the efficient null).
+ */
+const ciVerdict = (lo: unknown, hi: unknown): 'pos' | 'neg' | 'flat' => {
+  const l = num(lo);
+  const h = num(hi);
+  if (l === null || h === null) return 'flat';
+  if (l > 0) return 'pos';
+  if (h < 0) return 'neg';
+  return 'flat';
+};
+
+/** A muted `[lo, hi]` 95% band, '—' when either bound is absent. */
+const CiBand = ({ lo, hi, dp = 2, signed = false }: { lo: unknown; hi: unknown; dp?: number; signed?: boolean }): ReactElement => {
+  const l = num(lo);
+  const h = num(hi);
+  if (l === null || h === null) return <span className="muted small">—</span>;
+  const f = (x: number): string => (signed ? `${x >= 0 ? '+' : ''}${x.toFixed(dp)}` : x.toFixed(dp));
+  return (
+    <span className="muted small">
+      [{f(l)}, {f(h)}]
+    </span>
+  );
+};
+
 export default async function AmsterdamPage(): Promise<ReactElement> {
   const db = await serverDb();
   const view = await getAmsterdamSim(db);
@@ -135,7 +170,7 @@ export default async function AmsterdamPage(): Promise<ReactElement> {
         </p>
       </div>
 
-      {/* Best time of day — the evidence */}
+      {/* Best time of day — the evidence, now with 95% confidence intervals */}
       <h2>Best time of day — the evidence</h2>
       <div className="panel">
         <p className="muted small">
@@ -143,34 +178,62 @@ export default async function AmsterdamPage(): Promise<ReactElement> {
           day&apos;s high can only finish above what&apos;s happened so far). On a walk-forward backtest over 69
           post-warmup test days the 13:00 exact-bucket hit rose ~42%→~62% and its error roughly halved (McNemar
           p=0.024 — significant; 14:00 is directional, p=0.33); 15:00/16:00 keep the floor (already 86%/92%, the
-          forecast only adds noise there). Evidence is single-station, spring/summer only. The market still
-          re-prices our bucket in lockstep (its ask ≈ our hit rate), so a better nowcast sharpens the call without
-          necessarily paying more — the live race below is the real test.
+          forecast only adds noise there). Evidence is single-station, spring/summer only.
+        </p>
+        <p className="muted small">
+          Each figure carries its <strong>95% confidence interval</strong> from the graded bets so far —{' '}
+          <span className="mono">edge = mean(won − ask)</span> (the paired, low-variance headline; mean ± 1.96·SE)
+          and <span className="mono">EV/$1 = mean(won ? 1/ask−1 : −1)</span> (seeded bootstrap, heavy-tailed). The
+          read is simple: an arm only shows a <span className="pos">real edge</span> once its whole interval clears
+          zero; while a CI straddles 0 the arm is <span className="muted">indistinguishable from the efficient
+          market</span> (the WO-5 prior). Arms with fewer than {MIN_CREDIBLE_N} graded bets are greyed — too few to
+          call. This is the dashboard version of the ~June-30 / mid-July checkpoint.
         </p>
         <table style={{ width: 'auto' }}>
           <thead>
             <tr>
               <th>arm</th>
-              <th className="num">hit rate</th>
+              <th className="num">hit rate (95% CI)</th>
               <th className="num">avg ask</th>
-              <th className="num">edge (hit−ask)</th>
+              <th className="num">edge = hit−ask (95% CI)</th>
+              <th className="num">EV/$1 (95% CI)</th>
               <th className="num">net P&amp;L</th>
               <th className="num">graded</th>
             </tr>
           </thead>
           <tbody>
             {arms.map((a) => {
-              const edge = num(a.hitRate) !== null && num(a.avgAsk) !== null ? num(a.hitRate)! - num(a.avgAsk)! : null;
+              const n = num(a.nGraded) ?? 0;
+              const thin = n < MIN_CREDIBLE_N;
+              const edgeV = ciVerdict(a.edgeCiLo, a.edgeCiHi);
+              const evV = ciVerdict(a.evCiLo, a.evCiHi);
               return (
-                <tr key={a.hour}>
-                  <td className="mono">{a.hour}:00</td>
-                  <td className="num">{fmtPct(a.hitRate)}</td>
+                <tr key={a.hour} style={thin ? { opacity: 0.55 } : undefined}>
+                  <td className="mono">
+                    {a.hour}:00
+                    {a.isLeader ? <span className="chip green" style={{ marginLeft: 6 }}>leader</span> : null}
+                  </td>
+                  <td className="num">
+                    {fmtPct(a.hitRate)}
+                    <br />
+                    <CiBand lo={num(a.hitCiLo) === null ? null : num(a.hitCiLo)! * 100} hi={num(a.hitCiHi) === null ? null : num(a.hitCiHi)! * 100} dp={0} />
+                  </td>
                   <td className="num">{fmtProb(a.avgAsk)}</td>
-                  <td className={`num ${edge !== null && edge >= 0 ? 'pos' : 'neg'}`}>
-                    {edge === null ? '—' : `${edge >= 0 ? '+' : ''}${edge.toFixed(2)}`}
+                  <td className={`num ${edgeV === 'flat' ? '' : edgeV}`}>
+                    {fmtSigned(a.edge)}
+                    <br />
+                    <CiBand lo={a.edgeCiLo} hi={a.edgeCiHi} signed />
+                  </td>
+                  <td className={`num ${evV === 'flat' ? '' : evV}`}>
+                    {fmtSigned(a.ev)}
+                    <br />
+                    <CiBand lo={a.evCiLo} hi={a.evCiHi} signed />
                   </td>
                   <td className={`num ${pnlClass(a.pnl)}`}>{fmtUsd(a.pnl)}</td>
-                  <td className="num">{num(a.nGraded) ?? 0}</td>
+                  <td className="num">
+                    {n}
+                    {thin ? <><br /><span className="muted small">too few</span></> : null}
+                  </td>
                 </tr>
               );
             })}

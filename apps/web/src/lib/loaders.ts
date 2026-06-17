@@ -5,7 +5,7 @@
  * loader takes the WebDb port, so the PGlite suite drives the REAL loaders;
  * pages bind serverDb() from supabase.ts.
  */
-import { exposureSummary, parseConfigRows } from '@weather-edge/core';
+import { armEdgeStats, exposureSummary, parseConfigRows } from '@weather-edge/core';
 import type { AppConfig, EdgeRow } from '@weather-edge/core';
 import { goLiveGate, type GateDeps } from '@weather-edge/trading';
 import { compareEdgeRows, recomputeEdgeRows } from './edge-display.ts';
@@ -439,6 +439,22 @@ export interface ArmStanding {
   avgAsk: unknown;
   pnlAtCompare: unknown;
   isLeader: boolean;
+  /**
+   * Per-arm confidence intervals (0042) computed in TS from the graded (won, ask) rows via
+   * core/sim/stats armEdgeStats — so "is this arm's edge clearly off zero?" is answerable at a glance.
+   * NaN (→ null in the page) when the arm has no graded bets. `edge`/`ev` recompute the point estimates
+   * over the GRADED population (the paired-CI basis), so they're the authoritative ones for the panel.
+   */
+  hitCiLo: number;
+  hitCiHi: number;
+  /** Mean paired gap (won − ask) over graded bets — the low-variance headline edge. */
+  edge: number;
+  edgeCiLo: number;
+  edgeCiHi: number;
+  /** Mean realised EV per $1 staked, fee-free (won ? 1/ask−1 : −1). */
+  ev: number;
+  evCiLo: number;
+  evCiHi: number;
 }
 
 export interface SimBetRow {
@@ -484,12 +500,18 @@ interface SimEquityPoint {
   date: string;
   cum: unknown;
 }
+type ArmPointPayload = Omit<
+  ArmStanding,
+  'isLeader' | 'hitCiLo' | 'hitCiHi' | 'edge' | 'edgeCiLo' | 'edgeCiHi' | 'ev' | 'evCiLo' | 'evCiHi'
+>;
 interface SimPayload {
   config: AmsterdamSimView['config'];
   coverage: AmsterdamSimView['coverage'];
-  arms: Omit<ArmStanding, 'isLeader'>[];
+  arms: ArmPointPayload[];
   leader: { hour: number; pnl: unknown; nGraded: unknown } | null;
   equityByArm: Record<string, SimEquityPoint[]>;
+  /** Per-arm graded (won, ask) rows (0042) — the input to the per-arm CI computation. */
+  betsByArm?: Record<string, { won: boolean | null; ask: unknown }[]>;
   betLog: SimBetRow[];
   latest: { date: string | null; byHour: Record<string, SimLatestRow> };
 }
@@ -509,8 +531,29 @@ export async function getAmsterdamSim(db: WebDb): Promise<AmsterdamSimView | nul
   if (!v) return null;
 
   const leaderHour = v.leader?.hour ?? null;
+  const betsByArm = v.betsByArm ?? {};
   const arms: ArmStanding[] = (v.arms ?? [])
-    .map((a) => ({ ...a, isLeader: a.hour === leaderHour }))
+    .map((a) => {
+      // Per-arm hit/edge/EV CIs from the graded (won, ask) rows — computed once in core (armEdgeStats)
+      // so the dashboard and the best-buy backtest agree. Coerce defensively (jsonb numerics arrive as
+      // strings via the port; null `won` can't happen for a graded bet but is filtered for safety).
+      const graded = (betsByArm[String(a.hour)] ?? [])
+        .map((r) => ({ won: r.won === true, ask: Number(r.ask) }))
+        .filter((r) => Number.isFinite(r.ask));
+      const s = armEdgeStats(graded);
+      return {
+        ...a,
+        isLeader: a.hour === leaderHour,
+        hitCiLo: s.hitCiLo,
+        hitCiHi: s.hitCiHi,
+        edge: s.edge,
+        edgeCiLo: s.edgeCiLo,
+        edgeCiHi: s.edgeCiHi,
+        ev: s.ev,
+        evCiLo: s.evCiLo,
+        evCiHi: s.evCiHi,
+      };
+    })
     .sort((a, b) => a.hour - b.hour);
 
   // Shared, sorted union of every arm's bet dates → carry the last-known cum forward per arm.
