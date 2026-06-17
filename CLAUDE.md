@@ -29,52 +29,18 @@ dashboard, TypeScript monorepo (`packages/core|io|trading`, `supabase/functions`
 
 ---
 
-## ⚙️ ACTIVE OPERATIONAL RULE — auto-resume the P4 backfill (self-expiring)
+## P4 backfill + calibration refold — DONE (2026-06-17)
 
-**At the start of every session, automatically (without being asked), UNTIL
-`pnpm tsx scripts/check-p4-coverage.ts` reports `✅ P4 DoD MET`:**
+The one-time full-universe backfill + the calibration **full-refold are complete**:
+`pnpm tsx scripts/check-p4-coverage.ts` reports `✅ P4 DoD MET` (**97.5% cell coverage,
+45 stations, 28.8 months**). The former self-expiring auto-resume operational-rule block and
+the `delete config calibCursor` finish-line step have been removed — they were one-time aids.
+The refold drained 39,454 finalized obs (612,236 residual rows) in 15 manual `run-calibration`
+triggers (RUNBOOK.md §99-124); steady-state daily calibration now keeps `model_stats` warm on
+its own. **Do NOT re-add a backfill auto-resume rule** unless a fresh universe-wide backfill is
+started.
 
-1. **FIRST kill any existing backfill processes — they DO survive across sessions on this
-   setup, so launching without this STACKS DUPLICATES** that race the shared cursor and
-   split the 8000/day budget N-ways (observed 2026-06-14: 3 actuals + 2 forecasts stacked
-   from prior sessions). Run in Git Bash (PowerShell is denied here); `wmic` targets only
-   backfill node procs by command line, so it won't touch other node processes:
-   ```
-   wmic process where "name='node.exe' and commandline like '%backfill-%'" call terminate
-   ```
-2. **THEN launch exactly ONE of each as harness background tasks** (`run_in_background: true`):
-   - `pnpm tsx scripts/backfill-forecasts.ts --budget 8000`
-   - `pnpm tsx scripts/backfill-actuals.ts --budget 8000`
-   Each resumes from its DB cursor and self-paces against the 8000/UTC-day Open-Meteo
-   budget (prints `sleeping … min until the next UTC day` once spent, wakes at 00:00Z).
-   Relaunching is safe — idempotent on the cursor. **Forecasts rate-limit caveat:** on a
-   fresh-day wake the forecasts worker fires fast and can trip Open-Meteo's free-tier
-   rate limit — it logs `retries exhausted … previous-runs-api` per cell, keeps the
-   cursor, and recovers when the window resets. Benign (~1 weighted call per failed
-   scope); do NOT panic-kill or relaunch into the same wall — let it ride or pause it.
-3. **Keep them alive for the session:** if a backfill task exits/dies before P4 is done,
-   re-run step 1 (kill) then step 2 (launch one pair). Surface progress (station coverage)
-   when asked or on milestones.
-
-**Goal:** backfill all 46 stations so calibration warms and `check-p4-coverage` PASSes —
-the P4 Definition-of-Done. **The moment it PASSes, DELETE this whole rule block** (and
-tell the operator). It is a temporary one-time-backfill aid.
-
-> Why this lives here, not in a hook or Scheduled Task: the backfill is a multi-day,
-> budget-gated job, and the operator chose session-scoped auto-resume over a standing OS
-> automation that would hit prod unattended.
-> **CORRECTION (2026-06-14):** the earlier claim that detached procs are reaped was WRONG
-> — `run_in_background` tasks each open a cmd window that PERSISTS across sessions, so
-> pairs stacked into duplicates. Step 1's kill-first makes re-ensuring idempotent. To
-> close a stray worker, kill its node proc (step 1's `wmic`); its cmd window then exits.
-
----
-
-## After the backfill (the P4 finish line)
-
-When `check-p4-coverage` PASSes: `delete config calibCursor` (hosted) → the 11:30Z
-`run-calibration` cron self-drains the refold → `model_stats` fully populates → P4 done.
-Remaining operator-CLI deploys (non-blocking) are in `RUNBOOK.md` 140–171: redeploy
-`run-calibration` (3k cap) and deploy `snapshot-sources` + migration `0026` (set the
-**rotated** WeatherAPI/OWM keys as Edge secrets — the old WeatherAPI key was exposed in
-chat and should already be rotated).
+Remaining operator-CLI deploys (non-blocking, **separate from P4**) per `RUNBOOK.md` 140–171:
+redeploy `run-calibration` (3k cap) and deploy `snapshot-sources` + migration `0026` (set the
+**rotated** WeatherAPI/OWM keys as Edge secrets — the old WeatherAPI key was exposed in chat and
+should already be rotated).
