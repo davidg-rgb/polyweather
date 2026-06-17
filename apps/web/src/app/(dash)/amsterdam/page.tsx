@@ -8,11 +8,18 @@
  */
 import type { ReactElement } from 'react';
 import { EquityChart, type EquitySeries } from '../../../components/EquityChart.tsx';
+import { PeakHourChart } from '../../../components/PeakHourChart.tsx';
 import { fmtDate, fmtPct, fmtProb, fmtTemp, fmtUsd, num } from '../../../lib/format.ts';
 import { getAmsterdamSim } from '../../../lib/loaders.ts';
 import { serverDb } from '../../../lib/supabase.ts';
 
 export const dynamic = 'force-dynamic';
+
+const MONTH_NAMES = [
+  'January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December',
+];
+const monthName = (m: number): string => MONTH_NAMES[m - 1] ?? '';
 
 const ARM_COLOR: Record<number, string> = {
   13: 'var(--amber)',
@@ -88,7 +95,8 @@ export default async function AmsterdamPage(): Promise<ReactElement> {
     );
   }
 
-  const { config, coverage, arms, leaderHour, chart, betLog, latest, truthCoverage } = view;
+  const { config, coverage, arms, leaderHour, chart, betLog, latest, truthCoverage, bestTime, peakHourChart } =
+    view;
   const hasTruth = (num(truthCoverage?.nBetsWithTruth) ?? 0) > 0;
   const nGradedDays = num(coverage.nGradedDays) ?? 0;
   const hasBets = (num(coverage.nDays) ?? 0) > 0;
@@ -99,8 +107,12 @@ export default async function AmsterdamPage(): Promise<ReactElement> {
     .sort((a, b) => a - b)
     .map((h) => ({ label: `${h}:00`, color: ARM_COLOR[h] ?? 'var(--accent)', values: chart.byHour[h]! }));
 
+  const rec = bestTime.recommendedHour;
+  const pc = bestTime.headline.predictiveConfidence;
+  const fc = bestTime.headline.floorConfidence;
+
   return (
-    <div>
+    <div className="ams-dash">
       <h1>
         Amsterdam — paper-trade simulation{' '}
         <span className="chip blue">EHAM · °C · fictitious</span>
@@ -110,6 +122,139 @@ export default async function AmsterdamPage(): Promise<ReactElement> {
         rules — racing to see which hour gains the most. Resolves to the Wunderground Schiphol daily high (the
         market&apos;s own truth). Insight value, <strong>not trading</strong>.
       </p>
+
+      {/* ── Hero bento: real-time-vs-climatology chart + best-time tiles (0044) ──────────────────── */}
+      <div className="bento">
+        <div className="glass hero">
+          <div className="tile-head">
+            <span className="cap">
+              Real-time vs 20-year average · {monthName(peakHourChart.month)}
+              {peakHourChart.hot ? ' · hot-day peak timing' : ''}
+            </span>
+            <span className="cap" style={{ color: 'var(--ams-secondary-dim)' }}>
+              Schiphol · KNMI 240 · {bestTime.medianPeakHour}:00 median peak
+            </span>
+          </div>
+          <PeakHourChart data={peakHourChart} />
+          <div className="chart-legend">
+            <span>
+              <i className="ln solid" /> {peakHourChart.latestDate ? `latest (${fmtDate(peakHourChart.latestDate)})` : 'latest'} running max
+            </span>
+            <span>
+              <i className="ln dash" /> 20-yr avg temp (monthly)
+            </span>
+            <span>
+              <i className="ln dot" /> 20-yr avg running max (monthly)
+            </span>
+            <span>
+              <i className="sw" style={{ background: 'var(--ams-secondary-dim)', opacity: 0.4 }} /> peak-hour distribution
+            </span>
+            <span>
+              <i className="sw" /> peak window {peakHourChart.peakWindow.fromHour}:00–{peakHourChart.peakWindow.toHour}:00
+            </span>
+            {rec != null ? (
+              <span style={{ color: 'var(--ams-amber)' }}>
+                <i className="ln dash" style={{ borderColor: 'var(--ams-amber)' }} /> recommended lock {rec}:00
+              </span>
+            ) : null}
+          </div>
+        </div>
+
+        <div className="metric-col">
+          <div className="tile rec">
+            <div className="tile-head">
+              <span className="cap">Best time to bet</span>
+              <span className="pill">model</span>
+            </div>
+            <div className="big amber">{rec == null ? '—' : `${rec}:00`}</div>
+            <div className="sub">{bestTime.rationale}</div>
+          </div>
+
+          <div className="tile">
+            <div className="tile-head">
+              <span className="cap">Predictive confidence</span>
+              <span className="cap" style={{ color: 'var(--ams-secondary)' }}>{rec == null ? '' : `@ ${rec}:00`}</span>
+            </div>
+            <div className="big">{pc == null ? '—' : fmtPct(pc, 0)}</div>
+            <div className="meter">
+              <span className="glow" style={{ width: `${Math.round((pc ?? 0) * 100)}%` }} />
+            </div>
+            <div className="sub">peak-hour floor confidence × prediction accuracy (shrunk to the climatology prior)</div>
+          </div>
+
+          <div className="tile">
+            <div className="tile-head">
+              <span className="cap">Floor locked by {rec == null ? '—' : `${rec}:00`}</span>
+            </div>
+            <div className="big" style={{ color: 'var(--ams-tertiary)' }}>{fc == null ? '—' : fmtPct(fc, 0)}</div>
+            <div className="sub">
+              P(≤0.5°C left to climb) · max usually lands ~{bestTime.medianPeakHour}:00 ·{' '}
+              {peakHourChart.hot ? '≥25°C days' : `${monthName(peakHourChart.month)} normal`}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* ── Best time to bet — the accuracy × peak-hour fusion, per lock hour ─────────────────────── */}
+      <h2>Best time to bet — accuracy × peak hour</h2>
+      <div className="panel">
+        <p className="muted small">
+          Two independent things decide a fixed-stake bucket bet: whether the day still climbs past our bucket
+          after we lock (<strong>peak-hour floor confidence</strong>, from 20 years of KNMI Schiphol hourly
+          data — {peakHourChart.hot ? 'the ≥25°C hot-day' : `the ${monthName(peakHourChart.month)}`} climatology),
+          and whether our call is right given the floor (<strong>prediction accuracy</strong>, the graded paper
+          bets). <span className="mono">Predictive confidence</span> fuses them — the empirical hit rate shrunk
+          toward a structural prior (floor confidence × baseline skill), so early on it leans on the climatology
+          and tightens as bets accumulate. The recommendation maximises{' '}
+          <span className="mono">predictive&nbsp;conf / ask − 1</span> among hours whose floor is credibly locked
+          (else the earliest structurally-safe hour). A decision aid, <strong>not</strong> a calibrated
+          probability.
+        </p>
+        <table style={{ width: 'auto' }}>
+          <thead>
+            <tr>
+              <th>lock</th>
+              <th className="num">peaked by</th>
+              <th className="num">floor conf</th>
+              <th className="num">avg upside</th>
+              <th className="num">model hit</th>
+              <th className="num">predictive conf</th>
+              <th className="num">avg ask</th>
+              <th className="num">blended EV/$1</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {bestTime.rows.map((r) => {
+              const ev = r.evBlended;
+              const evCls = ev == null ? '' : ev > 0 ? 'pos' : ev < 0 ? 'neg' : '';
+              return (
+                <tr key={r.hour} className={r.recommended ? 'rec-row' : undefined}>
+                  <td className="mono">{r.hour}:00</td>
+                  <td className="num">{fmtPct(r.peakedPct, 0)}</td>
+                  <td className="num">{fmtPct(r.floorConfidence, 0)}</td>
+                  <td className="num">{r.meanUpsideC.toFixed(1)}°C</td>
+                  <td className="num">
+                    {r.empiricalHitRate == null ? <span className="muted">prior</span> : fmtPct(r.empiricalHitRate, 0)}
+                    {r.nGraded > 0 ? <span className="muted small"> · {r.nGraded}n</span> : null}
+                  </td>
+                  <td className="num">{fmtPct(r.predictiveConfidence, 0)}</td>
+                  <td className="num">{r.avgAsk == null ? '—' : fmtProb(r.avgAsk)}</td>
+                  <td className={`num ${evCls}`}>{ev == null ? '—' : `${ev >= 0 ? '+' : ''}${ev.toFixed(2)}`}</td>
+                  <td>{r.recommended ? <span className="pill">bet</span> : null}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+        <p className="muted small">
+          <strong>floor conf</strong> = P(remaining warming ≤ 0.5°C) — the running-max floor is essentially the
+          day&apos;s high. <strong>avg upside</strong> = mean °C the floor can still rise after that hour.{' '}
+          <strong>model hit</strong> is the empirical market hit rate (or the climatology prior before enough
+          graded bets). Hot days peak ~1h later, so on a forecast-hot day the safe hour shifts toward
+          16:00–17:00 — the table switches climatologies automatically.
+        </p>
+      </div>
 
       {!hasBets ? (
         <div className="panel">
@@ -302,7 +447,7 @@ export default async function AmsterdamPage(): Promise<ReactElement> {
                       />
                     </td>
                     <td className="num muted">{fmtPct(a.hitRate)}</td>
-                    <td className="num">{a.mae == null ? '—' : `${(num(a.mae) ?? 0).toFixed(2)}`}</td>
+                    <td className="num">{num(a.mae) === null ? '—' : `${num(a.mae)!.toFixed(2)}`}</td>
                     <td className="num">
                       {fmtSigned(a.bias)}
                       <br />
@@ -370,7 +515,7 @@ export default async function AmsterdamPage(): Promise<ReactElement> {
                       <td>{statusChip(r.status)}</td>
                       <td className={`num ${pnlClass(r.pnl)}`}>{r.status === 'pending' ? '—' : fmtUsd(r.pnl)}</td>
                       <td className="num">{r.actualC == null ? '—' : fmtTemp(r.actualC, 'C')}</td>
-                      <td className="num">{r.actualDecimalC == null ? '—' : `${(num(r.actualDecimalC) ?? 0).toFixed(1)}°`}</td>
+                      <td className="num">{num(r.actualDecimalC) === null ? '—' : `${num(r.actualDecimalC)!.toFixed(1)}°`}</td>
                       <td className="num">{fmtSigned(r.signedErrorC)}</td>
                       <td className="num">{truthChip(r.truthWon)}</td>
                     </tr>
@@ -416,7 +561,7 @@ export default async function AmsterdamPage(): Promise<ReactElement> {
                   <td className="num">{fmtProb(b.ask)}</td>
                   <td>{statusChip(b.status)}</td>
                   <td className="num">{b.actualC == null ? '—' : fmtTemp(b.actualC, 'C')}</td>
-                  <td className="num">{b.actualDecimalC == null ? '—' : `${(num(b.actualDecimalC) ?? 0).toFixed(1)}°`}</td>
+                  <td className="num">{num(b.actualDecimalC) === null ? '—' : `${num(b.actualDecimalC)!.toFixed(1)}°`}</td>
                   <td className="num">{fmtSigned(b.signedErrorC)}</td>
                   <td className="num">{truthChip(b.truthWon)}</td>
                   <td className={`num ${pnlClass(b.pnl)}`}>{b.status === 'pending' ? '—' : fmtUsd(b.pnl)}</td>

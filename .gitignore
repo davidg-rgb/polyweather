@@ -23,3 +23,6 @@ Thumbs.db
 
 # Claude Code — local settings
 .claude/settings.local.json
+
+# Generated research artifacts (regenerable via the --csv / --emit flags)
+scripts/research/out/

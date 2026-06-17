@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Analytics Hub - WeatherOdds</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "inverse-primary": "#565e74",
+                        "secondary-container": "#00a6e0",
+                        "on-error": "#690005",
+                        "on-error-container": "#ffdad6",
+                        "tertiary-fixed-dim": "#4edea3",
+                        "primary": "#bec6e0",
+                        "secondary-fixed-dim": "#7bd0ff",
+                        "primary-fixed": "#dae2fd",
+                        "on-tertiary-container": "#009365",
+                        "on-tertiary-fixed": "#002113",
+                        "primary-container": "#0f172a",
+                        "on-surface-variant": "#c6c6cd",
+                        "surface-container-lowest": "#010f1f",
+                        "surface-tint": "#bec6e0",
+                        "on-surface": "#d4e4fa",
+                        "surface-bright": "#2c3a4c",
+                        "on-secondary-fixed": "#001e2c",
+                        "on-secondary": "#00354a",
+                        "on-secondary-container": "#00374d",
+                        "outline-variant": "#45464d",
+                        "on-secondary-fixed-variant": "#004c69",
+                        "inverse-on-surface": "#233143",
+                        "surface-container-low": "#0d1c2d",
+                        "on-primary-container": "#798098",
+                        "primary-fixed-dim": "#bec6e0",
+                        "surface-container-high": "#1c2b3c",
+                        "on-primary-fixed-variant": "#3f465c",
+                        "on-tertiary-fixed-variant": "#005236",
+                        "background": "#051424",
+                        "outline": "#909097",
+                        "error": "#ffb4ab",
+                        "surface": "#051424",
+                        "on-background": "#d4e4fa",
+                        "on-primary": "#283044",
+                        "tertiary-container": "#001c10",
+                        "tertiary": "#4edea3",
+                        "inverse-surface": "#d4e4fa",
+                        "secondary": "#7bd0ff",
+                        "surface-dim": "#051424",
+                        "on-tertiary": "#003824",
+                        "surface-variant": "#273647",
+                        "secondary-fixed": "#c4e7ff",
+                        "on-primary-fixed": "#131b2e",
+                        "error-container": "#93000a",
+                        "tertiary-fixed": "#6ffbbe",
+                        "surface-container": "#122131",
+                        "surface-container-highest": "#273647"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.125rem",
+                        "lg": "0.25rem",
+                        "xl": "0.5rem",
+                        "full": "0.75rem"
+                    },
+                    "spacing": {
+                        "margin-desktop": "32px",
+                        "gutter": "16px",
+                        "unit": "4px",
+                        "margin-mobile": "16px",
+                        "container-max": "1440px"
+                    },
+                    "fontFamily": {
+                        "body-sm": ["Inter"],
+                        "data-lg": ["JetBrains Mono"],
+                        "data-sm": ["JetBrains Mono"],
+                        "data-md": ["JetBrains Mono"],
+                        "label-caps": ["Inter"],
+                        "body-md": ["Inter"],
+                        "headline-md": ["Inter"],
+                        "display-lg": ["Inter"],
+                        "headline-sm": ["Inter"]
+                    },
+                    "fontSize": {
+                        "body-sm": ["14px", {"lineHeight": "1.5", "fontWeight": "400"}],
+                        "data-lg": ["20px", {"lineHeight": "1.2", "fontWeight": "500"}],
+                        "data-sm": ["12px", {"lineHeight": "1.2", "fontWeight": "400"}],
+                        "data-md": ["14px", {"lineHeight": "1.2", "fontWeight": "500"}],
+                        "label-caps": ["11px", {"lineHeight": "1", "letterSpacing": "0.05em", "fontWeight": "700"}],
+                        "body-md": ["16px", {"lineHeight": "1.5", "fontWeight": "400"}],
+                        "headline-md": ["24px", {"lineHeight": "1.2", "fontWeight": "600"}],
+                        "display-lg": ["48px", {"lineHeight": "1.1", "letterSpacing": "-0.02em", "fontWeight": "700"}],
+                        "headline-sm": ["18px", {"lineHeight": "1.2", "fontWeight": "600"}]
+                    }
+                }
+            }
+        }
+    </script>
+<style>
+        .glass-panel {
+            background: rgba(15, 23, 42, 0.8);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        .glow-accent {
+            box-shadow: 0 0 8px rgba(56, 189, 248, 0.25);
+        }
+        .zebra-row:nth-child(even) {
+            background-color: rgba(255, 255, 255, 0.02);
+        }
+        .zebra-row:hover {
+            border-left: 2px solid #7bd0ff;
+            background-color: rgba(255, 255, 255, 0.05);
+        }
+        
+        /* Custom Scrollbar for compact feel */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: rgba(198, 198, 205, 0.2);
+            border-radius: 3px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: rgba(198, 198, 205, 0.4);
+        }
+    </style>
+</head>
+<body class="bg-background text-on-background font-body-md min-h-screen flex flex-col antialiased selection:bg-secondary/30 selection:text-secondary">
+<!-- TopNavBar -->
+<header class="fixed top-0 w-full z-50 bg-surface/80 dark:bg-surface/80 backdrop-blur-xl border-b border-white/10 shadow-[0_0_8px_rgba(56,189,248,0.25)] flex justify-between items-center px-margin-desktop h-16">
+<div class="flex items-center gap-6">
+<h1 class="font-display-lg text-display-lg font-bold text-primary tracking-tighter">WeatherOdds</h1>
+</div>
+<div class="flex items-center gap-8">
+<nav class="hidden md:flex gap-6">
+<!-- Navigation links from JSON -->
+<a class="text-on-surface-variant font-data-md hover:text-secondary transition-colors duration-200 active:scale-95 transition-transform" href="#">$1,240.50</a>
+<a class="text-on-surface-variant font-data-md hover:text-secondary transition-colors duration-200 active:scale-95 transition-transform" href="#">Alerts</a>
+</nav>
+<div class="flex items-center gap-4">
+<button class="text-secondary dark:text-secondary hover:text-secondary transition-colors duration-200 active:scale-95 transition-transform">
+<span class="material-symbols-outlined" data-icon="notifications">notifications</span>
+</button>
+<button class="text-secondary dark:text-secondary hover:text-secondary transition-colors duration-200 active:scale-95 transition-transform">
+<span class="material-symbols-outlined" data-icon="account_circle">account_circle</span>
+</button>
+</div>
+</div>
+</header>
+<div class="flex flex-1 pt-16">
+<!-- SideNavBar -->
+<aside class="hidden md:flex flex-col pt-20 pb-8 h-full bg-surface-container-low/90 dark:bg-surface-container-low/90 backdrop-blur-2xl fixed left-0 top-0 w-64 z-40 border-r border-white/5 transition-all duration-300 ease-in-out">
+<div class="px-4 mb-8">
+<div class="flex items-center gap-3 mb-6">
+<div class="w-10 h-10 rounded-full bg-surface-variant flex items-center justify-center overflow-hidden border border-white/10">
+<span class="material-symbols-outlined text-primary" data-icon="person">person</span>
+</div>
+<div>
+<div class="font-headline-sm text-headline-sm text-primary">Trader Alpha</div>
+<div class="font-data-sm text-data-sm text-on-surface-variant">Tier: Meteorologist</div>
+</div>
+</div>
+<button class="w-full bg-secondary text-on-secondary font-data-md py-2 rounded flex items-center justify-center gap-2 hover:bg-secondary-fixed transition-colors active:scale-95">
+<span class="material-symbols-outlined" data-icon="add" style="font-size: 18px;">add</span>
+                    Place New Bet
+                </button>
+</div>
+<nav class="flex-1 flex flex-col gap-1">
+<a class="text-on-surface-variant px-4 py-3 font-data-sm text-data-sm hover:bg-white/5 hover:text-on-surface flex items-center gap-3" href="#">
+<span class="material-symbols-outlined" data-icon="dashboard">dashboard</span>
+                    Live Dashboard
+                </a>
+<a class="text-secondary border-l-2 border-secondary bg-secondary/10 px-4 py-3 font-data-sm text-data-sm flex items-center gap-3" href="#">
+<span class="material-symbols-outlined" data-icon="analytics" data-weight="fill" style="font-variation-settings: 'FILL' 1;">analytics</span>
+                    Analytics Hub
+                </a>
+<a class="text-on-surface-variant px-4 py-3 font-data-sm text-data-sm hover:bg-white/5 hover:text-on-surface flex items-center gap-3" href="#">
+<span class="material-symbols-outlined" data-icon="payments">payments</span>
+                    My Stakes
+                </a>
+<a class="text-on-surface-variant px-4 py-3 font-data-sm text-data-sm hover:bg-white/5 hover:text-on-surface flex items-center gap-3" href="#">
+<span class="material-symbols-outlined" data-icon="history">history</span>
+                    Market History
+                </a>
+</nav>
+<div class="mt-auto px-4 flex flex-col gap-1">
+<a class="text-on-surface-variant px-4 py-3 font-data-sm text-data-sm hover:bg-white/5 hover:text-on-surface flex items-center gap-3" href="#">
+<span class="material-symbols-outlined" data-icon="settings">settings</span>
+                    Settings
+                </a>
+<a class="text-on-surface-variant px-4 py-3 font-data-sm text-data-sm hover:bg-white/5 hover:text-on-surface flex items-center gap-3" href="#">
+<span class="material-symbols-outlined" data-icon="help">help</span>
+                    Support
+                </a>
+</div>
+</aside>
+<!-- Main Content -->
+<main class="flex-1 md:ml-64 p-margin-mobile md:p-margin-desktop overflow-y-auto">
+<div class="max-w-[1440px] mx-auto space-y-6">
+<!-- Header Section -->
+<div class="flex flex-col md:flex-row justify-between items-start md:items-end gap-4 mb-8">
+<div>
+<h2 class="font-headline-md text-headline-md text-primary-fixed mb-1">Temperature Variance Analytics</h2>
+<p class="font-body-sm text-body-sm text-on-surface-variant">Cumulative historic highs/lows vs current telemetry.</p>
+</div>
+<div class="flex gap-2 bg-surface-container-low p-1 rounded border border-white/5">
+<button class="px-3 py-1 font-data-sm text-data-sm text-secondary bg-surface-variant rounded">24H</button>
+<button class="px-3 py-1 font-data-sm text-data-sm text-on-surface-variant hover:text-secondary transition-colors">7D</button>
+<button class="px-3 py-1 font-data-sm text-data-sm text-on-surface-variant hover:text-secondary transition-colors">30D</button>
+</div>
+</div>
+<!-- Main Chart Area (Bento Grid) -->
+<div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+<!-- Primary Visualization -->
+<div class="lg:col-span-8 glass-panel rounded-xl p-6 relative flex flex-col min-h-[400px]">
+<div class="flex justify-between items-center mb-6">
+<h3 class="font-data-md text-data-md text-on-surface flex items-center gap-2">
+<span class="w-2 h-2 rounded-full bg-secondary animate-pulse"></span>
+                                Real-Time vs 10-Year Average
+                            </h3>
+<button class="text-on-surface-variant hover:text-secondary transition-colors">
+<span class="material-symbols-outlined" data-icon="more_vert">more_vert</span>
+</button>
+</div>
+<!-- Simulated Chart Area -->
+<div class="flex-1 relative border-l border-b border-white/10 ml-8 mb-6 mt-4">
+<!-- Y-Axis Labels -->
+<div class="absolute -left-8 top-0 bottom-0 flex flex-col justify-between font-data-sm text-data-sm text-on-surface-variant opacity-70">
+<span>35°</span>
+<span>25°</span>
+<span>15°</span>
+<span>5°</span>
+</div>
+<!-- Grid Lines -->
+<div class="absolute inset-0 flex flex-col justify-between pointer-events-none">
+<div class="w-full border-t border-white/5"></div>
+<div class="w-full border-t border-white/5"></div>
+<div class="w-full border-t border-white/5"></div>
+<div class="w-full border-t border-white/5"></div>
+</div>
+<!-- X-Axis Labels -->
+<div class="absolute -bottom-6 left-0 right-0 flex justify-between font-data-sm text-data-sm text-on-surface-variant opacity-70 px-4">
+<span>00:00</span>
+<span>06:00</span>
+<span>12:00</span>
+<span>18:00</span>
+<span>24:00</span>
+</div>
+<!-- Simulated Data Lines (SVG) -->
+<svg class="absolute inset-0 w-full h-full overflow-visible" preserveaspectratio="none" viewbox="0 0 100 100">
+<!-- Historic Average (Dim Grey) -->
+<path d="M0,70 Q20,65 40,40 T80,30 T100,50" fill="none" stroke="#45464d" stroke-dasharray="2,2" stroke-width="1.5"></path>
+<!-- Current (Neon Blue) -->
+<path class="glow-accent" d="M0,75 Q20,70 30,50 T50,30 T70,35 T100,20" fill="none" stroke="#7bd0ff" stroke-width="2"></path>
+<!-- Tooltip Point Simulator (2 PM / 14:00 approx) -->
+<circle class="animate-pulse" cx="58" cy="32" fill="#0f172a" r="3" stroke="#7bd0ff" stroke-width="2"></circle>
+<line opacity="0.5" stroke="#7bd0ff" stroke-dasharray="1,3" stroke-width="1" x1="58" x2="58" y1="32" y2="100"></line>
+</svg>
+<!-- Floating Tooltip Simulator -->
+<div class="absolute left-[58%] top-[15%] -translate-x-1/2 bg-surface-container-high border border-white/10 rounded p-2 shadow-lg z-10 pointer-events-none">
+<div class="font-data-sm text-data-sm text-on-surface mb-1 text-center">14:00 (2 PM)</div>
+<div class="flex items-center gap-3">
+<div class="flex flex-col">
+<span class="font-label-caps text-label-caps text-secondary">CUR</span>
+<span class="font-data-md text-data-md text-on-surface">28.4°C</span>
+</div>
+<div class="w-px h-6 bg-white/10"></div>
+<div class="flex flex-col">
+<span class="font-label-caps text-label-caps text-on-surface-variant">AVG</span>
+<span class="font-data-md text-data-md text-on-surface-variant">25.1°C</span>
+</div>
+</div>
+</div>
+</div>
+</div>
+<!-- Key Metrics Column -->
+<div class="lg:col-span-4 flex flex-col gap-6">
+<!-- Metric 1 -->
+<div class="glass-panel rounded-xl p-5 flex flex-col justify-between group hover:border-secondary/30 transition-colors">
+<div class="flex justify-between items-start mb-2">
+<div class="font-label-caps text-label-caps text-on-surface-variant">Volatility Index</div>
+<span class="material-symbols-outlined text-error" data-icon="show_chart">show_chart</span>
+</div>
+<div class="font-data-lg text-data-lg text-on-surface mb-1">4.82 vIX</div>
+<div class="flex items-center gap-2">
+<span class="font-data-sm text-data-sm text-error bg-error/10 px-1.5 py-0.5 rounded flex items-center">
+<span class="material-symbols-outlined text-[14px]" data-icon="arrow_upward">arrow_upward</span> 1.2%
+                                </span>
+<span class="font-body-sm text-body-sm text-on-surface-variant text-[11px]">vs 24h avg</span>
+</div>
+</div>
+<!-- Metric 2 -->
+<div class="glass-panel rounded-xl p-5 flex flex-col justify-between group hover:border-tertiary/30 transition-colors">
+<div class="flex justify-between items-start mb-2">
+<div class="font-label-caps text-label-caps text-on-surface-variant">Historic Accuracy</div>
+<span class="material-symbols-outlined text-tertiary" data-icon="check_circle">check_circle</span>
+</div>
+<div class="font-data-lg text-data-lg text-on-surface mb-1">94.2%</div>
+<div class="flex items-center gap-2">
+<span class="font-data-sm text-data-sm text-tertiary bg-tertiary/10 px-1.5 py-0.5 rounded flex items-center">
+<span class="material-symbols-outlined text-[14px]" data-icon="arrow_upward">arrow_upward</span> 0.5%
+                                </span>
+<span class="font-body-sm text-body-sm text-on-surface-variant text-[11px]">model drift stable</span>
+</div>
+</div>
+<!-- Metric 3 -->
+<div class="glass-panel rounded-xl p-5 flex flex-col justify-between relative overflow-hidden group">
+<!-- Background gradient for score -->
+<div class="absolute -right-10 -bottom-10 w-32 h-32 bg-secondary/10 rounded-full blur-2xl"></div>
+<div class="flex justify-between items-start mb-2 relative z-10">
+<div class="font-label-caps text-label-caps text-on-surface-variant">Predictive Confidence</div>
+<span class="material-symbols-outlined text-secondary" data-icon="radar">radar</span>
+</div>
+<div class="font-display-lg text-display-lg text-secondary mb-1 relative z-10">88<span class="text-headline-md">%</span></div>
+<div class="w-full bg-surface-variant h-1 rounded-full overflow-hidden mt-2 relative z-10">
+<div class="bg-secondary h-full rounded-full w-[88%] glow-accent"></div>
+</div>
+</div>
+</div>
+</div>
+<!-- Secondary Data Area: Hourly Breakdown Table -->
+<div class="glass-panel rounded-xl overflow-hidden mt-6">
+<div class="p-4 border-b border-white/5 bg-surface-container-low flex justify-between items-center">
+<h4 class="font-data-md text-data-md text-primary-fixed">Hourly Breakdown (Last 6 Hours)</h4>
+<button class="font-data-sm text-data-sm text-secondary hover:underline">Export CSV</button>
+</div>
+<div class="w-full overflow-x-auto">
+<table class="w-full text-left border-collapse min-w-[600px]">
+<thead>
+<tr class="border-b border-white/10 font-label-caps text-label-caps text-on-surface-variant bg-surface-container-lowest">
+<th class="p-3 font-normal">Time (UTC)</th>
+<th class="p-3 font-normal">Recorded Temp</th>
+<th class="p-3 font-normal">Historic Avg</th>
+<th class="p-3 font-normal">Delta</th>
+<th class="p-3 font-normal">Market Impact</th>
+</tr>
+</thead>
+<tbody class="font-data-sm text-data-sm text-on-surface">
+<tr class="zebra-row border-b border-white/5 transition-colors">
+<td class="p-3 text-on-surface-variant">14:00</td>
+<td class="p-3 text-secondary">28.4°C</td>
+<td class="p-3">25.1°C</td>
+<td class="p-3 text-error">+3.3°</td>
+<td class="p-3"><span class="bg-error/10 text-error px-2 py-0.5 rounded">High Volatility</span></td>
+</tr>
+<tr class="zebra-row border-b border-white/5 transition-colors">
+<td class="p-3 text-on-surface-variant">13:00</td>
+<td class="p-3">27.8°C</td>
+<td class="p-3">24.5°C</td>
+<td class="p-3 text-error">+3.3°</td>
+<td class="p-3"><span class="bg-error/10 text-error px-2 py-0.5 rounded">High Volatility</span></td>
+</tr>
+<tr class="zebra-row border-b border-white/5 transition-colors">
+<td class="p-3 text-on-surface-variant">12:00</td>
+<td class="p-3">26.1°C</td>
+<td class="p-3">23.8°C</td>
+<td class="p-3 text-error">+2.3°</td>
+<td class="p-3"><span class="bg-secondary/10 text-secondary px-2 py-0.5 rounded">Moderate</span></td>
+</tr>
+<tr class="zebra-row border-b border-white/5 transition-colors">
+<td class="p-3 text-on-surface-variant">11:00</td>
+<td class="p-3">24.5°C</td>
+<td class="p-3">23.0°C</td>
+<td class="p-3 text-tertiary">+1.5°</td>
+<td class="p-3"><span class="bg-surface-variant text-on-surface-variant px-2 py-0.5 rounded">Nominal</span></td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+</div>
+</main>
+</div>
+<!-- Footer -->
+<footer class="md:ml-64 w-full relative border-t border-outline-variant bg-surface-container-lowest flex justify-between items-center px-margin-desktop py-gutter z-30">
+<div class="font-label-caps text-label-caps text-on-surface-variant">
+            © 2024 WeatherOdds Precision Markets
+        </div>
+<div class="flex gap-4">
+<!-- Footer links from JSON -->
+<a class="font-body-sm text-body-sm text-on-surface-variant hover:text-primary hover:underline transition-colors" href="#">Privacy Policy</a>
+<a class="font-body-sm text-body-sm text-on-surface-variant hover:text-primary hover:underline transition-colors" href="#">Market Rules</a>
+<a class="font-body-sm text-body-sm text-on-surface-variant hover:text-primary hover:underline transition-colors" href="#">API Docs</a>
+</div>
+</footer>
+</body></html>

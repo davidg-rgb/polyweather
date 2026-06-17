@@ -32,6 +32,14 @@ dashboard, TypeScript monorepo (`packages/core|io|trading`, `supabase/functions`
     log (MAE/bias). New `amsterdam_truth` table, `scripts/amsterdam-truth-backfill.ts`, `/amsterdam` truth
     panel + backtest columns. **Market-resolution accuracy stays its own number (drives the P&L);** truth is
     filled independently (the Edge tick refreshes KNMI best-effort). Operator-gated go-live: `AMSTERDAM-SIM.md` §4.
+  - **Peak-hour best-time model + `/amsterdam` redesign (2026-06-17):** fuses **20 years of KNMI Schiphol
+    hourly data** (peak-hour floor confidence — when is the running-max floor essentially the day's high?)
+    with the empirical hit rate (prediction accuracy) into a single **best-time-to-bet** recommendation
+    (`predictiveConfidence/ask − 1`, shrinkage-blended, hot-day aware). Committed climatology asset
+    `core/sim/amsterdam-climatology.ts` (regen via `scripts/research/amsterdam-peak-hour.ts --emit`), pure
+    model `core/sim/amsterdam-besttime.ts`, hero `components/PeakHourChart.tsx`, reworked `/amsterdam` in a
+    "Terminal-Glass" bento (mockup in `/design`). No DB/migration — static asset, computed server-side.
+    Design + formula: `AMSTERDAM-SIM.md` §6.
 
 ---
 

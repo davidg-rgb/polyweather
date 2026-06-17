@@ -23,4 +23,5 @@ export * from './distributions/ensemble.ts';
 export * from './distributions/consensus.ts';
 export * from './distributions/nowcast.ts';
 export * from './sim/amsterdam.ts';
+export * from './sim/amsterdam-besttime.ts';
 export * from './sim/stats.ts';

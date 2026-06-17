@@ -5,8 +5,16 @@
  * loader takes the WebDb port, so the PGlite suite drives the REAL loaders;
  * pages bind serverDb() from supabase.ts.
  */
-import { armEdgeStats, armTruthStats, exposureSummary, parseConfigRows } from '@weather-edge/core';
-import type { AppConfig, EdgeRow } from '@weather-edge/core';
+import {
+  AMSTERDAM_CLIMATOLOGY,
+  armEdgeStats,
+  armTruthStats,
+  exposureSummary,
+  parseConfigRows,
+  peakHourWindow,
+  recommendBestTime,
+} from '@weather-edge/core';
+import type { AppConfig, BestTimeView, EdgeRow } from '@weather-edge/core';
 import { goLiveGate, type GateDeps } from '@weather-edge/trading';
 import { compareEdgeRows, recomputeEdgeRows } from './edge-display.ts';
 import type { EdgeComparison, EventDetailForEdges, LadderRowPayload, StoredEdgeEval } from './edge-display.ts';
@@ -521,6 +529,29 @@ export interface TruthCoverage {
   tableNDays: unknown;
 }
 
+/**
+ * The hero "real-time vs 20-year average" chart payload (0044). Joins the committed Schiphol climatology
+ * (the avg temperature + avg running-max curves and the peak-hour distribution band, for the active month /
+ * hot-day period) with the latest day's live running-max trace and the model's recommended lock window.
+ */
+export interface PeakHourChartView {
+  month: number;
+  hot: boolean;
+  /** Mean instantaneous temperature (°C) by local hour 0..23 — the dashed "20-yr average" trace. */
+  avgTempC: number[];
+  /** Mean running-max-so-far (°C) by local hour 0..23 — comparable to today's bet floor. */
+  avgRunMaxC: number[];
+  /** Share of days whose max lands at each local hour 0..23 — rendered as the faint distribution behind the band. */
+  peakHistogram: number[];
+  /** Central ≥50% peak-hour window + modal hour, for the band annotation. */
+  peakWindow: { fromHour: number; toHour: number; modeHour: number };
+  medianPeakHour: number;
+  /** The latest bet day's running-max by arm hour — the live blue overlay. */
+  latestDate: string | null;
+  todayRunMax: { hour: number; runMaxC: number }[];
+  recommendedHour: number | null;
+}
+
 export interface AmsterdamSimView {
   config: { primaryHour: number; armHours: number[]; compareDays: number; stakeUsd: number };
   coverage: { firstDate: string | null; lastDate: string | null; nDays: unknown; nGradedDays: unknown; nPending: unknown };
@@ -528,6 +559,10 @@ export interface AmsterdamSimView {
   leaderHour: number | null;
   /** Cumulative net P&L per arm, carried forward onto the shared date axis (null before an arm's first bet). */
   chart: { dates: string[]; byHour: Record<number, (number | null)[]> };
+  /** Best-time-to-bet fusion (0044): peak-hour floor confidence × prediction accuracy → recommended lock hour. */
+  bestTime: BestTimeView;
+  /** Hero chart data (0044): climatology curves + peak-hour band + latest live trace + recommendation. */
+  peakHourChart: PeakHourChartView;
   betLog: SimBetRow[];
   latest: { date: string | null; byHour: Record<number, SimLatestRow> };
   /** Floor-truth coverage (0043); null when the RPC predates it. */
@@ -569,12 +604,30 @@ interface SimPayload {
   truthCoverage?: TruthCoverage | null;
 }
 
+// Coercion MUST mirror format.ts `num`: map null/undefined/'' to null FIRST, because Number(null)===0 and
+// Number('')===0 are finite — without the pre-check a present-but-null jsonb field (e.g. a null forecast or
+// running max) would silently become 0, defeating the `!= null` filters below (phantom 0°C overlay point,
+// wrong hot-climatology selection). Same contract as format.ts so there is one coercion semantics.
+const toNum = (x: unknown): number | null => {
+  if (x === null || x === undefined || x === '') return null;
+  const n = Number(x);
+  return Number.isFinite(n) ? n : null;
+};
+
+/** Europe/Amsterdam calendar month (1..12) for an instant — DST/zone-correct via Intl. */
+function amsterdamMonth(now: Date): number {
+  const mm = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Amsterdam', month: '2-digit' }).format(now);
+  return Number(mm);
+}
+
 /**
  * The Amsterdam paper-trade head-to-head (dash_amsterdam_sim, 0039) for /amsterdam. Aligns each arm's
- * cumulative equity onto the union date axis (carry-forward) so the four lines share an x-scale. Degrades
- * to null (not a thrown 500) if the RPC errors — the page can deploy ahead of the 0039 RPC.
+ * cumulative equity onto the union date axis (carry-forward) so the four lines share an x-scale, then fuses
+ * the 20-yr peak-hour climatology with the empirical hit rates into the best-time-to-bet recommendation +
+ * hero chart (0044). Degrades to null (not a thrown 500) if the RPC errors — the page can deploy ahead of
+ * the 0039 RPC. `now` is injectable so the best-time month selection is deterministic under test.
  */
-export async function getAmsterdamSim(db: WebDb): Promise<AmsterdamSimView | null> {
+export async function getAmsterdamSim(db: WebDb, opts: { now?: Date } = {}): Promise<AmsterdamSimView | null> {
   let v: SimPayload | null;
   try {
     v = await one<SimPayload>(db, 'dash_amsterdam_sim', {});
@@ -592,13 +645,14 @@ export async function getAmsterdamSim(db: WebDb): Promise<AmsterdamSimView | nul
       // so the dashboard and the best-buy backtest agree. Coerce defensively (jsonb numerics arrive as
       // strings via the port; null `won` can't happen for a graded bet but is filtered for safety).
       const graded = (betsByArm[String(a.hour)] ?? [])
-        .map((r) => ({ won: r.won === true, ask: Number(r.ask) }))
-        .filter((r) => Number.isFinite(r.ask));
+        .map((r) => ({ won: r.won === true, ask: toNum(r.ask) }))
+        .filter((r): r is { won: boolean; ask: number } => r.ask != null);
       const s = armEdgeStats(graded);
       // Floor-truth CIs (0043) from the (truthWon, signedErrorC) rows — armTruthStats, same one-place idiom.
+      // toNum (not Number) so a null signed error is DROPPED, not coerced to a phantom 0 that inflates n.
       const truth = (truthByArm[String(a.hour)] ?? [])
-        .map((r) => ({ truthWon: r.truthWon === true, signedErrorC: Number(r.signedErrorC) }))
-        .filter((r) => Number.isFinite(r.signedErrorC));
+        .map((r) => ({ truthWon: r.truthWon === true, signedErrorC: toNum(r.signedErrorC) }))
+        .filter((r): r is { truthWon: boolean; signedErrorC: number } => r.signedErrorC != null);
       const t = armTruthStats(truth);
       return {
         ...a,
@@ -611,6 +665,14 @@ export async function getAmsterdamSim(db: WebDb): Promise<AmsterdamSimView | nul
         ev: s.ev,
         evCiLo: s.evCiLo,
         evCiHi: s.evCiHi,
+        // Point estimates come from the SAME armTruthStats bundle as the CIs (not the RPC), so the table's
+        // nTruth/hit/mae/bias and their intervals are guaranteed to share one population — a truth row with a
+        // null/NaN signed error (possible when an arm's running_max_c is null) can't count toward the point
+        // while being dropped from the interval. Identical to the RPC values whenever the populations agree.
+        nTruth: t.nTruth,
+        truthHitRate: t.truthHitRate,
+        mae: t.mae,
+        bias: t.bias,
         truthHitCiLo: t.truthHitCiLo,
         truthHitCiHi: t.truthHitCiHi,
         biasCiLo: t.biasCiLo,
@@ -640,12 +702,53 @@ export async function getAmsterdamSim(db: WebDb): Promise<AmsterdamSimView | nul
   const latestByHour: Record<number, SimLatestRow> = {};
   for (const [h, row] of Object.entries(v.latest?.byHour ?? {})) latestByHour[Number(h)] = row;
 
+  // --- best-time-to-bet (0044): fuse the peak-hour climatology with the empirical arm hit rates ----------
+  const month = amsterdamMonth(opts.now ?? new Date());
+  const armHours = v.config.armHours ?? [];
+  // Today's de-biased forecast (one per-day scalar, written identically onto every arm by the place RPC) →
+  // selects the hot-day climatology. Prefer the primary arm's value explicitly, then fall back to the first
+  // arm that carries one — so the choice is principled, not iteration-order-dependent, if arms ever diverge.
+  const forecastC =
+    toNum(latestByHour[v.config.primaryHour]?.forecastC) ??
+    armHours.map((h) => toNum(latestByHour[h]?.forecastC)).find((x) => x != null) ??
+    null;
+  const bestTime = recommendBestTime({
+    month,
+    forecastC,
+    arms: arms.map((a) => ({
+      hour: a.hour,
+      hitRate: toNum(a.hitRate),
+      avgAsk: toNum(a.avgAsk),
+      nGraded: toNum(a.nGraded) ?? 0,
+    })),
+  });
+
+  const climMonth = AMSTERDAM_CLIMATOLOGY.months.find((m) => m.month === month) ?? AMSTERDAM_CLIMATOLOGY.months[0]!;
+  const todayRunMax = armHours
+    .map((h) => ({ hour: h, runMaxC: toNum(latestByHour[h]?.runMaxC) }))
+    .filter((r): r is { hour: number; runMaxC: number } => r.runMaxC != null);
+  const peakHourChart: PeakHourChartView = {
+    month,
+    hot: bestTime.usedHotClimatology,
+    avgTempC: climMonth.avgTempC,
+    avgRunMaxC: climMonth.avgRunMaxC,
+    peakHistogram:
+      bestTime.usedHotClimatology && climMonth.hot ? climMonth.hot.peakHourHistogram : climMonth.peakHourHistogram,
+    peakWindow: peakHourWindow(bestTime.usedHotClimatology && climMonth.hot ? climMonth.hot : climMonth),
+    medianPeakHour: bestTime.medianPeakHour,
+    latestDate: v.latest?.date ?? null,
+    todayRunMax,
+    recommendedHour: bestTime.recommendedHour,
+  };
+
   return {
     config: v.config,
     coverage: v.coverage,
     arms,
     leaderHour,
     chart: { dates, byHour },
+    bestTime,
+    peakHourChart,
     betLog: v.betLog ?? [],
     latest: { date: v.latest?.date ?? null, byHour: latestByHour },
     truthCoverage: v.truthCoverage ?? null,

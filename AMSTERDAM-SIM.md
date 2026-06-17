@@ -212,6 +212,59 @@ signed_error_c = nowcastBasisC(running_max, arm_hour, forecast_c) − actual_dec
   total is honest, not gross.
 - **Truth timing.** A bet grades only once `observations.finalized_at` is set for EHAM that date
   (~1–2 days), matching the market's own resolution-revision window.
+- **Best-time model is a decision aid, not a calibrated probability** (see §6) — it assumes the floor-break
+  and given-floor-error failure modes are independent, and the given-floor skill prior is a fixed constant
+  until enough graded bets refine it.
+
+## 6. Best time to bet — the peak-hour climatology model (2026-06-17, asset + `/amsterdam` 0044)
+
+The "best time of day" question has two independent answers, and this model fuses them into a single
+recommended lock hour. The hero `/amsterdam` chart + the "accuracy × peak hour" table are its surface.
+
+**The two halves.**
+1. **Peak-hour floor confidence** (structural). The running max is a hard floor on the day's high, so a bet
+   only loses to *further warming* if the day climbs past our bucket after we lock. How likely that is, by
+   local hour, is a pure climatology question — answered from **20 years of KNMI Schiphol hourly temperature**
+   (station 240, var `T`, 1.5 m, 0.1 °C; the free no-auth `uurgegevens` endpoint, the same provider as the
+   §4 truth feed). Converted to Europe/Amsterdam local time, one peak-hour per local calendar day (the day
+   the market resolves over), 7 306 complete days. The decision-relevant cut is **forward upside** =
+   `max(0, max(temp after h) − running max through h)` — how much the floor can *still* rise. We store, per
+   month and local hour, `peakedPct` (P max already reached), `leUpside05` = P(remaining ≤ 0.5 °C) (the
+   "floor confidence" — for a ~1 °C bucket, the floor is essentially locked), and the mean / p90 upside.
+   Hot days peak ~1 h later, so each warm month also carries a **≥25 °C sub-climatology**; the model uses it
+   when the day's forecast is hot. Findings: in June the median peak is **16:00 local** (17:00 on hot days);
+   floor confidence climbs 13:00 → 16:00 as 34 % → 50 % → 70 % → 84 % (hot days lag: 15 % → 26 % → 56 % → 81 %).
+2. **Prediction accuracy** (empirical). Given the floor, is our whole-°C call right? The graded paper bets'
+   hit rate at each lock hour. Small-sample early, so it is **shrunk toward a structural prior** = floor
+   confidence × a baseline given-floor skill (`AMSTERDAM_MODEL_SKILL_PRIOR = 0.85`, anchored to the §1
+   backtest): `blended = (n·empirical + k·prior)/(n+k)`, `k = 10`. Early on the recommendation leans on the
+   climatology; it tightens to the measured rate as bets accrue.
+
+**The fusion → recommendation.** `predictiveConfidence(h)` is that blended win probability. The recommended
+hour maximises **`predictiveConfidence(h) / ask(h) − 1`** (blended EV) among hours whose floor is credibly
+locked (`floorConfidence ≥ 0.5`) — trading floor-certainty (rises with h) against odds value (the market
+prices the floor in as the day resolves, so `ask → 1` and EV → 0 late). With no live odds it falls back to
+the earliest structurally-safe hour (`floorConfidence ≥ 0.8`); for a typical June day this is **16:00** (floor
+confidence 84% at 16:00 vs 70% at 15:00 — the first hour clearing 0.8). The structural fallback is deliberately
+one hour stricter than §1's empirical 15:00 sweet spot: when live odds exist the EV-aware path lands on **15:00**
+(it trades a little floor-certainty for the better-priced 15:00 ask), but with no odds to weigh it errs to the
+more floor-certain hour. Note also that the EV-eligibility gate (`floorConfidence ≥ 0.5`) excludes June 14:00
+by design — its floor confidence is 0.497 (a coin-flip), so 14:00 is never recommended even though the table
+rounds it to "50%". It is a transparent decision aid (P(win) ≈ P(floor locked) × P(call right), assumed
+independent), **not** a calibrated probability.
+
+**Where it lives.** `core/sim/amsterdam-besttime.ts` (pure model, `recommendBestTime`), the committed asset
+`core/sim/amsterdam-climatology.ts` (generated, do not hand-edit), the loader (`getAmsterdamSim` →
+`bestTime` + `peakHourChart`), and the page (`components/PeakHourChart.tsx` + the bento/tiles/table). Tests:
+`packages/core/test/{amsterdam-climatology,sim-amsterdam-besttime}.test.ts`, `apps/web/test/amsterdam-loader.test.ts`.
+
+**Regenerate the climatology** (only when extending the year range / refreshing the normal):
+```bash
+# Explore the distribution + decision tables (prints; --csv dumps per-day peaks):
+pnpm tsx scripts/research/amsterdam-peak-hour.ts --from 2006 --to 2025 [--csv]
+# Regenerate the committed asset consumed by the model + UI:
+pnpm tsx scripts/research/amsterdam-peak-hour.ts --from 2006 --to 2025 --emit packages/core/src/sim/amsterdam-climatology.ts
+```
 
 Companion docs: `AMSTERDAM-BUILDOUT.md` (the accuracy finding that seeded this), `FORECASTING-RD.md`
 (why trading is closed), `BUILD-STATE.md`, `RUNBOOK.md`.

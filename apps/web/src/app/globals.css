@@ -177,3 +177,70 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
 
 svg.spark { display: block; }
 svg.equity { display: block; max-width: 100%; height: auto; }
+
+/* --- /amsterdam — Terminal-Infused Glassmorphism dashboard (0044). Scoped under .ams-dash, additive:
+   it restyles only this page's panels/tables and adds the bento + metric tiles + hero chart classes,
+   in the mockup's "Meteorological Dark" language, without affecting any other route. -------------------- */
+.ams-dash {
+  --ams-bg: #051424;
+  --ams-secondary: #7bd0ff;       /* electric-blue "lidar" — live data */
+  --ams-secondary-dim: #5a8bb0;   /* climatological reference */
+  --ams-tertiary: #4edea3;        /* emerald — positive */
+  --ams-amber: #f5b942;           /* best-time accent */
+  --ams-red: #ff9a90;
+  --ams-text: #d4e4fa;
+  --ams-muted: #9fb2c8;
+  --ams-border: rgba(255, 255, 255, 0.10);
+  --ams-grid: rgba(255, 255, 255, 0.07);
+  color: var(--ams-text);
+}
+/* glass treatment auto-upgrades every existing .panel on the page + the new .glass/.tile surfaces */
+.ams-dash .panel,
+.ams-dash .glass,
+.ams-dash .tile {
+  background: linear-gradient(180deg, rgba(18, 33, 49, 0.82), rgba(8, 18, 30, 0.82));
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid var(--ams-border);
+  border-radius: 10px;
+}
+.ams-dash h1, .ams-dash h2 { color: var(--ams-text); letter-spacing: -0.01em; }
+.ams-dash .glow { box-shadow: 0 0 8px rgba(123, 208, 255, 0.25); }
+.ams-dash .cap {
+  font-size: 0.68rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ams-muted);
+}
+
+/* bento: hero (wide) + a stacked metric column; collapses to one column on narrow screens */
+.ams-dash .bento { display: grid; gap: 1rem; grid-template-columns: 1fr; margin: 0.75rem 0; }
+@media (min-width: 980px) { .ams-dash .bento { grid-template-columns: 2fr 1fr; align-items: stretch; } }
+.ams-dash .bento .hero { padding: 1rem 1.1rem; display: flex; flex-direction: column; min-height: 340px; }
+.ams-dash .bento .hero .peak-chart { width: 100%; height: auto; flex: 1; margin-top: 0.4rem; }
+.ams-dash .metric-col { display: flex; flex-direction: column; gap: 1rem; }
+
+/* metric tiles */
+.ams-dash .tile { padding: 0.9rem 1rem; display: flex; flex-direction: column; gap: 0.35rem; }
+.ams-dash .tile-head { display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; }
+.ams-dash .tile .big { font-family: var(--mono); font-size: 2rem; line-height: 1.05; color: var(--ams-secondary); }
+.ams-dash .tile .big.amber { color: var(--ams-amber); font-size: 1.7rem; }
+.ams-dash .tile .sub { font-size: 0.74rem; color: var(--ams-muted); }
+.ams-dash .tile.rec { border-color: rgba(245, 185, 66, 0.55); box-shadow: 0 0 10px rgba(245, 185, 66, 0.18); }
+.ams-dash .meter { height: 5px; border-radius: 999px; background: rgba(255, 255, 255, 0.08); overflow: hidden; }
+.ams-dash .meter > span { display: block; height: 100%; border-radius: 999px; background: var(--ams-secondary); }
+
+/* chart legend with line-style swatches (a11y: series differ by style, not colour alone) */
+.ams-dash .chart-legend { display: flex; flex-wrap: wrap; gap: 1rem; font-size: 0.72rem; color: var(--ams-muted); margin-top: 0.5rem; }
+.ams-dash .chart-legend span { display: inline-flex; align-items: center; gap: 0.4rem; }
+.ams-dash .chart-legend .ln { width: 22px; height: 0; border-top-width: 2px; border-top-style: solid; display: inline-block; }
+.ams-dash .chart-legend .ln.solid { border-color: var(--ams-secondary); }
+.ams-dash .chart-legend .ln.dash { border-color: var(--ams-muted); border-top-style: dashed; }
+.ams-dash .chart-legend .ln.dot { border-color: var(--ams-secondary-dim); border-top-style: dotted; }
+.ams-dash .chart-legend .sw { width: 12px; height: 12px; border-radius: 2px; background: rgba(245, 185, 66, 0.25); display: inline-block; }
+
+/* zebra + recommended-row highlight on this page's tables */
+.ams-dash table tbody tr:nth-child(even) { background: rgba(255, 255, 255, 0.02); }
+.ams-dash table tbody tr:hover { background: rgba(123, 208, 255, 0.06); }
+.ams-dash tr.rec-row { background: rgba(245, 185, 66, 0.10) !important; box-shadow: inset 2px 0 0 var(--ams-amber); }
+.ams-dash .pill {
+  display: inline-block; padding: 0.05rem 0.45rem; border-radius: 999px; font-size: 0.68rem; font-weight: 700;
+  background: rgba(245, 185, 66, 0.15); color: var(--ams-amber); border: 1px solid rgba(245, 185, 66, 0.5);
+}
