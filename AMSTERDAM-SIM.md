@@ -34,6 +34,28 @@ headline operating point** (high confidence, odds still < 1), but the whole poin
 arms forward is to *measure* whether any hour drifts positive — if the curve climbs, we found an edge;
 if it hugs $0 (or bleeds via fees), we confirmed efficiency. Either outcome is a result, visualised.
 
+### Predictor upgrade — forecast-aware nowcast (2026-06-17, migration 0040)
+
+The running max is a hard **floor** on the day's high (it can only finish ≥ what's already happened),
+but early in the day it under-predicts the peak. So at the **early arms (≤ 14:00)** we now lift the floor
+to our own **lead-1 NWP forecast, corrected for its trailing observed bias** —
+`basis = max(runningMax, forecast)` → `wuRound`. Late arms (15:00/16:00) keep the pure floor (already
+86%/92% exact; the forecast only adds noise there). The bias correction uses **only finalized days before
+the target** (walk-forward, no look-ahead — the same lead-1 bias `dash_station_predictions` measures);
+< 20 prior pairs ⇒ no correction, fall back to the floor.
+
+A **walk-forward backtest** (`scripts/amsterdam-nowcast-backtest.ts`, 182 EHAM days) measured:
+
+| Arm | exact-hit | MAE | within-1°C |
+|---|---|---|---|
+| 13:00 | 42% → **58%** (+16pp) | 0.81 → **0.45** (−45%) | 81% → **97%** |
+| 14:00 | 57% → **64%** (+7pp) | 0.49 → **0.39** | 94% → **97%** |
+| 15:00 / 16:00 | unchanged (hour-gated) | | |
+
+Under WO-5 efficiency this sharpens **forecast skill** (the analytics deliverable), not necessarily PnL —
+the market re-prices the better bucket in lockstep. It makes the model-vs-market scoreboard a fair fight.
+The seam is `nowcastBasisC` in `core/sim/amsterdam.ts`; `forecastC = null` reproduces the original floor.
+
 ## 2. Architecture (one engine, two drivers, one surface)
 
 ```
