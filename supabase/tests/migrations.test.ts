@@ -114,8 +114,11 @@ describe('migrations 0001–0010', () => {
       // dash_amsterdam_sim on authenticated, added to WEB_AUTHENTICATED below) + the daily cron.
       '0039_amsterdam_paper_sim.sql',
       // 0040 = forecast-aware Amsterdam nowcast — adds forecast_c, lifts the running-max floor to the
-      // de-biased lead-1 forecast at early arms in amsterdam_sim_place_inputs (signatures unchanged).
+      // bias-corrected lead-1 forecast at early arms in amsterdam_sim_place_inputs (signatures unchanged).
       '0040_amsterdam_forecast_nowcast.sql',
+      // 0041 = trailing-window bias (review follow-up) — amsterdam_sim_place_inputs' bias becomes the last
+      // 30 finalized pairs instead of an all-history mean; refreshes two stale 0039 column comments.
+      '0041_amsterdam_nowcast_trailing_bias.sql',
     ]);
   });
 });

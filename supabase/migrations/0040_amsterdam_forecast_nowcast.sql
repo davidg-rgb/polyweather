@@ -2,20 +2,22 @@
 --
 -- The 0039 sim predicts the day's WU high as wuRound(running max) at each lock hour. The running max
 -- is a hard FLOOR (the high can only finish ≥ what's already happened), but early in the day it
--- under-predicts the peak (the day keeps warming) — raw running max is only ~53% exact at 13:00. This
--- migration lifts the floor to the de-biased NWP forecast of the day's high at the EARLY arms
--- (≤ AMSTERDAM_SIM_FORECAST_MAX_HOUR = 14): basis = max(floor, forecast). A walk-forward backtest on
--- 182 EHAM days (scripts/amsterdam-nowcast-backtest.ts) measured +16pp exact-hit / −45% MAE at 13:00
--- and +7pp at 14:00, with 15:00/16:00 untouched (the floor already peaks there; the forecast only adds
--- noise). The place/round DECISION still lives once in @weather-edge/core (sim/amsterdam.ts —
--- nowcastBasisC/planPlacements); this migration only feeds it the forecast and stores what was used.
+-- under-predicts the peak (the day keeps warming) — raw running max is only 42% exact at 13:00 on the
+-- backtest window. This migration lifts the floor to the bias-corrected NWP forecast of the day's high
+-- at the EARLY arms (≤ AMSTERDAM_SIM_FORECAST_MAX_HOUR = 14): basis = max(floor, forecast). A
+-- walk-forward backtest over 69 post-warmup test days (scripts/amsterdam-nowcast-backtest.ts) measures
+-- the 13:00/14:00 lift, with 15:00/16:00 untouched (the floor already peaks there; the forecast only
+-- adds noise). [Current figures live in AMSTERDAM-SIM.md; migration 0041 later replaced the all-history
+-- bias below with a trailing window — 13:00 42%→62%, McNemar p=0.024.] The place/round DECISION lives
+-- once in @weather-edge/core (sim/amsterdam.ts — nowcastBasisC/planPlacements); this migration only
+-- feeds it the forecast and stores what was used.
 --
 -- forecast (per day) = cross-model MEAN of forecast_snapshots.tmax_c at lead_days = 1 (the same blend
--- the /city panel scores), DE-BIASED by the trailing mean (actual − forecast) over finalized days
--- STRICTLY BEFORE the target (walk-forward, no look-ahead — exactly the lead-1 bias
--- dash_station_predictions surfaces). Require ≥ 20 prior pairs or the de-bias is too noisy → null, and
--- the engine falls back to the original pure-floor call. No new RPC signatures, no new surface: the
--- Edge Function and the seed script consume the richer place-inputs payload unchanged.
+-- the /city panel scores), bias-corrected by the mean (actual − forecast) over finalized days STRICTLY
+-- BEFORE the target (walk-forward, no look-ahead — exactly the lead-1 bias dash_station_predictions
+-- surfaces). Require ≥ 20 prior pairs or the correction is too noisy → null, and the engine falls back
+-- to the original pure-floor call. No new RPC signatures, no new surface: the Edge Function and the
+-- seed script consume the richer place-inputs payload unchanged.
 
 -- --- column: what (if anything) lifted the call -----------------------------------------------------
 alter table public.amsterdam_paper_bets
@@ -71,7 +73,7 @@ begin
     return null;
   end if;
 
-  -- De-biased lead-1 forecast of the day's high (°C). Both pieces are known before the day starts, so
+  -- Bias-corrected lead-1 forecast of the day's high (°C). Both pieces are known before the day starts, so
   -- this is not look-ahead: v_raw_fc is the pre-day capture; v_bias is measured ONLY on days < target.
   select avg(fs.tmax_c) into v_raw_fc
   from public.forecast_snapshots fs

@@ -128,7 +128,9 @@ async function decisionBasis(db: ScriptDb): Promise<void> {
     [AMS_CITY],
   );
 
-  console.log('\n── A · Best time of day — decision basis (all resolved Amsterdam events) ──');
+  console.log('\n── A · Best time of day — PURE running-max floor baseline (all resolved Amsterdam events) ──');
+  console.log('  (Baseline only: this table scores wuRound(running max), the pre-forecast predictor. The bets');
+  console.log('   actually placed (Table B) use the forecast-aware lift at 13/14 — see AMSTERDAM-SIM.md.)');
   console.log('  hour  days  exact-hit   n-odds  avg-ask(pred)   EV/$1');
   for (const r of rowsA) {
     const star = (AMSTERDAM_SIM_ARM_HOURS as readonly number[]).includes(r.local_hour) ? ' ◀ arm' : '';

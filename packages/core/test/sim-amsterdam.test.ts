@@ -82,6 +82,15 @@ describe('nowcastBasisC — running-max floor lifted by the de-biased forecast a
     expect(nowcastBasisC(21.9, 16, 24.0)).toBe(21.9);
     expect(AMSTERDAM_SIM_FORECAST_MAX_HOUR).toBe(14); // pin the empirically-tuned gate
   });
+
+  it('a sub-degree lift flips the rounded bucket, and negative temps lift correctly (A-11 path)', () => {
+    // floor 21.4 → wuRound 21, but the forecast 21.6 lifts the basis → wuRound 22 (the whole point).
+    expect(predictedNativeC(nowcastBasisC(21.4, 13, 21.6))).toBe(22);
+    expect(predictedNativeC(nowcastBasisC(21.4, 13, null))).toBe(21); // no forecast → floor bucket
+    // negative-temperature lift: floor −2.6 (would round to −3), forecast −1.4 lifts → −1 (half-away-from-zero).
+    expect(nowcastBasisC(-2.6, 13, -1.4)).toBe(-1.4);
+    expect(predictedNativeC(nowcastBasisC(-2.6, 13, -1.4))).toBe(-1);
+  });
 });
 
 describe('placeSimBet — fixed-stake YES at the recorded odds', () => {

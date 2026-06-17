@@ -140,10 +140,12 @@ export default async function AmsterdamPage(): Promise<ReactElement> {
       <div className="panel">
         <p className="muted small">
           The early arms lift the running-max floor to our lead-1 NWP forecast, corrected for its recent bias (the
-          day&apos;s high can only finish above what&apos;s happened so far): a walk-forward backtest on 182 days raised the 13:00 exact-bucket
-          hit from ~42% to ~58% and halved its error; 15:00/16:00 keep the floor (already 86%/92%, the forecast
-          only adds noise there). The market still re-prices our bucket in lockstep (its ask ≈ our hit rate), so a
-          better nowcast sharpens the call without necessarily paying more — the live race below is the real test.
+          day&apos;s high can only finish above what&apos;s happened so far). On a walk-forward backtest over 69
+          post-warmup test days the 13:00 exact-bucket hit rose ~42%→~62% and its error roughly halved (McNemar
+          p=0.024 — significant; 14:00 is directional, p=0.33); 15:00/16:00 keep the floor (already 86%/92%, the
+          forecast only adds noise there). Evidence is single-station, spring/summer only. The market still
+          re-prices our bucket in lockstep (its ask ≈ our hit rate), so a better nowcast sharpens the call without
+          necessarily paying more — the live race below is the real test.
         </p>
         <table style={{ width: 'auto' }}>
           <thead>

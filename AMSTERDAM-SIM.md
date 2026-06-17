@@ -34,27 +34,47 @@ headline operating point** (high confidence, odds still < 1), but the whole poin
 arms forward is to *measure* whether any hour drifts positive — if the curve climbs, we found an edge;
 if it hugs $0 (or bleeds via fees), we confirmed efficiency. Either outcome is a result, visualised.
 
-### Predictor upgrade — forecast-aware nowcast (2026-06-17, migration 0040)
+### Predictor upgrade — forecast-aware nowcast (2026-06-17, migrations 0040 + 0041)
 
 The running max is a hard **floor** on the day's high (it can only finish ≥ what's already happened),
 but early in the day it under-predicts the peak. So at the **early arms (≤ 14:00)** we now lift the floor
 to our own **lead-1 NWP forecast, corrected for its trailing observed bias** —
 `basis = max(runningMax, forecast)` → `wuRound`. Late arms (15:00/16:00) keep the pure floor (already
-86%/92% exact; the forecast only adds noise there). The bias correction uses **only finalized days before
-the target** (walk-forward, no look-ahead — the same lead-1 bias `dash_station_predictions` measures);
-< 20 prior pairs ⇒ no correction, fall back to the floor.
+86%/92% exact on the ~180-day raw curve; the forecast only adds noise there). The bias correction is the
+mean (actual − forecast) over the **trailing 30 finalized days before the target** (walk-forward, no
+look-ahead — the same lead-1 bias `dash_station_predictions` measures; a *trailing* window, not an
+all-history mean, because Amsterdam's bias drifts seasonally ≈+0.4 °C spring → +0.83 °C June); **< 20
+prior pairs ⇒ no correction**, fall back to the floor. Constants `AMSTERDAM_SIM_DEBIAS_WINDOW_DAYS` /
+`_MIN_PAIRS` live in `core/sim/amsterdam.ts` and are mirrored in the `0041` RPC + the backtest.
 
-A **walk-forward backtest** (`scripts/amsterdam-nowcast-backtest.ts`, 182 EHAM days) measured:
+A **walk-forward backtest** (`scripts/amsterdam-nowcast-backtest.ts`) over **69 post-warmup test days**
+(of ~180 finalized EHAM days; only 89 have a lead-1 forecast) measured, with a **McNemar exact test** on
+the discordant flips:
 
-| Arm | exact-hit | MAE | within-1°C |
-|---|---|---|---|
-| 13:00 | 42% → **58%** (+16pp) | 0.81 → **0.45** (−45%) | 81% → **97%** |
-| 14:00 | 57% → **64%** (+7pp) | 0.49 → **0.39** | 94% → **97%** |
-| 15:00 / 16:00 | unchanged (hour-gated) | | |
+| Arm | exact-hit | MAE | within-1°C | significance |
+|---|---|---|---|---|
+| 13:00 | 42% → **62%** (+20pp) | 0.81 → **0.41** (−50%) | 81% → **97%** | McNemar p = **0.024** ✓ |
+| 14:00 | 57% → **65%** (+9pp) | 0.49 → **0.38** | 94% → **97%** | p = 0.33 (directional, not significant) |
+| 15:00 / 16:00 | unchanged (hour-gated) | | | n/a |
+
+**Honest read:** 13:00 is a *significant* improvement (n=69, p=0.024) but the evidence is **single-station
+(EHAM) and single-season (spring/summer — the forecast record starts 2026-03-20, no autumn/winter data)**;
+14:00 is **directional only**. Re-run the backtest and quote what it prints — don't trust a stale literal.
+The negative-temperature `wuRound` path (assumption A-11) and the °F→°C branch are **unexercised** on this
+dataset; revisit after cold-season pairs accrue.
 
 Under WO-5 efficiency this sharpens **forecast skill** (the analytics deliverable), not necessarily PnL —
 the market re-prices the better bucket in lockstep. It makes the model-vs-market scoreboard a fair fight.
 The seam is `nowcastBasisC` in `core/sim/amsterdam.ts`; `forecastC = null` reproduces the original floor.
+
+> **Live-leaderboard caveat (mixed regime).** Migrations 0040/0041 change only **future** placements —
+> `amsterdam_sim_record` is `on conflict … do nothing`, so the ~5 bets/arm placed pre-0040 keep their old
+> pure-floor prediction (`forecast_c = NULL`) and are **not** re-predicted. Because the lift is gated to
+> ≤ 14:00, the **13:00/14:00** equity curves splice floor-only history with forecast-aware future, while
+> 15:00/16:00 stay pure-floor throughout. It self-heals over ~2 weeks; until then the 13/14 arms are not a
+> clean like-for-like vs 15/16. Pre-0040 rows are identifiable by `forecast_c IS NULL`. To make history
+> consistent, delete the affected days and re-seed (`nowcastBasisC` reconstructs the call from stored
+> runMax + forecast).
 
 ## 2. Architecture (one engine, two drivers, one surface)
 
@@ -90,11 +110,15 @@ The integration test proves this (the forward-fill ignores a poison snapshot pri
 ## 3. Operate it
 
 ```bash
-# Tests (all green; 28 new): engine + the full place→grade→dash integration
-pnpm test            # 710 passing
+# Tests (all green): engine + the full place→grade→dash integration + forecast-lift + null-gate
+pnpm test            # 721 passing
 pnpm typecheck
 
-# Seed history + see the decision table and leaderboard (idempotent; safe to re-run any time)
+# Re-run the backtest and quote what it PRINTS (don't trust a stale literal):
+pnpm tsx scripts/amsterdam-nowcast-backtest.ts    # per-arm hit/MAE/within-1 + McNemar p
+
+# Seed history + see the decision table and leaderboard (idempotent on the unique (date,arm) key — it
+# extends history forward; it does NOT re-predict already-placed bets, see the mixed-regime caveat above)
 pnpm tsx scripts/amsterdam-sim.ts                 # seed all simulable days + grade + print
 pnpm tsx scripts/amsterdam-sim.ts --analyze-only  # print only, no writes
 pnpm tsx scripts/amsterdam-sim.ts --from 2026-05-01 --to 2026-06-15
@@ -102,11 +126,14 @@ pnpm tsx scripts/amsterdam-sim.ts --from 2026-05-01 --to 2026-06-15
 
 **Go-live (operator-gated — hosted DDL/deploys need per-action authorization):**
 
-1. **Apply the migration** `supabase/migrations/0039_amsterdam_paper_sim.sql` to hosted
-   (`npx supabase db push`, the Supabase SQL editor, or authorize the MCP `apply_migration`).
+1. **Apply the migrations** `0039_amsterdam_paper_sim.sql`, then `0040_amsterdam_forecast_nowcast.sql`
+   (adds `forecast_c` + rewrites place_inputs/record/dash), then `0041_amsterdam_nowcast_trailing_bias.sql`
+   (trailing-window bias) to hosted — **all three are required** for the forecast-aware behaviour
+   (`npx supabase db push`, the SQL editor, or authorize the MCP `apply_migration`).
 2. **Deploy the Edge Function:**
    `npx supabase functions deploy amsterdam-paper-trade --use-api --no-verify-jwt`
-   (the function self-authenticates via `x-cron-secret`, mirroring every other job).
+   (the function self-authenticates via `x-cron-secret`, mirroring every other job). Required so the
+   bundled `planPlacements` is the forecast-aware one; the bias correction itself lives in the 0040/0041 RPC.
 3. **Seed the curve:** `pnpm tsx scripts/amsterdam-sim.ts` (then the 15:30-UTC cron carries it forward).
 
 After that the `/amsterdam` page is live and self-updating. **To turn it off:** `select

@@ -7,9 +7,9 @@ import { freshDb, rows } from './harness.ts';
 import { pglitePort } from './pglite-port.ts';
 
 // The forecast-aware nowcast (0040): at the EARLY arms (<= 14:00) the running-max floor is lifted to
-// the de-biased lead-1 forecast — basis = max(floor, forecast) → wuRound. At 15:00/16:00 the floor is
+// the bias-corrected lead-1 forecast — basis = max(floor, forecast) → wuRound. At 15:00/16:00 the floor is
 // already the peak, so the forecast is ignored. This test seeds enough finalized history for the
-// de-bias to be trusted (>= 20 prior pairs) and a target day whose 13:00/14:00 floors sit BELOW the
+// bias correction to be trusted (>= 20 prior pairs) and a target day whose 13:00/14:00 floors sit BELOW the
 // forecast, proving the lift moves the predicted bucket up while the late arms stay on the floor.
 
 const LADDER = [
@@ -27,6 +27,7 @@ const LADDER = [
 ];
 
 const TARGET = '2026-07-01';
+const NULLGATE = '2026-06-13'; // < 20 prior finalized-forecast days → bias untrusted → forecastC null
 let db: PGlite;
 let port: ReturnType<typeof pglitePort>;
 const cfg = parseConfigRows([]);
@@ -83,7 +84,7 @@ beforeAll(async () => {
     );
   }
 
-  // Target day: lead-1 forecast mean 21.0 → de-biased = 21.0 + 1.0 = 22.0.
+  // Target day: lead-1 forecast mean 21.0 → bias-corrected = 21.0 + 1.0 = 22.0.
   const ev = await seedEvent(city.id, TARGET);
   await db.query(
     `insert into forecast_snapshots (icao, model, target_date, lead_days, tmax_c, snapshot_slot, source, captured_at)
@@ -114,14 +115,37 @@ beforeAll(async () => {
       `${TARGET}T11:00:00Z`,
     ]);
   }
+
+  // Null-gate scenario: target 2026-06-13 has only 12 prior finalized-forecast days (June 1-12) < 20,
+  // so the bias is untrusted → forecastC null → the engine falls back to the pure running-max floor.
+  const evNull = await seedEvent(city.id, NULLGATE);
+  for (const [h, v] of Object.entries({ 11: 17.0, 12: 18.0, 13: 19.0, 14: 19.5, 15: 20.0, 16: 20.2 })) {
+    await db.query(
+      `insert into intraday_advances (icao, date_local, local_hour, max_tenths_c) values ('EHAM', $1, $2, $3)`,
+      [NULLGATE, Number(h), v],
+    );
+  }
+  for (const b of LADDER) {
+    const bucket = (
+      await rows<{ id: string }>(db, `select id from market_buckets where event_id = $1 and bucket_idx = $2`, [
+        evNull,
+        b.idx,
+      ])
+    )[0]!;
+    await db.query(`insert into market_snapshots (bucket_id, best_ask, captured_at) values ($1, $2, $3)`, [
+      bucket.id,
+      0.5,
+      `${NULLGATE}T11:00:00Z`,
+    ]);
+  }
 });
 
 afterAll(async () => {
   await db?.close();
 });
 
-describe('amsterdam_sim_place_inputs — de-biased forecast in the payload (0040)', () => {
-  it('returns the de-biased lead-1 forecast (raw 21.0 + trailing bias 1.0 = 22.0)', async () => {
+describe('amsterdam_sim_place_inputs — bias-corrected forecast in the payload (0040)', () => {
+  it('returns the bias-corrected lead-1 forecast (raw 21.0 + trailing bias 1.0 = 22.0)', async () => {
     const r = await rows<{ v: PlaceInputs }>(
       db,
       `select public.amsterdam_sim_place_inputs($1::date, $2::timestamptz) as v`,
@@ -152,14 +176,40 @@ describe('amsterdam-paper-trade — forecast-aware placement (0040)', () => {
       [TARGET],
     );
     expect(bets.map((b) => b.arm_hour)).toEqual([13, 14, 15, 16]);
-    // 13:00 floor 19°C and 14:00 floor 20°C are both LIFTED to the de-biased forecast bucket (22°C, idx8).
+    // 13:00 floor 19°C and 14:00 floor 20°C are both LIFTED to the bias-corrected forecast bucket (22°C, idx8).
     expect(bets[0]).toMatchObject({ predicted_native_c: 22, bucket_idx: 8 });
     expect(bets[1]).toMatchObject({ predicted_native_c: 22, bucket_idx: 8 });
     // 15:00 (20.6→21°C) and 16:00 (20.9→21°C) are PAST the gate → the forecast is ignored; floor stands.
     expect(bets[2]).toMatchObject({ predicted_native_c: 21, bucket_idx: 7 });
     expect(bets[3]).toMatchObject({ predicted_native_c: 21, bucket_idx: 7 });
-    // The de-biased forecast is recorded on every arm (what was available), used or not.
+    // The bias-corrected forecast is recorded on every arm (what was available), used or not.
     expect(bets.every((b) => Math.abs(Number(b.forecast_c) - 22.0) < 1e-6)).toBe(true);
     expect(Number(bets[0]!.running_max_c)).toBeCloseTo(19.4, 4);
+  });
+});
+
+describe('amsterdam nowcast — insufficient history (< 20 pairs) → forecastC null, pure floor (0040 gate)', () => {
+  it('place_inputs returns forecastC null and placements fall back to wuRound(running max)', async () => {
+    const r = await rows<{ v: PlaceInputs }>(
+      db,
+      `select public.amsterdam_sim_place_inputs($1::date, $2::timestamptz) as v`,
+      [NULLGATE, `${NULLGATE}T15:30:00Z`],
+    );
+    expect(r[0]!.v.forecastC == null).toBe(true); // 12 prior pairs < 20 → no correction
+
+    await amsterdamPaperTrade(ctxAt(new Date(`${NULLGATE}T15:30:00Z`)), {
+      now: new Date(`${NULLGATE}T15:30:00Z`),
+      targetDate: NULLGATE,
+    });
+    const bets = await rows<{ arm_hour: number; predicted_native_c: number; forecast_c: string | null }>(
+      db,
+      `select arm_hour, predicted_native_c, forecast_c from amsterdam_paper_bets where target_date = $1 order by arm_hour`,
+      [NULLGATE],
+    );
+    expect(bets.length).toBe(4);
+    // forecast_c null on every arm, and the call is the pure running-max floor (no lift).
+    expect(bets.every((b) => b.forecast_c === null)).toBe(true);
+    expect(bets[0]).toMatchObject({ arm_hour: 13, predicted_native_c: 19 }); // rm 19.0 → 19
+    expect(bets[1]).toMatchObject({ arm_hour: 14, predicted_native_c: 20 }); // rm 19.5 → 20 (half-up)
   });
 });
