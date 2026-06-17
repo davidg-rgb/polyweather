@@ -11,11 +11,20 @@
  * efficient (the WO-5 prior) the curve hovers near zero net of fees; if we ever evolve
  * a real edge, it drifts up.
  *
- * Bucketing is whole-°C: our predicted bucket = wuRound(runningMax) routed through the
+ * Bucketing is whole-°C: our predicted bucket = wuRound(nowcastBasisC) routed through the
  * market ladder, EXACTLY how the market resolves (winningBucket). The P&L formula
  * mirrors the house backtest (scripts/simulate-historical-edge.ts): buy `shares =
  * stake/ask` YES shares; on win each pays $1 (profit `shares·(1−ask)`), on loss the
  * stake is lost — both net of the Polymarket taker fee.
+ *
+ * The NOWCAST BASIS (2026-06-17): the running max is a hard FLOOR on the day's high, but early in
+ * the day it under-predicts the peak (the day keeps warming) — raw running max is only ~53% exact at
+ * 13:00. So through AMSTERDAM_SIM_FORECAST_MAX_HOUR we lift the floor to the de-biased NWP forecast of
+ * the day's high (max(floor, forecast)); later (or with no forecast) the floor alone is best. A
+ * walk-forward backtest on 182 EHAM days (scripts/amsterdam-nowcast-backtest.ts) put this at +16pp
+ * exact-hit / −45% MAE at 13:00 and +7pp at 14:00, with 15:00/16:00 untouched (the floor already
+ * peaks there; the forecast only adds noise). nowcastBasisC is the single seam; forecastC = null
+ * reproduces the original pure-floor behaviour, so every prior caller is unchanged.
  */
 import { winningBucket } from '../buckets.ts';
 import { takerFeeTotal } from '../fees.ts';
@@ -39,6 +48,15 @@ export const AMSTERDAM_SIM_ARM_HOURS = [13, 14, 15, 16] as const;
 
 /** The headline arm whose cumulative sum is the dashboard's single total. */
 export const AMSTERDAM_SIM_PRIMARY_HOUR = 15;
+
+/**
+ * The latest lock hour at which the de-biased NWP forecast still improves the call. At/after this
+ * hour the running max IS effectively the day's peak (86%+ exact on its own), so blending the
+ * forecast only injects its ~0.8°C error. Empirically tuned on 182 EHAM days (walk-forward backtest):
+ * applying the forecast through 14:00 lifts exact-hit (+16pp at 13:00, +7pp at 14:00) and halves MAE;
+ * applying it at 15:00 HURTS (−16pp). Below/at this hour → forecast-lifted floor; above → pure floor.
+ */
+export const AMSTERDAM_SIM_FORECAST_MAX_HOUR = 14;
 
 /** The operator's comparison horizon — the leaderboard's milestone marker. */
 export const AMSTERDAM_SIM_COMPARE_DAYS = 14;
@@ -75,6 +93,21 @@ export interface SimGrade {
 /** Convert a continuous running-max °C into the whole-°C value the market resolves on. */
 export function predictedNativeC(runningMaxC: number): number {
   return wuRound(runningMaxC);
+}
+
+/**
+ * The continuous °C our whole-°C call rounds from. The running max is a hard FLOOR on the day's high
+ * (it can only finish ≥ what's already happened), but early in the day it under-predicts the peak —
+ * so through AMSTERDAM_SIM_FORECAST_MAX_HOUR we lift it to the de-biased NWP forecast of the day's
+ * high, max(floor, forecast). Late (or with no forecast) the floor alone is the better estimate and
+ * we return it unchanged. `forecastC` must already be de-biased (the raw cross-model lead-1 mean plus
+ * the trailing OBSERVED lead-1 bias — the de-bias the system measures in dash_station_predictions);
+ * pass null to disable the lift (no forecast / insufficient history) → the original pure-floor call.
+ */
+export function nowcastBasisC(runMaxC: number, hour: number, forecastC?: number | null): number {
+  const useForecast =
+    forecastC != null && Number.isFinite(forecastC) && hour <= AMSTERDAM_SIM_FORECAST_MAX_HOUR;
+  return useForecast ? Math.max(runMaxC, forecastC) : runMaxC;
 }
 
 function toBucketDefs(ladder: SimLadderBucket[]): BucketDef[] {
@@ -165,6 +198,12 @@ export interface PlaceInputs {
   ladder: SimLadderBucket[];
   /** Labels keyed by bucketIdx, for storage/readability (optional). */
   labels?: Record<number, string>;
+  /**
+   * De-biased lead-1 NWP forecast of the day's high (°C), or null/absent when unavailable (no
+   * forecast for the day, or too little history to trust the de-bias). Lifts the running-max floor
+   * at early arms via nowcastBasisC; null reproduces the original pure-floor behaviour.
+   */
+  forecastC?: number | null;
   arms: PlaceArmInput[];
 }
 
@@ -180,8 +219,10 @@ export interface PlacementRow {
   stakeUsd: number;
   shares: number;
   feeRate: number;
-  /** The running max (°C) that drove the prediction — stored for the log. */
+  /** The running max (°C) floor known by the arm hour — stored for the log. */
   runMaxC: number;
+  /** The de-biased forecast (°C) available for the day, or null — what (if anything) lifted the call. */
+  forecastC: number | null;
 }
 
 /**
@@ -193,9 +234,13 @@ export interface PlacementRow {
 export function planPlacements(input: PlaceInputs, opts: { stakeUsd?: number } = {}): PlacementRow[] {
   const out: PlacementRow[] = [];
   for (const arm of input.arms) {
-    const idx = predictedBucketIdx(input.ladder, arm.runMaxC);
+    // The forecast-aware basis: the running-max floor, lifted to the de-biased NWP forecast at early
+    // arms (nowcastBasisC). predictedBucketIdx/placeSimBet both wuRound this basis, so the recorded
+    // ask is the quote on the bucket we actually predict — exactly what a live order would have hit.
+    const basisC = nowcastBasisC(arm.runMaxC, arm.hour, input.forecastC);
+    const idx = predictedBucketIdx(input.ladder, basisC);
     const ask = arm.asks.find((a) => a.bucketIdx === idx)?.ask;
-    const place = placeSimBet(input.ladder, arm.runMaxC, ask, {
+    const place = placeSimBet(input.ladder, basisC, ask, {
       stakeUsd: opts.stakeUsd,
       feeRate: input.feeRate,
     });
@@ -212,6 +257,7 @@ export function planPlacements(input: PlaceInputs, opts: { stakeUsd?: number } =
       shares: place.shares,
       feeRate: place.feeRate,
       runMaxC: arm.runMaxC,
+      forecastC: input.forecastC ?? null,
     });
   }
   return out;

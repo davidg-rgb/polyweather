@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
   AMSTERDAM_SIM_ARM_HOURS,
+  AMSTERDAM_SIM_FORECAST_MAX_HOUR,
   AMSTERDAM_SIM_PRIMARY_HOUR,
   AMSTERDAM_SIM_STAKE_USD,
   evPerDollar,
   gradeSimBet,
+  nowcastBasisC,
   placeSimBet,
   planPlacements,
   planSettlements,
@@ -54,6 +56,31 @@ describe('predictedBucketIdx — route the prediction through the ladder', () =>
     expect(predictedBucketIdx(LADDER, 14.4)).toBe(0); // rounds to 14 → ≤14
     expect(predictedBucketIdx(LADDER, 26.7)).toBe(10); // ≥24
     expect(predictedBucketIdx(LADDER, 23.6)).toBe(10); // rounds to 24 → ≥24
+  });
+});
+
+describe('nowcastBasisC — running-max floor lifted by the de-biased forecast at early arms', () => {
+  it('no forecast (null/NaN) → the pure floor, at every hour (original behaviour)', () => {
+    expect(nowcastBasisC(19.4, 13, null)).toBe(19.4);
+    expect(nowcastBasisC(19.4, 13, undefined)).toBe(19.4);
+    expect(nowcastBasisC(19.4, 13, Number.NaN)).toBe(19.4);
+    expect(nowcastBasisC(21.6, 16, null)).toBe(21.6);
+  });
+
+  it('forecast below the floor never lowers the call (the floor is a hard minimum)', () => {
+    expect(nowcastBasisC(21.9, 13, 20.0)).toBe(21.9); // already warmer than forecast → keep floor
+    expect(nowcastBasisC(21.9, 14, 21.9)).toBe(21.9); // equal → floor
+  });
+
+  it('lifts the floor to the forecast at early arms (≤ FORECAST_MAX_HOUR)', () => {
+    expect(nowcastBasisC(19.4, 13, 22.0)).toBe(22.0); // day still warming → forecast wins
+    expect(nowcastBasisC(19.4, AMSTERDAM_SIM_FORECAST_MAX_HOUR, 22.0)).toBe(22.0); // boundary included
+  });
+
+  it('ignores the forecast at late arms (> FORECAST_MAX_HOUR) — the floor is already the peak', () => {
+    expect(nowcastBasisC(21.6, 15, 23.0)).toBe(21.6);
+    expect(nowcastBasisC(21.9, 16, 24.0)).toBe(21.9);
+    expect(AMSTERDAM_SIM_FORECAST_MAX_HOUR).toBe(14); // pin the empirically-tuned gate
   });
 });
 
@@ -196,6 +223,42 @@ describe('planPlacements — the shared place decision', () => {
     );
     expect(rows[0]!.stakeUsd).toBe(5);
     expect(rows[0]!.shares).toBeCloseTo(10, 10);
+  });
+
+  it('stores forecastC=null and bets the pure floor when no forecast is supplied', () => {
+    const rows = planPlacements({
+      ...base,
+      arms: [{ hour: 13, runMaxC: 19.4, asks: fullAsks({ 5: 0.3 }) }], // 19°C floor
+    });
+    expect(rows[0]).toMatchObject({ armHour: 13, bucketIdx: 5, predictedNativeC: 19, forecastC: null });
+  });
+
+  it('lifts an early arm to the de-biased forecast bucket; the recorded ask is on THAT bucket', () => {
+    // 13:00 floor is 19.4°C (→19°C, idx5), but the de-biased forecast says 22.0°C → we predict 22°C
+    // (idx8) and must record the ask on idx8 (0.8), not the floor bucket's.
+    const rows = planPlacements({
+      ...base,
+      forecastC: 22.0,
+      arms: [{ hour: 13, runMaxC: 19.4, asks: fullAsks({ 5: 0.3, 8: 0.8 }) }],
+    });
+    expect(rows[0]).toMatchObject({
+      armHour: 13,
+      bucketIdx: 8,
+      predictedNativeC: 22,
+      label: '22°C',
+      ask: 0.8,
+      runMaxC: 19.4,
+      forecastC: 22.0,
+    });
+  });
+
+  it('does not lift a late arm — 15:00 keeps the floor even with a higher forecast', () => {
+    const rows = planPlacements({
+      ...base,
+      forecastC: 23.0,
+      arms: [{ hour: 15, runMaxC: 21.9, asks: fullAsks({ 8: 0.8, 9: 0.9 }) }], // floor 22°C (idx8)
+    });
+    expect(rows[0]).toMatchObject({ armHour: 15, bucketIdx: 8, predictedNativeC: 22, forecastC: 23.0 });
   });
 });
 

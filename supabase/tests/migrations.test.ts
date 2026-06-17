@@ -113,6 +113,9 @@ describe('migrations 0001–0010', () => {
       // 0039 = Amsterdam paper-trade sim (amsterdam_paper_bets + 4 service-role place/grade RPCs +
       // dash_amsterdam_sim on authenticated, added to WEB_AUTHENTICATED below) + the daily cron.
       '0039_amsterdam_paper_sim.sql',
+      // 0040 = forecast-aware Amsterdam nowcast — adds forecast_c, lifts the running-max floor to the
+      // de-biased lead-1 forecast at early arms in amsterdam_sim_place_inputs (signatures unchanged).
+      '0040_amsterdam_forecast_nowcast.sql',
     ]);
   });
 });

@@ -139,9 +139,11 @@ export default async function AmsterdamPage(): Promise<ReactElement> {
       <h2>Best time of day — the evidence</h2>
       <div className="panel">
         <p className="muted small">
-          Over 182 days the running-max nowcast calls the exact whole-°C bucket 50% of the time by 13:00, 86% by
-          15:00, 92% by 16:00 — but the market re-prices our bucket in lockstep (its ask ≈ our hit rate), so the
-          later you wait the surer you are and the less the odds pay. The live race below is the real test.
+          The early arms lift the running-max floor to our lead-1 NWP forecast, corrected for its recent bias (the
+          day&apos;s high can only finish above what&apos;s happened so far): a walk-forward backtest on 182 days raised the 13:00 exact-bucket
+          hit from ~42% to ~58% and halved its error; 15:00/16:00 keep the floor (already 86%/92%, the forecast
+          only adds noise there). The market still re-prices our bucket in lockstep (its ask ≈ our hit rate), so a
+          better nowcast sharpens the call without necessarily paying more — the live race below is the real test.
         </p>
         <table style={{ width: 'auto' }}>
           <thead>
@@ -184,6 +186,7 @@ export default async function AmsterdamPage(): Promise<ReactElement> {
                 <tr>
                   <th>arm</th>
                   <th className="num">running max</th>
+                  <th className="num">forecast</th>
                   <th className="num">our bucket</th>
                   <th className="num">odds (ask)</th>
                   <th>status</th>
@@ -198,7 +201,7 @@ export default async function AmsterdamPage(): Promise<ReactElement> {
                     return (
                       <tr key={h}>
                         <td className="mono">{h}:00</td>
-                        <td className="num" colSpan={6}>
+                        <td className="num" colSpan={7}>
                           <span className="muted">no bet</span>
                         </td>
                       </tr>
@@ -208,6 +211,7 @@ export default async function AmsterdamPage(): Promise<ReactElement> {
                     <tr key={h}>
                       <td className="mono">{h}:00</td>
                       <td className="num">{fmtTemp(r.runMaxC, 'C')}</td>
+                      <td className="num">{r.forecastC == null ? '—' : fmtTemp(r.forecastC, 'C')}</td>
                       <td className="num">{r.label ?? fmtTemp(r.predictedC, 'C')}</td>
                       <td className="num">{fmtProb(r.ask)}</td>
                       <td>{statusChip(r.status)}</td>
@@ -234,6 +238,7 @@ export default async function AmsterdamPage(): Promise<ReactElement> {
                 <th>date</th>
                 <th>arm</th>
                 <th className="num">run max</th>
+                <th className="num">forecast</th>
                 <th className="num">our bucket</th>
                 <th className="num">ask</th>
                 <th>status</th>
@@ -247,6 +252,7 @@ export default async function AmsterdamPage(): Promise<ReactElement> {
                   <td>{fmtDate(b.date)}</td>
                   <td className="mono">{b.hour}:00</td>
                   <td className="num">{fmtTemp(b.runMaxC, 'C')}</td>
+                  <td className="num">{b.forecastC == null ? '—' : fmtTemp(b.forecastC, 'C')}</td>
                   <td className="num">{b.label ?? fmtTemp(b.predictedC, 'C')}</td>
                   <td className="num">{fmtProb(b.ask)}</td>
                   <td>{statusChip(b.status)}</td>

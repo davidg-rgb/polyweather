@@ -448,6 +448,8 @@ export interface SimBetRow {
   label: string | null;
   ask: unknown;
   runMaxC: unknown;
+  /** De-biased lead-1 forecast (°C) available at placement; null when none. */
+  forecastC: unknown;
   status: string;
   won: boolean | null;
   pnl: unknown;
@@ -459,6 +461,8 @@ export interface SimLatestRow {
   label: string | null;
   ask: unknown;
   runMaxC: unknown;
+  /** De-biased lead-1 forecast (°C) available at placement; null when none. */
+  forecastC: unknown;
   status: string;
   won: boolean | null;
   pnl: unknown;
