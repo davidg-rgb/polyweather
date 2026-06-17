@@ -110,6 +110,57 @@ export function bootstrapMeanCi(
   return { mean, lo: quantileSorted(means, alpha / 2), hi: quantileSorted(means, 1 - alpha / 2), n };
 }
 
+// --- floor "truth accuracy" stats: forecast skill vs the true decimal high, separate from the market ---
+
+/** One bet reduced to its floor-truth outcome + decimal signed error (from core/sim/amsterdam planTruth). */
+export interface TruthBet {
+  /** predicted whole °C === floor(decimal actual). */
+  truthWon: boolean;
+  /** Continuous nowcast basis − decimal actual (°C); the per-bet signed forecast error. */
+  signedErrorC: number;
+}
+
+/** The per-arm floor-truth bundle the dashboard renders alongside (but separate from) the market edge. */
+export interface ArmTruthStats {
+  nTruth: number;
+  nTruthWon: number;
+  /** Fraction of bets whose whole-°C call equals floor(decimal actual). NaN when nTruth = 0. */
+  truthHitRate: number;
+  truthHitCiLo: number;
+  truthHitCiHi: number;
+  /** Mean absolute signed error (°C) — the arm's nowcast MAE at decimal resolution. */
+  mae: number;
+  /** Mean signed error (°C); positive = the nowcast ran hot. The Δ on it is mean ± z·SE. */
+  bias: number;
+  biasCiLo: number;
+  biasCiHi: number;
+}
+
+/**
+ * Reduce a set of truth-resolved bets to the floor-hit rate (Wilson CI), the decimal MAE, and the signed
+ * bias (mean ± z·SE) — the one place these are wired, so the dashboard loader and the backtest score
+ * identically. Rows with a non-finite signed error are dropped. nTruth = 0 → an all-NaN/empty bundle.
+ */
+export function armTruthStats(rows: TruthBet[]): ArmTruthStats {
+  const usable = rows.filter((r) => Number.isFinite(r.signedErrorC));
+  const nTruth = usable.length;
+  const nTruthWon = usable.filter((r) => r.truthWon).length;
+  const hit = wilsonInterval(nTruthWon, nTruth);
+  const bias = meanConfidenceInterval(usable.map((r) => r.signedErrorC));
+  const mae = nTruth === 0 ? NaN : usable.reduce((a, r) => a + Math.abs(r.signedErrorC), 0) / nTruth;
+  return {
+    nTruth,
+    nTruthWon,
+    truthHitRate: nTruth === 0 ? NaN : nTruthWon / nTruth,
+    truthHitCiLo: hit.lo,
+    truthHitCiHi: hit.hi,
+    mae,
+    bias: bias.mean,
+    biasCiLo: bias.lo,
+    biasCiHi: bias.hi,
+  };
+}
+
 /** One graded paper bet reduced to the two fields every estimator above needs. */
 export interface GradedBet {
   won: boolean;

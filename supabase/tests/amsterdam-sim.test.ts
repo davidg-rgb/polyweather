@@ -96,6 +96,11 @@ async function seedFinalizedObs(targetDate: string, tmaxC: number): Promise<void
   );
 }
 
+/** A KNMI-shaped payload for a single day (tenths °C), for the handler's truth-fetch stub. */
+const knmiPayload = (date: string, txTenths: number) => [
+  { station_code: 240, date: `${date}T00:00:00.000Z`, TX: txTenths },
+];
+
 beforeAll(async () => {
   db = await freshDb();
   port = pglitePort(db);
@@ -268,5 +273,66 @@ describe('dash_amsterdam_sim — the head-to-head read', () => {
         rows(db, `select public.dash_amsterdam_sim()`),
       ),
     ).rejects.toThrow(/ERR_FORBIDDEN/);
+  });
+});
+
+describe('amsterdam-paper-trade — floor "truth accuracy" (0043)', () => {
+  it('fetches KNMI, fills floor-truth + signed error on graded bets, independent of the market', async () => {
+    // 2026-06-10's four bets are already graded on the market (22°C won). The real KNMI high was 22.4 →
+    // floor 22. So 15:00/16:00 (predicted 22) are truth-hits; 13:00 (19) / 14:00 (21) are truth-misses —
+    // and signed_error = running-max basis − 22.4 (no forecast seeded → basis = running max).
+    const stats = await amsterdamPaperTrade(ctxAt(new Date('2026-06-12T15:30:00Z')), {
+      now: new Date('2026-06-12T15:30:00Z'),
+      targetDate: '2026-06-12', // no event → place/grade no-op; the truth phase fetches + fills
+      fetchJson: async () => knmiPayload('2026-06-10', 224),
+    });
+    expect(stats.truthIngested).toBe(1);
+    expect(stats.truthFilled).toBe(4);
+
+    const bets = await rows<{ arm_hour: number; predicted_native_c: number; actual_decimal_c: string; truth_won: boolean; signed_error_c: string; running_max_c: string }>(
+      db,
+      `select arm_hour, predicted_native_c, actual_decimal_c, truth_won, signed_error_c, running_max_c
+       from amsterdam_paper_bets where target_date = '2026-06-10' order by arm_hour`,
+    );
+    expect(bets.every((b) => Number(b.actual_decimal_c) === 22.4)).toBe(true);
+    expect(bets.map((b) => b.truth_won)).toEqual([false, false, true, true]); // 19,21 miss; 22,22 hit floor(22.4)=22
+    // signed error = running max (basis, no forecast) − 22.4
+    for (const b of bets) {
+      expect(Number(b.signed_error_c)).toBeCloseTo(Number(b.running_max_c) - 22.4, 2);
+    }
+  });
+
+  it('is idempotent — a second run fills nothing new (truth already current)', async () => {
+    const stats = await amsterdamPaperTrade(ctxAt(new Date('2026-06-12T16:30:00Z')), {
+      now: new Date('2026-06-12T16:30:00Z'),
+      targetDate: '2026-06-12',
+      fetchJson: async () => knmiPayload('2026-06-10', 224),
+    });
+    expect(stats.truthFilled).toBe(0);
+  });
+
+  it('surfaces the truth panel in dash_amsterdam_sim (truthByArm + per-arm hit/MAE/bias + coverage)', async () => {
+    const out = await asRole(db, 'authenticated', OPERATOR, async () => {
+      const r = await rows<{ dash_amsterdam_sim: Record<string, unknown> }>(
+        db,
+        `select public.dash_amsterdam_sim() as dash_amsterdam_sim`,
+      );
+      return r[0]!.dash_amsterdam_sim;
+    });
+
+    const truthByArm = out.truthByArm as Record<string, { truthWon: boolean; signedErrorC: number }[]>;
+    expect(truthByArm['15']).toEqual([{ truthWon: true, signedErrorC: expect.closeTo(21.6 - 22.4, 2) }]);
+    expect(truthByArm['13']![0]!.truthWon).toBe(false);
+
+    const arms = out.arms as { hour: number; nTruth: number; truthHitRate: number | null; mae: number | null }[];
+    const a15 = arms.find((a) => a.hour === 15)!;
+    expect(Number(a15.nTruth)).toBe(1);
+    expect(Number(a15.truthHitRate)).toBe(1); // floor-hit
+    expect(Number(a15.mae)).toBeCloseTo(0.8, 2); // |21.6 − 22.4|
+
+    const tc = out.truthCoverage as { nBetsWithTruth: number; nDaysWithTruth: number; tableNDays: number };
+    expect(Number(tc.nBetsWithTruth)).toBe(4);
+    expect(Number(tc.nDaysWithTruth)).toBe(1);
+    expect(Number(tc.tableNDays)).toBe(1);
   });
 });

@@ -26,6 +26,12 @@ dashboard, TypeScript monorepo (`packages/core|io|trading`, `supabase/functions`
   scored against the real market. Engine `packages/core/src/sim/amsterdam.ts`, migration `0039`,
   Edge Function `amsterdam-paper-trade`, `/amsterdam` page, seed `scripts/amsterdam-sim.ts`. NOT
   trading. Design + go-live: **`AMSTERDAM-SIM.md`**.
+  - **Floor "truth accuracy" (2026-06-17, migration `0043`):** a second, cleaner accuracy lens scored
+    against the **real** Schiphol high at 0.1°C from **KNMI** (free daggegevens API, station 240, var TX —
+    897 gap-free days verified) — `truth_won = predicted == floor(decimal actual)` + a decimal signed-error
+    log (MAE/bias). New `amsterdam_truth` table, `scripts/amsterdam-truth-backfill.ts`, `/amsterdam` truth
+    panel + backtest columns. **Market-resolution accuracy stays its own number (drives the P&L);** truth is
+    filled independently (the Edge tick refreshes KNMI best-effort). Operator-gated go-live: `AMSTERDAM-SIM.md` §4.
 
 ---
 

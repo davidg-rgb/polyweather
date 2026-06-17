@@ -117,6 +117,9 @@ const FN_ARGS: Record<string, string[]> = {
   amsterdam_sim_record: ['p_rows'],
   amsterdam_sim_grade_inputs: [],
   amsterdam_sim_settle: ['p_settlements'],
+  amsterdam_truth_upsert: ['p_rows'],
+  amsterdam_sim_truth_inputs: [],
+  amsterdam_sim_truth_record: ['p_rows'],
   dash_amsterdam_sim: [],
 };
 

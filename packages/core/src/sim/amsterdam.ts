@@ -281,6 +281,66 @@ export function planPlacements(input: PlaceInputs, opts: { stakeUsd?: number } =
   return out;
 }
 
+// --- floor "truth accuracy": forecast skill vs the true decimal high (KNMI), separate from the market ---
+// The market grades on wuRound(WU's reported integer high) bucketed — its own rounding + bucket width.
+// The TRUTH lens (operator directive 2026-06-17) scores our whole-°C call against the integer FLOOR of the
+// real station high (KNMI Schiphol daily TX, 0.1°C), and logs the continuous signed forecast error at decimal
+// resolution. It is a cleaner skill measure (no WU-rounding noise, no bucket-width noise); market accuracy
+// stays its own number (it drives the paper-trade P&L). Note the deliberate asymmetry: we PREDICT with
+// wuRound (round-half-up, matching the market grain) but score truth with floor — so a true high of e.g.
+// 22.5 (we'd bet 23, floor is 22) counts as a truth miss. That is intentional: it measures "did our market
+// bet's integer match the true floor integer", the operator's exact spec.
+
+/** Floor-truth hit: our whole-°C call equals the integer floor of the decimal actual. floor(−2.3) = −3. */
+export function floorTruthHit(predictedNativeC: number, actualDecimalC: number): boolean {
+  return predictedNativeC === Math.floor(actualDecimalC);
+}
+
+/** A placed bet plus the decimal actual now known (KNMI) — produced by amsterdam_sim_truth_inputs. */
+export interface TruthInputRow {
+  betId: string;
+  armHour: number;
+  /** The whole-°C call we actually bet (predicted_native_c). */
+  predictedNativeC: number;
+  /** The running-max floor (°C) known at the arm hour. */
+  runMaxC: number;
+  /** The bias-corrected lead-1 forecast (°C) available at placement, or null — what (if anything) lifted the call. */
+  forecastC: number | null;
+  /** The true station daily high (°C, 0.1° resolution) from KNMI — the decimal actual. */
+  actualDecimalC: number;
+}
+
+/** The truth fields to persist on a bet (one row per input). */
+export interface TruthRow {
+  betId: string;
+  actualDecimalC: number;
+  /** predictedNativeC === floor(actualDecimalC). */
+  truthWon: boolean;
+  /**
+   * Signed forecast error at decimal resolution: the continuous nowcast BASIS we rounded to bet
+   * (nowcastBasisC — the running-max floor, lifted to the forecast at early arms) minus the decimal actual.
+   * Positive = we ran hot. |signedErrorC| is the per-bet absolute error; the mean is the arm's MAE.
+   */
+  signedErrorC: number;
+}
+
+/**
+ * Resolve the floor-truth + signed-error for a batch of bets against their now-known KNMI decimal actual.
+ * Pure, side-effect-free, mirrors the engine's nowcast basis — so the backfill script and the Edge Function
+ * compute byte-identical truth fields from the same inputs (the single-source-of-truth contract).
+ */
+export function planTruth(rows: TruthInputRow[]): TruthRow[] {
+  return rows.map((r) => {
+    const basisC = nowcastBasisC(r.runMaxC, r.armHour, r.forecastC);
+    return {
+      betId: r.betId,
+      actualDecimalC: r.actualDecimalC,
+      truthWon: floorTruthHit(r.predictedNativeC, r.actualDecimalC),
+      signedErrorC: basisC - r.actualDecimalC,
+    };
+  });
+}
+
 /** A pending bet plus its now-known resolution — produced by amsterdam_sim_grade_inputs. */
 export interface GradeInputRow {
   betId: string;

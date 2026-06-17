@@ -123,6 +123,10 @@ describe('migrations 0001–0010', () => {
       // ask) per arm) so the loader computes per-arm hit/edge/EV CIs via core/sim/stats (read-only,
       // additive, no new surface). dash_amsterdam_sim stays in WEB_AUTHENTICATED (unchanged signature).
       '0042_amsterdam_edge_ci.sql',
+      // 0043 = floor "truth accuracy" — new amsterdam_truth table (KNMI decimal high) + 3 service-role truth
+      // RPCs (upsert/inputs/record) + bet columns (actual_decimal_c/truth_won/signed_error_c); dash gains a
+      // truth panel + truthByArm. dash_amsterdam_sim stays in WEB_AUTHENTICATED (unchanged signature).
+      '0043_amsterdam_truth_floor_accuracy.sql',
     ]);
   });
 });

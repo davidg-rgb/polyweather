@@ -41,7 +41,8 @@ interface DayRow {
   date: string;
   rm: Record<number, number | null>; // running max by lock hour 13..16 (null = no intraday that hour)
   fc1: number | null; // raw cross-model lead-1 forecast (°C), null if none captured
-  actual: number; // finalized WU daily high (°C)
+  actual: number; // finalized WU daily high (°C) — the market's truth
+  truth: number | null; // KNMI decimal daily high (°C, 0.1°) — the floor-truth basis (null if no KNMI day)
 }
 
 const ARM_HOURS = [13, 14, 15, 16] as const;
@@ -58,6 +59,7 @@ async function fetchDays(db: ScriptDb, icao: string): Promise<DayRow[]> {
     rm16: string | null;
     fc1: string | null;
     actual: string;
+    truth: string | null;
   }>(
     `with hrs as (
        select ia.date_local,
@@ -72,10 +74,12 @@ async function fetchDays(db: ScriptDb, icao: string): Promise<DayRow[]> {
        from forecast_snapshots fs where fs.icao = $1 and fs.lead_days = 1 group by fs.target_date
      )
      select o.date_local::text, hrs.rm13, hrs.rm14, hrs.rm15, hrs.rm16, fc.fc1,
-       (case when o.unit = 'F' then (o.tmax_wu_native - 32) * 5.0 / 9.0 else o.tmax_wu_native end)::numeric as actual
+       (case when o.unit = 'F' then (o.tmax_wu_native - 32) * 5.0 / 9.0 else o.tmax_wu_native end)::numeric as actual,
+       t.tx_tenths_c::numeric as truth
      from observations o
      left join hrs on hrs.date_local = o.date_local
      left join fc on fc.target_date = o.date_local
+     left join amsterdam_truth t on t.date_local = o.date_local
      where o.icao = $1 and o.finalized_at is not null and o.tmax_wu_native is not null
      order by o.date_local`,
     [icao],
@@ -86,6 +90,7 @@ async function fetchDays(db: ScriptDb, icao: string): Promise<DayRow[]> {
     rm: { 13: num(r.rm13), 14: num(r.rm14), 15: num(r.rm15), 16: num(r.rm16) },
     fc1: num(r.fc1),
     actual: Number(r.actual),
+    truth: num(r.truth),
   }));
 }
 
@@ -94,13 +99,23 @@ interface Acc {
   hit: number;
   absErr: number;
   within1: number;
+  // floor "truth accuracy" vs the KNMI decimal high (only over days that have a KNMI truth row)
+  truthN: number;
+  truthHit: number; // predNative === floor(decimal actual)
+  truthAbsErr: number; // |continuous basis − decimal actual| (decimal MAE)
 }
-const mkAcc = (): Acc => ({ n: 0, hit: 0, absErr: 0, within1: 0 });
+const mkAcc = (): Acc => ({ n: 0, hit: 0, absErr: 0, within1: 0, truthN: 0, truthHit: 0, truthAbsErr: 0 });
 function add(a: Acc, predNative: number, actual: number): void {
   a.n += 1;
   if (predNative === wuRound(actual)) a.hit += 1;
   a.absErr += Math.abs(predNative - actual);
   if (Math.abs(predNative - actual) <= 1) a.within1 += 1;
+}
+/** Floor-truth + decimal MAE vs the real KNMI high: predNative=our whole-°C call, basis=the continuous °C. */
+function addTruth(a: Acc, predNative: number, basis: number, truth: number): void {
+  a.truthN += 1;
+  if (predNative === Math.floor(truth)) a.truthHit += 1;
+  a.truthAbsErr += Math.abs(basis - truth);
 }
 
 /** McNemar exact test: two-sided binomial p on the discordant pairs (each 50/50 under H0). n small. */
@@ -162,10 +177,15 @@ function main(): Promise<void> {
           for (const h of ARM_HOURS) {
             const rm = d.rm[h];
             if (rm == null) continue;
+            const imprBasis = nowcastBasisC(rm, h, corrected);
             const basePred = wuRound(rm);
-            const imprPred = wuRound(nowcastBasisC(rm, h, corrected));
+            const imprPred = wuRound(imprBasis);
             add(base[h]!, basePred, d.actual);
             add(impr[h]!, imprPred, d.actual);
+            if (d.truth != null) {
+              addTruth(base[h]!, basePred, rm, d.truth); // baseline basis = the raw running-max floor
+              addTruth(impr[h]!, imprPred, imprBasis, d.truth); // improved basis = the forecast-lifted floor
+            }
             const baseOk = basePred === wuRound(d.actual);
             const imprOk = imprPred === wuRound(d.actual);
             if (!baseOk && imprOk) flips[h]!.gain += 1;
@@ -209,6 +229,29 @@ function main(): Promise<void> {
         );
       }
       console.log('\n  * p < 0.05 (McNemar exact, two-sided). Δhit without a star is directional, not significant.\n');
+
+      // --- floor "truth accuracy" vs the real KNMI decimal high (the operator's second lens) -----------
+      const anyTruth = ARM_HOURS.some((h) => base[h]!.truthN > 0);
+      if (anyTruth) {
+        const tmae = (a: Acc) => (a.truthN ? (a.truthAbsErr / a.truthN).toFixed(3) : '—');
+        console.log('  Floor "truth accuracy" — predicted whole °C == floor(real KNMI high); decMAE = |basis − real high|.');
+        console.log('  Scored only over days with a KNMI decimal truth row (run scripts/amsterdam-truth-backfill.ts first).\n');
+        console.log('  hour │  n  │ baseline floor-hit  decMAE │ improved floor-hit  decMAE');
+        console.log('  ─────┼─────┼────────────────────────────┼────────────────────────────');
+        for (const h of ARM_HOURS) {
+          const b = base[h]!;
+          const i = impr[h]!;
+          console.log(
+            `  ${String(h).padStart(2)}:00 │ ${String(b.truthN).padStart(3)} │ ` +
+              `${pct(b.truthHit, b.truthN).padStart(10)}       ${tmae(b)} │ ` +
+              `${pct(i.truthHit, i.truthN).padStart(10)}       ${tmae(i)}`,
+          );
+        }
+        console.log('\n  (Floor-truth uses floor() while we bet with wuRound(); a .5+ true high can miss by design — it');
+        console.log('   measures whether our market-bet integer matched the true floor integer. All °C.)\n');
+      } else {
+        console.log('  (No KNMI decimal truth available yet — run scripts/amsterdam-truth-backfill.ts to score floor-truth.)\n');
+      }
     } finally {
       await db.end();
     }

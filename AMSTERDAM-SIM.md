@@ -94,11 +94,22 @@ supabase/migrations/0039_amsterdam_paper_sim.sql
   dash_amsterdam_sim          the operator read (operator_guard + authenticated)
   cron 'amsterdam-paper-trade' @ 15:30 UTC (= 17:30 local)
 
-DRIVER 1 — supabase/functions/amsterdam-paper-trade   the daily cron tick (place today + grade pending)
+supabase/migrations/0043_amsterdam_truth_floor_accuracy.sql   floor "truth accuracy" (see §4)
+  amsterdam_truth             the decimal (0.1°C) real daily high from KNMI (Schiphol 240, var TX)
+  amsterdam_paper_bets        + actual_decimal_c / truth_won / signed_error_c columns
+  amsterdam_truth_upsert      idempotent KNMI writer (backfill + the daily tick share it)
+  amsterdam_sim_truth_inputs  bets whose day now has a decimal actual (the engine recomputes)
+  amsterdam_sim_truth_record  writes truth_won + signed_error_c (independent of market grading)
+  dash_amsterdam_sim          + truth panel (per-arm floor-hit/MAE/bias) + truthByArm
+supabase/functions/_shared/knmi.ts   the KNMI daggegevens client (shared by the Edge fn + the script)
+
+DRIVER 1 — supabase/functions/amsterdam-paper-trade   the daily cron tick (place + grade + KNMI truth fill)
 DRIVER 2 — scripts/amsterdam-sim.ts                   backfill history + print the decision table + leaderboard
+DRIVER 3 — scripts/amsterdam-truth-backfill.ts        backfill ~880 KNMI days + fill floor-truth + report
 
 SURFACE  — apps/web /amsterdam   leaderboard cards · cumulative-P&L EquityChart (4 lines) · evidence
-           table · latest call · bet log.  Loader getAmsterdamSim degrades to null if the RPC is absent.
+           table · FLOOR-TRUTH panel · latest call · bet log.  Loader getAmsterdamSim degrades to null if
+           the RPC is absent (truth fields degrade to "—" if migration 0043 is not yet applied).
 ```
 
 **Why a daily reconstruction is faithful, not look-ahead:** both the running max (`intraday_advances`,
@@ -128,6 +139,11 @@ pnpm tsx scripts/amsterdam-best-buy.ts --price mid          # extended mid-histo
 pnpm tsx scripts/amsterdam-sim.ts                 # seed all simulable days + grade + print
 pnpm tsx scripts/amsterdam-sim.ts --analyze-only  # print only, no writes
 pnpm tsx scripts/amsterdam-sim.ts --from 2026-05-01 --to 2026-06-15
+
+# Floor "truth accuracy" (§4): backfill the KNMI decimal high (~880 days) + fill truth on every bet, then
+# print per-arm market-hit vs floor-hit + decimal MAE/bias. Idempotent (the daily tick also refreshes it).
+pnpm tsx scripts/amsterdam-truth-backfill.ts                  # fetch KNMI + fill + report
+pnpm tsx scripts/amsterdam-truth-backfill.ts --analyze-only  # report only, no fetch/writes
 ```
 
 **Go-live (operator-gated — hosted DDL/deploys need per-action authorization):**
@@ -141,11 +157,51 @@ pnpm tsx scripts/amsterdam-sim.ts --from 2026-05-01 --to 2026-06-15
    (the function self-authenticates via `x-cron-secret`, mirroring every other job). Required so the
    bundled `planPlacements` is the forecast-aware one; the bias correction itself lives in the 0040/0041 RPC.
 3. **Seed the curve:** `pnpm tsx scripts/amsterdam-sim.ts` (then the 15:30-UTC cron carries it forward).
+4. **Floor truth accuracy (§4):** apply `0043_amsterdam_truth_floor_accuracy.sql`, **redeploy** the Edge Function
+   (the bundled handler now also fetches KNMI + fills truth each tick), then run
+   `pnpm tsx scripts/amsterdam-truth-backfill.ts` to backfill ~880 KNMI days + fill truth on every bet.
+   (The Edge Function's truth phase is best-effort — it never breaks the place/grade tick — so deploying it
+   ahead of the migration is safe; truth just stays empty until 0043 lands + the backfill runs.)
 
 After that the `/amsterdam` page is live and self-updating. **To turn it off:** `select
 cron.unschedule('amsterdam-paper-trade');` — the data and dashboard stay; no new bets are placed.
 
-## 4. Honest caveats
+## 4. Floor "truth accuracy" — vs the real high (KNMI, migration 0043)
+
+The leaderboard scores the **market**: did our whole-°C bucket match how Polymarket resolved — to
+Wunderground's *rounded integer* Schiphol high, bucketed on the ladder? That is the number that drives the
+paper-trade P&L, and it stays its own number. But WU reports a rounded integer and some buckets are wider
+than 1° at the tails, so market `won` is a noisy proxy for forecast skill. The operator directive (2026-06-17)
+adds a second, cleaner lens scored against the **real** station high:
+
+```
+truth_won      = predicted_native_c == floor(actual_decimal_c)            ← the floor-truth hit
+signed_error_c = nowcastBasisC(running_max, arm_hour, forecast_c) − actual_decimal_c   ← decimals, signed
+```
+
+- **Source — KNMI, not WU.** `actual_decimal_c` is the day's max at **0.1°C** from the Dutch met office's free
+  daggegevens API (station **240 = Schiphol/EHAM**, variable **TX**; no auth, no key). Verified
+  **2024-01-01 → with 897 consecutive days, zero gaps, zero nulls**. It lands ~1–2 days after the day (same as
+  WU finalization). CheckWX was ruled out (whole-degree, no history); NOAA ISD SYNOP (062400) was the
+  fallback, unneeded since KNMI is cleaner (official daily max, decimal, gap-free).
+- **A new reference table** `amsterdam_truth (date_local, tx_tenths_c, source)` holds the decimal high
+  independently of whether we have an `observations` row, so the full ~880-day history is available to the
+  backtest, not just the dates we placed bets. Backfilled by `scripts/amsterdam-truth-backfill.ts`; refreshed
+  for the last ~6 days each cron tick by the Edge Function (best-effort — a KNMI hiccup never breaks the tick).
+- **Truth is independent of market grading.** A bet's `truth_won`/`signed_error_c` are filled by a separate
+  pass (`amsterdam_sim_truth_inputs → core planTruth → amsterdam_sim_truth_record`) the moment KNMI has the
+  day — whether or not the market bet has graded. So "market accuracy stays its own number" is literal.
+- **The deliberate round-vs-floor asymmetry.** We *predict* with `wuRound` (round-half-up, the market grain)
+  but *score truth* with `floor` — so a true high of e.g. 22.5 (we'd bet 23, floor is 22) counts as a truth
+  miss by design. That is the operator's exact spec: it measures whether our market-bet integer matched the
+  true *floor* integer. `MAE = mean|signed_error|` and `bias = mean signed_error` (positive = ran hot) are the
+  continuous skill numbers at 0.1° resolution, unaffected by either rounding.
+- **Where it shows.** `/amsterdam` gains a **Floor truth accuracy** panel (per-arm floor-hit rate with a Wilson
+  CI, decimal MAE, signed bias with a CI — the same one-place `core/sim/stats` idiom as the edge CIs), and the
+  bet log + latest call gain `real high` / `err` / `truth ✓·✗` columns. `scripts/amsterdam-nowcast-backtest.ts`
+  prints a second table — baseline vs forecast-lifted **floor-hit + decimal MAE** over the KNMI-truth days.
+
+## 5. Honest caveats
 
 - **Odds history is thin (~4 dense days).** The decision table's EV column is noisy until the live sim
   accrues `n`; the 182-day *accuracy* curve is robust, the *odds* side is what the race measures forward.

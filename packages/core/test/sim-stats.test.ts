@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
   armEdgeStats,
+  armTruthStats,
   bootstrapMeanCi,
   meanConfidenceInterval,
   quantileSorted,
+  type TruthBet,
   wilsonInterval,
   Z_95,
   type GradedBet,
@@ -145,5 +147,40 @@ describe('armEdgeStats — the wired (won, ask) → hit/edge/EV bundle', () => {
 
   it('is reproducible (seeded EV bootstrap)', () => {
     expect(armEdgeStats(bets)).toEqual(armEdgeStats(bets));
+  });
+});
+
+describe('armTruthStats — floor-hit (Wilson) + decimal MAE/bias', () => {
+  const rows: TruthBet[] = [
+    { truthWon: true, signedErrorC: 0.2 },
+    { truthWon: true, signedErrorC: -0.4 },
+    { truthWon: false, signedErrorC: 0.9 },
+    { truthWon: true, signedErrorC: -0.1 },
+  ];
+  it('computes the floor-hit rate with a bracketing Wilson CI', () => {
+    const s = armTruthStats(rows);
+    expect(s.nTruth).toBe(4);
+    expect(s.nTruthWon).toBe(3);
+    expect(s.truthHitRate).toBeCloseTo(0.75, 10);
+    expect(s.truthHitCiLo).toBeGreaterThanOrEqual(0);
+    expect(s.truthHitCiLo).toBeLessThan(0.75);
+    expect(s.truthHitCiHi).toBeGreaterThan(0.75);
+    expect(s.truthHitCiHi).toBeLessThanOrEqual(1);
+  });
+  it('MAE is the mean |signed error| and bias the mean signed error, with a bracketing CI', () => {
+    const s = armTruthStats(rows);
+    expect(s.mae).toBeCloseTo((0.2 + 0.4 + 0.9 + 0.1) / 4, 10);
+    expect(s.bias).toBeCloseTo((0.2 - 0.4 + 0.9 - 0.1) / 4, 10);
+    expect(s.biasCiLo).toBeLessThan(s.bias);
+    expect(s.biasCiHi).toBeGreaterThan(s.bias);
+  });
+  it('drops non-finite signed errors; empty → an all-NaN/empty bundle', () => {
+    const s = armTruthStats([{ truthWon: true, signedErrorC: Number.NaN }]);
+    expect(s.nTruth).toBe(0);
+    expect(Number.isNaN(s.truthHitRate)).toBe(true);
+    expect(Number.isNaN(s.mae)).toBe(true);
+    // n=0 Wilson is the maximally-uncertain [0,1] by design (not NaN)
+    expect(s.truthHitCiLo).toBe(0);
+    expect(s.truthHitCiHi).toBe(1);
   });
 });

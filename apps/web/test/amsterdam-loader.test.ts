@@ -30,8 +30,8 @@ describe('getAmsterdamSim — edge/EV confidence intervals (0042)', () => {
     config: { primaryHour: 15, armHours: [13, 14, 15, 16], compareDays: 14, stakeUsd: 10 },
     coverage: { firstDate: '2026-06-01', lastDate: '2026-06-10', nDays: 10, nGradedDays: 10, nPending: 0 },
     arms: [
-      armPoint(15, { nBets: 5, nGraded: 5, nWon: 5, staked: 50, pnl: 1, hitRate: 1, avgAsk: 0.85 }),
-      armPoint(13, { nBets: 12, nGraded: 12, nWon: 6, staked: 120, pnl: 5, hitRate: 0.5, avgAsk: 0.3 }),
+      armPoint(15, { nBets: 5, nGraded: 5, nWon: 5, staked: 50, pnl: 1, hitRate: 1, avgAsk: 0.85, nTruth: 5, truthHitRate: 0.8, mae: 0.4, bias: -0.1 }),
+      armPoint(13, { nBets: 12, nGraded: 12, nWon: 6, staked: 120, pnl: 5, hitRate: 0.5, avgAsk: 0.3, nTruth: 12, truthHitRate: 0.5, mae: 0.9, bias: 0.3 }),
     ],
     leader: { hour: 13, pnl: 5, nGraded: 12 },
     equityByArm: { '13': [{ date: '2026-06-01', cum: 5 }], '15': [{ date: '2026-06-01', cum: 1 }] },
@@ -39,6 +39,11 @@ describe('getAmsterdamSim — edge/EV confidence intervals (0042)', () => {
       '13': [...repeat(6, { won: true, ask: 0.3 }), ...repeat(6, { won: false, ask: 0.3 })],
       '15': repeat(5, { won: true, ask: 0.85 }),
     },
+    truthByArm: {
+      '13': [...repeat(6, { truthWon: true, signedErrorC: 0.3 }), ...repeat(6, { truthWon: false, signedErrorC: -0.5 })],
+      '15': repeat(5, { truthWon: true, signedErrorC: -0.1 }),
+    },
+    truthCoverage: { nBetsWithTruth: 17, nDaysWithTruth: 10, tableFirstDate: '2024-01-01', tableLastDate: '2026-06-10', tableNDays: 880 },
     betLog: [],
     latest: { date: '2026-06-10', byHour: {} },
   };
@@ -86,6 +91,41 @@ describe('getAmsterdamSim — edge/EV confidence intervals (0042)', () => {
     expect(a13.hitCiHi).toBe(1);
     // the point-estimate fields from the RPC still flow through
     expect(Number(a13.hitRate)).toBe(0.5);
+  });
+
+  it('computes floor-truth Wilson/bias CIs per arm and passes truthCoverage through (0043)', async () => {
+    const v = (await getAmsterdamSim(stubDb(payload)))!;
+    const a13 = v.arms.find((a) => a.hour === 13)!;
+    // truth hit-rate point (from RPC) is 0.5; the Wilson CI brackets it and stays in [0,1]
+    expect(Number(a13.truthHitRate)).toBe(0.5);
+    expect(a13.truthHitCiLo).toBeGreaterThanOrEqual(0);
+    expect(a13.truthHitCiLo).toBeLessThan(0.5);
+    expect(a13.truthHitCiHi).toBeGreaterThan(0.5);
+    expect(a13.truthHitCiHi).toBeLessThanOrEqual(1);
+    // bias = mean signed error = (6·0.3 + 6·(−0.5))/12 = −0.1 ; its CI brackets the point
+    expect(a13.biasCiLo).toBeLessThan(-0.1 + 1e-9);
+    expect(a13.biasCiHi).toBeGreaterThan(-0.1 - 1e-9);
+
+    const a15 = v.arms.find((a) => a.hour === 15)!;
+    expect(a15.truthHitCiHi).toBeCloseTo(1, 6); // 5/5 wins → Wilson upper clamps to 1
+    expect(a15.truthHitCiLo).toBeGreaterThan(0); // …lo is informative, < 1
+    expect(a15.truthHitCiLo).toBeLessThan(1);
+    expect(a15.biasCiLo).toBeCloseTo(-0.1, 10); // all signed errors identical → SE 0 → degenerate
+    expect(a15.biasCiHi).toBeCloseTo(-0.1, 10);
+
+    expect(v.truthCoverage?.tableNDays).toBe(880);
+    expect(v.truthCoverage?.nBetsWithTruth).toBe(17);
+  });
+
+  it('truthCoverage is null when the RPC predates 0043', async () => {
+    const noTruth = { ...payload, truthCoverage: undefined, truthByArm: undefined };
+    const v = (await getAmsterdamSim(stubDb(noTruth)))!;
+    expect(v.truthCoverage).toBeNull();
+    const a13 = v.arms.find((a) => a.hour === 13)!;
+    // no truthByArm → n=0 Wilson is [0,1]; bias CIs NaN
+    expect(a13.truthHitCiLo).toBe(0);
+    expect(a13.truthHitCiHi).toBe(1);
+    expect(Number.isNaN(a13.biasCiLo)).toBe(true);
   });
 
   it('returns null when the RPC errors (degraded page)', async () => {

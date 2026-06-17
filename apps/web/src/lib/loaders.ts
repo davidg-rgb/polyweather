@@ -5,7 +5,7 @@
  * loader takes the WebDb port, so the PGlite suite drives the REAL loaders;
  * pages bind serverDb() from supabase.ts.
  */
-import { armEdgeStats, exposureSummary, parseConfigRows } from '@weather-edge/core';
+import { armEdgeStats, armTruthStats, exposureSummary, parseConfigRows } from '@weather-edge/core';
 import type { AppConfig, EdgeRow } from '@weather-edge/core';
 import { goLiveGate, type GateDeps } from '@weather-edge/trading';
 import { compareEdgeRows, recomputeEdgeRows } from './edge-display.ts';
@@ -455,6 +455,21 @@ export interface ArmStanding {
   ev: number;
   evCiLo: number;
   evCiHi: number;
+  /**
+   * Floor "truth accuracy" (0043) — a forecast-skill lens SEPARATE from the market: did our whole-°C call
+   * equal floor(real KNMI high)? With the decimal signed error (nowcast basis − real high). nTruth/truthHitRate/
+   * mae/bias are the RPC point estimates; the CIs are computed in the loader (armTruthStats) like the edge CIs.
+   */
+  nTruth: unknown;
+  truthHitRate: unknown;
+  truthHitCiLo: number;
+  truthHitCiHi: number;
+  /** Mean absolute signed error (°C) — the arm's nowcast MAE at 0.1° resolution. */
+  mae: unknown;
+  /** Mean signed error (°C); positive = the nowcast ran hot vs the real high. */
+  bias: unknown;
+  biasCiLo: number;
+  biasCiHi: number;
 }
 
 export interface SimBetRow {
@@ -470,6 +485,12 @@ export interface SimBetRow {
   won: boolean | null;
   pnl: unknown;
   actualC: unknown;
+  /** KNMI decimal true high (°C, 0.1°); null until truth lands. */
+  actualDecimalC: unknown;
+  /** Signed forecast error (°C): nowcast basis − decimal actual; null until truth lands. */
+  signedErrorC: unknown;
+  /** Floor truth: predicted whole °C == floor(decimal actual); null until truth lands. */
+  truthWon: boolean | null;
 }
 
 export interface SimLatestRow {
@@ -483,6 +504,21 @@ export interface SimLatestRow {
   won: boolean | null;
   pnl: unknown;
   actualC: unknown;
+  /** KNMI decimal true high (°C, 0.1°); null until truth lands. */
+  actualDecimalC: unknown;
+  /** Signed forecast error (°C): nowcast basis − decimal actual; null until truth lands. */
+  signedErrorC: unknown;
+  /** Floor truth: predicted whole °C == floor(decimal actual); null until truth lands. */
+  truthWon: boolean | null;
+}
+
+/** Floor-truth coverage — how much decimal KNMI truth is wired in (the reference table + the filled bets). */
+export interface TruthCoverage {
+  nBetsWithTruth: unknown;
+  nDaysWithTruth: unknown;
+  tableFirstDate: string | null;
+  tableLastDate: string | null;
+  tableNDays: unknown;
 }
 
 export interface AmsterdamSimView {
@@ -494,6 +530,8 @@ export interface AmsterdamSimView {
   chart: { dates: string[]; byHour: Record<number, (number | null)[]> };
   betLog: SimBetRow[];
   latest: { date: string | null; byHour: Record<number, SimLatestRow> };
+  /** Floor-truth coverage (0043); null when the RPC predates it. */
+  truthCoverage: TruthCoverage | null;
 }
 
 interface SimEquityPoint {
@@ -502,7 +540,19 @@ interface SimEquityPoint {
 }
 type ArmPointPayload = Omit<
   ArmStanding,
-  'isLeader' | 'hitCiLo' | 'hitCiHi' | 'edge' | 'edgeCiLo' | 'edgeCiHi' | 'ev' | 'evCiLo' | 'evCiHi'
+  | 'isLeader'
+  | 'hitCiLo'
+  | 'hitCiHi'
+  | 'edge'
+  | 'edgeCiLo'
+  | 'edgeCiHi'
+  | 'ev'
+  | 'evCiLo'
+  | 'evCiHi'
+  | 'truthHitCiLo'
+  | 'truthHitCiHi'
+  | 'biasCiLo'
+  | 'biasCiHi'
 >;
 interface SimPayload {
   config: AmsterdamSimView['config'];
@@ -510,10 +560,13 @@ interface SimPayload {
   arms: ArmPointPayload[];
   leader: { hour: number; pnl: unknown; nGraded: unknown } | null;
   equityByArm: Record<string, SimEquityPoint[]>;
-  /** Per-arm graded (won, ask) rows (0042) — the input to the per-arm CI computation. */
+  /** Per-arm graded (won, ask) rows (0042) — the input to the per-arm market CI computation. */
   betsByArm?: Record<string, { won: boolean | null; ask: unknown }[]>;
+  /** Per-arm (truthWon, signedErrorC) rows (0043) — the input to the floor-truth CI computation. */
+  truthByArm?: Record<string, { truthWon: boolean | null; signedErrorC: unknown }[]>;
   betLog: SimBetRow[];
   latest: { date: string | null; byHour: Record<string, SimLatestRow> };
+  truthCoverage?: TruthCoverage | null;
 }
 
 /**
@@ -532,6 +585,7 @@ export async function getAmsterdamSim(db: WebDb): Promise<AmsterdamSimView | nul
 
   const leaderHour = v.leader?.hour ?? null;
   const betsByArm = v.betsByArm ?? {};
+  const truthByArm = v.truthByArm ?? {};
   const arms: ArmStanding[] = (v.arms ?? [])
     .map((a) => {
       // Per-arm hit/edge/EV CIs from the graded (won, ask) rows — computed once in core (armEdgeStats)
@@ -541,6 +595,11 @@ export async function getAmsterdamSim(db: WebDb): Promise<AmsterdamSimView | nul
         .map((r) => ({ won: r.won === true, ask: Number(r.ask) }))
         .filter((r) => Number.isFinite(r.ask));
       const s = armEdgeStats(graded);
+      // Floor-truth CIs (0043) from the (truthWon, signedErrorC) rows — armTruthStats, same one-place idiom.
+      const truth = (truthByArm[String(a.hour)] ?? [])
+        .map((r) => ({ truthWon: r.truthWon === true, signedErrorC: Number(r.signedErrorC) }))
+        .filter((r) => Number.isFinite(r.signedErrorC));
+      const t = armTruthStats(truth);
       return {
         ...a,
         isLeader: a.hour === leaderHour,
@@ -552,6 +611,10 @@ export async function getAmsterdamSim(db: WebDb): Promise<AmsterdamSimView | nul
         ev: s.ev,
         evCiLo: s.evCiLo,
         evCiHi: s.evCiHi,
+        truthHitCiLo: t.truthHitCiLo,
+        truthHitCiHi: t.truthHitCiHi,
+        biasCiLo: t.biasCiLo,
+        biasCiHi: t.biasCiHi,
       };
     })
     .sort((a, b) => a.hour - b.hour);
@@ -585,6 +648,7 @@ export async function getAmsterdamSim(db: WebDb): Promise<AmsterdamSimView | nul
     chart: { dates, byHour },
     betLog: v.betLog ?? [],
     latest: { date: v.latest?.date ?? null, byHour: latestByHour },
+    truthCoverage: v.truthCoverage ?? null,
   };
 }
 

@@ -1,4 +1,5 @@
-/** Edge Function entry — amsterdam-paper-trade (Amsterdam paper-sim place + grade). Schedule: 30 15 * * * UTC. */
+/** Edge Function entry — amsterdam-paper-trade (Amsterdam paper-sim place + grade + KNMI truth). Schedule: 30 15 * * * UTC. */
+import { fetchJson } from '../../../packages/io/src/index.ts';
 import { getServiceDb } from '../_shared/db.ts';
 import { runJob } from '../_shared/runJob.ts';
 import { amsterdamPaperTrade } from './handler.ts';
@@ -15,7 +16,7 @@ deno?.serve(async (req: Request) => {
     'amsterdam-paper-trade',
     periodKey,
     req,
-    (ctx) => amsterdamPaperTrade(ctx, { now }),
+    (ctx) => amsterdamPaperTrade(ctx, { now, fetchJson: (url, init, opts) => fetchJson(url, init, opts) }),
     { db },
   );
 });

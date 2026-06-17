@@ -5,16 +5,19 @@ import {
   AMSTERDAM_SIM_PRIMARY_HOUR,
   AMSTERDAM_SIM_STAKE_USD,
   evPerDollar,
+  floorTruthHit,
   gradeSimBet,
   nowcastBasisC,
   placeSimBet,
   planPlacements,
   planSettlements,
+  planTruth,
   predictedBucketIdx,
   predictedNativeC,
   type GradeInputRow,
   type PlaceInputs,
   type SimLadderBucket,
+  type TruthInputRow,
 } from '../src/sim/amsterdam.ts';
 import { LadderGapError } from '../src/errors.ts';
 
@@ -282,5 +285,47 @@ describe('planSettlements — the shared resolve decision', () => {
     expect(s[0]!.pnlUsd).toBeGreaterThan(0);
     expect(s[1]).toMatchObject({ betId: 'b', won: false });
     expect(s[1]!.pnlUsd).toBeCloseTo(-10, 10);
+  });
+});
+
+describe('floorTruthHit — predicted whole °C == floor(decimal actual)', () => {
+  it('hits when the call equals the integer floor of the real high', () => {
+    expect(floorTruthHit(22, 22.0)).toBe(true);
+    expect(floorTruthHit(22, 22.4)).toBe(true);
+    expect(floorTruthHit(22, 22.9)).toBe(true); // floor(22.9)=22
+    expect(floorTruthHit(23, 22.9)).toBe(false);
+  });
+  it('the round-vs-floor asymmetry: a .5+ true high we round up is a truth miss by design', () => {
+    // basis 22.5 → we bet wuRound(22.5)=23, but floor(22.5)=22 → our 23-call MISSES truth. Intentional.
+    expect(floorTruthHit(23, 22.5)).toBe(false);
+    // floor(22.5)=22, so a 22-call would hit — the truth grain is the integer part, not the rounded value.
+    expect(floorTruthHit(22, 22.5)).toBe(true);
+  });
+  it('handles negative highs (floor goes more negative)', () => {
+    expect(floorTruthHit(-3, -2.3)).toBe(true); // floor(-2.3) = -3
+    expect(floorTruthHit(-2, -2.3)).toBe(false); // wuRound(-2.3) = -2 ≠ -3 → miss
+  });
+});
+
+describe('planTruth — floor-truth + decimal signed error from the nowcast basis', () => {
+  const rows: TruthInputRow[] = [
+    // 13:00, forecast lifts the floor 19.4→21.6 → call 22; real high 21.7 → floor 21 → miss; err 21.6−21.7
+    { betId: 'a', armHour: 13, predictedNativeC: 22, runMaxC: 19.4, forecastC: 21.6, actualDecimalC: 21.7 },
+    // 15:00 (late — forecast ignored): basis = runMax 21.6 → call 22; real 21.9 → floor 21 → miss; err 21.6−21.9
+    { betId: 'b', armHour: 15, predictedNativeC: 22, runMaxC: 21.6, forecastC: 23.0, actualDecimalC: 21.9 },
+    // 16:00 floor truth hit: call 22, real 22.4 → floor 22 → hit; basis = runMax 21.95, err 21.95−22.4
+    { betId: 'c', armHour: 16, predictedNativeC: 22, runMaxC: 21.95, forecastC: null, actualDecimalC: 22.4 },
+  ];
+  it('computes truthWon via floor and signedErrorC via the same nowcast basis as the placement', () => {
+    const t = planTruth(rows);
+    expect(t[0]).toMatchObject({ betId: 'a', truthWon: false, actualDecimalC: 21.7 });
+    expect(t[0]!.signedErrorC).toBeCloseTo(21.6 - 21.7, 10); // forecast-lifted basis − real high
+    expect(t[1]!.signedErrorC).toBeCloseTo(21.6 - 21.9, 10); // late arm: forecast ignored, basis = runMax
+    expect(t[1]!.truthWon).toBe(false);
+    expect(t[2]).toMatchObject({ betId: 'c', truthWon: true });
+    expect(t[2]!.signedErrorC).toBeCloseTo(21.95 - 22.4, 10);
+  });
+  it('is empty for an empty batch', () => {
+    expect(planTruth([])).toEqual([]);
   });
 });

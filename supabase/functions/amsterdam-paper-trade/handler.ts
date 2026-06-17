@@ -19,14 +19,26 @@ import {
   type PlaceInputs,
   planPlacements,
   planSettlements,
+  planTruth,
+  type TruthInputRow,
 } from '../../../packages/core/src/index.ts';
+import { fetchKnmiTx, type FetchJsonLike, KNMI_TRUTH_SOURCE } from '../_shared/knmi.ts';
 import type { JobCtx, JobStats } from '../_shared/runJob.ts';
 
 export interface PaperTradeDeps {
   now: Date;
   /** Override the target day (defaults to today, Amsterdam local) — for manual backfill triggers. */
   targetDate?: string;
+  /**
+   * Injected JSON fetcher (packages/io fetchJson) — used only to pull the recent KNMI decimal highs for
+   * floor "truth accuracy". Optional: omit it (e.g. in tests) to skip the KNMI fetch; the truth fill from
+   * already-stored amsterdam_truth still runs.
+   */
+  fetchJson?: FetchJsonLike;
 }
+
+/** How many trailing local days of KNMI to refresh each tick (catches the just-finalized day + any laggard). */
+const KNMI_REFRESH_DAYS = 6;
 
 /** The fixed Etc/GMT-2 clock the rest of the sim (intraday_advances.local_hour, the arms) uses. */
 const AMS_TZ = 'Etc/GMT-2';
@@ -70,7 +82,42 @@ export async function amsterdamPaperTrade(ctx: JobCtx, deps: PaperTradeDeps): Pr
     log('graded paper bets', { graded, candidates: pending.length });
   }
 
-  const stats = { target, armsAvailable, placed, gradeCandidates: pending.length, graded };
+  // --- TRUTH: floor "truth accuracy" vs the real decimal high (KNMI) -----------------------------
+  // Independent of market grading (operator directive 2026-06-17): score our whole-°C call against
+  // floor(true high) and log the decimal signed forecast error. KNMI (free, no-auth, 0.1°C) lands ~1–2
+  // days after the day, same as WU finalization. The WHOLE block is best-effort: a KNMI outage — or this
+  // function deployed ahead of migration 0043 — must never break the market place/grade tick above.
+  let truthIngested = 0;
+  let truthFilled = 0;
+  try {
+    if (deps.fetchJson) {
+      const from = localDateAt(AMS_TZ, new Date(deps.now.getTime() - KNMI_REFRESH_DAYS * 86_400_000));
+      const knmi = await fetchKnmiTx(deps.fetchJson, from, target, { timeoutMs: 8000, retries: 1 });
+      if (knmi.length > 0) {
+        const up = await db.rpc<{ amsterdam_truth_upsert: number }>('amsterdam_truth_upsert', {
+          p_rows: knmi.map((r) => ({ dateLocal: r.dateLocal, txTenthsC: r.txTenthsC, source: KNMI_TRUTH_SOURCE })),
+        });
+        truthIngested = Number(up[0]?.amsterdam_truth_upsert ?? 0);
+      }
+    }
+    // Fill floor-truth on any bet whose day now has a decimal actual (graded on the market or not).
+    const truthInputs = await db.rpc<{ amsterdam_sim_truth_inputs: TruthInputRow[] }>('amsterdam_sim_truth_inputs', {});
+    const truthPending = truthInputs[0]?.amsterdam_sim_truth_inputs ?? [];
+    if (truthPending.length > 0) {
+      const truthRows = planTruth(truthPending);
+      const tr = await db.rpc<{ amsterdam_sim_truth_record: number }>('amsterdam_sim_truth_record', {
+        p_rows: truthRows,
+      });
+      truthFilled = Number(tr[0]?.amsterdam_sim_truth_record ?? 0);
+      log('filled floor-truth', { truthIngested, truthFilled, candidates: truthPending.length });
+    }
+  } catch (e) {
+    log('truth phase failed (non-fatal — market tick unaffected)', {
+      error: e instanceof Error ? e.message : String(e),
+    });
+  }
+
+  const stats = { target, armsAvailable, placed, gradeCandidates: pending.length, graded, truthIngested, truthFilled };
   log('amsterdam-paper-trade complete', stats);
   return stats;
 }

@@ -33,6 +33,10 @@ const statusChip = (status: string): ReactElement => {
   return <span className={`chip ${cls}`}>{status}</span>;
 };
 
+/** Floor-truth outcome marker: ✓ (hit floor of real high), ✗ (miss), or — when truth hasn't landed. */
+const truthChip = (won: boolean | null): ReactElement =>
+  won == null ? <span className="muted">—</span> : <span className={won ? 'pos' : 'neg'}>{won ? '✓' : '✗'}</span>;
+
 /** Below this many graded bets a CI is too wide to read — the arm is annotated "too few to call". */
 const MIN_CREDIBLE_N = 10;
 
@@ -84,7 +88,8 @@ export default async function AmsterdamPage(): Promise<ReactElement> {
     );
   }
 
-  const { config, coverage, arms, leaderHour, chart, betLog, latest } = view;
+  const { config, coverage, arms, leaderHour, chart, betLog, latest, truthCoverage } = view;
+  const hasTruth = (num(truthCoverage?.nBetsWithTruth) ?? 0) > 0;
   const nGradedDays = num(coverage.nGradedDays) ?? 0;
   const hasBets = (num(coverage.nDays) ?? 0) > 0;
   const leader = arms.find((a) => a.hour === leaderHour) ?? null;
@@ -241,6 +246,86 @@ export default async function AmsterdamPage(): Promise<ReactElement> {
         </table>
       </div>
 
+      {/* Floor "truth accuracy" — the forecast-skill lens vs the REAL decimal high (KNMI), separate from P&L */}
+      <h2>Floor truth accuracy — vs the real high</h2>
+      <div className="panel">
+        <p className="muted small">
+          The leaderboard above scores the <strong>market</strong>: did our bucket match how Polymarket resolved
+          (Wunderground&apos;s <em>rounded integer</em> high)? That drives the P&amp;L. This panel scores a cleaner{' '}
+          <strong>forecast-skill</strong> lens: did our whole-°C call equal the integer{' '}
+          <span className="mono">floor</span> of the <em>real</em> Schiphol daily high, measured to 0.1°C by{' '}
+          <strong>KNMI</strong> (station 240, variable TX — the Dutch met office&apos;s own record)?{' '}
+          <span className="mono">MAE</span> and <span className="mono">bias</span> are the signed error of our
+          continuous nowcast (basis − real high) at decimal resolution — positive bias = we ran hot.
+          {truthCoverage?.tableNDays
+            ? ` KNMI truth spans ${num(truthCoverage.tableNDays)} day${num(truthCoverage.tableNDays) === 1 ? '' : 's'}${
+                truthCoverage.tableFirstDate && truthCoverage.tableLastDate
+                  ? ` (${fmtDate(truthCoverage.tableFirstDate)} → ${fmtDate(truthCoverage.tableLastDate)})`
+                  : ''
+              }.`
+            : ''}
+        </p>
+        {!hasTruth ? (
+          <p className="muted">
+            No floor-truth filled yet — run <span className="mono">pnpm tsx scripts/amsterdam-truth-backfill.ts</span>{' '}
+            (and apply migration <span className="mono">0043</span>) to backfill the KNMI decimal high.
+          </p>
+        ) : (
+          <table style={{ width: 'auto' }}>
+            <thead>
+              <tr>
+                <th>arm</th>
+                <th className="num">floor-hit (95% CI)</th>
+                <th className="num">market-hit</th>
+                <th className="num">MAE (°C)</th>
+                <th className="num">bias (95% CI)</th>
+                <th className="num">truth n</th>
+              </tr>
+            </thead>
+            <tbody>
+              {arms.map((a) => {
+                const n = num(a.nTruth) ?? 0;
+                const thin = n < MIN_CREDIBLE_N;
+                return (
+                  <tr key={a.hour} style={thin ? { opacity: 0.55 } : undefined}>
+                    <td className="mono">
+                      {a.hour}:00
+                      {a.isLeader ? <span className="chip green" style={{ marginLeft: 6 }}>leader</span> : null}
+                    </td>
+                    <td className="num">
+                      {fmtPct(a.truthHitRate)}
+                      <br />
+                      <CiBand
+                        lo={num(a.truthHitCiLo) === null ? null : num(a.truthHitCiLo)! * 100}
+                        hi={num(a.truthHitCiHi) === null ? null : num(a.truthHitCiHi)! * 100}
+                        dp={0}
+                      />
+                    </td>
+                    <td className="num muted">{fmtPct(a.hitRate)}</td>
+                    <td className="num">{a.mae == null ? '—' : `${(num(a.mae) ?? 0).toFixed(2)}`}</td>
+                    <td className="num">
+                      {fmtSigned(a.bias)}
+                      <br />
+                      <CiBand lo={a.biasCiLo} hi={a.biasCiHi} signed />
+                    </td>
+                    <td className="num">
+                      {n}
+                      {thin ? <><br /><span className="muted small">too few</span></> : null}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+        <p className="muted small">
+          Floor-truth uses <span className="mono">floor()</span> while we bet with round-to-nearest, so a true high
+          of e.g. 22.5 (we&apos;d bet 23, floor is 22) counts as a truth miss by design — it measures whether our
+          market bet&apos;s integer matched the true floor integer. Market-hit (greyed) is repeated for contrast;
+          it stays the number that drives P&amp;L.
+        </p>
+      </div>
+
       {/* Latest standing */}
       {latest.date ? (
         <>
@@ -256,7 +341,10 @@ export default async function AmsterdamPage(): Promise<ReactElement> {
                   <th className="num">odds (ask)</th>
                   <th>status</th>
                   <th className="num">P&amp;L</th>
-                  <th className="num">actual</th>
+                  <th className="num">actual (mkt)</th>
+                  <th className="num">real high</th>
+                  <th className="num">err</th>
+                  <th className="num">truth</th>
                 </tr>
               </thead>
               <tbody>
@@ -266,7 +354,7 @@ export default async function AmsterdamPage(): Promise<ReactElement> {
                     return (
                       <tr key={h}>
                         <td className="mono">{h}:00</td>
-                        <td className="num" colSpan={7}>
+                        <td className="num" colSpan={10}>
                           <span className="muted">no bet</span>
                         </td>
                       </tr>
@@ -282,6 +370,9 @@ export default async function AmsterdamPage(): Promise<ReactElement> {
                       <td>{statusChip(r.status)}</td>
                       <td className={`num ${pnlClass(r.pnl)}`}>{r.status === 'pending' ? '—' : fmtUsd(r.pnl)}</td>
                       <td className="num">{r.actualC == null ? '—' : fmtTemp(r.actualC, 'C')}</td>
+                      <td className="num">{r.actualDecimalC == null ? '—' : `${(num(r.actualDecimalC) ?? 0).toFixed(1)}°`}</td>
+                      <td className="num">{fmtSigned(r.signedErrorC)}</td>
+                      <td className="num">{truthChip(r.truthWon)}</td>
                     </tr>
                   );
                 })}
@@ -307,7 +398,10 @@ export default async function AmsterdamPage(): Promise<ReactElement> {
                 <th className="num">our bucket</th>
                 <th className="num">ask</th>
                 <th>status</th>
-                <th className="num">actual</th>
+                <th className="num">actual (mkt)</th>
+                <th className="num">real high</th>
+                <th className="num">err</th>
+                <th className="num">truth</th>
                 <th className="num">P&amp;L</th>
               </tr>
             </thead>
@@ -322,6 +416,9 @@ export default async function AmsterdamPage(): Promise<ReactElement> {
                   <td className="num">{fmtProb(b.ask)}</td>
                   <td>{statusChip(b.status)}</td>
                   <td className="num">{b.actualC == null ? '—' : fmtTemp(b.actualC, 'C')}</td>
+                  <td className="num">{b.actualDecimalC == null ? '—' : `${(num(b.actualDecimalC) ?? 0).toFixed(1)}°`}</td>
+                  <td className="num">{fmtSigned(b.signedErrorC)}</td>
+                  <td className="num">{truthChip(b.truthWon)}</td>
                   <td className={`num ${pnlClass(b.pnl)}`}>{b.status === 'pending' ? '—' : fmtUsd(b.pnl)}</td>
                 </tr>
               ))}
