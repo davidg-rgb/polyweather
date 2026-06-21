@@ -110,16 +110,22 @@ beforeAll(async () => {
   const ev = await seedEvent(cityId, '2026-06-10');
   // by 13:00→19.4 (idx5), 14:00→20.6 (idx7), 15:00→21.6 (idx8), 16:00→21.9 (idx8)
   await seedIntraday('2026-06-10', { 11: 16.0, 12: 18.2, 13: 19.4, 14: 20.6, 15: 21.6, 16: 21.9 });
-  // a clean quote on every bucket at 11:00Z (13:00 local) — before every arm's asof, so all arms forward-fill it
-  const asksAt11 = { 5: 0.3, 7: 0.5, 8: 0.8 } as Record<number, number>;
-  for (const b of LADDER) await seedAsk(ev, b.idx, asksAt11[b.idx] ?? 0.02, '2026-06-10T11:00:00Z');
-  // a POISON quote on the 22°C bucket at 18:00Z (20:00 local) — AFTER every arm asof; forward-fill must ignore it
+  // 0048 in-hour guard: each arm's ask must be QUOTED inside its lock hour [H:00,H+1:00) local =
+  // [(H-2):00,(H-1):00) UTC. Seed the same book on every bucket at each arm-hour start — 11Z=13:00 (arm13),
+  // 12Z (arm14), 13Z (arm15), 14Z (arm16) — so every arm finds an in-hour quote (idx5/7/8 = 0.3/0.5/0.8).
+  const askBook = { 5: 0.3, 7: 0.5, 8: 0.8 } as Record<number, number>;
+  for (const t of ['11', '12', '13', '14']) {
+    for (const b of LADDER) await seedAsk(ev, b.idx, askBook[b.idx] ?? 0.02, `2026-06-10T${t}:00:00Z`);
+  }
+  // a POISON quote on the 22°C bucket at 18:00Z (20:00 local) — AFTER every arm's lock hour; must be ignored.
   await seedAsk(ev, 8, 0.01, '2026-06-10T18:00:00Z');
 
-  // --- a second day (2026-06-09) for the "only due arms" gate ---
+  // --- a second day (2026-06-09) for the "only due arms" gate — in-hour quotes for the two due arms ---
   const ev2 = await seedEvent(cityId, '2026-06-09');
   await seedIntraday('2026-06-09', { 13: 19.4, 14: 20.6, 15: 21.6, 16: 21.9 });
-  for (const b of LADDER) await seedAsk(ev2, b.idx, asksAt11[b.idx] ?? 0.02, '2026-06-09T10:00:00Z');
+  for (const t of ['11', '12']) {
+    for (const b of LADDER) await seedAsk(ev2, b.idx, askBook[b.idx] ?? 0.02, `2026-06-09T${t}:00:00Z`);
+  }
 });
 
 afterAll(async () => {
@@ -155,7 +161,7 @@ describe('amsterdam-paper-trade — placement (the four arms)', () => {
     expect(bets[1]).toMatchObject({ predicted_native_c: 21, bucket_idx: 7 });
     expect(Number(bets[1]!.ask)).toBeCloseTo(0.5, 6);
     expect(bets[2]).toMatchObject({ predicted_native_c: 22, bucket_idx: 8 });
-    // forward-fill ignored the 18:00Z poison (0.01) — used the 11:00Z 0.80 quote
+    // arm15 used its in-hour 13:00Z quote (0.80 on idx8); the 18:00Z poison (0.01) is after the lock hour → ignored
     expect(Number(bets[2]!.ask)).toBeCloseTo(0.8, 6);
     expect(Number(bets[3]!.ask)).toBeCloseTo(0.8, 6);
     expect(bets.every((b) => b.status === 'pending')).toBe(true);
@@ -419,6 +425,78 @@ describe('dash_amsterdam_sim — tomorrow + live running max (0046)', () => {
     expect(Number(t.predictedC)).toBe(23); // wuRound(22.7)
     expect(t.label).toBe('23°C');
     expect(Number(t.nModels)).toBe(1); // 0047: distinct models (tomorrow seeded one model)
+  });
+});
+
+describe('amsterdam_sim_place_inputs — in-lock-hour ask guard (0048)', () => {
+  // The recorded ask must be a real quote captured INSIDE the arm's lock hour; a pre-hour quote must NOT be
+  // forward-filled (the old unbounded fill stamped stale/phantom odds onto early-day bets). No in-hour quote
+  // → the arm is skipped (no-bet, never a phantom price).
+  let gdb: PGlite;
+  let gport: ReturnType<typeof pglitePort>;
+
+  beforeAll(async () => {
+    gdb = await freshDb();
+    gport = pglitePort(gdb);
+    await gdb.query(
+      `insert into cities (slug, display_name, country_code, unit, tz, region, first_seen, last_seen)
+       values ('amsterdam','Amsterdam','NL','C','Etc/GMT-2','europe-west',now(),now())`,
+    );
+    await gdb.query(
+      `insert into stations (icao, country_code, tz, source) values ('EHAM','NL','Etc/GMT-2','manual') on conflict (icao) do nothing`,
+    );
+    const cid = (await rows<{ id: string }>(gdb, `select id from cities where slug='amsterdam'`))[0]!.id;
+    await gdb.query(
+      `insert into city_stations (city_id, icao, wu_country_code, valid_from, verified) values ($1,'EHAM','NL',now(),true)`,
+      [cid],
+    );
+    const ev = (
+      await gdb.query<{ id: string }>(
+        `insert into market_events (poly_event_id, slug, city_id, target_date, unit, kind, ladder_ok)
+         values ('poly-ams-2026-06-10','highest-temperature-in-amsterdam-on-2026-06-10',$1,'2026-06-10','C','highest',true) returning id`,
+        [cid],
+      )
+    ).rows[0]!.id;
+    for (const b of LADDER) {
+      await gdb.query(
+        `insert into market_buckets (event_id, bucket_idx, label, low_native, high_native, condition_id, token_yes, token_no)
+         values ($1,$2,$3,$4,$5,$6,$7,$8)`,
+        [ev, b.idx, b.label, b.low, b.high, `c-${b.idx}`, `y-${b.idx}`, `n-${b.idx}`],
+      );
+    }
+    // running max 20°C all day → pred 20 → idx6 for every arm (no forecast seeded → pure floor).
+    for (const h of [11, 12, 13, 14, 15, 16]) {
+      await gdb.query(
+        `insert into intraday_advances (icao, date_local, local_hour, max_tenths_c) values ('EHAM','2026-06-10',$1,20.0)`,
+        [h],
+      );
+    }
+    const bucket6 = (
+      await rows<{ id: string }>(gdb, `select id from market_buckets where event_id=$1 and bucket_idx=6`, [ev])
+    )[0]!.id;
+    // Two quotes on the predicted bucket: one PRE-hour (10:00Z, before arm13's 11:00Z lock start) and one
+    // IN arm15's lock hour (13:30Z ∈ [13:00Z,14:00Z)). The old fill would have placed all four arms off the
+    // 10:00Z quote; the guard must place ONLY arm15, at the in-hour price.
+    await gdb.query(`insert into market_snapshots (bucket_id, best_ask, captured_at) values ($1, 0.44, '2026-06-10T10:00:00Z')`, [bucket6]);
+    await gdb.query(`insert into market_snapshots (bucket_id, best_ask, captured_at) values ($1, 0.55, '2026-06-10T13:30:00Z')`, [bucket6]);
+  });
+
+  afterAll(async () => {
+    await gdb?.close();
+  });
+
+  it('places only the arm with an in-lock-hour quote; a pre-hour quote is NOT forward-filled', async () => {
+    const stats = await amsterdamPaperTrade(
+      { db: gport, config: cfg, log: () => {}, startedAt: new Date('2026-06-10T15:30:00Z') },
+      { now: new Date('2026-06-10T15:30:00Z'), targetDate: '2026-06-10' },
+    );
+    expect(stats.placed).toBe(1);
+    const placed = await rows<{ arm_hour: number; ask: string }>(
+      gdb,
+      `select arm_hour, ask from amsterdam_paper_bets where target_date='2026-06-10' order by arm_hour`,
+    );
+    expect(placed.map((b) => b.arm_hour)).toEqual([15]); // only arm15 had an in-hour quote
+    expect(Number(placed[0]!.ask)).toBeCloseTo(0.55, 6); // the 13:30Z in-hour quote, NOT the 10:00Z pre-hour 0.44
   });
 });
 

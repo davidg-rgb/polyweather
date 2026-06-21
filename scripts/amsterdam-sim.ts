@@ -109,6 +109,7 @@ async function decisionBasis(db: ScriptDb): Promise<void> {
        from ev cross join hours hh),
      pred as (
        select b.*, round(b.runmax)::int pred_native,
+         (b.target_date::timestamp + make_interval(hours => b.h))   at time zone 'Etc/GMT-2' lockstart,
          (b.target_date::timestamp + make_interval(hours => b.h+1)) at time zone 'Etc/GMT-2' asof
        from base b where b.runmax is not null),
      pb as (
@@ -118,7 +119,8 @@ async function decisionBasis(db: ScriptDb): Promise<void> {
          and (mb.high_native is null or p.pred_native<=mb.high_native)),
      wa as (
        select pb.*, (select ms.best_ask from market_snapshots ms
-         where ms.bucket_id=pb.pred_bucket_id and ms.captured_at<pb.asof and ms.best_ask is not null
+         where ms.bucket_id=pb.pred_bucket_id
+           and ms.captured_at>=pb.lockstart and ms.captured_at<pb.asof and ms.best_ask is not null
          order by ms.captured_at desc limit 1) ask from pb)
      select h local_hour, count(*) n_days,
        round(avg((pred_idx=winning_bucket_idx)::int),2)::text exact_hit,

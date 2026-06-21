@@ -341,3 +341,33 @@ latest observation. The overall-rate sub reads "across 4 lock hours · N days" �
 outcome (correlated), so it is not N×4 independent bets. The Amsterdam date math stays fixed `Etc/GMT-2`
 (summer-only sim); a winter/DST switch to `Europe/Amsterdam` must be done across 0041+0046+0047+the city tz in
 lockstep, not piecemeal.
+
+## 9. In-lock-hour odds guard + data re-derivation (2026-06-22, migration 0048)
+
+Operator data-integrity audit of the paper-sim. Two defects surfaced, both rooted in the same cause — the
+universe was seeded **retrospectively** on 2026-06-16 from feeds that were still mid-backfill:
+
+- **Odds (the real defect).** `amsterdam_sim_place_inputs` reconstructed each arm's ask as the latest
+  `market_snapshots.best_ask` with `captured_at < asof` (asof = end of the lock hour) — an **unbounded**
+  backward forward-fill. On the two thinnest early days (06-12 / 06-13) this reached back past the lock hour;
+  **6 of those 8 bets carried an ask matching no snapshot on the bet's bucket at any time**, and the real
+  in-lock-hour quote differed materially (06-13 13:00 recorded **0.39** vs real **0.49** — a winning bet that
+  inflated the 13:00 leaderboard). Verified across all 40 bets: every bet from 06-14 on already matched a real
+  in-hour quote (staleness ≤ 1h); only 06-12/06-13 were corrupt.
+- **Fix — migration 0048.** Bound the forward-fill to the lock hour itself: the ask must be the latest quote
+  with `captured_at >= lockstart AND captured_at < asof`. No in-hour quote → the bucket ask is null →
+  `planPlacements` skips the arm (a no-bet, never a phantom price). This is the "validated odds at the specific
+  time" contract; it governs BOTH the live Edge tick and the backfill (one RPC). Tested directly
+  (`amsterdam-sim.test.ts` guard case: a pre-hour quote is NOT forward-filled — only the in-hour arm places).
+  The script's Table A analysis query got the same bound.
+- **Re-derivation.** With 0048 applied to prod, the 06-12/06-13/06-15 bets were deleted (full-table backup
+  first) and re-placed through the guarded RPC + re-graded + KNMI-truth-refilled. **Operator decision (full
+  walk-forward):** score every day with the predictor's current feeds (genuine lead-1 forecasts +
+  the observed running-max floors), consistent with how the live predictor runs — rather than freezing the
+  early days at their seed-time `forecast_c = null` state. This re-activates the forecast lift on 06-15 (floors
+  + lift → 13/14/15 flip from losses to wins) and lifts the leaderboard (13:00 +$21.16 → **+$44.70**; hit rate
+  44% → 56% on the early arms). **Provenance honesty:** the forecast feed itself was backfilled (rows written
+  06-13→06-16, though each carries a genuine lead-1 `captured_at`), so the pre-~06-17 period is a
+  *reconstruction*, not a live record — the consistency framing is the chosen interpretation, documented here.
+  **Post-state verified: 40/40 bets trace to a real in-lock-hour quote** (0 unvalidated); truth complete except
+  06-20 (KNMI lag, fills on the daily tick). No deploy needed — `dash_amsterdam_sim` reads the table live.

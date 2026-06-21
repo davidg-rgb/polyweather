@@ -100,20 +100,23 @@ beforeAll(async () => {
       [TARGET, Number(h), v],
     );
   }
-  // A clean quote on every bucket at 11:00Z (13:00 local) — before every arm asof, so all arms forward-fill.
-  for (const b of LADDER) {
-    const bucket = (
-      await rows<{ id: string }>(db, `select id from market_buckets where event_id = $1 and bucket_idx = $2`, [
-        ev,
-        b.idx,
-      ])
-    )[0]!;
-    const ask = b.idx === 7 ? 0.6 : b.idx === 8 ? 0.7 : 0.02;
-    await db.query(`insert into market_snapshots (bucket_id, best_ask, captured_at) values ($1, $2, $3)`, [
-      bucket.id,
-      ask,
-      `${TARGET}T11:00:00Z`,
-    ]);
+  // 0048 in-hour guard: seed each bucket at every arm-hour start (11Z=13:00, 12Z, 13Z, 14Z local) so all
+  // four arms find an in-lock-hour quote (idx7=0.6, idx8=0.7, else 0.02).
+  for (const t of ['11', '12', '13', '14']) {
+    for (const b of LADDER) {
+      const bucket = (
+        await rows<{ id: string }>(db, `select id from market_buckets where event_id = $1 and bucket_idx = $2`, [
+          ev,
+          b.idx,
+        ])
+      )[0]!;
+      const ask = b.idx === 7 ? 0.6 : b.idx === 8 ? 0.7 : 0.02;
+      await db.query(`insert into market_snapshots (bucket_id, best_ask, captured_at) values ($1, $2, $3)`, [
+        bucket.id,
+        ask,
+        `${TARGET}T${t}:00:00Z`,
+      ]);
+    }
   }
 
   // Null-gate scenario: target 2026-06-13 has only 12 prior finalized-forecast days (June 1-12) < 20,
@@ -125,18 +128,20 @@ beforeAll(async () => {
       [NULLGATE, Number(h), v],
     );
   }
-  for (const b of LADDER) {
-    const bucket = (
-      await rows<{ id: string }>(db, `select id from market_buckets where event_id = $1 and bucket_idx = $2`, [
-        evNull,
-        b.idx,
-      ])
-    )[0]!;
-    await db.query(`insert into market_snapshots (bucket_id, best_ask, captured_at) values ($1, $2, $3)`, [
-      bucket.id,
-      0.5,
-      `${NULLGATE}T11:00:00Z`,
-    ]);
+  for (const t of ['11', '12', '13', '14']) {
+    for (const b of LADDER) {
+      const bucket = (
+        await rows<{ id: string }>(db, `select id from market_buckets where event_id = $1 and bucket_idx = $2`, [
+          evNull,
+          b.idx,
+        ])
+      )[0]!;
+      await db.query(`insert into market_snapshots (bucket_id, best_ask, captured_at) values ($1, $2, $3)`, [
+        bucket.id,
+        0.5,
+        `${NULLGATE}T${t}:00:00Z`,
+      ]);
+    }
   }
 });
 

@@ -143,6 +143,10 @@ describe('migrations 0001–0010', () => {
       // 0047 = code-review follow-up to 0046: tomorrow.nModels counts DISTINCT models (was count(*) captures,
       // ~2x when 10Z+22Z both land). Whole dash_amsterdam_sim body re-stated (create-or-replace); count only.
       '0047_amsterdam_nmodels_distinct.sql',
+      // 0048 = in-lock-hour ask guard: amsterdam_sim_place_inputs only records an ask QUOTED inside the arm's
+      // lock hour [lockstart, asof); no in-hour quote → arm skipped (was an unbounded backward forward-fill
+      // that stamped pre-hour/phantom odds onto thin early-day bets). 0041 body verbatim; ask bound added.
+      '0048_amsterdam_in_hour_ask_guard.sql',
     ]);
   });
 });

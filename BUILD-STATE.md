@@ -14,6 +14,23 @@
 > deliverable (e.g. a polished forecast-skill + market-efficiency view as the product's headline). See the
 > updated project `CLAUDE.md` header and `FORECASTING-RD.md` WO-5 for the rationale.
 
+**2026-06-22 data-integrity: Amsterdam paper-sim odds audit → in-lock-hour ask guard (`0048`) + full re-derivation, LIVE & verified.**
+Operator audit of the fictitious arms. The sim (40 bets, 06-12→06-21; no older history) was seeded
+retrospectively on 06-16 from mid-backfill feeds. Defect: `amsterdam_sim_place_inputs` forward-filled each
+arm's ask from the latest snapshot `captured_at < asof` with NO lower bound, so on the two thinnest early days
+(06-12/06-13) **6 of 8 bets recorded an ask matching no snapshot on the bet's bucket at any time** (e.g. 06-13
+13:00 recorded 0.39 vs the real in-hour 0.49 — a winning bet that inflated the 13:00 leader). 06-14→06-21 were
+already clean (every ask = a real in-hour quote, staleness ≤1h). **Fix `0048`:** bound the fill to the lock
+hour (`captured_at >= lockstart AND < asof`); no in-hour quote → arm skipped (no phantom). Governs the live
+Edge tick + the backfill (one RPC). **Re-derivation:** with 0048 applied to prod, deleted+re-placed+re-graded
+06-12/06-13/06-15 through the guarded RPC (full-table backup first, since dropped) + KNMI-truth refill.
+**Operator decision = full walk-forward:** score every day with the predictor's current feeds (consistent with
+the live model), not frozen at seed-time — this re-activates the forecast lift on 06-15 (13:00 +$21.16 →
+**+$44.70**, early-arm hit 44%→56%). Provenance noted honestly: the forecast feed is itself a backfill (written
+06-13→06-16), so the pre-~06-17 period is a reconstruction. **Verified: 40/40 bets trace to a real in-lock-hour
+quote** (0 unvalidated); truth complete except 06-20 (KNMI lag). No deploy — `dash_amsterdam_sim` reads live.
+Tests +1 guard (db); suite green. Design: `AMSTERDAM-SIM.md` §9.
+
 **2026-06-21 analytics: `/amsterdam` decision-strip redesign + code-review remediation — migrations `0046`+`0047`, LIVE & verified.**
 Operator UI/UX review found the page over-served history and under-served "what now / what next". Shipped (commit
 `8002a40`): a top **decision strip** — today's predicted high (dated, NWP-labelled), live running max as-of-now,
