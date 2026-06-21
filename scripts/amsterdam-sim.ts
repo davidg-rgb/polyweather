@@ -78,8 +78,9 @@ async function place(db: ScriptDb, date: string, nowIso: string): Promise<number
 }
 
 async function grade(db: ScriptDb): Promise<number> {
-  const g = await db.query<{ v: GradeInputRow[] }>(`select public.amsterdam_sim_grade_inputs() as v`);
-  const pending = g[0]?.v ?? [];
+  // grade_inputs returns { rows: GradeInputRow[] } (wrapped, migration 0044 — see the handler note).
+  const g = await db.query<{ v: { rows: GradeInputRow[] } }>(`select public.amsterdam_sim_grade_inputs() as v`);
+  const pending = g[0]?.v?.rows ?? [];
   if (pending.length === 0) return 0;
   const settlements = planSettlements(pending);
   const s = await db.query<{ n: number }>(`select public.amsterdam_sim_settle($1::jsonb) as n`, [settlements]);

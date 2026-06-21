@@ -67,8 +67,9 @@ async function ingest(db: ScriptDb, from: string, to: string): Promise<{ fetched
 
 /** Fill truth_won + signed_error on every bet whose day now has a decimal actual. Returns rows filled. */
 async function fillTruth(db: ScriptDb): Promise<number> {
-  const g = await db.query<{ v: TruthInputRow[] }>(`select public.amsterdam_sim_truth_inputs() as v`);
-  const pending = g[0]?.v ?? [];
+  // truth_inputs returns { rows: TruthInputRow[] } (wrapped, migration 0044 — see the handler note).
+  const g = await db.query<{ v: { rows: TruthInputRow[] } }>(`select public.amsterdam_sim_truth_inputs() as v`);
+  const pending = g[0]?.v?.rows ?? [];
   if (pending.length === 0) return 0;
   const truth = planTruth(pending);
   const r = await db.query<{ n: number }>(`select public.amsterdam_sim_truth_record($1::jsonb) as n`, [truth]);

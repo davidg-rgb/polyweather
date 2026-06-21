@@ -32,6 +32,26 @@ describe('supabasePort rpc normalization (PostgREST → PGlite-twin row shape)',
     expect(await port.rpc('list_truth_stations', {})).toEqual(rows);
   });
 
+  // Regression guard for the 0044 bug: a `returns jsonb` fn that aggregates a TOP-LEVEL array is
+  // indistinguishable on the wire from a RETURNS TABLE row set, so the port passes it through unwrapped.
+  // A caller reading `rows[0]?.<fn>` then sees `undefined` → a SILENT empty (this is exactly how the
+  // Amsterdam daily tick graded 0 bets/day for ~5 days). The fix is at the source: such fns MUST wrap
+  // their array in an object — these two cases pin both halves of that contract.
+  it('passes a TOP-LEVEL jsonb array through unwrapped — the trap that forces *_inputs fns to wrap', async () => {
+    const bareArray = [{ betId: 'b1' }, { betId: 'b2' }];
+    const port = supabasePort(clientReturning(bareArray));
+    const out = await port.rpc<{ amsterdam_sim_grade_inputs?: unknown }>('amsterdam_sim_grade_inputs', {});
+    expect(out).toEqual(bareArray); // misread as a row set…
+    expect(out[0]?.amsterdam_sim_grade_inputs).toBeUndefined(); // …so `rows[0]?.<fn>` is the silent-empty trap
+  });
+
+  it('wraps the { rows: [...] } envelope (the 0044 shape) so callers can read `.rows`', async () => {
+    const wrapped = { rows: [{ betId: 'b1' }, { betId: 'b2' }] };
+    const port = supabasePort(clientReturning(wrapped));
+    const [row] = await port.rpc<{ amsterdam_sim_grade_inputs: { rows: unknown[] } }>('amsterdam_sim_grade_inputs', {});
+    expect(row?.amsterdam_sim_grade_inputs?.rows).toHaveLength(2);
+  });
+
   it('maps a null result (scalar fn returning NULL / void) to zero rows', async () => {
     const port = supabasePort(clientReturning(null));
     const [row] = await port.rpc<{ bet_for_execution: unknown }>('bet_for_execution', {});

@@ -101,6 +101,13 @@ supabase/migrations/0043_amsterdam_truth_floor_accuracy.sql   floor "truth accur
   amsterdam_sim_truth_inputs  bets whose day now has a decimal actual (the engine recomputes)
   amsterdam_sim_truth_record  writes truth_won + signed_error_c (independent of market grading)
   dash_amsterdam_sim          + truth panel (per-arm floor-hit/MAE/bias) + truthByArm
+supabase/migrations/0044_amsterdam_inputs_wrap.sql   GRADE/TRUTH-FILL BUG FIX (2026-06-21)
+  amsterdam_sim_grade_inputs / amsterdam_sim_truth_inputs now return { rows: [...] }, NOT a top-level
+  jsonb array. A bare array is misread by the Edge supabasePort (functions/_shared/db.ts) as a RETURNS
+  TABLE row set and passed through unwrapped, so the handler's rows[0]?.<fn> was undefined → the daily
+  tick SILENTLY graded 0 bets + filled 0 truth for ~5 days (19 bets stuck pending; reported status ok).
+  The PGlite twin wraps every shape via `select * from fn()`, so the integration test masked it. All four
+  callers (Edge handler + both scripts) read .rows; db.test.ts + amsterdam-sim.test.ts lock the shape.
 supabase/functions/_shared/knmi.ts   the KNMI daggegevens client (shared by the Edge fn + the script)
 
 DRIVER 1 — supabase/functions/amsterdam-paper-trade   the daily cron tick (place + grade + KNMI truth fill)

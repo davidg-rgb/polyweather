@@ -67,11 +67,14 @@ export async function amsterdamPaperTrade(ctx: JobCtx, deps: PaperTradeDeps): Pr
   }
 
   // --- GRADE: pending bets whose truth landed ----------------------------------------------------
-  const gradeRows = await db.rpc<{ amsterdam_sim_grade_inputs: GradeInputRow[] }>(
+  // The RPC returns { rows: GradeInputRow[] } (wrapped, not a top-level array — migration 0044): a bare
+  // jsonb array is misread by supabasePort as a RETURNS TABLE row set, which silently zeroed grading
+  // before 0044. Read `.rows`.
+  const gradeRows = await db.rpc<{ amsterdam_sim_grade_inputs: { rows: GradeInputRow[] } }>(
     'amsterdam_sim_grade_inputs',
     {},
   );
-  const pending = gradeRows[0]?.amsterdam_sim_grade_inputs ?? [];
+  const pending = gradeRows[0]?.amsterdam_sim_grade_inputs?.rows ?? [];
   let graded = 0;
   if (pending.length > 0) {
     const settlements = planSettlements(pending);
@@ -101,8 +104,11 @@ export async function amsterdamPaperTrade(ctx: JobCtx, deps: PaperTradeDeps): Pr
       }
     }
     // Fill floor-truth on any bet whose day now has a decimal actual (graded on the market or not).
-    const truthInputs = await db.rpc<{ amsterdam_sim_truth_inputs: TruthInputRow[] }>('amsterdam_sim_truth_inputs', {});
-    const truthPending = truthInputs[0]?.amsterdam_sim_truth_inputs ?? [];
+    const truthInputs = await db.rpc<{ amsterdam_sim_truth_inputs: { rows: TruthInputRow[] } }>(
+      'amsterdam_sim_truth_inputs',
+      {},
+    );
+    const truthPending = truthInputs[0]?.amsterdam_sim_truth_inputs?.rows ?? [];
     if (truthPending.length > 0) {
       const truthRows = planTruth(truthPending);
       const tr = await db.rpc<{ amsterdam_sim_truth_record: number }>('amsterdam_sim_truth_record', {

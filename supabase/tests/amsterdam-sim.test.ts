@@ -336,3 +336,20 @@ describe('amsterdam-paper-trade — floor "truth accuracy" (0043)', () => {
     expect(Number(tc.tableNDays)).toBe(1);
   });
 });
+
+describe('amsterdam *_inputs RPC shape (0044 — the port invariant)', () => {
+  it('grade_inputs / truth_inputs return { rows: [...] } (an object), never a top-level array', async () => {
+    // A top-level jsonb array is misread by supabasePort as a RETURNS TABLE row set (arrays pass through
+    // unwrapped), which silently zeroed the Edge tick's grade + truth-fill before 0044. Lock the wrapped
+    // shape at the DB boundary so it can never regress. (The PGlite twin masks this — it wraps every shape
+    // via `select * from fn()` — so the contract is asserted here directly on the function's return value.)
+    const shape = await rows<{ g_outer: string; t_outer: string; g_rows: string; t_rows: string }>(
+      db,
+      `select jsonb_typeof(public.amsterdam_sim_grade_inputs())          as g_outer,
+              jsonb_typeof(public.amsterdam_sim_truth_inputs())          as t_outer,
+              jsonb_typeof(public.amsterdam_sim_grade_inputs()->'rows')  as g_rows,
+              jsonb_typeof(public.amsterdam_sim_truth_inputs()->'rows')  as t_rows`,
+    );
+    expect(shape[0]).toEqual({ g_outer: 'object', t_outer: 'object', g_rows: 'array', t_rows: 'array' });
+  });
+});

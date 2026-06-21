@@ -127,6 +127,10 @@ describe('migrations 0001–0010', () => {
       // RPCs (upsert/inputs/record) + bet columns (actual_decimal_c/truth_won/signed_error_c); dash gains a
       // truth panel + truthByArm. dash_amsterdam_sim stays in WEB_AUTHENTICATED (unchanged signature).
       '0043_amsterdam_truth_floor_accuracy.sql',
+      // 0044 = wrap the two Amsterdam *_inputs RPCs in { rows: [...] } — they returned a TOP-LEVEL jsonb
+      // array, which supabasePort misreads as a RETURNS TABLE row set, silently zeroing the Edge tick's
+      // grade + truth-fill since 0039/0043 (19 bets stuck pending). Pure envelope change; callers read .rows.
+      '0044_amsterdam_inputs_wrap.sql',
     ]);
   });
 });
