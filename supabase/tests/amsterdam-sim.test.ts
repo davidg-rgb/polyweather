@@ -422,6 +422,79 @@ describe('dash_amsterdam_sim — tomorrow + live running max (0046)', () => {
   });
 });
 
+describe('dash_amsterdam_sim — empty-state branches (no market / no intraday / no bets) [cov-5]', () => {
+  // A FRESH, isolated DB: the shared suite db progressively seeds a tomorrow event, a forecast, an ask and
+  // today's intraday_max (the populated 0046 path), so the null branches can only be exercised in isolation.
+  // This pins the three empty states the page must survive: tomorrow with a forecast but NO market (the
+  // completeness-6 "market not open yet" tile), NO intraday_max for today (liveRunMax null), and zero bets
+  // (arms []/leader null/empty aggregates) — none of which the populated tests above can reach.
+  let db2: PGlite;
+
+  beforeAll(async () => {
+    db2 = await freshDb();
+    await db2.query(
+      `insert into cities (slug, display_name, country_code, unit, tz, region, first_seen, last_seen)
+       values ('amsterdam', 'Amsterdam', 'NL', 'C', 'Etc/GMT-2', 'europe-west', now(), now())`,
+    );
+    await db2.query(
+      `insert into stations (icao, country_code, tz, source) values ('EHAM', 'NL', 'Etc/GMT-2', 'manual')
+       on conflict (icao) do nothing`,
+    );
+    // A single lead-1 capture for tomorrow → mean 20.0 → wuRound 20. NO market_event for tomorrow and NO
+    // intraday_max for today are seeded — that is the point of this fixture.
+    const tmrw = (await rows<{ d: string }>(db2, `select ((now() at time zone 'Etc/GMT-2')::date + 1)::text d`))[0]!.d;
+    await db2.query(
+      `insert into forecast_snapshots (icao, model, target_date, lead_days, tmax_c, snapshot_slot, source, captured_at)
+       values ('EHAM', 'gfs_seamless', $1, 1, 20.0, '10Z', 'forecast_api', now())`,
+      [tmrw],
+    );
+  });
+
+  afterAll(async () => {
+    await db2?.close();
+  });
+
+  it('forecast-without-market → hasMarket=false, number still shows, label/ask null; liveRunMax null; empty arms', async () => {
+    const out = await asRole(db2, 'authenticated', OPERATOR, async () => {
+      const r = await rows<{ dash_amsterdam_sim: Record<string, unknown> }>(
+        db2,
+        `select public.dash_amsterdam_sim() as dash_amsterdam_sim`,
+      );
+      return r[0]!.dash_amsterdam_sim;
+    });
+
+    // tomorrow: the NWP feed has the day, so a forecast/bucket number still renders, but with no open market
+    // the bucket label + odds are null and hasMarket flags the "market not open yet" UI branch.
+    const t = out.tomorrow as Record<string, unknown>;
+    expect(t.hasMarket).toBe(false);
+    expect(Number(t.nModels)).toBe(1);
+    expect(Number(t.rawForecastC)).toBeCloseTo(20.0, 3);
+    expect(t.biasCorrected).toBe(false); // no prior (obs, forecast) pairs
+    expect(Number(t.forecastC)).toBeCloseTo(20.0, 3);
+    expect(Number(t.predictedC)).toBe(20);
+    expect(t.label).toBeNull();
+    expect(t.ask).toBeNull();
+
+    // liveRunMax: no intraday_max row for today → the whole block is JSON null (the page hides the tile).
+    expect(out.liveRunMax).toBeNull();
+
+    // zero bets → every aggregate coalesces to its empty shape (the page must render on day-zero).
+    expect(out.arms).toEqual([]);
+    expect(out.leader).toBeNull();
+    expect(out.equityByArm).toEqual({});
+    expect(out.betsByArm).toEqual({});
+    expect(out.truthByArm).toEqual({});
+    expect(out.betLog).toEqual([]);
+    const cov = out.coverage as { nDays: number; nGradedDays: number; nPending: number };
+    expect(Number(cov.nDays)).toBe(0);
+    expect(Number(cov.nGradedDays)).toBe(0);
+    expect(Number(cov.nPending)).toBe(0);
+    const latest = out.latest as { date: string | null; byHour: Record<string, unknown> };
+    expect(latest.date).toBeNull();
+    expect(latest.byHour).toEqual({});
+  });
+});
+
 describe('amsterdam *_inputs RPC shape (0044 — the port invariant)', () => {
   it('grade_inputs / truth_inputs return { rows: [...] } (an object), never a top-level array', async () => {
     // A top-level jsonb array is misread by supabasePort as a RETURNS TABLE row set (arrays pass through

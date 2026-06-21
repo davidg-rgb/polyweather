@@ -43,6 +43,10 @@ export default defineWorkspace([
     },
   },
   {
+    // The web components are server-rendered (no React import — they rely on the automatic JSX runtime),
+    // so esbuild must transform .tsx with jsx:'automatic' for a .test.ts to import + renderToStaticMarkup
+    // one. Only .tsx/.jsx files are affected; the existing pure-.ts loader tests are untouched.
+    esbuild: { jsx: 'automatic' },
     test: {
       name: 'web',
       include: ['apps/web/test/**/*.test.ts'],

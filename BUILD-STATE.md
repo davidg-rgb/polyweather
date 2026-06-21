@@ -14,6 +14,27 @@
 > deliverable (e.g. a polished forecast-skill + market-efficiency view as the product's headline). See the
 > updated project `CLAUDE.md` header and `FORECASTING-RD.md` WO-5 for the rationale.
 
+**2026-06-21 analytics: `/amsterdam` decision-strip redesign + code-review remediation — migrations `0046`+`0047`, LIVE & verified.**
+Operator UI/UX review found the page over-served history and under-served "what now / what next". Shipped (commit
+`8002a40`): a top **decision strip** — today's predicted high (dated, NWP-labelled), live running max as-of-now,
+**tomorrow's prediction** (bias-corrected lead-1 forecast → bucket → live odds), pooled overall prediction rate,
+provisional leader — plus a model-rec-vs-realised-leader reconciliation note, a categorical arm colour ramp
+(amber/sky/violet/magenta, so green/red mean P&L sign ONLY), dash-patterned equity lines with de-collided last-point
+labels, mobile scroll wrappers, and verification depth folded into `<details>`. **Migration `0046`** redefines the whole
+`dash_amsterdam_sim()` body (0043 truth panel + 0042 CIs preserved verbatim) and ADDS the `tomorrow` + `liveRunMax`
+blocks; **`0047`** fixes `tomorrow.nModels` to `count(distinct model)`. Both applied to prod via MCP `apply_migration`
+(precedent 0044). A **97-agent code review** (7 dimensions × adversarial verify) returned 45 findings → 23 confirmed; all
+fixed in commit `42d54e8` (a11y contrast/grid/legend/focus, honesty relabels — "max last rose ~HH:mm", "across 4 lock
+hours · N days", "Predicted high" dated). **Deployed:** Vercel prod `42d54e8` is READY and **eyeballed live** at
+`weather-edge-two.vercel.app/amsterdam` (decision strip, tomorrow tile, colours, both legends all render). **Tests +4 →
+849 green** (typecheck 0): the deferred review-coverage items are now closed — `cov-5` (the empty-state RPC branches:
+forecast-without-market → `hasMarket=false`/null label+ask, no-`intraday_max` → `liveRunMax` null, zero-bets aggregates,
+in `amsterdam-sim.test.ts` against an isolated fresh DB) and `cov-7` (`EquityChart` rendered via `renderToStaticMarkup`
+— viewBox, theme-var grid/labels, per-arm dash patterns, label de-collision; enabled `esbuild.jsx:'automatic'` for the
+web vitest project + `jsx` on the root typecheck pass). **Still deferred (intentional):** the winter-DST `Etc/GMT-2`
+switch (needs a coordinated `0041`+`0046`+`0047`+city-tz change, NOT piecemeal — summer sim has no bug) and the cosmetic
+`generatedAt` "as of" caption. Design + honesty caveats: `AMSTERDAM-SIM.md` §8; ops note `RUNBOOK.md` "0046/0047".
+
 **2026-06-21 ops-fix: `run-calibration` daily timeout FIXED — migration `0045`, deployed + verified end-to-end.**
 The daily learning loop had failed at step (3) SCORES since ~2026-06-18 (`calibration_scores` frozen at 06-19)
 with `rpc calib_scored_rows failed: canceling statement due to statement timeout`. Steps 1–2 succeeded and

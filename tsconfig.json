@@ -1,7 +1,12 @@
 {
   "extends": "./tsconfig.base.json",
   "compilerOptions": {
-    "types": ["node"]
+    "types": ["node"],
+    // The root pass type-checks the web test files (apps/web/tsconfig excludes `test`). A web test may
+    // import a .tsx server component (e.g. EquityChart) and render it, so the root pass needs a JSX mode.
+    // react-jsx (automatic runtime, React 19) matches the components — no React import — and the esbuild
+    // jsx:'automatic' used by the web vitest project. JSX types load via the explicit `react` import.
+    "jsx": "react-jsx"
   },
   "include": [
     "packages/*/src/**/*.ts",
