@@ -552,6 +552,52 @@ export interface PeakHourChartView {
   recommendedHour: number | null;
 }
 
+/**
+ * Tomorrow's prediction (0046) — the bias-corrected lead-1 NWP forecast of tomorrow's high routed to the
+ * whole-°C bucket and priced against tomorrow's live ladder. `forecastC` is the displayed forecast (the
+ * trailing-debias-corrected value when ≥20 prior pairs exist, else the raw cross-model mean — `biasCorrected`
+ * flags which). null fields when the NWP feed has no tomorrow capture; the whole object is null when the RPC
+ * predates 0046 (the page degrades to "ships with the 0046 deploy").
+ */
+export interface TomorrowView {
+  targetDate: string | null;
+  hasMarket: boolean;
+  /** How many lead-1 model captures the ensemble mean is over. */
+  nModels: unknown;
+  rawForecastC: unknown;
+  biasC: unknown;
+  biasN: unknown;
+  biasCorrected: boolean;
+  /** The forecast actually shown — corrected when trustworthy, else raw. */
+  forecastC: unknown;
+  /** wuRound(forecastC) — the whole-°C call. */
+  predictedC: unknown;
+  /** Ladder label for that bucket on tomorrow's market, or null when no market/bucket. */
+  label: string | null;
+  /** Latest best-ask on that bucket, or null when no live quote. */
+  ask: unknown;
+}
+
+/** Live running-max-so-far for today (0046) — intraday_max, with the observation timestamp ("as of HH:mm"). */
+export interface LiveRunMax {
+  date: string | null;
+  /** Running max in °C at 0.1° resolution. */
+  maxTenthsC: unknown;
+  maxNative: unknown;
+  nObs: unknown;
+  lastObsAt: string | null;
+}
+
+/** Pooled prediction accuracy across all arms (computed in the loader from the full-population aggregates). */
+export interface OverallAccuracy {
+  /** Market hit rate = won / graded, pooled over every arm (the number that drives P&L). */
+  marketHitRate: number | null;
+  nGradedAll: number;
+  /** Floor-truth hit rate = truthWon / truth-filled, pooled over every arm (KNMI skill lens). */
+  truthHitRate: number | null;
+  nTruthAll: number;
+}
+
 export interface AmsterdamSimView {
   config: { primaryHour: number; armHours: number[]; compareDays: number; stakeUsd: number };
   coverage: { firstDate: string | null; lastDate: string | null; nDays: unknown; nGradedDays: unknown; nPending: unknown };
@@ -567,6 +613,12 @@ export interface AmsterdamSimView {
   latest: { date: string | null; byHour: Record<number, SimLatestRow> };
   /** Floor-truth coverage (0043); null when the RPC predates it. */
   truthCoverage: TruthCoverage | null;
+  /** Tomorrow's prediction (0046); null when the RPC predates it. */
+  tomorrow: TomorrowView | null;
+  /** Live running-max as of now (0046); null when no obs today or the RPC predates it. */
+  liveRunMax: LiveRunMax | null;
+  /** Pooled prediction accuracy across all arms (computed in the loader, full-population). */
+  overall: OverallAccuracy;
 }
 
 interface SimEquityPoint {
@@ -602,6 +654,9 @@ interface SimPayload {
   betLog: SimBetRow[];
   latest: { date: string | null; byHour: Record<string, SimLatestRow> };
   truthCoverage?: TruthCoverage | null;
+  /** 0046 — present only once the RPC redefine ships; the loader tolerates their absence. */
+  tomorrow?: TomorrowView | null;
+  liveRunMax?: LiveRunMax | null;
 }
 
 // Coercion MUST mirror format.ts `num`: map null/undefined/'' to null FIRST, because Number(null)===0 and
@@ -741,6 +796,31 @@ export async function getAmsterdamSim(db: WebDb, opts: { now?: Date } = {}): Pro
     recommendedHour: bestTime.recommendedHour,
   };
 
+  // Pooled prediction accuracy across all arms — from the full-population arm aggregates (market) and the
+  // uncapped per-arm truth rows (floor-truth), NOT from betLog (which the RPC caps at 120 rows). This is the
+  // single headline accuracy number the operator asked for.
+  let nGradedAll = 0;
+  let nWonAll = 0;
+  for (const a of arms) {
+    nGradedAll += toNum(a.nGraded) ?? 0;
+    nWonAll += toNum(a.nWon) ?? 0;
+  }
+  let nTruthAll = 0;
+  let nTruthWonAll = 0;
+  for (const rows of Object.values(truthByArm)) {
+    for (const r of rows) {
+      if (r.truthWon == null) continue;
+      nTruthAll += 1;
+      if (r.truthWon === true) nTruthWonAll += 1;
+    }
+  }
+  const overall: OverallAccuracy = {
+    marketHitRate: nGradedAll > 0 ? nWonAll / nGradedAll : null,
+    nGradedAll,
+    truthHitRate: nTruthAll > 0 ? nTruthWonAll / nTruthAll : null,
+    nTruthAll,
+  };
+
   return {
     config: v.config,
     coverage: v.coverage,
@@ -752,6 +832,9 @@ export async function getAmsterdamSim(db: WebDb, opts: { now?: Date } = {}): Pro
     betLog: v.betLog ?? [],
     latest: { date: v.latest?.date ?? null, byHour: latestByHour },
     truthCoverage: v.truthCoverage ?? null,
+    tomorrow: v.tomorrow ?? null,
+    liveRunMax: v.liveRunMax ?? null,
+    overall,
   };
 }
 

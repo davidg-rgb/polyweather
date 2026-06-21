@@ -8,6 +8,8 @@ import type { ReactElement } from 'react';
 export interface EquitySeries {
   label: string;
   color: string;
+  /** SVG stroke-dasharray — distinguishes arms by LINE STYLE as well as colour (WCAG; colour-blind safe). */
+  dash?: string;
   /** Aligned to `dates`; null = no bet yet for this arm on/under that date. */
   values: (number | null)[];
 }
@@ -35,7 +37,7 @@ export function EquityChart({
   }
 
   const padL = 48;
-  const padR = 12;
+  const padR = 44; // room for the per-line last-point labels (so arms are identifiable without the legend)
   const padT = 12;
   const padB = 22;
   const minY = Math.min(0, ...allY);
@@ -72,7 +74,7 @@ export function EquityChart({
   const fmtY = (v: number): string => `${v >= 0 ? '+' : '-'}$${Math.abs(v).toFixed(0)}`;
 
   return (
-    <svg className="equity" width={width} height={height} role="img" aria-label="cumulative P&L by betting hour">
+    <svg className="equity" width={width} height={height} role="img" aria-label="cumulative P&L by betting hour, US dollars">
       {/* y gridlines: min, 0, max */}
       {[minY, 0, maxY].map((g, k) => (
         <g key={k}>
@@ -90,15 +92,26 @@ export function EquityChart({
           </text>
         </g>
       ))}
+      {/* y-axis unit */}
+      <text x={padL - 6} y={padT - 2} textAnchor="end" fontSize={9} fill="var(--muted)">
+        net $
+      </text>
       {/* zero baseline emphasized */}
       <line x1={padL} x2={width - padR} y1={y0} y2={y0} stroke="var(--muted)" strokeWidth={1} />
-      {/* series */}
+      {/* series — distinguished by colour AND dash pattern, each labelled at its last point */}
       {series.map((s) => {
         const lp = lastPoint(s.values);
         return (
           <g key={s.label}>
-            <path d={pathFor(s.values)} fill="none" stroke={s.color} strokeWidth={1.8} />
-            {lp ? <circle cx={lp.x} cy={lp.y} r={2.6} fill={s.color} /> : null}
+            <path d={pathFor(s.values)} fill="none" stroke={s.color} strokeWidth={1.8} strokeDasharray={s.dash} />
+            {lp ? (
+              <>
+                <circle cx={lp.x} cy={lp.y} r={2.6} fill={s.color} />
+                <text x={lp.x + 5} y={lp.y + 3} fontSize={9} fontWeight={700} fill={s.color}>
+                  {s.label}
+                </text>
+              </>
+            ) : null}
           </g>
         );
       })}

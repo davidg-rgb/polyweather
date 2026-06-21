@@ -61,12 +61,12 @@ nav.topnav .session { margin-left: auto; display: flex; align-items: center; gap
 
 .stat { display: flex; flex-direction: column; gap: 0.1rem; }
 .stat .label { color: var(--muted); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; }
-.stat .value { font-size: 1.35rem; font-family: var(--mono); }
+.stat .value { font-size: 1.35rem; font-family: var(--mono); font-variant-numeric: tabular-nums; }
 
 table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
 th, td { text-align: left; padding: 0.35rem 0.55rem; border-bottom: 1px solid var(--border); vertical-align: top; }
 th { color: var(--muted); font-weight: 600; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; }
-td.num, th.num { text-align: right; font-family: var(--mono); }
+td.num, th.num { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; }
 tr:last-child td { border-bottom: none; }
 
 .chip {
@@ -184,14 +184,21 @@ svg.equity { display: block; max-width: 100%; height: auto; }
 .ams-dash {
   --ams-bg: #051424;
   --ams-secondary: #7bd0ff;       /* electric-blue "lidar" — live data */
-  --ams-secondary-dim: #5a8bb0;   /* climatological reference */
+  --ams-secondary-dim: #6f9cc0;   /* climatological reference (lightened for AA contrast on glass) */
   --ams-tertiary: #4edea3;        /* emerald — positive */
   --ams-amber: #f5b942;           /* best-time accent */
   --ams-red: #ff9a90;
   --ams-text: #d4e4fa;
-  --ams-muted: #9fb2c8;
+  --ams-muted: #aec1d6;           /* lightened from #9fb2c8 → clears WCAG AA for the small caption text */
   --ams-border: rgba(255, 255, 255, 0.10);
   --ams-grid: rgba(255, 255, 255, 0.07);
+  /* Categorical arm ramp — DISTINCT from the green/red P&L-sign colours (which now mean profit/loss ONLY,
+     never arm identity). amber · sky · violet · orchid: four hues separable on the dark navy and, paired
+     with the equity chart's per-arm dash patterns, colour-blind safe. */
+  --ams-arm-13: #f5b942;          /* amber */
+  --ams-arm-14: #7bd0ff;          /* sky */
+  --ams-arm-15: #b794f6;          /* violet */
+  --ams-arm-16: #f48fb1;          /* orchid */
   color: var(--ams-text);
 }
 /* glass treatment auto-upgrades every existing .panel on the page + the new .glass/.tile surfaces */
@@ -244,3 +251,42 @@ svg.equity { display: block; max-width: 100%; height: auto; }
   display: inline-block; padding: 0.05rem 0.45rem; border-radius: 999px; font-size: 0.68rem; font-weight: 700;
   background: rgba(245, 185, 66, 0.15); color: var(--ams-amber); border: 1px solid rgba(245, 185, 66, 0.5);
 }
+
+/* ── decision strip (0046): the above-the-fold "what now / what next" headline tiles ─────────────────── */
+.ams-dash .strip { display: grid; gap: 0.75rem; grid-template-columns: repeat(auto-fit, minmax(168px, 1fr)); margin: 0.75rem 0 0.25rem; }
+.ams-dash .strip .tile { gap: 0.2rem; }
+.ams-dash .strip .tile .big { font-size: 1.7rem; }
+.ams-dash .strip .tile .big.sky { color: var(--ams-secondary); }
+.ams-dash .strip .tile .big.violet { color: var(--ams-arm-15); }
+.ams-dash .strip .tile .big.pos { color: var(--ams-tertiary); }
+.ams-dash .strip .tile .big.neg { color: var(--ams-red); }
+.ams-dash .strip .tile .unit { font-size: 1rem; font-weight: 600; color: var(--ams-muted); margin-left: 0.15rem; }
+/* tabular figures so the big headline numbers don't jitter on font-fallback */
+.ams-dash .big, .ams-dash .strip .tile .big { font-variant-numeric: tabular-nums; }
+
+/* "soft" badge variant for provisional / informational chips (not a pass/fail signal) */
+.ams-dash .chip.soft { color: var(--ams-muted); border-color: var(--ams-border); }
+
+/* reconciliation / info banner — neutral (NOT the green ok / red drift pass-fail styling) */
+.ams-dash .info-banner {
+  border: 1px solid var(--ams-border); background: rgba(123, 208, 255, 0.06);
+  border-left: 3px solid var(--ams-secondary); border-radius: 8px; padding: 0.6rem 0.9rem; margin: 0.6rem 0;
+  font-size: 0.82rem; color: var(--ams-text);
+}
+.ams-dash .info-banner strong { color: var(--ams-secondary); }
+
+/* horizontal-scroll wrapper for the wide tables on narrow screens (no more page-breaking overflow) */
+.ams-dash .tbl-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.ams-dash .tbl-scroll > table { min-width: 100%; }
+.ams-dash .tbl-scroll th, .ams-dash .tbl-scroll td { white-space: nowrap; }
+
+/* "show detail" disclosures — the verification depth folds away behind a one-line summary */
+.ams-dash details.detail { margin: 0.4rem 0; }
+.ams-dash details.detail > summary {
+  cursor: pointer; color: var(--ams-secondary); font-size: 0.82rem; font-weight: 600;
+  list-style: none; padding: 0.2rem 0; user-select: none;
+}
+.ams-dash details.detail > summary::-webkit-details-marker { display: none; }
+.ams-dash details.detail > summary::before { content: '▸ '; color: var(--ams-muted); }
+.ams-dash details.detail[open] > summary::before { content: '▾ '; }
+.ams-dash details.detail > summary:hover { color: var(--ams-text); }

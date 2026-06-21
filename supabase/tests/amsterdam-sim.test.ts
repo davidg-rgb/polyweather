@@ -337,6 +337,53 @@ describe('amsterdam-paper-trade — floor "truth accuracy" (0043)', () => {
   });
 });
 
+describe('dash_amsterdam_sim — tomorrow + live running max (0046)', () => {
+  it('surfaces tomorrow forecast (raw when <20 bias pairs) + bucket/odds + live running max', async () => {
+    const cityId = (await rows<{ id: string }>(db, `select id from cities where slug = 'amsterdam'`))[0]!.id;
+    // The RPC keys tomorrow/today off now() at Etc/GMT-2 — compute the same dates in SQL so the test is
+    // date-independent (no hard-coded "tomorrow").
+    const tmrw = (await rows<{ d: string }>(db, `select ((now() at time zone 'Etc/GMT-2')::date + 1)::text d`))[0]!.d;
+    const today = (await rows<{ d: string }>(db, `select ((now() at time zone 'Etc/GMT-2')::date)::text d`))[0]!.d;
+    const ev = await seedEvent(cityId, tmrw);
+    // single lead-1 capture for tomorrow → mean 22.0 → wuRound 22 → bucket idx8 ('22°C'). No prior fc1/obs
+    // pairs exist, so the bias is untrusted (<20) and the DISPLAY falls back to the raw forecast.
+    await db.query(
+      `insert into forecast_snapshots (icao, model, target_date, lead_days, tmax_c, snapshot_slot, source, captured_at)
+       values ('EHAM', 'gfs_seamless', $1, 1, 22.0, '10Z', 'forecast_api', now())`,
+      [tmrw],
+    );
+    await seedAsk(ev, 8, 0.42, new Date('2026-06-21T08:00:00Z').toISOString()); // quote on the 22°C bucket
+    await db.query(
+      `insert into intraday_max (icao, date_local, max_tenths_c, max_native, n_obs, last_obs_at)
+       values ('EHAM', $1, 24.3, 24, 9, now())`,
+      [today],
+    );
+
+    const out = await asRole(db, 'authenticated', OPERATOR, async () => {
+      const r = await rows<{ dash_amsterdam_sim: Record<string, unknown> }>(
+        db,
+        `select public.dash_amsterdam_sim() as dash_amsterdam_sim`,
+      );
+      return r[0]!.dash_amsterdam_sim;
+    });
+
+    const t = out.tomorrow as Record<string, unknown>;
+    expect(t.hasMarket).toBe(true);
+    expect(Number(t.nModels)).toBe(1);
+    expect(Number(t.rawForecastC)).toBeCloseTo(22.0, 3);
+    expect(t.biasCorrected).toBe(false);
+    expect(Number(t.forecastC)).toBeCloseTo(22.0, 3);
+    expect(Number(t.predictedC)).toBe(22);
+    expect(t.label).toBe('22°C');
+    expect(Number(t.ask)).toBeCloseTo(0.42, 3);
+
+    const l = out.liveRunMax as Record<string, unknown>;
+    expect(Number(l.maxTenthsC)).toBeCloseTo(24.3, 3);
+    expect(Number(l.nObs)).toBe(9);
+    expect(l.lastObsAt).toBeTruthy();
+  });
+});
+
 describe('amsterdam *_inputs RPC shape (0044 — the port invariant)', () => {
   it('grade_inputs / truth_inputs return { rows: [...] } (an object), never a top-level array', async () => {
     // A top-level jsonb array is misread by supabasePort as a RETURNS TABLE row set (arrays pass through

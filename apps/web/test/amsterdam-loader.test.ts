@@ -239,6 +239,54 @@ describe('getAmsterdamSim — present-but-null coercion (the toNum/num null-guar
   });
 });
 
+describe('getAmsterdamSim — tomorrow / liveRunMax / overall (0046)', () => {
+  const base = {
+    config: { primaryHour: 15, armHours: [13, 14, 15, 16], compareDays: 14, stakeUsd: 10 },
+    coverage: { firstDate: '2026-06-01', lastDate: '2026-06-10', nDays: 10, nGradedDays: 10, nPending: 0 },
+    arms: [armPoint(13, { nGraded: 12, nWon: 6 }), armPoint(15, { nGraded: 5, nWon: 5 })],
+    leader: { hour: 13, pnl: 5, nGraded: 12 },
+    equityByArm: {},
+    betsByArm: {},
+    truthByArm: {
+      '13': [...repeat(6, { truthWon: true, signedErrorC: 0.2 }), ...repeat(6, { truthWon: false, signedErrorC: -0.3 })],
+      '15': repeat(5, { truthWon: true, signedErrorC: -0.1 }),
+    },
+    betLog: [],
+    latest: { date: '2026-06-10', byHour: {} },
+  };
+
+  it('pools overall market + floor-truth accuracy across all arms (full-population, not betLog-capped)', async () => {
+    const v = (await getAmsterdamSim(stubDb(base)))!;
+    // market hit pooled = (6 + 5) / (12 + 5) = 11/17
+    expect(v.overall.nGradedAll).toBe(17);
+    expect(v.overall.marketHitRate!).toBeCloseTo(11 / 17, 6);
+    // floor-truth pooled = (6 + 5) / (12 + 5) = 11/17
+    expect(v.overall.nTruthAll).toBe(17);
+    expect(v.overall.truthHitRate!).toBeCloseTo(11 / 17, 6);
+  });
+
+  it('passes tomorrow + liveRunMax through when the RPC provides them (0046)', async () => {
+    const payload = {
+      ...base,
+      tomorrow: { targetDate: '2026-06-11', hasMarket: true, nModels: 9, rawForecastC: 25.9, biasC: 0.4, biasN: 30, biasCorrected: true, forecastC: 26.3, predictedC: 26, label: '24°C or higher', ask: 0.42 },
+      liveRunMax: { date: '2026-06-10', maxTenthsC: 24.3, maxNative: 24, nObs: 9, lastObsAt: '2026-06-10T13:00:00Z' },
+    };
+    const v = (await getAmsterdamSim(stubDb(payload)))!;
+    expect(v.tomorrow?.predictedC).toBe(26);
+    expect(v.tomorrow?.biasCorrected).toBe(true);
+    expect(v.tomorrow?.hasMarket).toBe(true);
+    expect(Number(v.liveRunMax?.maxTenthsC)).toBe(24.3);
+    expect(v.liveRunMax?.lastObsAt).toBe('2026-06-10T13:00:00Z');
+  });
+
+  it('tomorrow / liveRunMax are null when the RPC predates 0046; overall still computes', async () => {
+    const v = (await getAmsterdamSim(stubDb(base)))!;
+    expect(v.tomorrow).toBeNull();
+    expect(v.liveRunMax).toBeNull();
+    expect(v.overall.nGradedAll).toBe(17);
+  });
+});
+
 describe('getAmsterdamSim — floor-truth point estimates share the CI population (0044)', () => {
   it('excludes a truth row with null signed error from BOTH nTruth and its CI', async () => {
     const payload = {

@@ -95,7 +95,7 @@ export function PeakHourChart({
             width={barW}
             height={(share / maxShare) * barMaxH}
             fill="var(--ams-secondary-dim)"
-            opacity={0.18}
+            opacity={0.32}
           />
         ) : null,
       )}

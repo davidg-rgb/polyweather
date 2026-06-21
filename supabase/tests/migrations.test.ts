@@ -136,6 +136,10 @@ describe('migrations 0001–0010', () => {
       // rows to keep ~1,914 scored ones. Adds a partial index on (event_id) where scored_for_leads<>'{}'
       // and nowcast=false + the matching explicit WHERE predicate (semantic no-op) + 60s headroom (0027 twin).
       '0045_calib_scored_rows_perf.sql',
+      // 0046 = surface tomorrow's prediction + the live "as-of-now" running max — redefines the whole 0043
+      // dash_amsterdam_sim body (additive) with `tomorrow` (bias-corrected lead-1 forecast → bucket → odds)
+      // and `liveRunMax` (intraday_max) blocks. Unchanged signature; stays in WEB_AUTHENTICATED.
+      '0046_amsterdam_tomorrow_live.sql',
     ]);
   });
 });
