@@ -131,6 +131,11 @@ describe('migrations 0001–0010', () => {
       // array, which supabasePort misreads as a RETURNS TABLE row set, silently zeroing the Edge tick's
       // grade + truth-fill since 0039/0043 (19 bets stuck pending). Pure envelope change; callers read .rows.
       '0044_amsterdam_inputs_wrap.sql',
+      // 0045 = calib_scored_rows access-path fix — run-calibration's daily cron timed out at step (3)
+      // SCORES (calibration_scores frozen since 2026-06-19) because the RPC scanned ~91k non-nowcast bp
+      // rows to keep ~1,914 scored ones. Adds a partial index on (event_id) where scored_for_leads<>'{}'
+      // and nowcast=false + the matching explicit WHERE predicate (semantic no-op) + 60s headroom (0027 twin).
+      '0045_calib_scored_rows_perf.sql',
     ]);
   });
 });
@@ -202,6 +207,7 @@ describe('secondary indexes (§7.5 / §7.11)', () => {
     ['forecast_snapshots', 'forecast_snapshots_target_lead_idx'],
     ['market_snapshots', 'market_snapshots_bucket_time_idx'],
     ['config_audit', 'config_audit_key_created_idx'], // 0032 FIX 9 — last-writer lookup
+    ['bucket_probabilities', 'bucket_probabilities_scored_idx'], // 0045 — calib_scored_rows access path
   ] as const;
 
   for (const [table, index] of expected) {
@@ -214,6 +220,22 @@ describe('secondary indexes (§7.5 / §7.11)', () => {
       expect(found.length).toBe(1);
     });
   }
+
+  it('0045: bucket_probabilities_scored_idx is PARTIAL on (event_id) over scored, non-nowcast rows', async () => {
+    // The partial predicate is what makes calib_scored_rows scale with scored rows (~3/event/day)
+    // instead of the whole bucket_probabilities table. A plain full index would not gate the timeout.
+    const [idx] = await rows<{ indexdef: string }>(
+      db,
+      `select indexdef from pg_indexes
+       where schemaname = 'public' and tablename = 'bucket_probabilities'
+         and indexname = 'bucket_probabilities_scored_idx'`,
+    );
+    expect(idx).toBeDefined();
+    expect(idx!.indexdef).toMatch(/\(event_id\)/);
+    expect(idx!.indexdef).toContain('WHERE');
+    expect(idx!.indexdef).toMatch(/scored_for_leads <>/);
+    expect(idx!.indexdef).toMatch(/nowcast/);
+  });
 });
 
 describe('seeds (0010 — §6.11 config, §7.4 models, clusters, §7.16 init)', () => {

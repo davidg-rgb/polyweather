@@ -456,3 +456,70 @@ describe('runCalibration §6.18 — drift gate + Brier breaker (synthetic bad ch
     expect(badAlerts.some((a) => a.kind === 'BREAKER' && a.title.includes('city:badcity'))).toBe(true);
   });
 });
+
+describe('calib_scored_rows (0045) — selective WHERE rewrite is a semantic no-op', () => {
+  // 0045 added `scored_for_leads <> '{}'` to the WHERE (so the new partial index applies) and 60s
+  // headroom. The inner `cross join lateral unnest` already dropped empty-array rows, so the result set
+  // must be IDENTICAL — these tests pin that, plus the nowcast exclusion the partial index also carries.
+  let sdb: PGlite;
+  let sport: ReturnType<typeof pglitePort>;
+
+  beforeAll(async () => {
+    sdb = await freshDb();
+    sport = pglitePort(sdb);
+    await sdb.query(
+      `insert into stations (icao, country_code, tz, lat, lon, source)
+       values ('CSCR', 'KR', 'Asia/Seoul', 37, 127, 'ourairports')`,
+    );
+    await sdb.query(
+      `insert into cities (slug, display_name, country_code, unit, tz, region, first_seen, last_seen)
+       values ('scorecity', 'scorecity', 'KR', 'C', 'Asia/Seoul', 'east-asia', now(), now())`,
+    );
+    const ev = await sdb.query<{ id: string }>(
+      `insert into market_events (poly_event_id, slug, city_id, target_date, unit, ladder_ok, winning_bucket_idx, closed)
+       select 'pe-score', 'sc-score', id, '2026-06-10', 'C', true, 0, true
+       from cities where slug = 'scorecity' returning id`,
+    );
+    // Same resolved event: one SCORED row (both leads) + one UNSCORED row (scored_for_leads '{}', the
+    // table default). The unscored row must contribute zero output rows.
+    await sdb.query(
+      `insert into bucket_probabilities (event_id, source, lead_days, nowcast, made_at, inputs_hash, probs, scored_for_leads, brier) values
+         ($1, 'house_gaussian', 1, false, now(), 'h-scored',   '{0.8,0.2}', '{0,1}', 0.05),
+         ($1, 'house_unscored', 1, false, now(), 'h-unscored', '{0.5,0.5}', '{}',    null)`,
+      [ev.rows[0]!.id],
+    );
+  });
+
+  afterAll(async () => {
+    await sdb.close();
+  });
+
+  it('returns only the scored row, one entry per lead; the {} row is absent', async () => {
+    const res = await sport.rpc<{
+      city_id: string;
+      city_slug: string;
+      scored: { source: string; lead: number }[];
+    }>('calib_scored_rows', { p_days: 90, p_today: '2026-06-11' });
+    expect(res.length).toBe(1); // one city
+    const scored = res[0]!.scored;
+    expect(scored.length).toBe(2); // '{0,1}' → 2 leads; the '{}' row contributes nothing
+    expect(scored.map((s) => s.lead).sort()).toEqual([0, 1]);
+    expect(scored.every((s) => s.source === 'house_gaussian')).toBe(true);
+    expect(scored.some((s) => s.source === 'house_unscored')).toBe(false);
+  });
+
+  it('a nowcast=true row carrying scored_for_leads is also excluded (matches the partial-index predicate)', async () => {
+    await sdb.query(
+      `insert into bucket_probabilities (event_id, source, lead_days, nowcast, made_at, inputs_hash, probs, scored_for_leads, brier)
+       select id, 'house_nowcast', 0, true, now(), 'h-nowcast', '{0.5,0.5}', '{0}', 0.1
+       from market_events where slug = 'sc-score'`,
+    );
+    const res = await sport.rpc<{ scored: { source: string }[] }>('calib_scored_rows', {
+      p_days: 90,
+      p_today: '2026-06-11',
+    });
+    const sources = res.flatMap((r) => r.scored.map((s) => s.source));
+    expect(sources).not.toContain('house_nowcast');
+    expect(sources.filter((s) => s === 'house_gaussian').length).toBe(2);
+  });
+});

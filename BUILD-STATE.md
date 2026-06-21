@@ -14,6 +14,29 @@
 > deliverable (e.g. a polished forecast-skill + market-efficiency view as the product's headline). See the
 > updated project `CLAUDE.md` header and `FORECASTING-RD.md` WO-5 for the rationale.
 
+**2026-06-21 ops-fix: `run-calibration` daily timeout FIXED — migration `0045`, deployed + verified end-to-end.**
+The daily learning loop had failed at step (3) SCORES since ~2026-06-18 (`calibration_scores` frozen at 06-19)
+with `rpc calib_scored_rows failed: canceling statement due to statement timeout`. Steps 1–2 succeeded and
+advanced `calibCursor`, so the symptom was "scores frozen while the cursor keeps moving". Root cause (EXPLAIN
+ANALYZE on hosted): `calib_scored_rows` nested-loop-joined the 682 resolved-90d events to
+`bucket_probabilities` on `event_id` and pulled ~134 non-nowcast rows/event = **91,249 rows** (probs arrays in
+tow), then `unnest(scored_for_leads)` discarded 98% to keep the **1,914** actually-scored ones. The selective
+predicate `scored_for_leads <> '{}'` (1.6% of 120,960 rows) had NO index; `nowcast=false` removed only ~5k. 3.7s
+warm in the admin role → over the PostgREST role's default ~8s timeout on a colder edge connection. (0027 had
+added 60s headroom to the two SIBLING calib aggregations but missed this third one.) **Fix (`0045`):** partial
+index `bucket_probabilities_scored_idx on (event_id) where scored_for_leads <> '{}' and nowcast=false` + the
+matching explicit WHERE predicate (a semantic no-op — the inner unnest already dropped empty arrays, but it lets
+the planner use the index) + `set statement_timeout='60s'` (0027 twin). **Verified:** plan now uses the partial
+index, **3,734ms → 97ms** (~38×), 91,249→1,914 rows touched; the deployed RPC returns 44 cities / 1,931 entries
+even under a forced 2s session timeout. **Tests +4 (840 green, typecheck 0):** migrations file-list + partial-
+index assertion; `calib_scored_rows` empty-`{}`/nowcast exclusion no-op pin (calibration.test). **Deployed +
+closed the loop:** `0045` applied to hosted (MCP `apply_migration`); manual `run-calibration` trigger (server-
+side Vault secret, never surfaced) → **ok in 50.7s, scoresUpserted 698**, `calibration_scores` un-frozen to
+06-21. The `halts: 45` in run-stats (= 44 city + 1 global) is PRE-EXISTING gate behaviour (city halts first
+applied 06-15, BEFORE this regression) resuming now that step 3 no longer aborts before step 4 — dormant-bet-
+path only, NOT caused by this change. **NO edge-function redeploy needed** — DB-only fix, the handler is
+unchanged.
+
 **iter-49 (2026-06-16): SHIPPED the first analytics deliverable — the Amsterdam paper-trade head-to-head.**
 Per the operator directive, `$10/day` of fictitious money rides our predicted whole-°C bucket at FOUR
 intraday lock hours (**13/14/15/16 local**) under identical rules; each arm records the live market odds at
