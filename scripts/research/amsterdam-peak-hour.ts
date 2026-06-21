@@ -22,7 +22,22 @@
 import { parseArgs } from 'node:util';
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { fetchJson } from '../../packages/io/src/index.ts';
+import { AMSTERDAM_CLIMATOLOGY } from '../../packages/core/src/index.ts';
+import { wuRound } from '../../packages/core/src/units.ts';
 import { emitClimatologyAsset } from './amsterdam-climatology-emit.ts';
+
+/**
+ * The candidate late-arm (15/16) "climatology upside" lift this validation tests: the all-day mean
+ * remaining-warming after the hour, read from the committed asset. (This was prototyped as a core engine
+ * helper but the validation below proved it degrades INTEGER accuracy in every month, so it was NOT shipped
+ * to the engine — it lives here only to reproduce that negative result. See AMSTERDAM-SIM.md §"cold bias".)
+ */
+function candidateLateUpsideC(month: number, hour: number): number {
+  if (hour <= 14) return 0;
+  const m = AMSTERDAM_CLIMATOLOGY.months.find((x) => x.month === month);
+  const up = m?.decisionByHour.find((s) => s.hour === hour)?.meanUpsideC ?? 0;
+  return Math.min(Math.max(Number.isFinite(up) ? up : 0, 0), 0.5);
+}
 
 const KNMI_UURGEGEVENS_URL = 'https://www.daggegevens.knmi.nl/klimatologie/uurgegevens';
 const SCHIPHOL = 240;
@@ -198,6 +213,72 @@ function decisionTable(title: string, peaks: DayPeak[]): void {
   console.log('  (meanUpside/p90/p99 = how much MORE the running-max floor rises after h, °C — the bucket-break risk if you lock at h.)');
 }
 
+/** Running-max floor (°C) through local hour h from the day's hourly trace, or null if no obs by h. */
+function floorAtC(d: DayPeak, h: number): number | null {
+  let runMax = -Infinity;
+  let saw = false;
+  for (const [hr, t] of d.byLocalHour) {
+    if (hr <= h) {
+      saw = true;
+      if (t > runMax) runMax = t;
+    }
+  }
+  return saw ? runMax / 10 : null;
+}
+
+/**
+ * YEAR-ROUND validation of the C7 late-arm climatology-upside lift on the full 20-yr KNMI record (the data the
+ * committed climatology itself is built from — so the signed bias is centred in-sample by construction; the
+ * decision-relevant output is the INTEGER-hit Δ and the gained/lost flip counts PER MONTH). Confirms the lift is
+ * net-neutral-or-better in every month (so it is safe to apply unconditionally) rather than only in the
+ * spring/summer window the live forecast record covers. VERDICT: the lift degrades integer hit in EVERY
+ * month (Δexact −3 to −16pp) — so it was rejected and the engine predictor was left unchanged.
+ */
+function validateLift(peaks: DayPeak[]): void {
+  console.log('\n' + '='.repeat(78));
+  console.log('C7 LIFT VALIDATION — floor vs floor+amsterdamLateUpsideC, 20-yr KNMI hourly, per month × {15,16}');
+  console.log('  exact = wuRound(basis) == wuRound(day max); bias = mean(basis − day max) (neg = cold). Truth = KNMI max.');
+  console.log('='.repeat(78));
+  console.log('  mo  h │   n   upside │ floor: exact  bias │ +lift: exact  bias │  Δexact   flips +/−');
+  console.log('  ──────┼─────────────┼────────────────────┼────────────────────┼────────────────────');
+  let worstMonthDelta = Infinity;
+  for (let mo = 1; mo <= 12; mo++) {
+    for (const h of [15, 16]) {
+      const up = candidateLateUpsideC(mo, h);
+      let n = 0, fHit = 0, lHit = 0, fBias = 0, lBias = 0, gain = 0, loss = 0;
+      for (const d of peaks) {
+        if (d.month !== mo) continue;
+        const floor = floorAtC(d, h);
+        if (floor == null) continue;
+        n += 1;
+        const hi = wuRound(d.maxC);
+        const fp = wuRound(floor);
+        const lp = wuRound(floor + up);
+        if (fp === hi) fHit += 1;
+        if (lp === hi) lHit += 1;
+        fBias += floor - d.maxC;
+        lBias += floor + up - d.maxC;
+        if (fp !== hi && lp === hi) gain += 1;
+        if (fp === hi && lp !== hi) loss += 1;
+      }
+      if (n === 0) continue;
+      const dEx = ((lHit - fHit) / n) * 100;
+      if (dEx < worstMonthDelta) worstMonthDelta = dEx;
+      const s = (x: number) => `${x >= 0 ? '+' : ''}${x.toFixed(2)}`;
+      console.log(
+        `  ${String(mo).padStart(2)} ${h} │ ${String(n).padStart(4)}  ${up.toFixed(2)} │ ` +
+          `${((fHit / n) * 100).toFixed(0).padStart(6)}%  ${s(fBias / n).padStart(5)} │ ` +
+          `${((lHit / n) * 100).toFixed(0).padStart(6)}%  ${s(lBias / n).padStart(5)} │ ` +
+          `${(dEx >= 0 ? '+' : '') + dEx.toFixed(1)}pp   ${gain}/${loss}`,
+      );
+    }
+  }
+  console.log('  ──────┴─────────────┴────────────────────┴────────────────────┴────────────────────');
+  console.log(`  WORST month×arm Δexact = ${worstMonthDelta.toFixed(1)}pp.  >= ~0 in every month ⇒ ship the lift`);
+  console.log('  unconditionally; a clearly negative month ⇒ gate amsterdamLateUpsideC to the safe months.');
+  console.log('  (In-sample for the climatology, so bias→0 is by construction; the integer Δ is the real test.)');
+}
+
 async function main(): Promise<void> {
   const { values } = parseArgs({
     options: {
@@ -205,6 +286,7 @@ async function main(): Promise<void> {
       to: { type: 'string', default: '2025' },
       csv: { type: 'boolean', default: false },
       emit: { type: 'string' },
+      'validate-lift': { type: 'boolean', default: false },
     },
   });
   const from = Number(values.from);
@@ -220,6 +302,12 @@ async function main(): Promise<void> {
   }
 
   const peaks = buildDayPeaks(allObs);
+
+  // --validate-lift: year-round backtest of the C7 late-arm climatology-upside lift, then exit.
+  if (values['validate-lift']) {
+    validateLift(peaks);
+    return;
+  }
 
   // --emit: regenerate the committed core climatology asset and exit (skip the human-facing report).
   if (values.emit) {

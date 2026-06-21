@@ -275,3 +275,42 @@ pnpm tsx scripts/research/amsterdam-peak-hour.ts --from 2006 --to 2025 --emit pa
 
 Companion docs: `AMSTERDAM-BUILDOUT.md` (the accuracy finding that seeded this), `FORECASTING-RD.md`
 (why trading is closed), `BUILD-STATE.md`, `RUNBOOK.md`.
+
+## 7. The "cold bias" — investigated, predictor left UNCHANGED (2026-06-21)
+
+**Symptom.** Through the June 2026 warm spell the live paper bets ran ~1.1–1.4 °C **cold** (the floor-truth
+panel's signed error went negative at every arm; 15:00 hit only ~44% over ~9 graded days). The question: is
+the late-arm nowcast systematically under-predicting in a way we can fix?
+
+**What we found (the honest, evidence-backed answer): NO — the predictor is at its integer-skill ceiling at
+the late arms, and "fixing" the cold bias demonstrably makes the bet WORSE.** No engine change shipped.
+
+**The analysis (`scripts/research/amsterdam-coldbias.ts`, walk-forward, KNMI 0.1 °C truth):**
+- The full 69-day backtest is healthy — 15:00 **82.6%** exact, 16:00 **92.8%**. The cold spell was a recent
+  warm-day patch, not the system's general behaviour. The bias is a **continuous mis-centring**: the
+  running-max floor sits ~0.4–0.6 °C below the eventual high because the day is still warming.
+- Candidate fixes were baked off. Lifting the floor by the bias-corrected **forecast** at 15/16 (C1) or by
+  the climatology upside at the **early** arms (C3/C5) significantly **hurts** the proven arms (McNemar
+  p<0.05). The only candidate that looked good was **C7** — add the *all-day* climatology expected
+  remaining-upside at 15/16: on the 69 live days it showed **zero integer flips** (P&L-neutral) while cutting
+  the late-arm decimal MAE −34%/−20% and the cold bias to ~⅓. It looked like a free calibration win.
+
+**Why C7 was REJECTED — the 20-year validation (`amsterdam-peak-hour.ts --validate-lift`, 7 306 days):** the
+"zero flips" was a small-sample accident. On 20 years the identical lift **degrades integer exact-hit in every
+single month** (Δexact **−3 to −16 pp**; flips overwhelmingly losses — e.g. Dec 15:00 **13 gained / 110 lost**,
+Jun 15:00 83/139). The mechanism: remaining warming after 15/16 is **right-skewed near zero**, so the
+running-max floor is a biased-*low* **continuous** estimator but the **better integer** estimator —
+`wuRound(floor)` already lands on the high's whole degree, and adding the *mean* upside (inflated by the right
+tail) overshoots. The mean minimises signed bias but is the wrong statistic for the rounded bet.
+
+**Conclusion & the only real lever.** The cold bias is an **inherent right-skew artifact, not a fixable
+predictor error**; the floor (+ the existing forecast lift at 13/14) is already the optimal integer call at
+every arm. The hot-day 15:00 miss is **irreducible** — the day genuinely hasn't peaked (≈56% floor confidence
+on hot June days). The lever that *does* help the cold-spell losses is the **decision layer**: bet later
+(16:00+) on hot days — which the best-time model already does (§6: the ≥25 °C sub-climatology lowers 15:00's
+floor confidence to 0.56 vs 16:00's 0.81, and the no-odds fallback recommends the first hour ≥0.8 → 16:00).
+
+**What shipped:** the two reusable R&D harnesses (`amsterdam-coldbias.ts` bake-off; `amsterdam-peak-hour.ts
+--validate-lift` 20-yr check) and this finding. **The engine is unchanged** — `nowcastBasisC` stays pure
+floor at 15/16. A 4-lens adversarial panel + the 20-yr validation caught a change that would have silently
+degraded market accuracy 3–16 pp; the negative result is the deliverable.
