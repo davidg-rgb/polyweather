@@ -140,6 +140,9 @@ describe('migrations 0001–0010', () => {
       // dash_amsterdam_sim body (additive) with `tomorrow` (bias-corrected lead-1 forecast → bucket → odds)
       // and `liveRunMax` (intraday_max) blocks. Unchanged signature; stays in WEB_AUTHENTICATED.
       '0046_amsterdam_tomorrow_live.sql',
+      // 0047 = code-review follow-up to 0046: tomorrow.nModels counts DISTINCT models (was count(*) captures,
+      // ~2x when 10Z+22Z both land). Whole dash_amsterdam_sim body re-stated (create-or-replace); count only.
+      '0047_amsterdam_nmodels_distinct.sql',
     ]);
   });
 });

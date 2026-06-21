@@ -321,6 +321,12 @@ Then `/amsterdam` is live and self-updating (15:30 UTC daily: places today's fou
 `pnpm tsx scripts/amsterdam-sim.ts --analyze-only`. **Turn it off:**
 `select cron.unschedule('amsterdam-paper-trade');` (data + dashboard remain; no new bets placed).
 
+**`/amsterdam` 0046/0047 (2026-06-21, applied to hosted):** the decision-strip redesign added `tomorrow`
+(bias-corrected lead-1 forecast → bucket → live odds) and `liveRunMax` (intraday_max as-of) to
+`dash_amsterdam_sim`; 0047 fixed `nModels` to count distinct models. Both are pure `create-or-replace` of the
+RPC (no table change), applied via Supabase MCP `apply_migration`; the frontend ships via the normal Vercel
+push. To re-apply by CLI: `supabase db push` (idempotent — the function body is the latest in 0047).
+
 ## Failure-drill log (each upstream killed under test)
 
 Every upstream's failure path is exercised by the committed suite — re-run

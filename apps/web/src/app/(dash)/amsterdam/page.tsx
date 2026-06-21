@@ -189,7 +189,7 @@ export default async function AmsterdamPage(): Promise<ReactElement> {
       <div className="strip">
         <div className="tile">
           <div className="tile-head">
-            <span className="cap">Today&apos;s predicted high</span>
+            <span className="cap">Predicted high</span>
             {latest.date ? <span className="cap" style={{ color: 'var(--ams-secondary)' }}>{fmtDate(latest.date)}</span> : null}
           </div>
           <div className="big sky">{predictedHighBucket == null ? '—' : `${predictedHighBucket}°`}</div>
@@ -208,9 +208,9 @@ export default async function AmsterdamPage(): Promise<ReactElement> {
           </div>
           <div className="sub">
             {liveRunMax
-              ? `as of ${amsTime(liveRunMax.lastObsAt)} local · ${num(liveRunMax.nObs) ?? 0} obs · max usually ~${bestTime.medianPeakHour}:00`
+              ? `METAR floor · max last rose ~${amsTime(liveRunMax.lastObsAt)} local · peaks ~${bestTime.medianPeakHour}:00`
               : runMaxToday != null
-                ? `floor at last lock · max usually lands ~${bestTime.medianPeakHour}:00`
+                ? `floor at last lock · peaks ~${bestTime.medianPeakHour}:00`
                 : 'no observations yet today'}
           </div>
         </div>
@@ -223,10 +223,14 @@ export default async function AmsterdamPage(): Promise<ReactElement> {
           <div className="big violet">{tmrwPred == null ? '—' : `${tmrwPred}°`}</div>
           <div className="sub">
             {tmrwFc != null
-              ? `${tomorrow?.biasCorrected ? 'debiased' : 'raw'} NWP ${tmrwFc.toFixed(1)}°C${tmrwAsk != null ? ` · ask ${fmtProb(tmrwAsk)}` : ''}${rec != null ? ` · lock ${rec}:00` : ''}`
-              : tomorrow == null
-                ? 'lights up with the 0046 deploy'
-                : 'no NWP capture for tomorrow yet'}
+              ? `${tomorrow?.biasCorrected ? 'debiased' : 'raw'} NWP ${tmrwFc.toFixed(1)}°C${
+                  tmrwAsk != null
+                    ? ` · ask ${fmtProb(tmrwAsk)}`
+                    : tomorrow?.hasMarket === false
+                      ? ' · market not open yet'
+                      : ''
+                }${rec != null ? ` · lock ${rec}:00` : ''}`
+              : 'no NWP capture for tomorrow yet'}
           </div>
         </div>
 
@@ -236,8 +240,8 @@ export default async function AmsterdamPage(): Promise<ReactElement> {
           </div>
           <div className="big">{overall.marketHitRate == null ? '—' : fmtPct(overall.marketHitRate, 0)}</div>
           <div className="sub">
-            {overall.nGradedAll} graded · floor-truth{' '}
-            {overall.truthHitRate == null ? '—' : fmtPct(overall.truthHitRate, 0)} ({overall.nTruthAll})
+            across {config.armHours.length} lock hours · {nGradedDays} day{nGradedDays === 1 ? '' : 's'} · floor-truth{' '}
+            {overall.truthHitRate == null ? '—' : fmtPct(overall.truthHitRate, 0)}
           </div>
         </div>
 
@@ -446,7 +450,10 @@ export default async function AmsterdamPage(): Promise<ReactElement> {
         <div className="legend">
           {series.map((s) => (
             <span key={s.label}>
-              <span className="swatch" style={{ background: s.color }} />
+              {/* line-style swatch (not colour-only) — mirrors each arm's actual dash in the chart */}
+              <svg width={20} height={6} style={{ marginRight: 4, verticalAlign: 'middle' }} aria-hidden="true">
+                <line x1={0} y1={3} x2={20} y2={3} stroke={s.color} strokeWidth={2} strokeDasharray={s.dash || undefined} />
+              </svg>
               {s.label}
             </span>
           ))}

@@ -314,3 +314,30 @@ floor confidence to 0.56 vs 16:00's 0.81, and the no-odds fallback recommends th
 --validate-lift` 20-yr check) and this finding. **The engine is unchanged** — `nowcastBasisC` stays pure
 floor at 15/16. A 4-lens adversarial panel + the 20-yr validation caught a change that would have silently
 degraded market accuracy 3–16 pp; the negative result is the deliverable.
+
+## 8. Tomorrow's prediction + live running max + decision-strip redesign (2026-06-21, migrations 0046/0047)
+
+Operator UI/UX review of `/amsterdam`: the page answered "best time to bet / who's winning / history" but
+not the two most glanceable operational facts — **what we predict for tomorrow** and the **running-max floor
+right now**. Every figure was first cross-checked against prod (all matched). What shipped:
+
+- **Decision strip** (top of page): today's predicted high, live running max (as-of), tomorrow's prediction,
+  overall prediction rate, provisional leader. Plus a model-rec-vs-realised-leader reconciliation note and a
+  neutral leaderboard banner. Arm colours recoloured to a categorical ramp (amber/sky/violet/magenta) so
+  green/red mean P&L sign only; equity lines gain dash patterns + de-collided last-point labels (colour-blind
+  safe); wide tables get mobile scroll wrappers; verification depth folds into `<details>`.
+- **Migration 0046** (`dash_amsterdam_sim`, whole 0043 body re-stated + two blocks): `tomorrow` =
+  bias-corrected cross-model lead-1 forecast from `forecast_snapshots` (verbatim mirror of
+  `amsterdam_sim_place_inputs` 0041 trailing-30 debias; **display falls back to the RAW forecast when <20
+  pairs**, flagged `biasCorrected:false`) → `wuRound` bucket → live ladder ask; `liveRunMax` = `intraday_max`
+  (METAR floor + `last_obs_at`). The web port is RLS-scoped/RPC-only, so these had to come from the RPC.
+- **`overall` accuracy** is pooled in the loader (TS) from the full-population arm aggregates (NOT betLog,
+  which the RPC caps at 120); floor-truth pools over the same `armTruthStats` population as the per-arm cards.
+- **Migration 0047** (code-review follow-up): `tomorrow.nModels` counts `distinct model`, not captures.
+
+**Honesty caveats (from the multi-agent code review):** the "Running max now" sub is labelled "max last rose
+~HH:mm" because `intraday_max.last_obs_at`/`n_obs` freeze when the max last advanced (0015 upsert), not at the
+latest observation. The overall-rate sub reads "across 4 lock hours · N days" — the 4 arms bet the same day's
+outcome (correlated), so it is not N×4 independent bets. The Amsterdam date math stays fixed `Etc/GMT-2`
+(summer-only sim); a winter/DST switch to `Europe/Amsterdam` must be done across 0041+0046+0047+the city tz in
+lockstep, not piecemeal.

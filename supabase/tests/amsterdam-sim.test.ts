@@ -382,6 +382,44 @@ describe('dash_amsterdam_sim — tomorrow + live running max (0046)', () => {
     expect(Number(l.nObs)).toBe(9);
     expect(l.lastObsAt).toBeTruthy();
   });
+
+  it('applies the trailing-bias correction once >=20 prior (obs, lead-1 forecast) pairs exist', async () => {
+    // The prod path is the CORRECTED one. Seed 20 finalized pairs strictly before tomorrow, each with a known
+    // residual of +0.7 (actual 20.0 − forecast 19.3), so bias=+0.7. With tomorrow's raw lead-1 mean already
+    // seeded at 22.0 (prior test), the corrected forecast is 22.7 -> wuRound 23 -> bucket idx9 ('23°C').
+    const tmrw = (await rows<{ d: string }>(db, `select ((now() at time zone 'Etc/GMT-2')::date + 1)::text d`))[0]!.d;
+    for (let i = 1; i <= 20; i++) {
+      const day = `2025-05-${String(i).padStart(2, '0')}`;
+      await db.query(
+        `insert into observations (icao, date_local, tmax_wu_native, unit, n_obs, provisional, finalized_at)
+         values ('EHAM', $1, 20, 'C', 30, false, now())
+         on conflict (icao, date_local) do update set tmax_wu_native = 20, finalized_at = now()`,
+        [day],
+      );
+      await db.query(
+        `insert into forecast_snapshots (icao, model, target_date, lead_days, tmax_c, snapshot_slot, source, captured_at)
+         values ('EHAM', 'gfs_seamless', $1, 1, 19.3, '10Z', 'forecast_api', now())`,
+        [day],
+      );
+    }
+
+    const out = await asRole(db, 'authenticated', OPERATOR, async () => {
+      const r = await rows<{ dash_amsterdam_sim: Record<string, unknown> }>(
+        db,
+        `select public.dash_amsterdam_sim() as dash_amsterdam_sim`,
+      );
+      return r[0]!.dash_amsterdam_sim;
+    });
+    const t = out.tomorrow as Record<string, unknown>;
+    expect(t.biasCorrected).toBe(true);
+    expect(Number(t.biasN)).toBeGreaterThanOrEqual(20);
+    expect(Number(t.biasC)).toBeCloseTo(0.7, 2);
+    expect(Number(t.rawForecastC)).toBeCloseTo(22.0, 3);
+    expect(Number(t.forecastC)).toBeCloseTo(22.7, 2);
+    expect(Number(t.predictedC)).toBe(23); // wuRound(22.7)
+    expect(t.label).toBe('23°C');
+    expect(Number(t.nModels)).toBe(1); // 0047: distinct models (tomorrow seeded one model)
+  });
 });
 
 describe('amsterdam *_inputs RPC shape (0044 — the port invariant)', () => {

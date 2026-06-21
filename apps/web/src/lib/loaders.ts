@@ -469,6 +469,8 @@ export interface ArmStanding {
    * mae/bias are the RPC point estimates; the CIs are computed in the loader (armTruthStats) like the edge CIs.
    */
   nTruth: unknown;
+  /** Truth-floor wins over the SAME finite-signed-error population as nTruth (for the pooled overall accuracy). */
+  nTruthWon: number;
   truthHitRate: unknown;
   truthHitCiLo: number;
   truthHitCiHi: number;
@@ -725,6 +727,7 @@ export async function getAmsterdamSim(db: WebDb, opts: { now?: Date } = {}): Pro
         // null/NaN signed error (possible when an arm's running_max_c is null) can't count toward the point
         // while being dropped from the interval. Identical to the RPC values whenever the populations agree.
         nTruth: t.nTruth,
+        nTruthWon: t.nTruthWon,
         truthHitRate: t.truthHitRate,
         mae: t.mae,
         bias: t.bias,
@@ -799,20 +802,18 @@ export async function getAmsterdamSim(db: WebDb, opts: { now?: Date } = {}): Pro
   // Pooled prediction accuracy across all arms — from the full-population arm aggregates (market) and the
   // uncapped per-arm truth rows (floor-truth), NOT from betLog (which the RPC caps at 120 rows). This is the
   // single headline accuracy number the operator asked for.
+  // Floor-truth pools over the SAME population as the per-arm cards (armTruthStats — finite signed error),
+  // by summing each arm's nTruth/nTruthWon, so the headline reconciles with the truth table (no double
+  // population). Market pools nWon/nGraded over the full graded set.
   let nGradedAll = 0;
   let nWonAll = 0;
+  let nTruthAll = 0;
+  let nTruthWonAll = 0;
   for (const a of arms) {
     nGradedAll += toNum(a.nGraded) ?? 0;
     nWonAll += toNum(a.nWon) ?? 0;
-  }
-  let nTruthAll = 0;
-  let nTruthWonAll = 0;
-  for (const rows of Object.values(truthByArm)) {
-    for (const r of rows) {
-      if (r.truthWon == null) continue;
-      nTruthAll += 1;
-      if (r.truthWon === true) nTruthWonAll += 1;
-    }
+    nTruthAll += toNum(a.nTruth) ?? 0;
+    nTruthWonAll += a.nTruthWon;
   }
   const overall: OverallAccuracy = {
     marketHitRate: nGradedAll > 0 ? nWonAll / nGradedAll : null,

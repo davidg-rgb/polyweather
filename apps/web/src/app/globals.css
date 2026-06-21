@@ -198,7 +198,7 @@ svg.equity { display: block; max-width: 100%; height: auto; }
   --ams-arm-13: #f5b942;          /* amber */
   --ams-arm-14: #7bd0ff;          /* sky */
   --ams-arm-15: #b794f6;          /* violet */
-  --ams-arm-16: #f48fb1;          /* orchid */
+  --ams-arm-16: #f06ec0;          /* magenta — pushed off the pale P&L red (#ff9a90) for separation */
   color: var(--ams-text);
 }
 /* glass treatment auto-upgrades every existing .panel on the page + the new .glass/.tile surfaces */
@@ -260,9 +260,13 @@ svg.equity { display: block; max-width: 100%; height: auto; }
 .ams-dash .strip .tile .big.violet { color: var(--ams-arm-15); }
 .ams-dash .strip .tile .big.pos { color: var(--ams-tertiary); }
 .ams-dash .strip .tile .big.neg { color: var(--ams-red); }
-.ams-dash .strip .tile .unit { font-size: 1rem; font-weight: 600; color: var(--ams-muted); margin-left: 0.15rem; }
 /* tabular figures so the big headline numbers don't jitter on font-fallback */
 .ams-dash .big, .ams-dash .strip .tile .big { font-variant-numeric: tabular-nums; }
+
+/* P&L sign colours: the global .pos/.neg (#2fbf71 / #e5484d) under-contrast on the dark glass — scope this
+   page to the accessible --ams variants so every profit/loss figure clears WCAG AA on the panels/zebra/rows. */
+.ams-dash .pos { color: var(--ams-tertiary); }
+.ams-dash .neg { color: var(--ams-red); }
 
 /* "soft" badge variant for provisional / informational chips (not a pass/fail signal) */
 .ams-dash .chip.soft { color: var(--ams-muted); border-color: var(--ams-border); }
@@ -290,3 +294,4 @@ svg.equity { display: block; max-width: 100%; height: auto; }
 .ams-dash details.detail > summary::before { content: '▸ '; color: var(--ams-muted); }
 .ams-dash details.detail[open] > summary::before { content: '▾ '; }
 .ams-dash details.detail > summary:hover { color: var(--ams-text); }
+.ams-dash details.detail > summary:focus-visible { outline: 1px solid var(--ams-secondary); outline-offset: 2px; border-radius: 4px; }
