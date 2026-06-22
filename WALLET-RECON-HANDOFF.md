@@ -870,3 +870,49 @@ forecaster" is dominated by the market price; the measurement IS the analytics d
 trading rail stays DORMANT** — re-open only on genuinely new out-of-market information. The one remaining
 genuinely-distinct lever is **Move 4** (intraday running-max physics), which overlaps the closed WO-5 finding
 (low prior, not run).
+
+---
+
+## 15. FORENSIC PURCHASE MAP — every badatmath buy 2026-05-23 → 06-21 (the vertical window)
+
+**The ask.** Map every badatmath purchase in the vertical-PnL window, score every win/loss, describe the
+purchasing patterns in depth. Tool: `scripts/research/badatmath-purchase-map.ts` (read-only, no migration,
+no `packages/trading`; a no-network `sanity()` self-test; Gamma resolution cached to
+`out/badatmath-resolutions.json`). Complete per-position log: `out/badatmath-purchases-may23-jun21.csv`
+(8,780 rows). **Resolution: Polymarket Gamma `/markets?...&closed=true` → `outcomePrices` (Yes won iff
+["1","0"]) is AUTHORITATIVE and ~complete (97% scored); our DB resolves only ~45% (the resolution pipeline
+lags), so Gamma is primary, DB is enrichment (bucket label / region / tz-lead) + fallback.** `closed=true`
+is REQUIRED — Gamma's /markets defaults to ACTIVE markets and returns `[]` for resolved ones without it.
+
+**Scale.** 53,764 BUY fills (of 64,934 lifetime) in window → **8,780 positions** (city·day·bucket·side) across
+**1,336 city-days / 46 cities**; ~3 fills/position (max 112). **WINS 3,504 · LOSSES 5,012 · win rate 41.1%**
+(matches KILL-GATE 1's 40.6% net). **Net hold-to-resolution P&L +$22,350** (+12.9% ROI on $167k resolved
+stake) — reconciles to the public curve move (~$24.3k, $1,146→$25,407) within ~8% (residual = sells/merges/
+redeems the BUY-only cache can't net; this is per-purchase hold-to-resolution P&L, NOT the wallet's realized
+total).
+
+**Patterns (the detail):**
+1. **Engine = cheap Yes in the 0.10–0.25 band, NOT the cheapest.** ROI by entry band: [0,0.05) +62.5% (rare
+   50–100× hits — best bet KL 29°C @0.011 → +$4,118), **[0.05,0.10) −22.1% (a real DEAD ZONE)**, [0.10,0.15)
+   +23.2%, [0.15,0.25) +24.0%, [0.25,0.45) +11%, [0.45,0.75) +9%, [0.75,1] +11%. Refines §3/§13: the
+   low-MIDDLE band is the engine; the very cheapest is a lottery and 0.05–0.10 actively bleeds.
+2. **Yes carries it; No is a field-hedge.** Yes/cheap +$11,547 (+19.6%, 11% win), Yes/rich +$6,898 (+17%),
+   No/rich +$4,377 (+6.5%, 77% win — selling unlikely buckets for thin premium), No/cheap −$471 (−8.5%). In
+   THIS window the No book is mildly POSITIVE (vs the lifetime "No is pure bleed" read, which only saw top-50 winners).
+3. **Timing is the sharpest signal — he does NOT bet day-of.** Lead by band: <24h +2.0% (break-even!),
+   24–48h +18.3%, 48–72h +15.5%. Median lead 36.9h (~1.5d), range 7–72h (markets created ~2d out). The edge
+   is the calibrated day-before entry before the short-lived market converges — corroborates WO-5 (day-of the
+   market has already priced the running-max, no late edge).
+4. **Breadth:** median 3 distinct buckets per city·day·side (max 11) — sprays the plausible range, not one modal bucket.
+5. **Sizing:** micro-grind — per FILL median $1.69 (max $56), per POSITION median $12.12 (max $234). Never size at risk.
+6. **Geography:** tropical/stable climates pay (southeast-asia +84% ROI, KL alone +$8,233/+199%; east-asia
+   +$5,855 abs), volatile mid-latitudes bleed (south-asia, latam, na-central, europe-east negative). NA +$5,500
+   vs intl +$17,894 → global, not a US secret (confirms §3).
+7. **The vertical:** buy volume ramped ~10× (≈500 → ≈4,800 fills/day); cum P&L tracks the public curve; two
+   days dominate (Jun 17 +$5,506, Jun 21 +$3,967 — heat events resolving many cheap longshots together).
+8. **Biggest wins** are all cheap Yes longshots that hit (KL 29°C @0.011 +$4,118; Beijing 28°C @0.013 +$1,134);
+   **biggest losses** are capped at stake, mostly richer bets that missed (Houston No 88–89°F @0.53 −$234).
+
+**Every pattern reinforces the closed thesis:** calibration + day-before timing + breadth + maker micro-sizing
+across ~45 cities — a high-volume calibrated-longshot maker grind, structurally non-followable / non-replicable
+(the five falsified angles). Pure analytics; nothing reopens the dormant rail.
