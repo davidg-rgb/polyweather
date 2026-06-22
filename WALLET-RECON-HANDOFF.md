@@ -702,23 +702,35 @@ falsified; the rail stays DORMANT.**
 **The run (full universe: 45 stations · 721 resolved events · 2026-04-21→06-21 · entry-lead 24h · rest-at bid ·
 ask-touch; fork-equality db1 `1.2991°C` byte-match — the canonical KILL-GATE 2 anchor):**
 
+> **⚠ NUMBERS REFRESHED 2026-06-22 (commit `77c92f2`).** A parallel multi-agent code-review found a de-dup bug:
+> `assembleBids` emitted one bid *per NWP lead* (with `--leads 1,2` the default, exactly 2× per market position),
+> inflating the effective n and shrinking every CI by ~√2. The table below is the **re-run at the corrected n**
+> (one bid per event, shortest lead). The point estimates of the binding edge metric are **identical** (the
+> duplicate had the same `won−restPx`, which doesn't depend on the NWP lead) — only n halves and the CIs widen.
+> **The FAIL conclusion is fully intact: the edge CI still EXCLUDES 0 in both modes even at the honest, halved n.**
+
 | Lens | indiscriminate (`select=all`) | forecast-conditioned (`calibratedP>restPx`) |
 |---|---|---|
-| cheap-eligible / filled | 2048 / 1990 (97% fill) | 1282 / 1248 (97% fill) |
-| **maker edge (won−restPx)** — the robust low-variance metric | **−1.46% CI [−2.20, −0.72]** | **−1.73% CI [−2.66, −0.80]** |
-| EV/$1 (pre-registered; heavy-tailed) | −38.18% CI [−71.22, +3.78] | −13.14% CI [−67.65, +50.87] |
-| adverse selection (filled-hit ≪ eligible-hit) | 3.1% ≪ 5.1% — **CONFIRMED** | 2.9% ≪ 4.8% — **CONFIRMED** |
-| Brier ours vs market-at-entry | 0.0959 vs 0.0890 (ours worse) | 0.0982 vs 0.0885 (ours worse) |
+| cheap-eligible / filled | 1024 / 995 (97% fill) | 590 / 572 (97% fill) |
+| **maker edge (won−restPx)** — the robust low-variance metric | **−1.46% CI [−2.51, −0.41]** | **−1.73% CI [−3.16, −0.30]** |
+| EV/$1 (pre-registered; heavy-tailed) | −38.18% CI [−80.45, +24.37] | −4.72% CI [−77.15, +105.14] |
+| adverse selection (filled-hit ≪ eligible-hit) | 3.1% ≪ 5.1% — **CONFIRMED** | 3.1% ≪ 5.6% — **CONFIRMED** |
+| Brier ours vs market-at-entry | 0.0949 vs 0.0890 (ours worse) | 0.1110 vs 0.1006 (ours worse) |
 | verdict | **FAIL** | **FAIL** |
 
 **Three reads:**
 1. **Both modes FAIL on the robust metric.** The low-variance maker edge (`won − restPx`) is negative with a 95%
    CI that **excludes zero in both modes** — as a maker resting below the ask, our filled bids win ~1.5–1.7pp
    LESS than the price we rested at. Efficient.
-2. **Our forecast as a SELECTOR is value-NEGATIVE on the cheap tail.** Forecast-conditioning makes it slightly
-   WORSE (−1.73 vs −1.46) and picks buckets that win LESS (4.8% vs 5.1%). Using our forecast to choose cheap
-   buckets is *worse than not using it* — a clean corroboration that our calibration is inferior to the market's
-   (Brier ours > market in both modes; consistent with KILL-GATE 2).
+2. **Our forecast as a SELECTOR is value-NEGATIVE on the cheap tail.** Forecast-conditioning makes the realized
+   maker edge WORSE (−1.73 vs −1.46) and the calibration further behind the market (Brier 0.1110 vs market 0.1006,
+   a bigger deficit than `select=all`'s 0.0949 vs 0.0890). The eligible buckets it picks actually win marginally
+   MORE at selection (5.6% vs 5.1%) — but that does NOT survive the fill: forecast-conditioning suffers *worse*
+   adverse selection (filled 3.1% vs eligible 5.6% = a 2.5pp gap, vs `select=all`'s 2.0pp). Net: using our forecast
+   to choose cheap buckets is *worse than not using it* — a clean corroboration that our calibration is inferior to
+   the market's (Brier ours > market in both modes; consistent with KILL-GATE 2). [corrected read at the de-duped n;
+   the pre-fix note had this as "picks buckets that win LESS (4.8% vs 5.1%)" — the de-dup flips the eligible-hit
+   comparison, but the value-NEGATIVE conclusion is unchanged and now rests on adverse selection + Brier, not bucket selection.]
 3. **The adverse-selection trap is real and quantified.** The fill model fills 97% of rested bids, but the filled
    set wins far less than the eligible base rate — the classic maker problem: your cheap bid fills precisely on
    the buckets the market is marking down (losers), while winners' asks rise away and never fill you.
@@ -726,7 +738,8 @@ ask-touch; fork-equality db1 `1.2991°C` byte-match — the canonical KILL-GATE 
 **Methodological note (the build's own guard caught it — honest record).** The pre-registered binding metric was
 the fee-net **EV/$1** pooled CI. On cheap longshots that metric is HEAVY-TAILED (a 0.02 bucket that wins pays
 +49/$1), so its bootstrap CI is unreliable — the mandatory zero-skill Monte-Carlo reported **P(PASS | shuffled
-outcomes) ≈ 99.7–100%**, i.e. the EV/$1 gate would "pass" pure noise almost always. Per WO-5 discipline the
+outcomes) = 100% (`select=all`) / 79.6% (`select=forecast`)** at the corrected n, i.e. the EV/$1 gate would "pass"
+pure noise the overwhelming majority of the time. Per WO-5 discipline the
 criterion was NOT moved (its lower bound is < 0 → FAIL anyway); the conclusion rests on the **low-variance edge
 metric + the AS diagnostic**, which falsify cleanly. Pre-registering EV/$1-CI as binding for cheap-longshot maker
 fills was a slight mis-design; the edge metric is the right tool and was reported alongside (it's why the report
