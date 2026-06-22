@@ -5,7 +5,7 @@
 
 ## Active Phase
 
-### ▶ NEXT STEP — PIVOT TO ANALYTICS VALUE (operator chose 2026-06-15). Trading thesis CLOSED by WO-5 (iter-48, market efficient w.r.t. the hard running-max floor). The product is now forecast-skill + calibration + model-vs-market insight; trading machinery stays DORMANT. Analytics shipped: the **WALLET-RECON milestone** (sharp-wallet benchmark #1, wallet forensics #2, day-before efficiency study #3) ran end-to-end 2026-06-22 → **branch (b): the day-before market is EFFICIENT w.r.t. our forecast** (KILL-GATE 2 FAIL; the sharp's edge is real but not replicable as a follower). Live rail stays dormant. Operator follow-ups (non-blocking): deploy `sharp-wallet-track`, merge feat→main, optional re-persist + nbm_conus A/B — see WALLET-RECON-HANDOFF.md §10. R&D round-2 reviewed (iter-47); RPC-lockdown DEPLOYED (iter-45)
+### ▶ NEXT STEP — PIVOT TO ANALYTICS VALUE (operator chose 2026-06-15). Trading thesis CLOSED by WO-5 (iter-48, market efficient w.r.t. the hard running-max floor). The product is now forecast-skill + calibration + model-vs-market insight; trading machinery stays DORMANT. Analytics shipped: the **WALLET-RECON milestone** (sharp-wallet benchmark #1, wallet forensics #2, day-before efficiency study #3) ran end-to-end 2026-06-22 → **branch (b): the day-before market is EFFICIENT w.r.t. our forecast** (KILL-GATE 2 FAIL; the sharp's edge is real but not replicable as a follower). Live rail stays dormant. Build #1 now FULLY LIVE (`sharp-wallet-track` deployed 2026-06-22, cron active). Remaining operator follow-ups (non-blocking): merge feat→main, optional re-persist + nbm_conus A/B — see WALLET-RECON-HANDOFF.md §10. R&D round-2 reviewed (iter-47); RPC-lockdown DEPLOYED (iter-45)
 
 > **PIVOT DECISION (2026-06-15):** after WO-5 closed the trading thesis, the operator chose **lean into
 > analytics value** (over seek-out-of-market-info / shelve). Polyweather is now an analytics & forecasting
@@ -38,10 +38,12 @@ market is efficient w.r.t. our forecast (KILL-GATE 2). The deliverable is the an
   `nbm_conus` US sub-lever DEFERRED (migration `0051` STAGED-not-applied, `enabled=false`; low prior R²=0.6%; can't
   overturn a global efficiency finding).
 - **Verified:** 970 tests green, typecheck 0. Migrations `0049`+`0050` applied to prod; `0051` staged.
-- **OPERATOR FOLLOW-UPS (non-blocking):** (1) deploy Edge `sharp-wallet-track` (Build #1 daily auto-refresh; Supabase
-  CLI — MCP can't bundle the monorepo fn; data already seeded so the card is live, only auto-refresh pends);
-  (2) merge `feat/live-integration-readiness` → main to ship the `/amsterdam` sharp card + this milestone (user's call);
-  (3) OPTIONAL: apply `0051` + run the `nbm_conus` US A/B (low prior). The live trading rail STAYS DORMANT (branch b).
+- **OPERATOR FOLLOW-UPS:** (1) ✅ **DONE 2026-06-22** — Edge `sharp-wallet-track` deployed via Supabase CLI
+  (`npx supabase functions deploy … --use-api --no-verify-jwt`), ACTIVE, cron `0 16 * * *` active → Build #1
+  auto-refreshes daily. **Build #1 now FULLY LIVE** (0049 applied + seeded + fn deployed + cron). Remaining
+  (non-blocking): (2) merge `feat/live-integration-readiness` → main to ship the `/amsterdam` sharp card + this
+  milestone (user's call); (3) re-persist forensics when Polymarket isn't rate-limiting; (4) OPTIONAL: apply
+  `0051` + run the `nbm_conus` US A/B (low prior). The live trading rail STAYS DORMANT (branch b).
 
 **2026-06-22 analytics: sharp-wallet & WEATHER-leaderboard benchmark tracker — migration `0049` + Edge `sharp-wallet-track`, BUILT & TESTED (deploy operator-gated).**
 WALLET-RECON-HANDOFF.md **Build #1**, on-pivot (analytics, NOT trading — no copy-trade; trading thesis stays closed).
@@ -58,9 +60,8 @@ leaderboard `proxyWallet/userName/vol/pnl/rank`-string). Edge Function `sharp-wa
 manual twin `scripts/sharp-wallets.ts`, loader `SharpsView` + web card `SharpDisagreement.tsx` in the `/amsterdam` bento.
 **Verified:** `pnpm test` **871 green** (+21: 15 parser, 6 end-to-end sharp-wallet — record RPCs/handler/dash sharps/empty
 state), typecheck 0, web build OK. Live Polymarket data path verified by curl (badatmath = 20 Amsterdam positions incl. the
-cheap-longshot YES on "25°C or below"). **DEPLOY PENDING (operator-gated):** apply `0049` to prod (`apply_migration`,
-precedent 0044/0046) → deploy Edge `sharp-wallet-track` → first 16:00 UTC cron fills the card (or run
-`pnpm tsx scripts/sharp-wallets.ts --leaderboard` once to seed immediately). No new secrets (reuses `project_url`/`cron_secret`,
+cheap-longshot YES on "25°C or below"). **✅ DEPLOYED 2026-06-22:** `0049` applied to prod, data seeded, Edge `sharp-wallet-track`
+deployed (ACTIVE, `verify_jwt:false`), cron `0 16 * * *` active — FULLY LIVE. No new secrets (reuses `project_url`/`cron_secret`,
 `SUPABASE_*`). Design + builds #2/#3: `WALLET-RECON-HANDOFF.md`.
 
 **2026-06-22 data-integrity: Amsterdam paper-sim odds audit → in-lock-hour ask guard (`0048`) + full re-derivation, LIVE & verified.**

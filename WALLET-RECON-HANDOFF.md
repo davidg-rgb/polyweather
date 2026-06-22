@@ -559,9 +559,9 @@ the one lever `FORECASTING-RD.md` left open, consistent with WO-5.
    cross-checks its earliest fill against the user-pnl span and refuses to `--persist` an incomplete run.
 
 ### Operator follow-ups (all NON-BLOCKING — the analytics deliverable is complete)
-1. **Deploy Edge `sharp-wallet-track`** (Build #1 daily auto-refresh) via the Supabase CLI
-   (`supabase functions deploy sharp-wallet-track --use-api --no-verify-jwt --project-ref "$SUPABASE_REF"`) —
-   MCP can't bundle a monorepo Deno fn; the card is already live (data seeded), only the daily cron auto-refresh pends.
+1. ✅ **DONE (2026-06-22):** Edge `sharp-wallet-track` deployed via the Supabase CLI
+   (`npx supabase functions deploy sharp-wallet-track --use-api --no-verify-jwt --project-ref lenysiqxihsmxljvyybt`),
+   ACTIVE (`verify_jwt:false`), cron `0 16 * * *` active — **Build #1 now auto-refreshes daily** (was 404-ing harmlessly until the deploy).
 2. **Merge `feat/live-integration-readiness` → main** to ship the `/amsterdam` sharp card + this milestone (your call).
 3. **Persist badatmath's forensic baseline** (deferred — Polymarket is rate-limiting after this session's heavy
    crawls; the tool now *correctly refuses* to persist a partial). Re-run when the API is healthy:
