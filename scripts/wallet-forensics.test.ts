@@ -9,7 +9,7 @@
  * non-zero. Importing the script does NOT run main() (it is guarded behind the import.meta.url check).
  */
 import { describe, expect, it } from 'vitest';
-import { crawlMissedHistory } from './wallet-forensics.ts';
+import { crawlIncomplete, crawlMissedHistory } from './wallet-forensics.ts';
 import type { UserPnlPoint } from '../packages/io/src/polymarket-wallet.ts';
 
 const sec = (d: string): number => Math.floor(Date.parse(`${d}T00:00:00Z`) / 1000);
@@ -53,5 +53,26 @@ describe('crawlMissedHistory — silent-truncation guard', () => {
     // a 30-day gap passes a 60-day tolerance but fails the default.
     expect(crawlMissedHistory(pnl('2026-05-16'), '2026-06-15', 'full', 60)).toBe(false);
     expect(crawlMissedHistory(pnl('2026-05-16'), '2026-06-15', 'full')).toBe(true);
+  });
+});
+
+describe('crawlIncomplete — the persist guard (review fix [6]: --from masks hitCap in the mode)', () => {
+  it('a clean full / window crawl is complete', () => {
+    expect(crawlIncomplete('full', false, false)).toBe(false);
+    expect(crawlIncomplete('window', false, false)).toBe(false); // legitimate short --from window
+  });
+
+  it('a capped crawl is incomplete', () => {
+    expect(crawlIncomplete('capped', true, false)).toBe(true);
+  });
+
+  it('a --from WINDOW that exhausts the page cap is INCOMPLETE (the masked case)', () => {
+    // mode='window' (from took precedence) but hitCap=true → the older tail was dropped. Must be flagged so
+    // --persist is refused; the pre-fix `mode === 'capped' || missedHistory` returned false here.
+    expect(crawlIncomplete('window', true, false)).toBe(true);
+  });
+
+  it('an early-terminated full crawl (missedHistory) is incomplete', () => {
+    expect(crawlIncomplete('full', false, true)).toBe(true);
   });
 });

@@ -135,11 +135,17 @@ const MONTHS: Record<string, number> = {
  * strict parser) — the slug date IS the station-local target date — but is TOTAL: returns null on any
  * non-temperature / unparseable slug instead of throwing, so one odd position never aborts an ingest.
  * Note: a bucket-leg slug carries a trailing bucket suffix ('…-25c', '…-25corbelow') — pass the EVENT slug.
+ * Scoped divergence from gamma.ts: we ALSO tolerate the `arch-` archived-market prefix Polymarket stamps
+ * onto resolved markets. The ALL-history /activity crawl (Build #2) surfaces archived slugs; an archived
+ * market is the SAME market (same kind/city/date), just renamed on archival, so parsing it identically lets
+ * those resolved positions grade instead of silently falling to a null targetDate. The live gamma parser
+ * never sees `arch-` slugs (archived markets aren't tradeable), so it stays strict; the two wallet twins
+ * stay byte-identical to each other.
  */
 export function parsePositionMarket(
   eventSlug: string,
 ): { kind: 'highest' | 'lowest'; citySlug: string; targetDate: string } | null {
-  const m = /^(highest|lowest)-temperature-in-(.+)-on-([a-z]+)-(\d{1,2})-(\d{4})$/.exec(eventSlug ?? '');
+  const m = /^(?:arch-)?(highest|lowest)-temperature-in-(.+)-on-([a-z]+)-(\d{1,2})-(\d{4})$/.exec(eventSlug ?? '');
   if (!m) return null;
   const month = MONTHS[m[3]!];
   if (!month) return null;
@@ -393,7 +399,7 @@ export async function fetchPositions(
   const limit = Math.min(opts.limit ?? 500, 500);
   const offset = opts.offset ?? 0;
   const url =
-    `${POLYMARKET_DATA_API}/positions?user=${address}` +
+    `${POLYMARKET_DATA_API}/positions?user=${encodeURIComponent(address)}` +
     `&sizeThreshold=${sizeThreshold}&limit=${limit}&offset=${offset}&sortBy=CURRENT`;
   const payload = await fetchJson(url, { headers: REQUEST_HEADERS }, {
     timeoutMs: opts.timeoutMs,
@@ -438,7 +444,7 @@ export async function fetchUserPnlSeries(
 ): Promise<UserPnlPoint[]> {
   const interval = opts.interval ?? 'all';
   const fidelity = opts.fidelity ?? '1d';
-  const url = `${POLYMARKET_USER_PNL_API}/user-pnl?user_address=${address}&interval=${interval}&fidelity=${fidelity}`;
+  const url = `${POLYMARKET_USER_PNL_API}/user-pnl?user_address=${encodeURIComponent(address)}&interval=${interval}&fidelity=${fidelity}`;
   const payload = await fetchJson(url, { headers: REQUEST_HEADERS }, {
     timeoutMs: opts.timeoutMs,
     retries: opts.retries,
@@ -487,7 +493,7 @@ export async function fetchActivity(
   for (let page = 0; page < maxPages; page++) {
     if (page > 0 && pageDelayMs > 0) await sleep(pageDelayMs);
     const offset = page * limit;
-    let url = `${POLYMARKET_DATA_API}/activity?user=${address}&limit=${limit}&offset=${offset}` +
+    let url = `${POLYMARKET_DATA_API}/activity?user=${encodeURIComponent(address)}&limit=${limit}&offset=${offset}` +
       `&sortBy=TIMESTAMP&sortDirection=${sortDirection}`;
     if (opts.type && opts.type !== 'ALL') url += `&type=${opts.type}`;
     if (typeof opts.start === 'number') url += `&start=${Math.trunc(opts.start)}`;

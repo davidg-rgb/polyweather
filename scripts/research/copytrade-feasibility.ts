@@ -37,6 +37,7 @@ import {
   type BucketSnapshot,
   copyTradeVerdict,
   type MirrorFill,
+  quantileSorted,
   simulateMirror,
 } from '../../packages/core/src/index.ts';
 import {
@@ -218,8 +219,8 @@ async function loadFills(
 // protocol-spec extras (the reverse-engineering deliverable that the same pipeline yields)
 // ──────────────────────────────────────────────────────────────────────────────────────────────────
 
-const quantile = (sortedAsc: number[], q: number): number =>
-  sortedAsc.length === 0 ? NaN : sortedAsc[Math.min(sortedAsc.length - 1, Math.floor(q * sortedAsc.length))]!;
+// quantiles use the type-7 interpolated quantileSorted (stats.ts), not a nearest-rank pick that overstates
+// median/p90 for non-divisible n; all inputs below are sorted ascending before use.
 
 function printProtocolSpec(positions: Position[], meta: Map<string, BucketMeta>): void {
   // lead time: hours from first fill to resolution (resolved_at, else target_date+1d 00:00 UTC).
@@ -243,16 +244,16 @@ function printProtocolSpec(positions: Position[], meta: Map<string, BucketMeta>)
   console.log('\n── PROTOCOL SPEC (reverse-engineered from the fills) ──');
   console.log(`  positions: ${positions.length}  (distinct city·day events: ${byCityDay.size})`);
   console.log(
-    `  lead time to resolution (h):  p10 ${quantile(leadsH, 0.1).toFixed(1)}  median ${quantile(leadsH, 0.5).toFixed(1)}  ` +
-      `p90 ${quantile(leadsH, 0.9).toFixed(1)}   (frac <36h = day-before/day-of: ${(leadsH.filter((h) => h < 36).length / Math.max(1, leadsH.length) * 100).toFixed(0)}%)`,
+    `  lead time to resolution (h):  p10 ${quantileSorted(leadsH, 0.1).toFixed(1)}  median ${quantileSorted(leadsH, 0.5).toFixed(1)}  ` +
+      `p90 ${quantileSorted(leadsH, 0.9).toFixed(1)}   (frac <36h = day-before/day-of: ${(leadsH.filter((h) => h < 36).length / Math.max(1, leadsH.length) * 100).toFixed(0)}%)`,
   );
   console.log(
-    `  stake/position ($):           p10 ${quantile(stakes, 0.1).toFixed(2)}  median ${quantile(stakes, 0.5).toFixed(2)}  ` +
-      `p90 ${quantile(stakes, 0.9).toFixed(2)}`,
+    `  stake/position ($):           p10 ${quantileSorted(stakes, 0.1).toFixed(2)}  median ${quantileSorted(stakes, 0.5).toFixed(2)}  ` +
+      `p90 ${quantileSorted(stakes, 0.9).toFixed(2)}`,
   );
   console.log(
-    `  buckets bought per city·day:  median ${quantile(bucketsPerCityDay, 0.5).toFixed(0)}  ` +
-      `p90 ${quantile(bucketsPerCityDay, 0.9).toFixed(0)}  max ${bucketsPerCityDay.length ? bucketsPerCityDay[bucketsPerCityDay.length - 1] : 0}`,
+    `  buckets bought per city·day:  median ${quantileSorted(bucketsPerCityDay, 0.5).toFixed(0)}  ` +
+      `p90 ${quantileSorted(bucketsPerCityDay, 0.9).toFixed(0)}  max ${bucketsPerCityDay.length ? bucketsPerCityDay[bucketsPerCityDay.length - 1] : 0}`,
   );
 }
 

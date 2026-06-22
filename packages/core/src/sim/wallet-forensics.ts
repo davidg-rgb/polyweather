@@ -62,8 +62,21 @@ export interface WalletFill {
 export interface RealizedBet extends GradedBet {
   conditionId: string;
   outcome: string;
-  /** Volume-weighted entry (BUY) price in (0,1] — the implied probability paid; alias of GradedBet.ask. */
+  /**
+   * Volume-weighted entry (BUY) price in (0,1] — the implied probability paid; alias of GradedBet.ask.
+   * NaN when the position has no BUY shares (a REDEEM/SELL-only graded market, or a zero-share BUY): there is
+   * no implied probability to score, so every entry-price-keyed surface (roiByEntryBucket, aggregateRange,
+   * brierVsOutcomes, armEdgeStats) skips it rather than mis-bucketing a priceless bet into [0,0.10).
+   */
   entryPrice: number;
+  /**
+   * The MARKET-RESOLUTION outcome for the calibration lens, distinct from the trading-P&L `won`: `true` if a
+   * real settlement payout was received (REDEEM/MERGE proceeds > 0 → resolved in the money), `false` if graded
+   * as a past-resolution total loss (no payout), and `null` for a position closed by SELL before resolution
+   * (the market's actual outcome is unobserved from /activity). brierVsOutcomes scores against THIS, not `won`
+   * (which counts a profitable pre-resolution SELL as a "win" — a trading exit, not a resolution).
+   */
+  resolvedWon: boolean | null;
   /** Realized P&L on the position in USDC (proceeds − matched cost basis). */
   realizedUsd: number;
   /** Total USDC cost basis bought into the position (the staked notional). */
@@ -103,6 +116,23 @@ export interface RealizedReconstruction {
   winRate: number;
   /** realizedTotalUsd / volumeUsd; NaN when volumeUsd = 0. */
   roiOnVolume: number;
+  /**
+   * AUDIT counters — graded markets whose cash is in realizedTotalUsd but that are deliberately held out of
+   * one or more per-bet metrics, so any divergence between the win-rate denominator and the entry-keyed
+   * denominators is visible rather than silent.
+   *
+   * `nUnattributed`: empty-conditionId merged-leg ('') blobs — cash kept in the total, never a win/loss/bet.
+   * `nEntryUnpriced`: graded bets with no BUY shares (entryPrice NaN) — count in win/loss, skipped by entry-keyed surfaces.
+   * `nUngradedNullTarget` / `ungradedNullTargetStakeUsd`: BUY-only markets with a null targetDate that a
+   *   `resolvedBefore` cutoff cannot grade (unparseable slug) — the residual asymmetry of the survivorship
+   *   control (a null-target winner still settles via REDEEM and counts; this loss leg can never be graded).
+   *   After the `arch-`-archived-slug tolerance, this is the non-weather remainder; assert it negligible
+   *   before trusting the win rate.
+   */
+  nUnattributed: number;
+  nEntryUnpriced: number;
+  nUngradedNullTarget: number;
+  ungradedNullTargetStakeUsd: number;
 }
 
 /** One day of the reconstructed cumulative realized-PnL curve (the analog of user-pnl-api). */
@@ -406,6 +436,10 @@ export function reconstructRealizedPnl(
   let volumeUsd = 0;
   let nWins = 0;
   let nLosses = 0;
+  let nUnattributed = 0;
+  let nEntryUnpriced = 0;
+  let nUngradedNullTarget = 0;
+  let ungradedNullTargetStakeUsd = 0;
 
   const ordList = [...markets.values()].sort(
     (a, b) => a.lastTs - b.lastTs || a.conditionId.localeCompare(b.conditionId),
@@ -426,12 +460,32 @@ export function reconstructRealizedPnl(
       opts.resolvedBefore !== undefined &&
       p.targetDate !== null &&
       p.targetDate < opts.resolvedBefore;
-    if (!p.settled && !resolvedLoss) continue; // still-open: not realized yet
+    if (!p.settled && !resolvedLoss) {
+      // Still-open OR ungradable-because-null-targetDate. Under a resolvedBefore cutoff, a BUY-only market with
+      // a null targetDate (unparseable slug) can NEVER be graded as its loss leg — yet a null-target WINNER
+      // still settles via REDEEM and counts. That asymmetry is a survivorship gap inside the survivorship
+      // control; surface its magnitude (the `arch-` tolerance already recovers archived weather markets, so
+      // this is the non-weather remainder) so the operator can confirm it is negligible before trusting winRate.
+      if (opts.resolvedBefore !== undefined && p.targetDate === null && p.buyCostUsd > 0) {
+        nUngradedNullTarget++;
+        ungradedNullTargetStakeUsd += p.buyCostUsd;
+      }
+      continue; // not realized yet
+    }
     realizedTotalUsd += realized;
     buyCostUsd += p.buyCostUsd;
     sellProceedsUsd += p.sellProceedsUsd;
     redeemProceedsUsd += p.redeemProceedsUsd;
     mergeProceedsUsd += p.mergeProceedsUsd;
+    // An empty-conditionId accumulator is the merged-leg (outcomeIndex 999) blob: its cash is real and stays
+    // in the trading total above (preserving the cash-conservation identity the reconciliation gate checks),
+    // but it groups UNRELATED positions under one '' key — so it can never be a single attributable bet.
+    // Never count it as a win/loss or push it as a bet (that would merge positions, delete losses, and emit a
+    // meaningless blended entryPrice into the bucket-ROI / Brier blocks).
+    if (p.conditionId === '') {
+      nUnattributed++;
+      continue;
+    }
     const won = realized > 0;
     if (won) nWins++;
     else nLosses++;
@@ -444,13 +498,21 @@ export function reconstructRealizedPnl(
         outcome = leg;
       }
     }
-    const entryPrice = p.buyShares > 0 ? p.buyPriceShares / p.buyShares : 0;
+    // No BUY shares (REDEEM/SELL-only, or zero-share BUY) → no implied entry probability. NaN so every
+    // entry-keyed surface skips it instead of dumping a priceless bet into the [0,0.10) cut.
+    const entryPrice = p.buyShares > 0 ? p.buyPriceShares / p.buyShares : NaN;
+    if (!Number.isFinite(entryPrice)) nEntryUnpriced++;
+    // Calibration truth (distinct from trading-P&L `won`): a real settlement payout = resolved in the money;
+    // a graded total loss = resolved out of the money; a SELL-closed exit = resolution unobserved (null).
+    const resolvedWon: boolean | null =
+      p.redeemProceedsUsd > 0 || p.mergeProceedsUsd > 0 ? true : resolvedLoss ? false : null;
     bets.push({
       conditionId: p.conditionId,
       outcome,
       entryPrice,
       ask: entryPrice,
       won,
+      resolvedWon,
       realizedUsd: realized,
       stakedUsd: p.buyCostUsd,
       citySlug: p.citySlug,
@@ -474,6 +536,10 @@ export function reconstructRealizedPnl(
     nLosses,
     winRate: nDecisive === 0 ? NaN : nWins / nDecisive,
     roiOnVolume: volumeUsd === 0 ? NaN : realizedTotalUsd / volumeUsd,
+    nUnattributed,
+    nEntryUnpriced,
+    nUngradedNullTarget,
+    ungradedNullTargetStakeUsd,
   };
 }
 
@@ -639,9 +705,11 @@ function rollup(bets: RealizedBet[], keyOf: (b: RealizedBet) => string): Attribu
 
 /**
  * Score the wallet's revealed buys as a forecaster: each decisive bet's implied probability = entryPrice,
- * truth = did it resolve in the money (`won`). We score the binary {q, hit} with a per-bet Brier
- * (q−o)², ECE, and a reliability diagram (scores.ts). The headline is a paired bootstrap p on
- * (marketBrier − walletBrier) per bet.
+ * truth = the MARKET RESOLUTION (`resolvedWon`), NOT the trading-P&L `won`. A position closed by SELL before
+ * resolution (resolvedWon === null) has an unobserved outcome and is excluded — scoring it by trading P&L
+ * would credit/penalise a calibration the wallet never revealed. Bets with no implied entry price (entryPrice
+ * NaN — REDEEM/SELL-only) are excluded too. We score the binary {q, hit} with a per-bet Brier (q−o)², ECE, and
+ * a reliability diagram (scores.ts). The headline is a paired bootstrap p on (walletBrier − marketBrier) per bet.
  *
  * BASELINE (documented): the "market-implied prob baseline" we compare against is the SAME bet priced at
  * the market's revealed willingness to pay — but the cleanest market-implied probability for a
@@ -656,17 +724,21 @@ function rollup(bets: RealizedBet[], keyOf: (b: RealizedBet) => string): Attribu
 export const MARKET_BASELINE_PROB = 0.5;
 
 export function brierVsOutcomes(bets: RealizedBet[]): BrierResult {
-  const usable = bets.filter((b) => isFiniteNum(b.entryPrice) && b.entryPrice >= 0 && b.entryPrice <= 1);
+  // Only bets with an implied entry price AND an OBSERVED market resolution (resolvedWon non-null) are
+  // scoreable — SELL-closed exits have an unknown resolution, REDEEM/SELL-only bets have no entry price.
+  const usable = bets.filter(
+    (b) => isFiniteNum(b.entryPrice) && b.entryPrice >= 0 && b.entryPrice <= 1 && b.resolvedWon !== null,
+  );
   const n = usable.length;
   if (n === 0) {
     return { n: 0, walletBrier: NaN, marketBrier: NaN, ece: NaN, reliability: [], pairedBootstrapP: 1 };
   }
-  const preds: Prediction[] = usable.map((b) => ({ q: b.entryPrice, hit: b.won }));
+  const preds: Prediction[] = usable.map((b) => ({ q: b.entryPrice, hit: b.resolvedWon === true }));
 
-  // Per-bet binary Brier: brierScore([q, 1-q], outcomeIdx) where outcomeIdx=0 means "won" (q is P(win)).
-  const walletPer = usable.map((b) => brierScore([b.entryPrice, 1 - b.entryPrice], b.won ? 0 : 1));
+  // Per-bet binary Brier: brierScore([q, 1-q], outcomeIdx) where outcomeIdx=0 means "resolved YES" (q is P(win)).
+  const walletPer = usable.map((b) => brierScore([b.entryPrice, 1 - b.entryPrice], b.resolvedWon === true ? 0 : 1));
   const marketPer = usable.map((b) =>
-    brierScore([MARKET_BASELINE_PROB, 1 - MARKET_BASELINE_PROB], b.won ? 0 : 1),
+    brierScore([MARKET_BASELINE_PROB, 1 - MARKET_BASELINE_PROB], b.resolvedWon === true ? 0 : 1),
   );
   const mean = (xs: number[]): number => xs.reduce((a, x) => a + x, 0) / xs.length;
   const walletBrier = mean(walletPer);

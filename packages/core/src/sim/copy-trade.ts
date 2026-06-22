@@ -42,6 +42,7 @@ import {
   armEdgeStats,
   bootstrapMeanCi,
   meanConfidenceInterval,
+  quantileSorted,
 } from './stats.ts';
 
 // ──────────────────────────────────────────────────────────────────────────────────────────────────
@@ -339,9 +340,9 @@ export function simulateMirror(fills: MirrorFill[], opts: MirrorOpts = {}): Copy
   const driftToward = { mean: driftCi.mean, ciLo: driftCi.lo, ciHi: driftCi.hi, n: driftCi.n };
 
   const stale = usable.map((e) => e.entryStalenessSec).filter((v) => Number.isFinite(v)).sort((a, b) => a - b);
-  const q = (arr: number[], p: number): number =>
-    arr.length === 0 ? NaN : arr[Math.min(arr.length - 1, Math.floor(p * arr.length))]!;
-  const entryStaleness = { medianSec: q(stale, 0.5), p90Sec: q(stale, 0.9), n: stale.length };
+  // type-7 interpolated quantile (stats.ts) — the prior nearest-rank picked the element ABOVE the true
+  // quantile for non-divisible n (median of [10,20,30,40] → 30, not 25), overstating these diagnostics.
+  const entryStaleness = { medianSec: quantileSorted(stale, 0.5), p90Sec: quantileSorted(stale, 0.9), n: stale.length };
 
   return {
     nFills: fills.length,

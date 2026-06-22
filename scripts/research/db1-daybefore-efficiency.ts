@@ -135,13 +135,16 @@ export function bucketEdge(calibratedP: number, ask: number): number {
 /**
  * Market-implied bucket distribution from the day-before asks: ask per bucket renormalized to Σ=1
  * over the buckets that HAVE an ask (the others are treated as absent, not zero-prob — a missing
- * quote is missing data). Used only for the market Brier; returns null when no asks at all or the
- * winner bucket has no ask (the event is then dropped from the paired Brier comparison).
+ * quote is missing data). Used only for the market Brier; returns null when there are no asks at all OR
+ * the WINNER bucket has no ask — in which case the event is dropped from the paired Brier comparison
+ * (scoring it would hand the market a guaranteed P(winner)=0 → a +1 Brier penalty on the very outcome that
+ * resolved, silently biasing the comparison toward "ours sharper").
  */
-export function marketImpliedProbs(views: BucketView[]): number[] | null {
+export function marketImpliedProbs(views: BucketView[], winnerPos: number): number[] | null {
   const asks = views.map((v) => (v.ask != null && Number.isFinite(v.ask) && v.ask > 0 ? v.ask : 0));
   const sum = asks.reduce((a, b) => a + b, 0);
   if (sum <= 0) return null;
+  if (winnerPos < 0 || winnerPos >= asks.length || asks[winnerPos] === 0) return null; // winner unquoted → drop
   return asks.map((a) => a / sum);
 }
 
@@ -535,7 +538,7 @@ export async function runDb1(args: Db1Args, deps: Db1Deps): Promise<Db1Result> {
         const ekey = `${ev.eventId}|${lead}`;
         if (!seenEvents.has(ekey)) {
           seenEvents.add(ekey);
-          const mImplied = marketImpliedProbs(views);
+          const mImplied = marketImpliedProbs(views, winnerPos);
           if (mImplied) {
             const bo = brierScore(probs, winnerPos);
             const bm = brierScore(mImplied, winnerPos);
@@ -616,12 +619,21 @@ function edgeLine(label: string, bets: GradedBet[]): string {
   return `${label.padEnd(22)} n=${String(s.nGraded).padStart(5)}  edge ${pp(s.edge)} [${pp(s.edgeCiLo)}, ${pp(s.edgeCiHi)}]  EV/$1 ${f4(s.ev)}  hit ${f4(s.hitRate)}`;
 }
 
+/**
+ * Paired-bootstrap p that OURS is reliably sharper (lower Brier) than the market. Repo-wide convention is
+ * (candidate − reference) fed to pairedBootstrapPValue (fraction of resample means ≥ 0): Brier is a LOSS, so
+ * ours sharper ⇒ ours − market negative ⇒ SMALL p. (The pre-fix wiring passed market − ours, inverting it —
+ * p(ours sharper) read ~0 exactly when the MARKET was sharper.) Exported so the sign convention is pinned by a test.
+ */
+export function brierSharperP(ours: number[], market: number[]): number {
+  return pairedBootstrapPValue(ours.map((x, i) => x - market[i]!));
+}
+
 function brierLine(label: string, b: BrierAcc): string {
   const n = b.ours.length;
   const mo = n ? b.ours.reduce((a, x) => a + x, 0) / n : NaN;
   const mm = n ? b.market.reduce((a, x) => a + x, 0) / n : NaN;
-  const diffs = b.ours.map((x, i) => b.market[i]! - x); // market − ours; >0 = ours sharper
-  const p = pairedBootstrapPValue(diffs);
+  const p = brierSharperP(b.ours, b.market);
   return `${label.padEnd(22)} nEv=${String(n).padStart(4)}  Brier ours ${f4(mo)} market ${f4(mm)} diff(ours−mkt) ${f4(mo - mm)}  p(ours sharper) ${f4(p)}`;
 }
 
@@ -721,10 +733,16 @@ function sanity(): void {
   if (longs.length !== 2 || !longs.every((l) => l.inCheapSubset)) throw new Error(`sanity: longshot selection wrong: ${JSON.stringify(longs)}`);
   // bucketEdge
   if (Math.abs(bucketEdge(0.3, 0.2) - 0.1) > 1e-12) throw new Error('sanity: bucketEdge wrong');
-  // marketImpliedProbs renormalizes
-  const mip = marketImpliedProbs(views)!;
+  // marketImpliedProbs renormalizes (winner = idx 1, which has an ask → not dropped)
+  const mip = marketImpliedProbs(views, 1)!;
   const sum = mip.reduce((a, b) => a + b, 0);
   if (Math.abs(sum - 1) > 1e-9) throw new Error(`sanity: marketImpliedProbs not normalized: ${sum}`);
+  // winner bucket with no day-before ask ⇒ event dropped from the paired Brier (honor the docstring contract)
+  const noWinnerAsk: BucketView[] = [
+    { bucketIdx: 0, calibratedP: 0.5, ask: 0.40, isWinner: false },
+    { bucketIdx: 1, calibratedP: 0.5, ask: null, isWinner: true }, // winner unquoted
+  ];
+  if (marketImpliedProbs(noWinnerAsk, 1) !== null) throw new Error('sanity: winner-no-ask event must be dropped');
   // a cheap modal bucket appears under BOTH arms
   const both: BucketView[] = [
     { bucketIdx: 0, calibratedP: 0.5, ask: 0.10, isWinner: true }, // modal AND cheap (p>ask, ask<0.25)

@@ -203,6 +203,40 @@ describe('assembleBids — the walk-forward fold + ADR-05 tz-correct instants (p
     expect(Number.isFinite(res.forkRmse)).toBe(true);
   });
 
+  it('multi-lead de-dup (review fix [1]): one bid per (event,bucket), NOT per (lead × bucket)', () => {
+    // Two NWP leads (1 and 2) for every day — the default --leads 1,2 regime. Each EV-driving field is
+    // event-level, so pooling both leads previously counted each market position TWICE (4 bids for 2 buckets),
+    // halving every downstream CI's variance. The fix emits one bid per (eventId,bucketIdx) = 2 bids.
+    const fc = new Map<string, Map<string, Map<number, Map<string, number>>>>();
+    const obs = new Map<string, Map<string, number>>();
+    const byT = new Map<string, Map<number, Map<string, number>>>();
+    const obsByDate = new Map<string, number>();
+    for (const d of allDays) {
+      byT.set(
+        d.date,
+        new Map([
+          [1, new Map([['gfs', d.forecastC]])],
+          [2, new Map([['gfs', d.forecastC + 0.3]])], // lead 2 differs → distinct calibratedP, same position
+        ]),
+      );
+      obsByDate.set(d.date, d.obsC);
+    }
+    fc.set('EHAM', byT);
+    obs.set('EHAM', obsByDate);
+    const twoLeadEmos: EmosLoadResult = { cfg: CFG, icaos: ['EHAM'], unitByIcao: new Map([['EHAM', 'C']]), fc, obs };
+
+    const res = assembleBids(
+      twoLeadEmos,
+      [twoBucketEvent({ eventId: 'EV1', icao: 'EHAM', tz: 'Europe/Amsterdam', targetDate: TARGET, winnerIdx: 1 })],
+      new Map(),
+      { from: TARGET, to: TARGET, leads: [1, 2], entryLeadHours: 24 },
+    );
+    expect(res.bids.length).toBe(2); // 2 buckets × 1 — NOT 2 buckets × 2 leads
+    expect(new Set(res.bids.map((b) => b.bucketIdx)).size).toBe(2); // both buckets, each once
+    // fork RMSE still saw BOTH leads (forecast skill is per-lead, only the bids list is de-duplicated)
+    expect(res.forkN).toBeGreaterThanOrEqual(2);
+  });
+
   it('computes the station-LOCAL resolution instant via localDayWindow (ADR-05), not a UTC proxy', () => {
     const res = build(new Map());
     const expectedRes = Math.floor(localDayWindow('Europe/Amsterdam', TARGET).endUtc.getTime() / 1000);

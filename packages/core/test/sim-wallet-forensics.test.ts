@@ -265,6 +265,52 @@ describe('reconstructRealizedPnl — conditionId cash-flow identity', () => {
   });
 });
 
+describe('reconstructRealizedPnl — audit holdouts (review fixes: empty-cond, zero-entry, null-target)', () => {
+  it('empty-conditionId merged-leg blob keeps its cash in the total but is NOT a win/loss/bet', () => {
+    // A '' merged-leg REDEEM ($30) + a real winning market. The '' cash must stay in realizedTotalUsd (cash
+    // conservation) but must not merge into a phantom win or pollute the per-bet rows.
+    const fills: WalletFill[] = [
+      buy('real', 'Yes', 100, 0.2, 0), // $20 cost
+      redeem('real', 100, 1, 2), // $100 payout → +80, a real win
+      { type: 'REDEEM', side: null, conditionId: '', outcome: '', sizeShares: 30, usdcSize: 30,
+        timestamp: T0 + 3 * DAY, citySlug: null, targetDate: null }, // unattributable merged leg
+    ];
+    const r = reconstructRealizedPnl(fills, { resolvedBefore: RESOLVED_BEFORE });
+    expect(r.nWins).toBe(1); // ONLY the real market — the '' blob is not a win
+    expect(r.nLosses).toBe(0);
+    expect(r.bets).toHaveLength(1);
+    expect(r.bets[0]!.conditionId).toBe('real');
+    expect(r.nUnattributed).toBe(1);
+    expect(r.realizedTotalUsd).toBeCloseTo(80 + 30, 6); // cash conserved: +80 real + $30 unattributable redeem
+    expect(dailyPnlCurve(fills).at(-1)!.cumUsd).toBeCloseTo(110, 6); // curve agrees (same cash basis)
+  });
+
+  it('a REDEEM-only graded market (no BUY shares) → entryPrice NaN, counts as a win, excluded from bucket ROI', () => {
+    const fills: WalletFill[] = [redeem('x', 100, 1, 1)]; // settled win, zero BUY shares
+    const r = reconstructRealizedPnl(fills, { resolvedBefore: RESOLVED_BEFORE });
+    expect(r.nWins).toBe(1);
+    expect(r.nEntryUnpriced).toBe(1);
+    expect(Number.isNaN(r.bets[0]!.entryPrice)).toBe(true); // NaN, not 0
+    // NaN entry must NOT land in the cheap [0,0.10) cut (the silent-wrong-number the review flagged)
+    const cuts = roiByEntryBucket(r.bets);
+    expect(cuts[0]!.nBets).toBe(0);
+    expect(roiBelow025(r.bets).nBets).toBe(0);
+  });
+
+  it('a BUY-only loser with a null targetDate is held out (ungraded) and surfaced, not silently dropped', () => {
+    const fills: WalletFill[] = [
+      { ...buy('nul', 'Yes', 100, 0.5, 0), targetDate: null }, // $50 BUY-only, unparseable slug → ungradable
+      buy('win', 'Yes', 100, 0.2, 0, { targetDate: null }), // null-target WINNER still settles + counts
+      redeem('win', 100, 1, 2, { targetDate: null }),
+    ];
+    const r = reconstructRealizedPnl(fills, { resolvedBefore: RESOLVED_BEFORE });
+    expect(r.nWins).toBe(1); // the null-target winner counts (the asymmetry)
+    expect(r.nLosses).toBe(0); // the null-target loser is NOT graded as a loss…
+    expect(r.nUngradedNullTarget).toBe(1); // …but it is COUNTED so the gap is auditable
+    expect(r.ungradedNullTargetStakeUsd).toBeCloseTo(50, 6);
+  });
+});
+
 // ──────────────────────────────────────────────────────────────────────────────────────────────────
 // dailyPnlCurve
 // ──────────────────────────────────────────────────────────────────────────────────────────────────
@@ -308,13 +354,21 @@ describe('dailyPnlCurve — cumulative net cash flow by day', () => {
 // roiByEntryBucket + the first-class cuts
 // ──────────────────────────────────────────────────────────────────────────────────────────────────
 
-function mkBet(entryPrice: number, won: boolean, staked: number, realized: number, citySlug: string | null = null): RealizedBet {
+function mkBet(
+  entryPrice: number,
+  won: boolean,
+  staked: number,
+  realized: number,
+  citySlug: string | null = null,
+  resolvedWon: boolean | null = won, // synthetic test bets ARE resolutions → default to `won`
+): RealizedBet {
   return {
     conditionId: `c${entryPrice}-${citySlug}`,
     outcome: 'Yes',
     entryPrice,
     ask: entryPrice,
     won,
+    resolvedWon,
     realizedUsd: realized,
     stakedUsd: staked,
     citySlug,
@@ -435,6 +489,19 @@ describe('brierVsOutcomes — calibration of revealed buys', () => {
     expect(r.n).toBe(0);
     expect(Number.isNaN(r.walletBrier)).toBe(true);
     expect(r.pairedBootstrapP).toBe(1);
+  });
+
+  it('excludes SELL-closed bets (resolvedWon null) — their market resolution is unobserved', () => {
+    // Two scored resolutions + one profitable SELL-close. The SELL-close (resolvedWon null) must NOT enter the
+    // calibration set even though its trading `won` is true — calibration needs the resolution, not the exit.
+    const bets: RealizedBet[] = [
+      mkBet(0.2, true, 10, 40, null, true), // resolved YES
+      mkBet(0.8, false, 10, -10, null, false), // resolved NO
+      mkBet(0.5, true, 10, 20, null, null), // SELL-closed: won by trading, resolution unknown
+    ];
+    const r = brierVsOutcomes(bets);
+    expect(r.n).toBe(2); // the SELL-close is excluded
+    expect(r.walletBrier).toBeCloseTo(1.28, 6); // same hand-computed value as the 2-bet ledger above
   });
 });
 

@@ -501,6 +501,10 @@ export function assembleBids(
   for (const t of [...allTargets].sort()) if (t < args.from) for (const icao of icaos) foldDay(icao, t);
 
   const bids: RestingBid[] = [];
+  // De-dup guard: the EV unit is a market POSITION (eventId, bucketIdx), not a (NWP-lead × position). Emit one
+  // bid per event — pooling every lead counted each position once PER LEAD (with --leads 1,2 the default,
+  // exactly 2×), inflating the effective n and shrinking every downstream CI by ~√leadCount.
+  const emittedEvents = new Set<string>();
   let forkSe = 0;
   let forkN = 0;
 
@@ -511,8 +515,10 @@ export function assembleBids(
       if (o === undefined || !byLeadMap) continue;
       const sm = stateByIcao.get(icao)!;
       const ev = eventByKey.get(`${icao}|${d}`);
-      for (const [lead, byModel] of byLeadMap) {
+      // NWP leads in ASCENDING order so the de-dup below keeps the SHORTEST-lead (most-recent) forecast.
+      for (const lead of [...byLeadMap.keys()].sort((a, b) => a - b)) {
         if (!leadSet.has(lead)) continue;
+        const byModel = byLeadMap.get(lead)!;
         const points = [...byModel].map(([model, f]) => ({ model, f }));
         if (points.length === 0) continue;
 
@@ -545,6 +551,11 @@ export function assembleBids(
         const startTs = Math.floor(localDayWindow(ev.tz, ev.targetDate).startUtc.getTime() / 1000);
         const localMidnightUtcSec = Date.parse(`${ev.targetDate}T00:00:00Z`) / 1000;
         const tzOffsetHours = (localMidnightUtcSec - startTs) / 3600;
+
+        // One emission per event: fork RMSE above counted every lead; the bids list takes the first
+        // (shortest) lead that clears all guards, so each market position appears exactly once.
+        if (emittedEvents.has(ev.eventId)) continue;
+        emittedEvents.add(ev.eventId);
 
         const byBucket = seriesMap.get(ev.eventId);
         for (let i = 0; i < ev.ladder.length; i++) {
