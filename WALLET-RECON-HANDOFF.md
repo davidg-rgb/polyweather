@@ -20,6 +20,13 @@ All data below is from Polymarket's **public, unauthenticated** APIs (recipe in 
 > clean day-before-efficiency measurement IS the analytics deliverable. Full record, the numbers, and
 > corrections to three premises that turned out stale (the "twice-daily cron", the ±2% reconciliation, the
 > "May 14–21" regime week): **§10 (OUTCOME)** at the bottom. §1–§9 below are preserved as authored (pre-run).
+>
+> **✅ ALSO RESOLVED 2026-06-22 — the COPY-TRADE (fill-mirror) path is CLOSED too (§11).** The last
+> replication angle — *mirror badatmath's revealed fills* — was measured for the first time: a taker-follower
+> loses (edge **−6.05pp** vs the sharp's +1.34pp; robust to lag/staleness/price-cut). badatmath's edge is a
+> **maker** edge (it rests cheap bids ~7pp below the ask; no post-fill drift to ride) and is structurally
+> **non-followable**. All three angles are now falsified; the rail stays DORMANT. Full record + the
+> reverse-engineered protocol spec: **§11 (bottom)**.
 
 ---
 
@@ -572,3 +579,78 @@ the one lever `FORECASTING-RD.md` left open, consistent with WO-5.
    and re-run `db1-daybefore-efficiency.ts --stations …`. Cannot overturn the global efficiency finding.
 
 **The live trading rail stays DORMANT (branch b).** Re-open only on genuinely new out-of-market information.
+
+---
+
+## 11. COPY-TRADE (fill-mirror) feasibility — the last replication path, also CLOSED (2026-06-22)
+
+**The question.** §10 closed the "run badatmath's protocol on OUR forecast" path (KILL-GATE 2: our forecast
+is worse than the day-before market). But badatmath BEATS the market — so the one path left to *get as
+close to its automated buying protocol as possible* was to **MIRROR its revealed bucket choices**
+(copy-trade), riding its forecast for free. The handoff dismissed this as "structurally a late follower in
+thin books" (TL;DR §0.5) but **never measured it.** This section measures it, end-to-end, on data we already
+have. **Result: copy-trading badatmath is NOT viable — decisively, and robustly across every assumption.**
+The "late follower" intuition is now a quantified fact. The live rail stays dormant.
+
+**What was built (committed on `feat/live-integration-readiness`).**
+- `packages/core/src/sim/copy-trade.ts` — pure, deterministic fill-mirror analytics (+ `copy-trade.test.ts`,
+  18 cases). For each BUY fill joined to its `market_snapshots` book series + resolution: the contemporaneous
+  mid (maker/taker character), the post-fill mid drift (price discovery), and a **follower fee-net EV taking
+  the ask** (canonical `takerFeeTotal` fee — badatmath earns the maker rebate; a follower does not). Reuses
+  `armEdgeStats`/`bootstrapMeanCi`. Pre-registered verdict: `copyTradeVerdict` (follower fee-net EV 95% CI
+  must clear 0).
+- `scripts/research/copytrade-feasibility.ts` — the impure spine: windowed crawl (with `--cache`), the
+  snapshot/resolution DB join, the readout + verdict + protocol-spec.
+- `scripts/lib/polymarket-crawl.ts` — the time-windowed full-`/activity` crawler **extracted** from
+  `wallet-forensics.ts` (DRY: both tools now share it) and **hardened** against transient 4xx (408/429): a
+  rate-limit blip mid-crawl now retries the window with backoff instead of silently truncating (the same
+  §10-class truncation the forensics guard exists to catch — a real bug found + fixed here; it had stopped
+  the first crawl at Jun-04).
+
+**PRE-REGISTERED kill-criterion (written before the number was seen — WO-5 discipline):** a follower
+mirroring badatmath's cheap (<0.25) fills, entering at the **ask** after a realistic detection lag, net of the
+5% taker fee, must show a **follower fee-net EV/$1 whose 95% CI clears 0** (primary), corroborated by the
+low-variance mean **edge = hit − ask**. CI straddles 0 → late-follower confirmed, market efficient to a
+mirror, rail stays dormant.
+
+**The run (full regime, 2026-05-14 → 06-22; 59,664 BUY fills → 10,053 positions; 1,156 cheap+resolved with a
+usable follower-entry snapshot):**
+
+| Lens | badatmath (maker, its fill price) | Follower (taker, the ask) |
+|---|---|---|
+| **edge = hit − ask** (low-variance, the clean read) | **+1.34%** CI [−0.48, +3.15] | **−6.05%** CI [−8.10, −4.00] |
+| fee-net EV/$1 (pre-registered; heavy-tailed) | — | **+14.81%** CI **[−38.88, +107.17]** → fails to clear 0 |
+| avg entry price | 0.107 (the bid it rests) | 0.181 (the ask it must cross to) |
+
+- **badatmath is a MAKER:** fill price is **−4.76%** below the contemporaneous mid; **65%** of fills are below
+  mid. The edge is in resting cheap bids, not crossing spreads.
+- **No wave to ride:** post-fill mid drift TOWARD its bucket is **−7.38%** CI [−8.72, −6.04] — the market moves
+  *away* from its pick after it buys. Its edge is terminal (the bucket resolves in the money often enough),
+  not momentum a follower could front-run.
+- **The spread tax kills it:** a taker pays 0.181 where badatmath rested 0.107 — a ~74% markup — for the
+  identical 12% hit rate. That ~7.4pp spread tax alone exceeds badatmath's entire ~1.3pp maker edge, flipping
+  +1.3pp into **−6.05pp**. Fees only deepen it.
+- **Robust across every assumption** (verdict unchanged): fastest follower (lag 0 / 15-min staleness) →
+  follower edge −6.16% [−8.80, −3.52]; **cheapest longshots <0.10** (where the raw ROI was *highest*, §3) →
+  follower edge **−7.76%** [−9.83, −5.69], fee-net EV **−63.60%** [−80.52, −43.02] (the cheapest bets are the
+  *worst* to mirror — the ask sits proportionally furthest above the bid).
+
+**Protocol spec (reverse-engineered — the by-product deliverable; refines §1–§3):**
+- **Entry timing:** lead-to-resolution median **43.2h** (~1.8 days; p10 13.9h, p90 151.7h; 43% <36h) — it
+  enters near market *creation* (~2 days out) and tops up closer in, NOT a day-before sniper.
+- **Sizing:** **$10.80** median per position (p10 $1.54, p90 $44.96) — the §1 "$1.3–3.3" was per *fill*;
+  positions aggregate many micro-fills.
+- **Breadth:** **6 buckets per city·day** (median; max 16) — it does NOT pick one modal bucket; it **sprays
+  the cheap longshots across the plausible range** of the ladder. The edge is the aggregate calibration of
+  *which* cheap buckets, harvested as a maker at scale across ~45 cities.
+
+**Conclusion.** badatmath's edge is a **maker edge** — resting cheap bids + the rebate + breadth/calibration —
+and is **structurally non-followable**: a taker pays the ask (which the sharp's own bid sits ~7pp below),
+there is no post-fill drift to compensate, and the effect is worst exactly where the raw ROI looks best. You
+cannot *follow* this protocol; you would have to *be* the maker, resting your own bids in competition with it
+in thin books — which a follower cannot win. This closes the last replication path. **All three angles
+(forecast-beats-market, day-before-edge, copy-trade-mirror) are now falsified; the live rail stays DORMANT.**
+The clean copy-trade-efficiency measurement + the reverse-engineered protocol spec ARE the analytics
+deliverable. (Coverage caveat: 1,156 of 4,383 cheap+resolved positions had a takeable post-fill snapshot
+within the 30-min `market_snapshots` grid — the realistic "a follower could actually act" subset; the grid is
+coarser than a sub-minute lag, surfaced honestly in `copy-trade.ts`.)

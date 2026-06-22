@@ -45,13 +45,13 @@ import {
 } from '../packages/core/src/index.ts';
 import { fetchJson } from '../packages/io/src/index.ts';
 import {
-  fetchActivity,
   fetchUserPnlSeries,
   SHARP_WALLET_ADDRESS,
   type UserPnlPoint,
   type WalletActivity,
 } from '../packages/io/src/polymarket-wallet.ts';
 import { loadEnv } from './lib/load-env.ts';
+import { crawlActivity, type PagingResult } from './lib/polymarket-crawl.ts';
 import { makeScriptDb, type ScriptDb } from './lib/script-db.ts';
 
 const num = (v: unknown): number | null => (v == null || v === '' ? null : Number(v));
@@ -114,112 +114,6 @@ export function crawlMissedHistory(
   const gapDays =
     (Date.parse(`${windowFrom}T00:00:00Z`) - Date.parse(`${pnlFirstDay}T00:00:00Z`)) / 86_400_000;
   return gapDays > toleranceDays;
-}
-
-interface PagingResult {
-  fills: WalletActivity[];
-  /** 'full' = recovered to the first fill; 'capped' = stopped at --max-pages; 'window' = restricted to --from. */
-  mode: 'full' | 'capped' | 'window';
-  pagesFetched: number;
-  /** The earliest fill day actually fetched (the reconciliation window start). */
-  windowFrom: string | null;
-  hitCap: boolean;
-}
-
-/**
- * The data-api `/activity` offset is hard-capped (~4,000 rows; offset 4000 returns HTTP 400 — verified live
- * 2026-06-22). To recover the FULL history despite that cap (the prime directive: no silent caps), we page
- * DESC (newest-first) by offset WITHIN a time window, then SLIDE the window: when a window stops (short page
- * or the offset cap / a 400), we set the next window's `end` to one second before the OLDEST timestamp seen
- * and reset offset to 0. Each window therefore only ever pages within the safe offset band. Repeats until a
- * window returns nothing (we reached the wallet's first fill) or --max-pages total pages is hit.
- *
- * If --from is set, the crawl stops once it pages past that start (REGIME-window mode). Logs exactly which
- * window was used + whether it stopped at the page cap.
- */
-async function pageActivity(
-  wallet: string,
-  opts: { maxPages: number; from?: string },
-): Promise<PagingResult> {
-  const limit = 500;
-  // Stay safely below the verified ~4,000 offset cap: at most 7 pages (offset 3,500) per time window.
-  const pagesPerWindow = 7;
-  const startBound = opts.from ? Math.floor(Date.parse(`${opts.from}T00:00:00Z`) / 1000) : undefined;
-
-  const all: WalletActivity[] = [];
-  const seen = new Set<string>(); // de-dupe across overlapping window boundaries
-  let totalPages = 0;
-  let hitCap = false;
-  let windowEnd: number | undefined = undefined; // newest-first; undefined = "now"
-  let oldestTs = Infinity;
-
-  // Stable per-fill identity (the same fill can appear at a window boundary): type+side+condition+ts+size.
-  const fid = (f: WalletActivity): string =>
-    `${f.type}|${f.side ?? ''}|${f.conditionId}|${f.asset}|${f.timestamp}|${f.sizeShares}|${f.usdcSize}`;
-
-  for (;;) {
-    if (totalPages >= opts.maxPages) {
-      hitCap = true;
-      break;
-    }
-    const pagesThisWindow = Math.min(pagesPerWindow, opts.maxPages - totalPages);
-    let windowRows: WalletActivity[] = [];
-    try {
-      windowRows = await fetchActivity(fetchJson, wallet, {
-        type: 'ALL',
-        sortDirection: 'DESC', // newest-first; windowed by `end`, paged by offset within the safe band
-        limit,
-        maxPages: pagesThisWindow,
-        start: startBound,
-        end: windowEnd,
-        timeoutMs: 60_000,
-        retries: 2,
-        onProgress: (pageRows, _total) => {
-          totalPages++;
-          process.stderr.write(
-            `  …window end=${windowEnd ? new Date(windowEnd * 1000).toISOString().slice(0, 10) : 'now'} ` +
-              `page +${pageRows.length} (total fills ${all.length + windowRows.length + pageRows.length}; ` +
-              `pages ${totalPages}/${opts.maxPages})\r`,
-          );
-        },
-      });
-    } catch (err) {
-      // The offset cap manifests as an HTTP 400 mid-window; treat it as "this window is exhausted" and
-      // slide. (fetchActivity threw, so windowRows holds nothing for this attempt — we re-page the window
-      // from its already-known oldest boundary on the next loop.)
-      const msg = err instanceof Error ? err.message : String(err);
-      if (!/HTTP 4\d\d/.test(msg)) throw err;
-      process.stderr.write(`\n  (offset cap hit: ${msg} — sliding the time window)\n`);
-    }
-
-    let added = 0;
-    let windowOldest = Infinity;
-    for (const f of windowRows) {
-      windowOldest = Math.min(windowOldest, f.timestamp);
-      const id = fid(f);
-      if (seen.has(id)) continue;
-      seen.add(id);
-      all.push(f);
-      added++;
-    }
-
-    // Termination: a window that produced no NEW rows means we've reached the wallet's first fill (or the
-    // --from bound). The offset-cap catch can yield 0 added for the throwing window; but if windowOldest is
-    // still our previous oldest (no progress) AND nothing new, we're done.
-    if (windowRows.length === 0 && added === 0) break;
-    if (added === 0 && windowOldest >= oldestTs) break; // no forward progress past the boundary
-    if (Number.isFinite(windowOldest)) oldestTs = Math.min(oldestTs, windowOldest);
-    if (!Number.isFinite(oldestTs)) break;
-    // Slide to just before the oldest fill we've seen.
-    windowEnd = oldestTs - 1;
-    if (startBound !== undefined && windowEnd <= startBound) break; // paged past the --from bound
-  }
-  process.stderr.write('\n');
-
-  all.sort((a, b) => a.timestamp - b.timestamp); // ascending for FIFO replay
-  const windowFrom = all.length > 0 ? new Date(all[0]!.timestamp * 1000).toISOString().slice(0, 10) : null;
-  const mode: PagingResult['mode'] = opts.from ? 'window' : hitCap ? 'capped' : 'full';
-  return { fills: all, mode, pagesFetched: totalPages, windowFrom, hitCap };
 }
 
 /** TRADE-only fills for behavioral stats (entry px / Yes-No share). */
@@ -562,7 +456,7 @@ async function main(): Promise<void> {
   // 2) page /activity — a FULL crawl by default, or windowed ONLY when the operator explicitly passes --from.
   // There is NO automatic window fallback: if the full crawl hits the page cap we surface it loudly (below)
   // and exit non-zero rather than silently windowing and presenting a partial number as lifetime.
-  const paging = await pageActivity(wallet, { maxPages, from });
+  const paging = await crawlActivity(wallet, { maxPages, from });
 
   const { out, bets, curve } = analyze(wallet, paging.fills, pnlSeries, paging);
 

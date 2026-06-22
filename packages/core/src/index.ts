@@ -26,3 +26,4 @@ export * from './sim/amsterdam.ts';
 export * from './sim/amsterdam-besttime.ts';
 export * from './sim/stats.ts';
 export * from './sim/wallet-forensics.ts';
+export * from './sim/copy-trade.ts';
