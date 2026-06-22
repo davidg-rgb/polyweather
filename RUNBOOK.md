@@ -327,6 +327,26 @@ Then `/amsterdam` is live and self-updating (15:30 UTC daily: places today's fou
 RPC (no table change), applied via Supabase MCP `apply_migration`; the frontend ships via the normal Vercel
 push. To re-apply by CLI: `supabase db push` (idempotent — the function body is the latest in 0047).
 
+## Sharp-wallet tracker — go-live (analytics benchmark; WALLET-RECON-HANDOFF.md Build #1)
+
+Tracks the #1 WEATHER-leaderboard sharp "badatmath." + the top-N board as an independent third forecaster on
+`/amsterdam` (3-way disagreement: their bucket vs our `house_ensemble` vs the market modal). NOT trading.
+**State 2026-06-22:** migration `0049` **applied to hosted** (via MCP `apply_migration`) and the prod tables
+**seeded live** (`scripts/sharp-wallets.ts --leaderboard` — 495 badatmath legs, 20 Amsterdam; rank #1). Remaining
+operator steps:
+
+```bash
+# 1) deploy the daily ingest job (self-auth via x-cron-secret; cron 'sharp-wallet-track' 16:00 UTC already
+#    registered by 0049 — it 404s harmlessly until this lands)
+supabase functions deploy sharp-wallet-track --use-api --no-verify-jwt --project-ref "$SUPABASE_REF"
+# 2) redeploy the web app (Vercel) for the SharpDisagreement card on /amsterdam (ships on the normal push)
+#    — the dash_amsterdam_sim.sharps key is already live; the card renders once the frontend deploys.
+```
+
+Re-pull / extend any time: `pnpm tsx scripts/sharp-wallets.ts --leaderboard` (idempotent; `--analyze-only` to
+just re-report). **Turn it off:** `select cron.unschedule('sharp-wallet-track');` (data + card remain). Builds
+#2 (wallet-forensics/PnL ledger) and #3 (day-before efficiency study) are not yet built — see the hand-off.
+
 ## Failure-drill log (each upstream killed under test)
 
 Every upstream's failure path is exercised by the committed suite — re-run

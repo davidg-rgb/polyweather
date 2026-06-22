@@ -5,7 +5,7 @@
 
 ## Active Phase
 
-### ▶ NEXT STEP — PIVOT TO ANALYTICS VALUE (operator chose 2026-06-15). Trading thesis CLOSED by WO-5 (iter-48, market efficient w.r.t. the hard running-max floor). The product is now forecast-skill + calibration + model-vs-market insight; trading machinery stays DORMANT. First analytics deliverable TBD (candidate: promote the forecast-skill / market-efficiency story to a first-class public surface, demote `bets`). R&D round-2 reviewed (iter-47); RPC-lockdown DEPLOYED (iter-45)
+### ▶ NEXT STEP — PIVOT TO ANALYTICS VALUE (operator chose 2026-06-15). Trading thesis CLOSED by WO-5 (iter-48, market efficient w.r.t. the hard running-max floor). The product is now forecast-skill + calibration + model-vs-market insight; trading machinery stays DORMANT. Analytics shipped: the **WALLET-RECON milestone** (sharp-wallet benchmark #1, wallet forensics #2, day-before efficiency study #3) ran end-to-end 2026-06-22 → **branch (b): the day-before market is EFFICIENT w.r.t. our forecast** (KILL-GATE 2 FAIL; the sharp's edge is real but not replicable as a follower). Live rail stays dormant. Build #1 now FULLY LIVE (`sharp-wallet-track` deployed 2026-06-22, cron active). Remaining operator follow-ups (non-blocking): merge feat→main, optional re-persist + nbm_conus A/B — see WALLET-RECON-HANDOFF.md §10. R&D round-2 reviewed (iter-47); RPC-lockdown DEPLOYED (iter-45)
 
 > **PIVOT DECISION (2026-06-15):** after WO-5 closed the trading thesis, the operator chose **lean into
 > analytics value** (over seek-out-of-market-info / shelve). Polyweather is now an analytics & forecasting
@@ -13,6 +13,56 @@
 > `events`, `system` (analytics) + `bets` (trading — now dormant). Next: scope the first analytics-lean
 > deliverable (e.g. a polished forecast-skill + market-efficiency view as the product's headline). See the
 > updated project `CLAUDE.md` header and `FORECASTING-RD.md` WO-5 for the rationale.
+
+**2026-06-22 analytics: WALLET-RECON Builds #2–#3 + both KILL-GATES adjudicated — day-before market is EFFICIENT (branch b). LIVE & committed.**
+The synchronized §9 multi-agent workflow (WALLET-RECON-HANDOFF.md) ran to completion. Outcome: the badatmath
+sharp's edge is **real, not survivorship** (KILL-GATE 1), but **we cannot replicate it** — the day-before bucket
+market is efficient w.r.t. our forecast (KILL-GATE 2). The deliverable is the analytics, exactly as the pivot intended.
+- **Phase 0 (committed `79b794f`):** canonical Node wallet client `packages/io/src/polymarket-wallet.ts` (parsers +
+  paged `fetchActivity`); **forward-capture audit → existing `market_snapshots`/`poll-markets` already gives 100%
+  day-before coverage at 5-min cadence** (no new pipeline; corrected the handoff's stale "twice-daily cron" premise);
+  SDK-seam ADR-22 + day-before-edge gate-socket SPEC (design-only, Phase-3-gated).
+- **Build #2 forensics (committed `30ab21a`, migration `0050` APPLIED):** `core/sim/wallet-forensics.ts` +
+  `scripts/wallet-forensics.ts` reconstruct realized PnL from public `/activity` via the conditionId cash-flow identity
+  (NOT `/closed-positions`, which is winners-only). **KILL-GATE 1 = PASS-on-substance** (operator-adjudicated): edge is
+  REAL — official +$25,445 (verified independently), **win rate 40.6% net of 5,436 losers**, `<0.25` ROI +22.8% /
+  `[0.45,0.75)` −1.0%, Brier 0.350 vs 0.500 (p=0.000). The pre-registered ±2% reconciliation was NOT reachable from
+  public data (official curve sits between trading-only −8.5% and trading+incentives +5.4% — MERGE/SPLIT set-netting +
+  open-position accounting); regime onset May 5 (causal) / kink May 26, refining the handoff's "May 14–21" estimate.
+  Both misses are public-data precision limits, not survivorship — hence PASS-on-substance.
+- **Build #3 study (committed `39289f0`):** `scripts/research/db1-daybefore-efficiency.ts` (forks mos-pointskill
+  loaders; reads day-before ask from `market_snapshots`). **KILL-GATE 2 = FAIL → market EFFICIENT (3/3 skeptics):**
+  pooled `<0.25` day-before edge **+0.46pp, CI [−0.92, +1.83]** (straddles 0), **0/44 stations** clear zero,
+  **Brier(ours) significantly WORSE than the day-before market** (0.740/0.756 vs 0.715; p(ours sharper) 0.05/0.015) —
+  the market is the sharper day-before forecaster. Fork verified (RMSE 1.2991 byte-matches mos-pointskill same-window).
+  `nbm_conus` US sub-lever DEFERRED (migration `0051` STAGED-not-applied, `enabled=false`; low prior R²=0.6%; can't
+  overturn a global efficiency finding).
+- **Verified:** 970 tests green, typecheck 0. Migrations `0049`+`0050` applied to prod; `0051` staged.
+- **OPERATOR FOLLOW-UPS:** (1) ✅ **DONE 2026-06-22** — Edge `sharp-wallet-track` deployed via Supabase CLI
+  (`npx supabase functions deploy … --use-api --no-verify-jwt`), ACTIVE, cron `0 16 * * *` active → Build #1
+  auto-refreshes daily. **Build #1 now FULLY LIVE** (0049 applied + seeded + fn deployed + cron). Remaining
+  (non-blocking): (2) merge `feat/live-integration-readiness` → main to ship the `/amsterdam` sharp card + this
+  milestone (user's call); (3) re-persist forensics when Polymarket isn't rate-limiting; (4) OPTIONAL: apply
+  `0051` + run the `nbm_conus` US A/B (low prior). The live trading rail STAYS DORMANT (branch b).
+
+**2026-06-22 analytics: sharp-wallet & WEATHER-leaderboard benchmark tracker — migration `0049` + Edge `sharp-wallet-track`, BUILT & TESTED (deploy operator-gated).**
+WALLET-RECON-HANDOFF.md **Build #1**, on-pivot (analytics, NOT trading — no copy-trade; trading thesis stays closed).
+An external Polymarket wallet "badatmath." (`0x8fbd…a959`) trades our exact universe and is verifiably profitable
+(#1 on the WEATHER leaderboard, +$25.4k realized, regime change ~May 14–21 2026; cheap-longshot edge). We ingest it +
+the top-N WEATHER leaderboard daily and surface it on `/amsterdam` as an **independent third forecaster** — the signal
+is 3-way **disagreement** (their bucket vs our `house_ensemble` argmax vs the market's modal/max-mid bucket).
+**Shipped (code):** migration `0049_sharp_wallet_tracker.sql` — 3 tables (`tracked_wallets` seeded with badatmath,
+`wallet_leaderboard_snapshots`, `wallet_positions_daily`), 2 service-role record RPCs (post-0034 revoke/grant), the whole
+`dash_amsterdam_sim` body re-stated with an additive `sharps` key, + daily cron `sharp-wallet-track` `0 16 * * *` UTC
+(migrations.test 14→15 jobs). Pure parsers + thin fetch wrappers in `_shared/polymarket-wallet.ts` (knmi.ts idiom; field
+names fixture-verified live against `research/dataapi-positions-badatmath-sample.json` etc. — `size` not `shares`,
+leaderboard `proxyWallet/userName/vol/pnl/rank`-string). Edge Function `sharp-wallet-track` (+`handler.ts`, runJob idiom),
+manual twin `scripts/sharp-wallets.ts`, loader `SharpsView` + web card `SharpDisagreement.tsx` in the `/amsterdam` bento.
+**Verified:** `pnpm test` **871 green** (+21: 15 parser, 6 end-to-end sharp-wallet — record RPCs/handler/dash sharps/empty
+state), typecheck 0, web build OK. Live Polymarket data path verified by curl (badatmath = 20 Amsterdam positions incl. the
+cheap-longshot YES on "25°C or below"). **✅ DEPLOYED 2026-06-22:** `0049` applied to prod, data seeded, Edge `sharp-wallet-track`
+deployed (ACTIVE, `verify_jwt:false`), cron `0 16 * * *` active — FULLY LIVE. No new secrets (reuses `project_url`/`cron_secret`,
+`SUPABASE_*`). Design + builds #2/#3: `WALLET-RECON-HANDOFF.md`.
 
 **2026-06-22 data-integrity: Amsterdam paper-sim odds audit → in-lock-hour ask guard (`0048`) + full re-derivation, LIVE & verified.**
 Operator audit of the fictitious arms. The sim (40 bets, 06-12→06-21; no older history) was seeded

@@ -147,6 +147,19 @@ describe('migrations 0001–0010', () => {
       // lock hour [lockstart, asof); no in-hour quote → arm skipped (was an unbounded backward forward-fill
       // that stamped pre-hour/phantom odds onto thin early-day bets). 0041 body verbatim; ask bound added.
       '0048_amsterdam_in_hour_ask_guard.sql',
+      // 0049 = sharp-wallet & WEATHER-leaderboard benchmark tracker (tracked_wallets +
+      // wallet_leaderboard_snapshots + wallet_positions_daily + 2 service-role record RPCs); dash_amsterdam_sim
+      // gains an additive `sharps` key (whole body re-stated) — stays in WEB_AUTHENTICATED. New daily cron
+      // sharp-wallet-track at 16:00 UTC (count 14 → 15 below). WALLET-RECON-HANDOFF.md Build #1.
+      '0049_sharp_wallet_tracker.sql',
+      // 0050 = wallet-forensics persistence (Build #2): wallet_pnl_daily + wallet_bet_calibration +
+      // wallet_forensics_record (idempotent, service-role only). RLS/grants mirror 0043/0049; no cron, no
+      // dashboard-surface change. WALLET-RECON-HANDOFF.md Build #2 (the skill-vs-survivorship gate).
+      '0050_wallet_forensics_persist.sql',
+      // 0051 = ncep_nbm_conus model seed (Build #3 US sub-lever): one additive row in `models`
+      // (CONUS National Blend of Models, registered for the day-before bucket A/B; live-verified slug is
+      // `ncep_nbm_conus`). No table, RLS, cron, or RPC change. WALLET-RECON-HANDOFF.md §6 Build #3 / §7 item 2.
+      '0051_nbm_conus_model.sql',
     ]);
   });
 });
@@ -386,7 +399,7 @@ describe('RLS (ADR-13, §11.5)', () => {
     const models = await asRole(db, 'authenticated', { email: 'david.geborek@gmail.com' }, () =>
       rows(db, `select * from models`),
     );
-    expect(models.length).toBe(15); // 14 seeded (§7.4 incl. 3 traps) + the 0017 'blend' pseudo-model
+    expect(models.length).toBe(16); // 14 seeded (§7.4 incl. 3 traps) + the 0017 'blend' pseudo-model + ncep_nbm_conus (0051)
   });
 
   it('writes are service-role only', async () => {
@@ -718,8 +731,9 @@ describe('pg_cron registrations (§7.22, W11)', () => {
       'health-monitor': '*/30 * * * *',
       'snapshot-downsample': '0 3 * * *',
       'amsterdam-paper-trade': '30 15 * * *',
+      'sharp-wallet-track': '0 16 * * *',
     };
-    expect(jobs.length).toBe(14);
+    expect(jobs.length).toBe(15);
     for (const j of jobs) {
       expect(j.schedule, `schedule for ${j.jobname}`).toBe(expected[j.jobname]);
     }
