@@ -741,3 +741,66 @@ rescue an inferior calibration — adverse selection makes it worse, and our for
 value-negative. **All four replication angles (forecast-beats-market, day-before-edge, copy-trade-mirror,
 maker-spray) are now falsified. The live trading rail stays DORMANT** — re-open only on genuinely new
 out-of-market information.
+
+---
+
+## 13. M1 TAIL-CALIBRATION DIAGNOSIS — the one router arm never measured (2026-06-22) — AMBIGUOUS
+
+**The question (BADATMATH-GAP-PLAN.md Move 1 / §6 "the single next concrete action").** §10–§12 falsified all
+four replication angles — and **every one used OUR forecast as the SELECTOR**. The reverse was never asked: *do
+badatmath's REVEALED cheap picks resolve more often than OUR EMOS predicts?* If yes (≥+3pp, CI>0) our **tail** is
+underweighted — a *fixable forecast* (Case A → Move 7 recalibration), not just an un-replicable rent. If no
+(<+1pp, with M2 already FAIL) the forecast is **not** the gap → the analytics product (Move 10). This is a
+DIAGNOSIS, not a trade gate: a PASS routes to a recalibration *experiment* re-tested by the existing maker-spray
+sim; it does **not** reopen the live rail. The result feeds the analytics product either way.
+
+**What was built (committed on `feat/live-integration-readiness`).**
+- `packages/core/src/sim/tail-calibration.ts` — the pure analytics: `m1TailCalibration` (the BINDING
+  low-variance `won − EMOS_p` gap + CI), `m3TailBrier` (tail-local Brier ours vs market), `m4EntryDeciles`
+  (their realized edge by entry-price band), `tailCalibrationVerdict` (the §5 branch table), with the FROZEN
+  cut + thresholds in a header comment block (WO-5: the §12 heavy-tailed-EV mis-design lesson is honored — the
+  binding metric is the low-variance paired gap, never a per-bet EV). **13 tests.**
+- `scripts/research/m1-tail-calibration.ts` — the impure spine: reuses `crawlActivity` (the windowed
+  `/activity` crawler) + `toPositions` (copytrade) + the maker-spray EMOS spine (`assembleBids` =
+  db1-forked walk-forward EMOS) + `forkEqualityRmse` (the correctness anchor). The bridge is
+  `market_buckets.condition_id → (event_id, bucket_idx)`. **1064 tests green, typecheck 0, read-only, no
+  migration, no `packages/trading` import.** Crawl cached to `scripts/research/out/badatmath-fills.json`.
+
+**The run (full universe: 45 stations · 721 resolved events · 2026-04-21→06-21 · fork-equality `1.2991°C`
+byte-match to db1 — the EMOS_p IS the live model). Crawled 64,934 BUY fills → 12,402 positions → 5,139 cheap
+(<0.25) YES positions; 1,050 joined to an EMOS forecast (the rest are cities/days outside our 45-station scope
+or without a forecast+σ in window).**
+
+| Metric | Lead 1 (24h) | Lead 2 (48h) |
+|---|---|---|
+| cheap-tail picks (EMOS_p<0.15), n | 479 | 460 |
+| empirical resolution freq | 8.98% | 10.22% |
+| mean EMOS_p (what our model said) | 6.61% | 7.45% |
+| **★ M1 gap (won − EMOS_p)** — the binding metric | **+2.37pp CI [−0.18, +4.91]** | **+2.76pp CI [+0.01, +5.52]** |
+| M3 tail Brier (ours − market) | +0.79pp [−0.04, +1.61] | +0.23pp [−0.51, +0.97] |
+| verdict | **AMBIGUOUS** | **AMBIGUOUS** (stable across leads ✓) |
+
+**Three reads:**
+1. **Our tail is roughly calibrated — NOT a clean Case A.** The gap is a *whisper* of underweighting (+2.4 to
+   +2.8pp: their cheap picks resolve slightly more than EMOS predicts) but it **does NOT clear the pre-registered
+   +3pp PASS bar**, and lead-1's CI includes 0 (lead-2 grazes +0.01). Per WO-5 the bar is NOT moved → AMBIGUOUS.
+   **No Move-7 recalibration is warranted by the frozen criterion.**
+2. **The market is still the sharper tail forecaster (M3 corroborates KILL-GATE 2).** `Brier(ours) − Brier(market)`
+   on the cheap tail is **positive** (ours worse), tied within CI. Our forecast is not better than the market on
+   the tail — exactly KILL-GATE 2's finding, now confirmed on the sharp's own revealed picks.
+3. **A whisper of mis-calibration would still not be tradable — and the edge isn't even at the extreme tail.**
+   M4 shows badatmath's realized edge lives in the **0.08–0.16 entry band** (+5.7 to +10.4pp), and is *negative*
+   at the very cheapest (<0.07) and at 0.19 — refining §3's "cheapest longshots are the engine" to "the
+   low-MIDDLE band is." Even a recalibrated tail can't harvest it: §12 already proved adverse selection eats a
+   maker entry on our forecast, and the edge sits precisely in the band we'd have to out-rest competing makers in.
+
+**Conclusion.** The M1 router returns **AMBIGUOUS, stable across leads**: our EMOS tail is *approximately*
+calibrated to the #1 sharp's revealed picks (a small +2.5pp gap below the Case-A bar), and is *not* sharper than
+the market there (M3). Per the frozen §5 branch table this is an **analytics input, not a forecast-lever reopen**
+— the destination remains the analytics product (Move 10). **The number is itself the deliverable:** we hold the
+only forensic reconstruction of the #1 weather trader, now scored against a calibrated model — and the finding is
+that the sharp does *not* materially out-forecast our tail; its edge is microstructure (maker resting + rebate +
+breadth across ~45 cities), which §11/§12 already proved structurally non-followable and non-replicable on our
+fills. **The live trading rail stays DORMANT.** The remaining genuinely-distinct lever (Move 4, the intraday
+running-max physics signal) is unaffected by this result but overlaps a closed WO-5 finding (the market is
+efficient w.r.t. the running-max floor) — low prior, not run here.
