@@ -20,7 +20,10 @@
 -- a live-trading path. The day-before study read existing forecast_snapshots; this row is only
 -- needed if/when the operator chooses to run the (low-prior, R²=0.6%) US sub-lever A/B.
 
+-- NOTE: the LIVE-VERIFIED Open-Meteo slug is `ncep_nbm_conus` — the bare `nbm_conus` is rejected with
+-- HTTP 400 ("Cannot initialize MultiDomains from invalid String value"). The model is registered under the
+-- real slug so `scripts/backfill-forecasts.ts --models ncep_nbm_conus` actually fetches data.
 insert into public.models (slug, display_name, provider, horizon_days, archive_start, enabled, is_ensemble, notes) values
-  ('nbm_conus', 'NOAA NBM (CONUS)', 'NOAA', 11, '2024-01-21', false, false,
+  ('ncep_nbm_conus', 'NOAA NBM (CONUS)', 'NOAA', 11, '2024-01-21', false, false,
    'CONUS-only 2.5km National Blend of Models; US sub-lever for the day-before bucket study (Build #3), registered for A/B backfill only (enabled=false — not in live ingestion). Non-US stations return no data.')
 on conflict (slug) do nothing;

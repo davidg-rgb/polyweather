@@ -120,15 +120,24 @@ export async function backfillForecasts(
     for (const w of wanted) if (!found.has(w)) log(`WARNING: station ${w} not found (or missing coordinates) — skipped`);
   }
 
+  // Default: only live-enabled models. But an EXPLICIT `--models X` request backfills X even if it is
+  // registered-but-disabled (`enabled=false`) — that is exactly how a sub-lever model is staged for an A/B
+  // (e.g. nbm_conus, migration 0051: registered disabled so the live ingestion cron does NOT request a
+  // CONUS-only model for all ~46 stations, yet `--models nbm_conus` can still backfill it). Without this,
+  // the explicit request was silently dropped by the `enabled` filter. Still requires a real backfillable
+  // model (not an ensemble, has an archive_start).
+  const wantedModels = args.models ?? [];
   let models = await db.query<ModelRow>(
     `select slug, archive_start from models
-     where enabled and not is_ensemble and archive_start is not null order by slug`,
+     where not is_ensemble and archive_start is not null and (enabled or slug = any($1))
+     order by slug`,
+    [wantedModels],
   );
   if (args.models) {
     const wanted = new Set(args.models);
     models = models.filter((m) => wanted.has(m.slug));
     const found = new Set(models.map((m) => m.slug));
-    for (const w of wanted) if (!found.has(w)) log(`WARNING: model ${w} not enabled/backfillable — skipped`);
+    for (const w of wanted) if (!found.has(w)) log(`WARNING: model ${w} not registered/backfillable — skipped`);
   }
 
   const stats: ForecastBackfillStats = { scopes: 0, scopesDone: 0, scopesErrored: 0, chunksFetched: 0, rowsUpserted: 0 };

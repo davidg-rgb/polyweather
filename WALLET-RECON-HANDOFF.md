@@ -654,3 +654,19 @@ The clean copy-trade-efficiency measurement + the reverse-engineered protocol sp
 deliverable. (Coverage caveat: 1,156 of 4,383 cheap+resolved positions had a takeable post-fill snapshot
 within the 30-min `market_snapshots` grid — the realistic "a follower could actually act" subset; the grid is
 coarser than a sub-minute lag, surfaced honestly in `copy-trade.ts`.)
+
+### Follow-up: `nbm_conus` US sub-lever A/B — RAN 2026-06-22, no improvement (confirms the low prior)
+
+The §10 optional follow-up #4 was run. **Result: adding the NBM CONUS model to the US blend does NOT improve
+forecast skill, and the day-before market stays efficient — the input ceiling holds.** US-station (10 cities,
+197 resolved events) walk-forward, with vs without nbm: blended-μ point **RMSE 1.4024 → 1.4092°C (flat/noise)**;
+day-before verdict NOT MET either way. (Caveat: not perfectly apples-to-apples — nbm expands forecast coverage,
+so the "with" run scores more build-days/events and a different set, which also shifts the market-Brier
+denominator; the least-confounded signal, point RMSE, is flat.) Matches the pre-registered R²=0.6% prior; changes
+nothing. **Two real bugs fixed along the way** (committed): (1) the registered Open-Meteo slug was wrong —
+`nbm_conus` is rejected with HTTP 400; the live-verified slug is **`ncep_nbm_conus`** (fixed in
+`openmeteo.ts` `KNOWN_FORECAST_MODELS`, migration `0051`, and the prod `models` row). (2) `backfill-forecasts.ts`
+silently dropped an explicit `--models X` request when X was registered-but-disabled (the `enabled` filter ran
+first) — now an explicit `--models` honors a disabled-but-registered model, exactly the staged-sub-lever
+workflow `0051` documents. The 4,400 scratch backfill rows were deleted afterward (the study ships nothing to
+prod); `ncep_nbm_conus` stays registered + `enabled=false`.
