@@ -14,6 +14,13 @@
 Wallet: `0x8fbd7cf5f806f563080864694415829f7229a959` · handle **"badatmath."** · Polygon proxy wallet.
 All data below is from Polymarket's **public, unauthenticated** APIs (recipe in §5). Reproducible.
 
+> **✅ RESOLVED 2026-06-22 — the synchronized §9 workflow ran to completion (branch b).**
+> **KILL-GATE 1 = PASS-on-substance** (the badatmath edge is REAL, not survivorship). **KILL-GATE 2 = FAIL —
+> the day-before bucket market is EFFICIENT** w.r.t. our EMOS forecast; the live rail stays **DORMANT**. The
+> clean day-before-efficiency measurement IS the analytics deliverable. Full record, the numbers, and
+> corrections to three premises that turned out stale (the "twice-daily cron", the ±2% reconciliation, the
+> "May 14–21" regime week): **§10 (OUTCOME)** at the bottom. §1–§9 below are preserved as authored (pre-run).
+
 ---
 
 ## 0. TL;DR
@@ -488,3 +495,80 @@ PHASE 3 — Live activation   (only if KILL-GATE 2 passed)
 _Cross-refs: `FORECASTING-RD.md` (closed-trading evidence + open lever), `AMSTERDAM-SIM.md` (the existing
 paper-sim this extends), `GO-LIVE-CHECKLIST.md` + `packages/trading/src/gate.ts` (the live gate this lane
 instruments), memory `polymarket-sharp-weather-wallet.md`._
+
+---
+
+## 10. OUTCOME — the workflow ran to completion (2026-06-22, branch b)
+
+The §9 synchronized multi-agent workflow was instantiated and run end-to-end (3 workflow phases + a
+remediation pass, all adversarially verified). **Result: branch (b) — the day-before market is efficient
+w.r.t. our forecast; the live trading rail stays dormant.** The machinery (benchmark → forensic edge-proof →
+day-before study → gated live specs) was built either way; only the live switch was contingent, and the
+evidence did not flip it. Nothing shipped to a trading path.
+
+### What was built + committed (branch `feat/live-integration-readiness`)
+- **Phase 0 (`79b794f`):** `packages/io/src/polymarket-wallet.ts` (canonical Node wallet client: parsers +
+  paged `fetchActivity` + `resolveMarketsMeta`); the forward-capture audit (`docs/specs/forward-capture-audit.md`);
+  the SDK-seam **ADR-22** + the day-before-edge **gate-socket SPEC** (design-only, Phase-3-gated).
+- **Build #2 (`30ab21a`, migration `0050` APPLIED):** `core/sim/wallet-forensics.ts` + `scripts/wallet-forensics.ts`
+  (realized-PnL reconstruction from public `/activity` via the conditionId cash-flow identity).
+- **Build #3 (`39289f0`):** `scripts/research/db1-daybefore-efficiency.ts` (walk-forward EMOS day-before edge
+  vs the `market_snapshots` ask) + the `nbm_conus` registration (migration `0051` STAGED, not applied).
+- **Robustness fix (`7e5b968`):** a silent-crawl-truncation guard in `wallet-forensics.ts` (see corrections).
+- Migrations `0049` + `0050` are applied to prod; `0051` is staged (unapplied, `enabled=false`). 970 tests green.
+
+### KILL-GATE 1 — the sharp's edge is REAL, not survivorship (PASS-on-substance, operator-adjudicated)
+Reconstructed badatmath's full 92,921-fill history. **Decisive anti-survivorship evidence:** win rate **40.6%
+net of 5,436 losers** (a survivorship lens would show ~100%); `<0.25` ROI **+22.8%** / `[0.45,0.75)` **−1.0%**
+(the cheap-longshot signature, robust to a total-loss counterfactual); wallet Brier **0.350** vs 0.500 baseline
+(p=0.000). The official PnL **+$25,445** was verified independently 5×. **It did NOT cleanly pass two
+pre-registered criteria** (see corrections), so it was adjudicated **PASS-on-substance** by the operator: the
+gate's binding question (real vs survivorship) is decisively answered REAL; the two misses are public-data
+precision limits, not survivorship.
+
+### KILL-GATE 2 — the day-before market is EFFICIENT (FAIL → branch b; 3/3 skeptics)
+Walk-forward EMOS calibrated next-day bucket probs vs the **day-before** market ask (read from `market_snapshots`,
+100% day-before coverage). Over 44 stations / 721 resolved events / ~2 months of market overlap:
+- pooled cheap-longshot (`<0.25`) day-before edge = **+0.46pp, 95% CI [−0.92, +1.83]** — straddles 0
+- **0 of 44 stations** show a CI-clears-0 positive cheap edge; EHAM is among the *worst* (−6.32pp) → no EHAM-only artifact
+- **Brier(ours) is significantly WORSE than the day-before market** on both leads (0.740 / 0.756 vs 0.715;
+  p(ours sharper) 0.05 / 0.015) — the market is the sharper day-before forecaster (corroborates WO-5 + the live readout)
+- edge is gross; fees only erode it. **Every axis of the +1.5% kill-criterion fails.** REJECTED — efficient.
+- fork-correctness confirmed: blend RMSE **1.2991** byte-matches `mos-pointskill` on the same window.
+
+**Interpretation:** badatmath's edge is calibration + timing + scale across ~45 cities — NOT a data secret we
+can replicate as a slower follower. We cannot beat the day-before bucket market with our forecast. This closes
+the one lever `FORECASTING-RD.md` left open, consistent with WO-5.
+
+### Corrections to premises in §1–§9 (found false/stale during the run — recorded, not edited above)
+1. **"Forward-capture cron is needed / the price-poll cron is twice-daily" (§7.1, §8, §9 Phase 0) — FALSE.**
+   `poll-markets` already runs **every 5 minutes** and writes bid/ask/mid per bucket to `market_snapshots`,
+   with **100% day-before coverage** (1,302/1,302 resolved events, ~50 captures/bucket, 30-min cadence, global).
+   No forward-capture pipeline was built; the data spine already existed. (The "twice-daily" was the forecast-
+   snapshot cron, conflated with the price-poll cron.) Details: `docs/specs/forward-capture-audit.md`.
+2. **"Reconstruction reconciles to user-pnl within ±2%" (§6 Build #2 AC) — NOT reachable from public data.**
+   Over the full lifetime, the official curve (+$25,445) sits *between* the trading-only reconstruction
+   (−8.5%) and trading+incentives (+5.4%); MERGE ($93.6k of proceeds!) / SPLIT set-netting and open-position
+   accounting are not fully reconstructible from `/activity`. Every definition lands within ~3–8.5% of the
+   independently-verified official total — enough to prove real-not-survivorship, not enough for ±2%.
+3. **"Regime break in the week of May 14–21" (§2, §6, §9) — refined to ~May 5–26.** The endpoint-stable causal
+   onset (final trough crossing) is **2026-05-05**; the min-SSE best-fit kink is **2026-05-26**. The abrupt
+   flat→vertical regime change is not in dispute; the handoff's predicted week was a rough estimate.
+4. **A silent-truncation bug in `wallet-forensics.ts` (found + fixed, `7e5b968`).** A rate-limited crawl could
+   terminate early yet report `mode='full'` and persist a partial snapshot as lifetime. Now guarded: the crawl
+   cross-checks its earliest fill against the user-pnl span and refuses to `--persist` an incomplete run.
+
+### Operator follow-ups (all NON-BLOCKING — the analytics deliverable is complete)
+1. **Deploy Edge `sharp-wallet-track`** (Build #1 daily auto-refresh) via the Supabase CLI
+   (`supabase functions deploy sharp-wallet-track --use-api --no-verify-jwt --project-ref "$SUPABASE_REF"`) —
+   MCP can't bundle a monorepo Deno fn; the card is already live (data seeded), only the daily cron auto-refresh pends.
+2. **Merge `feat/live-integration-readiness` → main** to ship the `/amsterdam` sharp card + this milestone (your call).
+3. **Persist badatmath's forensic baseline** (deferred — Polymarket is rate-limiting after this session's heavy
+   crawls; the tool now *correctly refuses* to persist a partial). Re-run when the API is healthy:
+   `pnpm tsx scripts/wallet-forensics.ts 0x8fbd7cf5f806f563080864694415829f7229a959 --persist` (writes the
+   `0050` tables; durable baseline for the §8 "does the edge decay?" re-run in ~2 weeks).
+4. **OPTIONAL (low prior, R²=0.6%):** the `nbm_conus` US sub-lever A/B — apply `0051`, then
+   `pnpm tsx scripts/backfill-forecasts.ts --models nbm_conus --stations KORD,KSEA,KSFO,KLAX,KLGA,KMIA,KATL,KHOU,KDAL,KAUS --from 2026-04-21 --to 2026-06-21`
+   and re-run `db1-daybefore-efficiency.ts --stations …`. Cannot overturn the global efficiency finding.
+
+**The live trading rail stays DORMANT (branch b).** Re-open only on genuinely new out-of-market information.
