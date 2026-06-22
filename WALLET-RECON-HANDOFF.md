@@ -804,3 +804,69 @@ breadth across ~45 cities), which §11/§12 already proved structurally non-foll
 fills. **The live trading rail stays DORMANT.** The remaining genuinely-distinct lever (Move 4, the intraday
 running-max physics signal) is unaffected by this result but overlaps a closed WO-5 finding (the market is
 efficient w.r.t. the running-max floor) — low prior, not run here.
+
+---
+
+## 14. MOVE 5 — the sharp as a FORECASTER (stacked-ensemble study) — RAN 2026-06-22 — KILL (value-NEGATIVE)
+
+**The question (BADATMATH-GAP-PLAN.md Move 5).** §10–§13 falsified every way to *trade* badatmath — all
+harvesting problems, all using OUR forecast as the selector. One Move was never run: the *forecasting* one.
+badatmath BEATS the market, and its revealed cheap-spray is a daily distribution we currently throw away — so
+**does that distribution carry orthogonal information that, folded into a stacked forecaster, beats the market
+distribution we already lose to?** The honest baseline is the **MARKET** (the sharper forecaster per KILL-GATE 2
+/ M3), not our EMOS. This is the lowest-regret Move: a PASS upgrades the FORECAST/analytics product (a
+"smart-money-consensus" distribution); it does NOT reopen the live rail (the harvest is still adverse-selection
+bound, §12). **Result: the sharp's revealed distribution adds NO orthogonal skill — folding it in is
+value-NEGATIVE — stable across both leads. The 5th angle is closed; the live rail stays DORMANT.**
+
+**What was built (committed on `feat/live-integration-readiness`).**
+- `packages/core/src/sim/sharp-ensemble.ts` — the pure analytics: three per-event forecaster
+  distributions (`marketDist` = renormalized asks-at-entry, the baseline; `emosDist` = our walk-forward
+  gaussian ladder; `sharpDist` = the **market tilted toward the sharp's cheap revealed stake**,
+  `mkt·(1+λ·stakeShare)` renormalized — λ frozen, never zeros the favourite so it is a fair forecaster), a
+  convex `blend`, a deterministic simplex-grid `fitWeights`, the **no-lookahead `walkForwardStack`** (weights
+  fit on STRICTLY-prior target dates only), paired-Brier `scoreArm`, the **`zeroSkillSharpMc`** false-positive
+  guard (shuffle the sharp signal across events, re-fit, P(PASS|noise)), and the frozen `ensembleVerdict`
+  (FOUR guards must all clear: the low-variance improvement CI, the paired bootstrap, the zero-skill MC, AND the
+  marginal-sharp arm that neutralizes the EMOS confound). **27 tests** (a constructed PASS, KILL, INSUFFICIENT).
+- `scripts/research/m5-sharp-ensemble.ts` — the impure spine: reuses the m1/maker-spray data path
+  (`crawlActivity`→`toPositions`, the `market_buckets.condition_id` bridge, the db1-forked `assembleBids` EMOS
+  ladder, `forkEqualityRmse`); groups the ladder into `EnsembleEvent`s and attaches the sharp's per-bucket
+  revealed Yes-leg stake. **1091 tests green, typecheck 0, read-only, no migration, no `packages/trading` import.**
+
+**The run (full universe: 45 stations · 721 resolved events · 2026-04-21→06-21 · leads 1,2 · tiltλ 4 · mc-iters
+200 · fork-equality `1.2991°C` byte-match to db1 — the EMOS ladder IS the live model. 174 sharp-touched events
+of 473 seen had all three forecasters defined).**
+
+| Arm (vs MARKET baseline) | Lead 1 (24h) | Lead 2 (48h) |
+|---|---|---|
+| **★ M+S** (binding — does the sharp add over the market?) | **−1.74pp CI [−3.44, −0.04]** p=0.97 | **−1.20pp CI [−2.35, −0.05]** p=0.98 |
+| M+E (EMOS control — our forecast vs market) | −0.02pp CI [−0.21, +0.17] | +0.34pp CI [−0.17, +0.85] |
+| M+E+S (full smart-money consensus) | −1.74pp CI [−3.45, −0.04] | −0.83pp CI [−2.08, +0.42] |
+| marginal sharp (M+E − M+E+S) | −1.72pp CI [−3.41, −0.04] | −1.17pp CI [−2.32, −0.02] |
+| zero-skill P(PASS \| shuffled sharp) | **0.0%** (200 iters) | **0.0%** |
+| verdict | **KILL_ALREADY_PRICED** | **KILL** (stable ✓) |
+
+**Three reads:**
+1. **The sharp's distribution is value-NEGATIVE as a forecaster.** The binding M+S improvement (Brier_market −
+   Brier_stack) is **negative with a CI that excludes 0 in both leads** — tilting a calibrated market toward the
+   sharp's revealed cheap picks does not just fail to help, it makes the forecast *worse*. The walk-forward fit
+   picks up tiny in-sample noise in the sharp signal and pays for it out-of-sample (the honest OOS penalty for a
+   useless signal — exactly what walk-forward exists to expose).
+2. **WHY it's negative is the same mechanism as §12.** The sharp's cheap longshots mostly **lose** (their tail
+   hit rate is ~5–12%, §3/§13). Treating "the sharp bet this cheap bucket" as forecast signal moves mass off the
+   favourite (which usually wins) onto longshots (which usually don't). Their edge is the maker rebate + breadth,
+   **not a superior probability** — so it carries no forecasting information once you already have the market price.
+3. **Clean corroboration of the whole chain.** M+E ≈ 0 re-confirms KILL-GATE 2 (our EMOS adds nothing over the
+   market); the zero-skill MC at **0.0%** proves the gate isn't a false-positive machine; the result is stable
+   across leads. This is the **5th independent angle** (after forecast-beats-market, day-before-edge,
+   copy-trade-mirror, maker-spray) to land on the same finding from a new direction.
+
+**Conclusion.** Treating the #1 weather sharp as a forecaster and stacking its revealed distribution onto the
+market **adds no orthogonal skill — it subtracts** — stable across leads, with a clean zero-skill guard. The
+sharp's edge is confirmed, from a fifth angle, to be **pure microstructure** (maker resting + rebate + breadth
+across ~45 cities), not a superior view of the world the market hasn't priced. The "smart-money-consensus
+forecaster" is dominated by the market price; the measurement IS the analytics deliverable (Move 10). **The live
+trading rail stays DORMANT** — re-open only on genuinely new out-of-market information. The one remaining
+genuinely-distinct lever is **Move 4** (intraday running-max physics), which overlaps the closed WO-5 finding
+(low prior, not run).

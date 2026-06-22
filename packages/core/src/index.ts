@@ -28,3 +28,4 @@ export * from './sim/stats.ts';
 export * from './sim/wallet-forensics.ts';
 export * from './sim/copy-trade.ts';
 export * from './sim/tail-calibration.ts';
+export * from './sim/sharp-ensemble.ts';

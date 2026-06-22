@@ -163,7 +163,7 @@ convex option, not a base case** — it has a plausible null (the market is a sh
 If it hits, the prize is a **market-beating intraday Tmax signal** that generalizes to Kalshi + energy
 desks — worth far more than $25k/yr.
 
-### MOVE 5 — Treat the sharps as FORECASTERS in our ensemble (not traders to copy)  ·  LOW · free inputs
+### MOVE 5 — Treat the sharps as FORECASTERS in our ensemble (not traders to copy)  ·  ✅ RAN 2026-06-22 — KILL (value-NEGATIVE)
 
 We falsified *trading* on badatmath's fills (spread tax — a harvesting problem). We never tested
 *forecasting* with them. Its revealed cheap-spray is a **+1.34pp-edge distribution handed to us free,
@@ -173,6 +173,20 @@ measured calibration into a "smart-money consensus." **FROZEN: stacked OOS Brier
 market-implied-alone (the thing that already beats us). KILL if the sharp's distribution adds no orthogonal
 info over the market.** (Clean offline on resolved events; lagged live — fine for the forecast + analytics
 product, a latency problem for live harvest, solved later.)
+
+> **✅ RAN 2026-06-22 — KILL (`WALLET-RECON-HANDOFF.md` §14).** Full universe (45 stn / 721 ev, 174
+> sharp-touched events, fork-equality `1.2991°C` byte-match). Walk-forward "smart-money-consensus" stack vs
+> the MARKET baseline: **M+S improvement (Brier_market − Brier_stack) = −1.74pp CI[−3.44,−0.04] (lead 1) /
+> −1.20pp CI[−2.35,−0.05] (lead 2)** — CI EXCLUDES 0 on the *negative* side: folding the sharp's revealed
+> distribution into the market is **value-NEGATIVE**, not merely already-priced. M+E ≈ 0 (re-confirms
+> KILL-GATE 2: our EMOS adds nothing over the market); marginal-sharp −1.72/−1.17pp (CI excludes 0);
+> zero-skill P(PASS|shuffled)=0.0%. STABLE across leads. **The sharp's cheap longshots mostly LOSE → tilting a
+> calibrated market toward them moves mass off the favourite → worse Brier (same mechanism as §12's
+> value-negative selector).** The 5th independent angle to confirm the edge is pure microstructure, not a
+> superior distribution. Built `core/sim/sharp-ensemble.ts` (pure + 27 tests) +
+> `scripts/research/m5-sharp-ensemble.ts` (spine). 1091 tests green, read-only, no migration. Destination
+> remains the analytics product (Move 10). The single genuinely-distinct lever still unrun is **Move 4**
+> (intraday running-max physics — overlaps closed WO-5, low prior).
 
 ### MOVE 6 — Re-run copy-trade as a MAKER, not a taker  ·  LOW · ~1 day
 
