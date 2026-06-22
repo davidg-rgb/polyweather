@@ -670,3 +670,74 @@ silently dropped an explicit `--models X` request when X was registered-but-disa
 first) — now an explicit `--models` honors a disabled-but-registered model, exactly the staged-sub-lever
 workflow `0051` documents. The 4,400 scratch backfill rows were deleted afterward (the study ships nothing to
 prod); `ncep_nbm_conus` stays registered + `enabled=false`.
+
+---
+
+## 12. MAKER-SPRAY (rest-our-own-bid) feasibility — the 4th and LAST angle, also CLOSED (2026-06-22)
+
+**The question.** §10/§11 closed three angles (forecast-beats-market, day-before-edge, copy-trade-mirror). One
+variable was never directly measured: badatmath is a **MAKER** (rests cheap bids ~7pp below the ask). Could WE
+run that protocol on OUR EMOS forecast — rest our own cheap bids *below* the ask — and clear zero? KILL-GATE 2
+measured the TAKER price (`calibratedP − ask`); this measures the MAKER price (`calibratedP − rested_bid`) with a
+fill model that reads the real `market_snapshots` book evolution (the ask collapses to our bid on losers → fill;
+rises away on winners → no fill). Built architecture-first (`MAKER-SPRAY-SIM.md` + `docs/specs/maker-spray-*.md`,
+Full Phase-9 review → 2-pass convergence) then via a gated subagent workflow. **Result: maker entry on our forecast
+is ALSO efficient — decisively, in BOTH a forecast-conditioned and an indiscriminate spray. All four angles
+falsified; the rail stays DORMANT.**
+
+**What was built (committed on `feat/live-integration-readiness`).**
+- `packages/core/src/sim/maker-spray.ts` — the pure maker twin of `copy-trade.ts`: `restPrice`, the **novel
+  ask-touch fill model** `simulateFill` (filled iff `min(best_ask after entry) ≤ restPx` — embeds adverse
+  selection from the real book), `makerNetEvPerDollar`, `makerEntry`, `simulateSpray`, `makerSprayVerdict`,
+  `crossValidateFillModel`, + a **mandatory zero-skill Monte-Carlo** false-positive guard. 34 tests.
+- `scripts/research/maker-spray-feasibility.ts` — the spine: forks the **db1 EMOS spine** + **copytrade's
+  snapshot loader**; the **tz-correct `localDayWindow` window** is the binding correctness fix vs db1's
+  station-local-`target_date`-as-UTC skew (a real up-to-12h per-city error db1's last-ask read had masked). 21
+  tests. 1044 tests green, typecheck 0, read-only, no migration, no `packages/trading` import.
+- A **`--select all|forecast`** axis distinguishes the mechanical baseline (rest on every cheap bucket) from the
+  real "our-forecast-as-a-maker" test (rest only where `calibratedP > restPx` — the maker analog of db1's
+  cheap-longshot rule). This was added after the build's first cut sprayed indiscriminately (our forecast never
+  entered the EV path) — the indiscriminate-only result would have under-tested the question.
+
+**The run (full universe: 45 stations · 721 resolved events · 2026-04-21→06-21 · entry-lead 24h · rest-at bid ·
+ask-touch; fork-equality db1 `1.2991°C` byte-match — the canonical KILL-GATE 2 anchor):**
+
+| Lens | indiscriminate (`select=all`) | forecast-conditioned (`calibratedP>restPx`) |
+|---|---|---|
+| cheap-eligible / filled | 2048 / 1990 (97% fill) | 1282 / 1248 (97% fill) |
+| **maker edge (won−restPx)** — the robust low-variance metric | **−1.46% CI [−2.20, −0.72]** | **−1.73% CI [−2.66, −0.80]** |
+| EV/$1 (pre-registered; heavy-tailed) | −38.18% CI [−71.22, +3.78] | −13.14% CI [−67.65, +50.87] |
+| adverse selection (filled-hit ≪ eligible-hit) | 3.1% ≪ 5.1% — **CONFIRMED** | 2.9% ≪ 4.8% — **CONFIRMED** |
+| Brier ours vs market-at-entry | 0.0959 vs 0.0890 (ours worse) | 0.0982 vs 0.0885 (ours worse) |
+| verdict | **FAIL** | **FAIL** |
+
+**Three reads:**
+1. **Both modes FAIL on the robust metric.** The low-variance maker edge (`won − restPx`) is negative with a 95%
+   CI that **excludes zero in both modes** — as a maker resting below the ask, our filled bids win ~1.5–1.7pp
+   LESS than the price we rested at. Efficient.
+2. **Our forecast as a SELECTOR is value-NEGATIVE on the cheap tail.** Forecast-conditioning makes it slightly
+   WORSE (−1.73 vs −1.46) and picks buckets that win LESS (4.8% vs 5.1%). Using our forecast to choose cheap
+   buckets is *worse than not using it* — a clean corroboration that our calibration is inferior to the market's
+   (Brier ours > market in both modes; consistent with KILL-GATE 2).
+3. **The adverse-selection trap is real and quantified.** The fill model fills 97% of rested bids, but the filled
+   set wins far less than the eligible base rate — the classic maker problem: your cheap bid fills precisely on
+   the buckets the market is marking down (losers), while winners' asks rise away and never fill you.
+
+**Methodological note (the build's own guard caught it — honest record).** The pre-registered binding metric was
+the fee-net **EV/$1** pooled CI. On cheap longshots that metric is HEAVY-TAILED (a 0.02 bucket that wins pays
++49/$1), so its bootstrap CI is unreliable — the mandatory zero-skill Monte-Carlo reported **P(PASS | shuffled
+outcomes) ≈ 99.7–100%**, i.e. the EV/$1 gate would "pass" pure noise almost always. Per WO-5 discipline the
+criterion was NOT moved (its lower bound is < 0 → FAIL anyway); the conclusion rests on the **low-variance edge
+metric + the AS diagnostic**, which falsify cleanly. Pre-registering EV/$1-CI as binding for cheap-longshot maker
+fills was a slight mis-design; the edge metric is the right tool and was reported alongside (it's why the report
+prints both, and why W4's zero-skill MC is mandatory).
+
+**Scope honesty.** A small sub-scope (8 stations × 6 weeks) had ZERO cheap-bucket winners → a degenerate −104%
+(every cheap bet loses by construction; db1 shows the identical 0% hit there). The full universe is the
+informative scope. The 30-min snapshot grid makes the fill model coarse (surfaced in the coverage block).
+
+**Conclusion.** badatmath's maker edge is **NON-REPLICABLE on our forecast**: resting below the ask does not
+rescue an inferior calibration — adverse selection makes it worse, and our forecast's cheap-tail selection is
+value-negative. **All four replication angles (forecast-beats-market, day-before-edge, copy-trade-mirror,
+maker-spray) are now falsified. The live trading rail stays DORMANT** — re-open only on genuinely new
+out-of-market information.
