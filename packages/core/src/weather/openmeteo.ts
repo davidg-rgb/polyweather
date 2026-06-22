@@ -12,10 +12,16 @@ export interface StationCoords {
   lon: number;
 }
 
-/** The live-verified working model set — KMA/ecmwf_ifs04/gfs025 are traps (accepted, zero data). */
+/**
+ * The live-verified working model set — KMA/ecmwf_ifs04/gfs025 are traps (accepted, zero data).
+ * `nbm_conus` is the NBM (National Blend of Models) CONUS sub-lever for the day-before bucket study
+ * (WALLET-RECON-HANDOFF.md §6 Build #3): 2.5km, ~11-day lead, US-only (non-US stations return no
+ * data, tolerated by parseMultiModelDaily). Registered behind migration 0051; the model seed row is
+ * 0051_nbm_conus_model.sql.
+ */
 export const KNOWN_FORECAST_MODELS = new Set([
   'ecmwf_ifs025', 'gfs_seamless', 'icon_seamless', 'jma_seamless', 'gem_seamless',
-  'meteofrance_seamless', 'ukmo_seamless', 'cma_grapes_global', 'best_match',
+  'meteofrance_seamless', 'ukmo_seamless', 'cma_grapes_global', 'best_match', 'nbm_conus',
 ]);
 
 function assertKnownModels(models: string[]): void {

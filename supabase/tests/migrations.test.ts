@@ -156,6 +156,10 @@ describe('migrations 0001–0010', () => {
       // wallet_forensics_record (idempotent, service-role only). RLS/grants mirror 0043/0049; no cron, no
       // dashboard-surface change. WALLET-RECON-HANDOFF.md Build #2 (the skill-vs-survivorship gate).
       '0050_wallet_forensics_persist.sql',
+      // 0051 = nbm_conus model seed (Build #3 US sub-lever): one additive row in `models`
+      // (CONUS National Blend of Models, registered for the day-before bucket A/B). No table,
+      // RLS, cron, or RPC change. WALLET-RECON-HANDOFF.md §6 Build #3 / §7 item 2.
+      '0051_nbm_conus_model.sql',
     ]);
   });
 });
@@ -395,7 +399,7 @@ describe('RLS (ADR-13, §11.5)', () => {
     const models = await asRole(db, 'authenticated', { email: 'david.geborek@gmail.com' }, () =>
       rows(db, `select * from models`),
     );
-    expect(models.length).toBe(15); // 14 seeded (§7.4 incl. 3 traps) + the 0017 'blend' pseudo-model
+    expect(models.length).toBe(16); // 14 seeded (§7.4 incl. 3 traps) + the 0017 'blend' pseudo-model + nbm_conus (0051)
   });
 
   it('writes are service-role only', async () => {
