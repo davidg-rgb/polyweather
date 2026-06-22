@@ -152,6 +152,10 @@ describe('migrations 0001–0010', () => {
       // gains an additive `sharps` key (whole body re-stated) — stays in WEB_AUTHENTICATED. New daily cron
       // sharp-wallet-track at 16:00 UTC (count 14 → 15 below). WALLET-RECON-HANDOFF.md Build #1.
       '0049_sharp_wallet_tracker.sql',
+      // 0050 = wallet-forensics persistence (Build #2): wallet_pnl_daily + wallet_bet_calibration +
+      // wallet_forensics_record (idempotent, service-role only). RLS/grants mirror 0043/0049; no cron, no
+      // dashboard-surface change. WALLET-RECON-HANDOFF.md Build #2 (the skill-vs-survivorship gate).
+      '0050_wallet_forensics_persist.sql',
     ]);
   });
 });
