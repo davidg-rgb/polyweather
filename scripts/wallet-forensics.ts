@@ -91,6 +91,31 @@ function userPnlFinal(series: UserPnlPoint[]): number | null {
   return series.length === 0 ? null : series[series.length - 1]!.cumPnlUsd;
 }
 
+/**
+ * Detect a SILENTLY-TRUNCATED "full" crawl. The /activity offset cap forces a slide-the-window crawl; if a
+ * window returns empty or 4xx (e.g. Polymarket rate-limiting under heavy use), the loop can terminate early
+ * with mode='full' and exit 0 while having fetched only the most-recent slice — a partial reconstruction
+ * that must never be persisted or reported as lifetime. We catch it by cross-checking the crawl's earliest
+ * fetched fill against the user-pnl ground-truth curve (a single un-paged call that spans the wallet's whole
+ * history): if the earliest fill is more than `toleranceDays` AFTER the wallet's first user-pnl point, the
+ * crawl missed history. Pure + testable. Returns false for an explicit --from window (short by design) and
+ * when there is no ground-truth curve to compare against.
+ */
+export function crawlMissedHistory(
+  pnlSeries: UserPnlPoint[],
+  windowFrom: string | null,
+  mode: string,
+  toleranceDays = 7,
+): boolean {
+  if (mode === 'window') return false; // a deliberate --from window is short on purpose
+  if (pnlSeries.length === 0) return false; // no ground truth to compare against
+  if (windowFrom === null) return true; // a non-window crawl that fetched nothing
+  const pnlFirstDay = utcDay(pnlSeries[0]!.t);
+  const gapDays =
+    (Date.parse(`${windowFrom}T00:00:00Z`) - Date.parse(`${pnlFirstDay}T00:00:00Z`)) / 86_400_000;
+  return gapDays > toleranceDays;
+}
+
 interface PagingResult {
   fills: WalletActivity[];
   /** 'full' = recovered to the first fill; 'capped' = stopped at --max-pages; 'window' = restricted to --from. */
@@ -272,6 +297,11 @@ function analyze(
       : curve;
   const rc = regimeChange(truthCurve);
 
+  // Detect a silently-truncated "full" crawl (early termination, e.g. rate-limiting) by cross-checking the
+  // earliest fetched fill against the user-pnl curve's span — so a partial reconstruction is never persisted
+  // or reported as a lifetime number.
+  const missedHistory = crawlMissedHistory(pnlSeries, paging.windowFrom, paging.mode);
+
   // Reconciliation: compare the TRADING-ONLY reconstructed total to the user-pnl curve over the SAME window
   // (the principled like-for-like — user-pnl-api's profile curve reports realized TRADING PnL). A full/capped
   // crawl reconciles against the lifetime final point; an explicit --from window reconciles against the
@@ -285,7 +315,12 @@ function analyze(
     windowLabel = `${paging.windowFrom}..present (explicit --from window)`;
   } else {
     userPnlTotalUsd = userPnlFinal(pnlSeries);
-    windowLabel = paging.mode === 'capped' ? 'lifetime (INCOMPLETE — crawl hit the page cap)' : 'lifetime';
+    windowLabel =
+      paging.mode === 'capped'
+        ? 'lifetime (INCOMPLETE — crawl hit the page cap)'
+        : missedHistory
+          ? 'lifetime (INCOMPLETE — crawl terminated early, likely rate-limited)'
+          : 'lifetime';
   }
   const absPct = (recon_: number): number | null =>
     userPnlTotalUsd === null || userPnlTotalUsd === 0
@@ -306,7 +341,7 @@ function analyze(
   const out: ForensicsOutput = {
     wallet,
     window: windowLabel,
-    incomplete: paging.mode === 'capped',
+    incomplete: paging.mode === 'capped' || missedHistory,
     paging: {
       mode: paging.mode,
       pagesFetched: paging.pagesFetched,
@@ -395,7 +430,11 @@ function printReadout(out: ForensicsOutput, curve: ReturnType<typeof dailyPnlCur
   console.log('\n──────── RECONCILIATION (the survivorship gate) ────────');
   console.log(`  window:               ${out.window}`);
   if (out.incomplete) {
-    console.log('  ⚠ INCOMPLETE: the crawl hit the --max-pages cap — this is NOT a lifetime reconciliation.');
+    console.log(
+      out.paging.hitCap
+        ? '  ⚠ INCOMPLETE: the crawl hit the --max-pages cap — this is NOT a lifetime reconciliation.'
+        : '  ⚠ INCOMPLETE: the crawl terminated early (likely rate-limited) — this is NOT a lifetime reconciliation.',
+    );
   }
   const d = out.decomposition;
   console.log('  ── proceeds decomposition (the like-for-like diagnostic) ──');
@@ -533,6 +572,24 @@ async function main(): Promise<void> {
     printReadout(out, curve, paging.fills);
   }
 
+  // LOUD failure on an incomplete crawl, BEFORE any persist: a partial reconstruction must never masquerade
+  // as a lifetime reconciliation, and must never be written to the persist tables. `incomplete` is true when
+  // the crawl hit the page cap OR terminated early (missed history vs the user-pnl span — e.g. Polymarket
+  // rate-limiting). The JSON already carries `incomplete: true` + the page count.
+  if (out.incomplete) {
+    const reason = out.paging.hitCap
+      ? `hit the ${maxPages}-page cap after ${out.paging.pagesFetched} pages`
+      : `terminated early after ${out.paging.pagesFetched} pages — earliest fill ${out.paging.windowFrom ?? 'none'}, ` +
+        `but the user-pnl curve starts earlier (likely Polymarket rate-limiting)`;
+    process.stderr.write(
+      `\n✗ INCOMPLETE CRAWL: ${reason} (${out.paging.nFills} fills). The reconstruction is NOT a full lifetime ` +
+        `reconciliation` +
+        (values.persist ? ' — refusing to --persist a partial snapshot' : '') +
+        `. Re-run when the API is healthy (raise --max-pages only if truly capped). Exiting non-zero.\n`,
+    );
+    process.exit(2);
+  }
+
   if (values.persist) {
     const db = makeScriptDb();
     try {
@@ -541,18 +598,6 @@ async function main(): Promise<void> {
     } finally {
       await db.end();
     }
-  }
-
-  // LOUD failure on a capped/incomplete crawl (both modes): a partial reconstruction must never masquerade as
-  // a lifetime reconciliation. The JSON already carries `incomplete: true` + the page count; warn on stderr
-  // and exit non-zero so a caller/CI treats it as a failed run.
-  if (out.incomplete) {
-    process.stderr.write(
-      `\n✗ INCOMPLETE CRAWL: hit the ${maxPages}-page cap after ${out.paging.pagesFetched} pages ` +
-        `(${out.paging.nFills} fills). The reconstruction is NOT a full lifetime reconciliation — raise ` +
-        `--max-pages and re-run for a complete crawl. Exiting non-zero.\n`,
-    );
-    process.exit(2);
   }
 }
 
