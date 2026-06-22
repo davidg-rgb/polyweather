@@ -590,6 +590,48 @@ export interface LiveRunMax {
   lastObsAt: string | null;
 }
 
+/** One revealed bet held by the tracked sharp on the latest pull (0049). */
+export interface SharpPosition {
+  targetDate: string | null;
+  bucketIdx: number | null;
+  outcome: string;
+  sizeShares: unknown;
+  avgPrice: unknown;
+  curValueUsd: unknown;
+  title: string | null;
+}
+
+/**
+ * The sharp-wallet disagreement (0049) — the verified #1 WEATHER sharp's revealed Amsterdam bet for the
+ * soonest upcoming market, set against our house_ensemble forecast and the market's modal (max-mid) bucket.
+ * `hasSharp=false` until the sharp-wallet-track tracker has written a position; the whole object is null
+ * when the RPC predates 0049.
+ */
+export interface SharpsView {
+  hasSharp: boolean;
+  address: string;
+  label: string | null;
+  asOfDate: string | null;
+  targetDate: string | null;
+  /** Latest WEATHER-leaderboard standing (null until the board is snapshotted). */
+  rank: unknown;
+  pnlUsd: unknown;
+  /** Their max-conviction (max-size) YES bucket — the bucket they back to win. */
+  sharpBucketIdx: number | null;
+  sharpLabel: string | null;
+  /** Our house_ensemble argmax bucket. */
+  ourBucketIdx: number | null;
+  ourLabel: string | null;
+  /** The market's modal (max-mid) bucket. */
+  marketBucketIdx: number | null;
+  marketLabel: string | null;
+  /** Distinct calls among {sharp, ours, market}: 1 = full agreement, 3 = three-way split. */
+  disagreement: unknown;
+  /** sharpBucketIdx − ourBucketIdx in ladder steps (≈ °C for the interior), or null. */
+  signedDeltaIdx: number | null;
+  positions: SharpPosition[];
+}
+
 /** Pooled prediction accuracy across all arms (computed in the loader from the full-population aggregates). */
 export interface OverallAccuracy {
   /** Market hit rate = won / graded, pooled over every arm (the number that drives P&L). */
@@ -619,6 +661,8 @@ export interface AmsterdamSimView {
   tomorrow: TomorrowView | null;
   /** Live running-max as of now (0046); null when no obs today or the RPC predates it. */
   liveRunMax: LiveRunMax | null;
+  /** Sharp-wallet disagreement (0049); null when the RPC predates it. */
+  sharps: SharpsView | null;
   /** Pooled prediction accuracy across all arms (computed in the loader, full-population). */
   overall: OverallAccuracy;
 }
@@ -659,6 +703,8 @@ interface SimPayload {
   /** 0046 — present only once the RPC redefine ships; the loader tolerates their absence. */
   tomorrow?: TomorrowView | null;
   liveRunMax?: LiveRunMax | null;
+  /** 0049 — present only once the RPC redefine ships; the loader tolerates its absence. */
+  sharps?: SharpsView | null;
 }
 
 // Coercion MUST mirror format.ts `num`: map null/undefined/'' to null FIRST, because Number(null)===0 and
@@ -835,6 +881,7 @@ export async function getAmsterdamSim(db: WebDb, opts: { now?: Date } = {}): Pro
     truthCoverage: v.truthCoverage ?? null,
     tomorrow: v.tomorrow ?? null,
     liveRunMax: v.liveRunMax ?? null,
+    sharps: v.sharps ?? null,
     overall,
   };
 }

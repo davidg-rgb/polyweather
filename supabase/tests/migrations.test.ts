@@ -147,6 +147,11 @@ describe('migrations 0001–0010', () => {
       // lock hour [lockstart, asof); no in-hour quote → arm skipped (was an unbounded backward forward-fill
       // that stamped pre-hour/phantom odds onto thin early-day bets). 0041 body verbatim; ask bound added.
       '0048_amsterdam_in_hour_ask_guard.sql',
+      // 0049 = sharp-wallet & WEATHER-leaderboard benchmark tracker (tracked_wallets +
+      // wallet_leaderboard_snapshots + wallet_positions_daily + 2 service-role record RPCs); dash_amsterdam_sim
+      // gains an additive `sharps` key (whole body re-stated) — stays in WEB_AUTHENTICATED. New daily cron
+      // sharp-wallet-track at 16:00 UTC (count 14 → 15 below). WALLET-RECON-HANDOFF.md Build #1.
+      '0049_sharp_wallet_tracker.sql',
     ]);
   });
 });
@@ -718,8 +723,9 @@ describe('pg_cron registrations (§7.22, W11)', () => {
       'health-monitor': '*/30 * * * *',
       'snapshot-downsample': '0 3 * * *',
       'amsterdam-paper-trade': '30 15 * * *',
+      'sharp-wallet-track': '0 16 * * *',
     };
-    expect(jobs.length).toBe(14);
+    expect(jobs.length).toBe(15);
     for (const j of jobs) {
       expect(j.schedule, `schedule for ${j.jobname}`).toBe(expected[j.jobname]);
     }

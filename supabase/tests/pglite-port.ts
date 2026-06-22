@@ -121,6 +121,8 @@ const FN_ARGS: Record<string, string[]> = {
   amsterdam_sim_truth_inputs: [],
   amsterdam_sim_truth_record: ['p_rows'],
   dash_amsterdam_sim: [],
+  sharp_wallet_record_positions: ['p_address', 'p_label', 'p_as_of', 'p_rows'],
+  sharp_wallet_record_leaderboard: ['p_captured_at', 'p_time_period', 'p_rows'],
 };
 
 export function pglitePort(db: PGlite): DbPort {

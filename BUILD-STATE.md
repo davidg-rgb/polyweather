@@ -14,6 +14,26 @@
 > deliverable (e.g. a polished forecast-skill + market-efficiency view as the product's headline). See the
 > updated project `CLAUDE.md` header and `FORECASTING-RD.md` WO-5 for the rationale.
 
+**2026-06-22 analytics: sharp-wallet & WEATHER-leaderboard benchmark tracker — migration `0049` + Edge `sharp-wallet-track`, BUILT & TESTED (deploy operator-gated).**
+WALLET-RECON-HANDOFF.md **Build #1**, on-pivot (analytics, NOT trading — no copy-trade; trading thesis stays closed).
+An external Polymarket wallet "badatmath." (`0x8fbd…a959`) trades our exact universe and is verifiably profitable
+(#1 on the WEATHER leaderboard, +$25.4k realized, regime change ~May 14–21 2026; cheap-longshot edge). We ingest it +
+the top-N WEATHER leaderboard daily and surface it on `/amsterdam` as an **independent third forecaster** — the signal
+is 3-way **disagreement** (their bucket vs our `house_ensemble` argmax vs the market's modal/max-mid bucket).
+**Shipped (code):** migration `0049_sharp_wallet_tracker.sql` — 3 tables (`tracked_wallets` seeded with badatmath,
+`wallet_leaderboard_snapshots`, `wallet_positions_daily`), 2 service-role record RPCs (post-0034 revoke/grant), the whole
+`dash_amsterdam_sim` body re-stated with an additive `sharps` key, + daily cron `sharp-wallet-track` `0 16 * * *` UTC
+(migrations.test 14→15 jobs). Pure parsers + thin fetch wrappers in `_shared/polymarket-wallet.ts` (knmi.ts idiom; field
+names fixture-verified live against `research/dataapi-positions-badatmath-sample.json` etc. — `size` not `shares`,
+leaderboard `proxyWallet/userName/vol/pnl/rank`-string). Edge Function `sharp-wallet-track` (+`handler.ts`, runJob idiom),
+manual twin `scripts/sharp-wallets.ts`, loader `SharpsView` + web card `SharpDisagreement.tsx` in the `/amsterdam` bento.
+**Verified:** `pnpm test` **871 green** (+21: 15 parser, 6 end-to-end sharp-wallet — record RPCs/handler/dash sharps/empty
+state), typecheck 0, web build OK. Live Polymarket data path verified by curl (badatmath = 20 Amsterdam positions incl. the
+cheap-longshot YES on "25°C or below"). **DEPLOY PENDING (operator-gated):** apply `0049` to prod (`apply_migration`,
+precedent 0044/0046) → deploy Edge `sharp-wallet-track` → first 16:00 UTC cron fills the card (or run
+`pnpm tsx scripts/sharp-wallets.ts --leaderboard` once to seed immediately). No new secrets (reuses `project_url`/`cron_secret`,
+`SUPABASE_*`). Design + builds #2/#3: `WALLET-RECON-HANDOFF.md`.
+
 **2026-06-22 data-integrity: Amsterdam paper-sim odds audit → in-lock-hour ask guard (`0048`) + full re-derivation, LIVE & verified.**
 Operator audit of the fictitious arms. The sim (40 bets, 06-12→06-21; no older history) was seeded
 retrospectively on 06-16 from mid-backfill feeds. Defect: `amsterdam_sim_place_inputs` forward-filled each

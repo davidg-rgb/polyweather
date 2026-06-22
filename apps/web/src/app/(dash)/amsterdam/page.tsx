@@ -14,6 +14,7 @@
 import type { ReactElement } from 'react';
 import { EquityChart, type EquitySeries } from '../../../components/EquityChart.tsx';
 import { PeakHourChart } from '../../../components/PeakHourChart.tsx';
+import { SharpDisagreement } from '../../../components/SharpDisagreement.tsx';
 import { fmtDate, fmtPct, fmtProb, fmtTemp, fmtUsd, num } from '../../../lib/format.ts';
 import { getAmsterdamSim } from '../../../lib/loaders.ts';
 import { serverDb } from '../../../lib/supabase.ts';
@@ -132,7 +133,7 @@ export default async function AmsterdamPage(): Promise<ReactElement> {
 
   const {
     config, coverage, arms, leaderHour, chart, betLog, latest, truthCoverage, bestTime, peakHourChart,
-    tomorrow, liveRunMax, overall,
+    tomorrow, liveRunMax, sharps, overall,
   } = view;
   const hasTruth = (num(truthCoverage?.nBetsWithTruth) ?? 0) > 0;
   const nGradedDays = num(coverage.nGradedDays) ?? 0;
@@ -395,6 +396,9 @@ export default async function AmsterdamPage(): Promise<ReactElement> {
           the leaderboard as provisional.
         </div>
       ) : null}
+
+      {/* ── What the #1 weather sharp is betting (0049) — independent third forecaster benchmark ───────── */}
+      {sharps ? <SharpDisagreement sharps={sharps} /> : null}
 
       {!hasBets ? (
         <div className="panel">
