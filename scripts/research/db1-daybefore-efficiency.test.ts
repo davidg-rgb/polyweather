@@ -2,10 +2,25 @@ import { describe, expect, it } from 'vitest';
 import {
   selectEntries,
   bucketEdge,
+  brierSharperP,
   marketImpliedProbs,
   CHEAP_LONGSHOT_MAX_ASK,
   type BucketView,
 } from './db1-daybefore-efficiency.ts';
+
+describe('brierSharperP — sign convention (review fix [9]: small p ⇒ OURS sharper)', () => {
+  it('returns a SMALL p when ours is unambiguously sharper (lower Brier)', () => {
+    const ours = Array.from({ length: 40 }, () => 0.1);
+    const market = Array.from({ length: 40 }, () => 0.6);
+    expect(brierSharperP(ours, market)).toBeLessThan(0.05);
+  });
+
+  it('returns a LARGE p when the MARKET is sharper (the EFFICIENT-verdict case)', () => {
+    const ours = Array.from({ length: 40 }, () => 0.6);
+    const market = Array.from({ length: 40 }, () => 0.1);
+    expect(brierSharperP(ours, market)).toBeGreaterThan(0.95);
+  });
+});
 
 describe('bucketEdge — the primary metric (calibratedP − ask)', () => {
   it('computes the signed gap', () => {
@@ -88,7 +103,7 @@ describe('marketImpliedProbs — day-before asks renormalized to a distribution'
       { bucketIdx: 1, calibratedP: 0, ask: 0.6, isWinner: true },
       { bucketIdx: 2, calibratedP: 0, ask: null, isWinner: false },
     ];
-    const mip = marketImpliedProbs(v)!;
+    const mip = marketImpliedProbs(v, 1)!; // winner = pos 1 (has an ask)
     expect(mip.reduce((a, b) => a + b, 0)).toBeCloseTo(1, 9);
     expect(mip[0]!).toBeCloseTo(0.25, 9); // 0.2 / 0.8
     expect(mip[1]!).toBeCloseTo(0.75, 9); // 0.6 / 0.8
@@ -100,6 +115,22 @@ describe('marketImpliedProbs — day-before asks renormalized to a distribution'
       { bucketIdx: 0, calibratedP: 0, ask: null, isWinner: false },
       { bucketIdx: 1, calibratedP: 0, ask: 0, isWinner: true },
     ];
-    expect(marketImpliedProbs(v)).toBeNull();
+    expect(marketImpliedProbs(v, 1)).toBeNull();
+  });
+
+  it('drops the event when the WINNER bucket has no day-before ask (review fix [10])', () => {
+    // Other buckets are quoted (sum > 0) but the bucket that resolved has no ask. The pre-fix returned a
+    // distribution with P(winner)=0, handing the market a guaranteed +1 Brier penalty on the winning outcome.
+    const v: BucketView[] = [
+      { bucketIdx: 0, calibratedP: 0, ask: 0.4, isWinner: false },
+      { bucketIdx: 1, calibratedP: 0, ask: null, isWinner: true }, // winner unquoted
+    ];
+    expect(marketImpliedProbs(v, 1)).toBeNull();
+    // …but a quoted winner alongside an unquoted loser still yields a distribution.
+    const v2: BucketView[] = [
+      { bucketIdx: 0, calibratedP: 0, ask: null, isWinner: false },
+      { bucketIdx: 1, calibratedP: 0, ask: 0.4, isWinner: true },
+    ];
+    expect(marketImpliedProbs(v2, 1)).not.toBeNull();
   });
 });

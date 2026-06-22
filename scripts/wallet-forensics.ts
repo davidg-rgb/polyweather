@@ -116,6 +116,21 @@ export function crawlMissedHistory(
   return gapDays > toleranceDays;
 }
 
+/**
+ * A crawl is INCOMPLETE (so its reconstructed total must NEVER be persisted or reported as a lifetime number)
+ * if it hit the page cap or a full crawl silently terminated early. CRITICAL: the paging `mode` ternary lets
+ * `--from` take precedence over `hitCap` (`opts.from ? 'window' : hitCap ? 'capped' : 'full'`), so a --from
+ * window that ALSO exhausts --max-pages reports mode='window' and would mask the truncation. We therefore read
+ * the raw `hitCap` flag directly — `mode === 'capped'` alone is not enough. Pure + testable.
+ */
+export function crawlIncomplete(
+  mode: PagingResult['mode'],
+  hitCap: boolean,
+  missedHistory: boolean,
+): boolean {
+  return mode === 'capped' || hitCap || missedHistory;
+}
+
 /** TRADE-only fills for behavioral stats (entry px / Yes-No share). */
 function tradeFills(fills: WalletActivity[]): WalletActivity[] {
   return fills.filter((f) => f.type === 'TRADE' && f.side === 'BUY');
@@ -150,6 +165,8 @@ interface ForensicsOutput {
   winRateCi: { lo: number; hi: number };
   nWins: number;
   nLosses: number;
+  /** Audit holdouts (graded cash kept in the total but held out of one or more per-bet metrics — see RealizedReconstruction). */
+  audit: { nUnattributed: number; nEntryUnpriced: number; nUngradedNullTarget: number; ungradedNullTargetStakeUsd: number };
   roiLt025Pct: number;
   roiMid045to075Pct: number;
   lt025Positive: boolean;
@@ -206,7 +223,13 @@ function analyze(
     const before = userPnlAtDate(pnlSeries, paging.windowFrom) ?? 0;
     const final = userPnlFinal(pnlSeries);
     userPnlTotalUsd = final === null ? null : final - before;
-    windowLabel = `${paging.windowFrom}..present (explicit --from window)`;
+    // A window crawl that ALSO exhausted --max-pages kept only the newest slice of the window and dropped the
+    // older tail — the reconstructed total then reconciles a truncated slice against the FULL-window user-pnl
+    // delta. Flag it so the `incomplete` guard below refuses to persist it (the `mode` ternary lets `from` mask
+    // `hitCap`, so window+hitCap must be caught explicitly).
+    windowLabel = paging.hitCap
+      ? `${paging.windowFrom}..present (INCOMPLETE — window crawl hit the page cap, older tail dropped)`
+      : `${paging.windowFrom}..present (explicit --from window)`;
   } else {
     userPnlTotalUsd = userPnlFinal(pnlSeries);
     windowLabel =
@@ -235,7 +258,7 @@ function analyze(
   const out: ForensicsOutput = {
     wallet,
     window: windowLabel,
-    incomplete: paging.mode === 'capped' || missedHistory,
+    incomplete: crawlIncomplete(paging.mode, paging.hitCap, missedHistory),
     paging: {
       mode: paging.mode,
       pagesFetched: paging.pagesFetched,
@@ -262,6 +285,12 @@ function analyze(
     winRateCi: ci,
     nWins: recon.nWins,
     nLosses: recon.nLosses,
+    audit: {
+      nUnattributed: recon.nUnattributed,
+      nEntryUnpriced: recon.nEntryUnpriced,
+      nUngradedNullTarget: recon.nUngradedNullTarget,
+      ungradedNullTargetStakeUsd: recon.ungradedNullTargetStakeUsd,
+    },
     roiLt025Pct: Number.isFinite(cheap.roi) ? cheap.roi * 100 : NaN,
     roiMid045to075Pct: Number.isFinite(mid.roi) ? mid.roi * 100 : NaN,
     lt025Positive: Number.isFinite(cheap.roi) && cheap.roi > 0,
@@ -399,6 +428,14 @@ function printReadout(out: ForensicsOutput, curve: ReturnType<typeof dailyPnlCur
     `  win rate: ${pct(out.winRatePct / 100)} (${out.nWins}W / ${out.nLosses}L);  ` +
       `Wilson 95% CI [${pct(out.winRateCi.lo)}, ${pct(out.winRateCi.hi)}];  ROI-on-vol ${pct(out.roiOnVolume)}\n`,
   );
+  const a = out.audit;
+  if (a.nUngradedNullTarget > 0 || a.nEntryUnpriced > 0 || a.nUnattributed > 0) {
+    console.log(
+      `  audit holdouts: ${a.nUngradedNullTarget} BUY-only null-target ungraded (${usd(a.ungradedNullTargetStakeUsd)} stake), ` +
+        `${a.nEntryUnpriced} unpriced (no BUY shares), ${a.nUnattributed} unattributable merged-leg blobs — ` +
+        `cash kept in the total, held out of the win-rate/entry-keyed denominators. Confirm the null-target stake is negligible vs loss stake before trusting win rate.\n`,
+    );
+  }
 }
 
 /** Persist the daily curve + per-bet calibration via the 0050 record RPC (idempotent). */
@@ -450,8 +487,12 @@ async function main(): Promise<void> {
     console.log('Pulling user-pnl ground-truth curve + paging /activity …');
   }
 
-  // 1) ground-truth curve
-  const pnlSeries = await fetchUserPnlSeries(fetchJson, wallet, { timeoutMs: 60_000, retries: 2 });
+  // 1) ground-truth curve. parseUserPnl preserves upstream order, but crawlMissedHistory (reads [0] as the
+  // first day), userPnlAtDate, and userPnlFinal all assume ascending t — pin that invariant here at the
+  // boundary (sorted in the script, not the seam-shared fetcher, to keep the Deno/Node twins byte-identical).
+  const pnlSeries = (await fetchUserPnlSeries(fetchJson, wallet, { timeoutMs: 60_000, retries: 2 })).sort(
+    (a, b) => a.t - b.t,
+  );
 
   // 2) page /activity — a FULL crawl by default, or windowed ONLY when the operator explicitly passes --from.
   // There is NO automatic window fallback: if the full crawl hits the page cap we surface it loudly (below)

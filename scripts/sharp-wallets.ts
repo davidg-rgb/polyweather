@@ -151,8 +151,10 @@ async function report(db: ScriptDb, wallet: string): Promise<void> {
       mkt_label: string | null;
     }>(
       `with focus as (
+         -- Amsterdam-local cutoff to match dash_amsterdam_sim's v_today (0049:226/473); current_date (UTC)
+         -- drifts a day at the 22:00–24:00 UTC edge, breaking the "byte-identical to the Edge tick" claim.
          select coalesce(
-           min(target_date) filter (where target_date >= current_date),
+           min(target_date) filter (where target_date >= (now() at time zone 'Etc/GMT-2')::date),
            max(target_date)
          ) as d
          from wallet_positions_daily

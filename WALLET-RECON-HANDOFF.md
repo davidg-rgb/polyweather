@@ -670,3 +670,262 @@ silently dropped an explicit `--models X` request when X was registered-but-disa
 first) — now an explicit `--models` honors a disabled-but-registered model, exactly the staged-sub-lever
 workflow `0051` documents. The 4,400 scratch backfill rows were deleted afterward (the study ships nothing to
 prod); `ncep_nbm_conus` stays registered + `enabled=false`.
+
+---
+
+## 12. MAKER-SPRAY (rest-our-own-bid) feasibility — the 4th and LAST angle, also CLOSED (2026-06-22)
+
+**The question.** §10/§11 closed three angles (forecast-beats-market, day-before-edge, copy-trade-mirror). One
+variable was never directly measured: badatmath is a **MAKER** (rests cheap bids ~7pp below the ask). Could WE
+run that protocol on OUR EMOS forecast — rest our own cheap bids *below* the ask — and clear zero? KILL-GATE 2
+measured the TAKER price (`calibratedP − ask`); this measures the MAKER price (`calibratedP − rested_bid`) with a
+fill model that reads the real `market_snapshots` book evolution (the ask collapses to our bid on losers → fill;
+rises away on winners → no fill). Built architecture-first (`MAKER-SPRAY-SIM.md` + `docs/specs/maker-spray-*.md`,
+Full Phase-9 review → 2-pass convergence) then via a gated subagent workflow. **Result: maker entry on our forecast
+is ALSO efficient — decisively, in BOTH a forecast-conditioned and an indiscriminate spray. All four angles
+falsified; the rail stays DORMANT.**
+
+**What was built (committed on `feat/live-integration-readiness`).**
+- `packages/core/src/sim/maker-spray.ts` — the pure maker twin of `copy-trade.ts`: `restPrice`, the **novel
+  ask-touch fill model** `simulateFill` (filled iff `min(best_ask after entry) ≤ restPx` — embeds adverse
+  selection from the real book), `makerNetEvPerDollar`, `makerEntry`, `simulateSpray`, `makerSprayVerdict`,
+  `crossValidateFillModel`, + a **mandatory zero-skill Monte-Carlo** false-positive guard. 34 tests.
+- `scripts/research/maker-spray-feasibility.ts` — the spine: forks the **db1 EMOS spine** + **copytrade's
+  snapshot loader**; the **tz-correct `localDayWindow` window** is the binding correctness fix vs db1's
+  station-local-`target_date`-as-UTC skew (a real up-to-12h per-city error db1's last-ask read had masked). 21
+  tests. 1044 tests green, typecheck 0, read-only, no migration, no `packages/trading` import.
+- A **`--select all|forecast`** axis distinguishes the mechanical baseline (rest on every cheap bucket) from the
+  real "our-forecast-as-a-maker" test (rest only where `calibratedP > restPx` — the maker analog of db1's
+  cheap-longshot rule). This was added after the build's first cut sprayed indiscriminately (our forecast never
+  entered the EV path) — the indiscriminate-only result would have under-tested the question.
+
+**The run (full universe: 45 stations · 721 resolved events · 2026-04-21→06-21 · entry-lead 24h · rest-at bid ·
+ask-touch; fork-equality db1 `1.2991°C` byte-match — the canonical KILL-GATE 2 anchor):**
+
+> **⚠ NUMBERS REFRESHED 2026-06-22 (commit `77c92f2`).** A parallel multi-agent code-review found a de-dup bug:
+> `assembleBids` emitted one bid *per NWP lead* (with `--leads 1,2` the default, exactly 2× per market position),
+> inflating the effective n and shrinking every CI by ~√2. The table below is the **re-run at the corrected n**
+> (one bid per event, shortest lead). The point estimates of the binding edge metric are **identical** (the
+> duplicate had the same `won−restPx`, which doesn't depend on the NWP lead) — only n halves and the CIs widen.
+> **The FAIL conclusion is fully intact: the edge CI still EXCLUDES 0 in both modes even at the honest, halved n.**
+
+| Lens | indiscriminate (`select=all`) | forecast-conditioned (`calibratedP>restPx`) |
+|---|---|---|
+| cheap-eligible / filled | 1024 / 995 (97% fill) | 590 / 572 (97% fill) |
+| **maker edge (won−restPx)** — the robust low-variance metric | **−1.46% CI [−2.51, −0.41]** | **−1.73% CI [−3.16, −0.30]** |
+| EV/$1 (pre-registered; heavy-tailed) | −38.18% CI [−80.45, +24.37] | −4.72% CI [−77.15, +105.14] |
+| adverse selection (filled-hit ≪ eligible-hit) | 3.1% ≪ 5.1% — **CONFIRMED** | 3.1% ≪ 5.6% — **CONFIRMED** |
+| Brier ours vs market-at-entry | 0.0949 vs 0.0890 (ours worse) | 0.1110 vs 0.1006 (ours worse) |
+| verdict | **FAIL** | **FAIL** |
+
+**Three reads:**
+1. **Both modes FAIL on the robust metric.** The low-variance maker edge (`won − restPx`) is negative with a 95%
+   CI that **excludes zero in both modes** — as a maker resting below the ask, our filled bids win ~1.5–1.7pp
+   LESS than the price we rested at. Efficient.
+2. **Our forecast as a SELECTOR is value-NEGATIVE on the cheap tail.** Forecast-conditioning makes the realized
+   maker edge WORSE (−1.73 vs −1.46) and the calibration further behind the market (Brier 0.1110 vs market 0.1006,
+   a bigger deficit than `select=all`'s 0.0949 vs 0.0890). The eligible buckets it picks actually win marginally
+   MORE at selection (5.6% vs 5.1%) — but that does NOT survive the fill: forecast-conditioning suffers *worse*
+   adverse selection (filled 3.1% vs eligible 5.6% = a 2.5pp gap, vs `select=all`'s 2.0pp). Net: using our forecast
+   to choose cheap buckets is *worse than not using it* — a clean corroboration that our calibration is inferior to
+   the market's (Brier ours > market in both modes; consistent with KILL-GATE 2). [corrected read at the de-duped n;
+   the pre-fix note had this as "picks buckets that win LESS (4.8% vs 5.1%)" — the de-dup flips the eligible-hit
+   comparison, but the value-NEGATIVE conclusion is unchanged and now rests on adverse selection + Brier, not bucket selection.]
+3. **The adverse-selection trap is real and quantified.** The fill model fills 97% of rested bids, but the filled
+   set wins far less than the eligible base rate — the classic maker problem: your cheap bid fills precisely on
+   the buckets the market is marking down (losers), while winners' asks rise away and never fill you.
+
+**Methodological note (the build's own guard caught it — honest record).** The pre-registered binding metric was
+the fee-net **EV/$1** pooled CI. On cheap longshots that metric is HEAVY-TAILED (a 0.02 bucket that wins pays
++49/$1), so its bootstrap CI is unreliable — the mandatory zero-skill Monte-Carlo reported **P(PASS | shuffled
+outcomes) = 100% (`select=all`) / 79.6% (`select=forecast`)** at the corrected n, i.e. the EV/$1 gate would "pass"
+pure noise the overwhelming majority of the time. Per WO-5 discipline the
+criterion was NOT moved (its lower bound is < 0 → FAIL anyway); the conclusion rests on the **low-variance edge
+metric + the AS diagnostic**, which falsify cleanly. Pre-registering EV/$1-CI as binding for cheap-longshot maker
+fills was a slight mis-design; the edge metric is the right tool and was reported alongside (it's why the report
+prints both, and why W4's zero-skill MC is mandatory).
+
+**Scope honesty.** A small sub-scope (8 stations × 6 weeks) had ZERO cheap-bucket winners → a degenerate −104%
+(every cheap bet loses by construction; db1 shows the identical 0% hit there). The full universe is the
+informative scope. The 30-min snapshot grid makes the fill model coarse (surfaced in the coverage block).
+
+**Conclusion.** badatmath's maker edge is **NON-REPLICABLE on our forecast**: resting below the ask does not
+rescue an inferior calibration — adverse selection makes it worse, and our forecast's cheap-tail selection is
+value-negative. **All four replication angles (forecast-beats-market, day-before-edge, copy-trade-mirror,
+maker-spray) are now falsified. The live trading rail stays DORMANT** — re-open only on genuinely new
+out-of-market information.
+
+---
+
+## 13. M1 TAIL-CALIBRATION DIAGNOSIS — the one router arm never measured (2026-06-22) — AMBIGUOUS
+
+**The question (BADATMATH-GAP-PLAN.md Move 1 / §6 "the single next concrete action").** §10–§12 falsified all
+four replication angles — and **every one used OUR forecast as the SELECTOR**. The reverse was never asked: *do
+badatmath's REVEALED cheap picks resolve more often than OUR EMOS predicts?* If yes (≥+3pp, CI>0) our **tail** is
+underweighted — a *fixable forecast* (Case A → Move 7 recalibration), not just an un-replicable rent. If no
+(<+1pp, with M2 already FAIL) the forecast is **not** the gap → the analytics product (Move 10). This is a
+DIAGNOSIS, not a trade gate: a PASS routes to a recalibration *experiment* re-tested by the existing maker-spray
+sim; it does **not** reopen the live rail. The result feeds the analytics product either way.
+
+**What was built (committed on `feat/live-integration-readiness`).**
+- `packages/core/src/sim/tail-calibration.ts` — the pure analytics: `m1TailCalibration` (the BINDING
+  low-variance `won − EMOS_p` gap + CI), `m3TailBrier` (tail-local Brier ours vs market), `m4EntryDeciles`
+  (their realized edge by entry-price band), `tailCalibrationVerdict` (the §5 branch table), with the FROZEN
+  cut + thresholds in a header comment block (WO-5: the §12 heavy-tailed-EV mis-design lesson is honored — the
+  binding metric is the low-variance paired gap, never a per-bet EV). **13 tests.**
+- `scripts/research/m1-tail-calibration.ts` — the impure spine: reuses `crawlActivity` (the windowed
+  `/activity` crawler) + `toPositions` (copytrade) + the maker-spray EMOS spine (`assembleBids` =
+  db1-forked walk-forward EMOS) + `forkEqualityRmse` (the correctness anchor). The bridge is
+  `market_buckets.condition_id → (event_id, bucket_idx)`. **1064 tests green, typecheck 0, read-only, no
+  migration, no `packages/trading` import.** Crawl cached to `scripts/research/out/badatmath-fills.json`.
+
+**The run (full universe: 45 stations · 721 resolved events · 2026-04-21→06-21 · fork-equality `1.2991°C`
+byte-match to db1 — the EMOS_p IS the live model). Crawled 64,934 BUY fills → 12,402 positions → 5,139 cheap
+(<0.25) YES positions; 1,050 joined to an EMOS forecast (the rest are cities/days outside our 45-station scope
+or without a forecast+σ in window).**
+
+| Metric | Lead 1 (24h) | Lead 2 (48h) |
+|---|---|---|
+| cheap-tail picks (EMOS_p<0.15), n | 479 | 460 |
+| empirical resolution freq | 8.98% | 10.22% |
+| mean EMOS_p (what our model said) | 6.61% | 7.45% |
+| **★ M1 gap (won − EMOS_p)** — the binding metric | **+2.37pp CI [−0.18, +4.91]** | **+2.76pp CI [+0.01, +5.52]** |
+| M3 tail Brier (ours − market) | +0.79pp [−0.04, +1.61] | +0.23pp [−0.51, +0.97] |
+| verdict | **AMBIGUOUS** | **AMBIGUOUS** (stable across leads ✓) |
+
+**Three reads:**
+1. **Our tail is roughly calibrated — NOT a clean Case A.** The gap is a *whisper* of underweighting (+2.4 to
+   +2.8pp: their cheap picks resolve slightly more than EMOS predicts) but it **does NOT clear the pre-registered
+   +3pp PASS bar**, and lead-1's CI includes 0 (lead-2 grazes +0.01). Per WO-5 the bar is NOT moved → AMBIGUOUS.
+   **No Move-7 recalibration is warranted by the frozen criterion.**
+2. **The market is still the sharper tail forecaster (M3 corroborates KILL-GATE 2).** `Brier(ours) − Brier(market)`
+   on the cheap tail is **positive** (ours worse), tied within CI. Our forecast is not better than the market on
+   the tail — exactly KILL-GATE 2's finding, now confirmed on the sharp's own revealed picks.
+3. **A whisper of mis-calibration would still not be tradable — and the edge isn't even at the extreme tail.**
+   M4 shows badatmath's realized edge lives in the **0.08–0.16 entry band** (+5.7 to +10.4pp), and is *negative*
+   at the very cheapest (<0.07) and at 0.19 — refining §3's "cheapest longshots are the engine" to "the
+   low-MIDDLE band is." Even a recalibrated tail can't harvest it: §12 already proved adverse selection eats a
+   maker entry on our forecast, and the edge sits precisely in the band we'd have to out-rest competing makers in.
+
+**Conclusion.** The M1 router returns **AMBIGUOUS, stable across leads**: our EMOS tail is *approximately*
+calibrated to the #1 sharp's revealed picks (a small +2.5pp gap below the Case-A bar), and is *not* sharper than
+the market there (M3). Per the frozen §5 branch table this is an **analytics input, not a forecast-lever reopen**
+— the destination remains the analytics product (Move 10). **The number is itself the deliverable:** we hold the
+only forensic reconstruction of the #1 weather trader, now scored against a calibrated model — and the finding is
+that the sharp does *not* materially out-forecast our tail; its edge is microstructure (maker resting + rebate +
+breadth across ~45 cities), which §11/§12 already proved structurally non-followable and non-replicable on our
+fills. **The live trading rail stays DORMANT.** The remaining genuinely-distinct lever (Move 4, the intraday
+running-max physics signal) is unaffected by this result but overlaps a closed WO-5 finding (the market is
+efficient w.r.t. the running-max floor) — low prior, not run here.
+
+---
+
+## 14. MOVE 5 — the sharp as a FORECASTER (stacked-ensemble study) — RAN 2026-06-22 — KILL (value-NEGATIVE)
+
+**The question (BADATMATH-GAP-PLAN.md Move 5).** §10–§13 falsified every way to *trade* badatmath — all
+harvesting problems, all using OUR forecast as the selector. One Move was never run: the *forecasting* one.
+badatmath BEATS the market, and its revealed cheap-spray is a daily distribution we currently throw away — so
+**does that distribution carry orthogonal information that, folded into a stacked forecaster, beats the market
+distribution we already lose to?** The honest baseline is the **MARKET** (the sharper forecaster per KILL-GATE 2
+/ M3), not our EMOS. This is the lowest-regret Move: a PASS upgrades the FORECAST/analytics product (a
+"smart-money-consensus" distribution); it does NOT reopen the live rail (the harvest is still adverse-selection
+bound, §12). **Result: the sharp's revealed distribution adds NO orthogonal skill — folding it in is
+value-NEGATIVE — stable across both leads. The 5th angle is closed; the live rail stays DORMANT.**
+
+**What was built (committed on `feat/live-integration-readiness`).**
+- `packages/core/src/sim/sharp-ensemble.ts` — the pure analytics: three per-event forecaster
+  distributions (`marketDist` = renormalized asks-at-entry, the baseline; `emosDist` = our walk-forward
+  gaussian ladder; `sharpDist` = the **market tilted toward the sharp's cheap revealed stake**,
+  `mkt·(1+λ·stakeShare)` renormalized — λ frozen, never zeros the favourite so it is a fair forecaster), a
+  convex `blend`, a deterministic simplex-grid `fitWeights`, the **no-lookahead `walkForwardStack`** (weights
+  fit on STRICTLY-prior target dates only), paired-Brier `scoreArm`, the **`zeroSkillSharpMc`** false-positive
+  guard (shuffle the sharp signal across events, re-fit, P(PASS|noise)), and the frozen `ensembleVerdict`
+  (FOUR guards must all clear: the low-variance improvement CI, the paired bootstrap, the zero-skill MC, AND the
+  marginal-sharp arm that neutralizes the EMOS confound). **27 tests** (a constructed PASS, KILL, INSUFFICIENT).
+- `scripts/research/m5-sharp-ensemble.ts` — the impure spine: reuses the m1/maker-spray data path
+  (`crawlActivity`→`toPositions`, the `market_buckets.condition_id` bridge, the db1-forked `assembleBids` EMOS
+  ladder, `forkEqualityRmse`); groups the ladder into `EnsembleEvent`s and attaches the sharp's per-bucket
+  revealed Yes-leg stake. **1091 tests green, typecheck 0, read-only, no migration, no `packages/trading` import.**
+
+**The run (full universe: 45 stations · 721 resolved events · 2026-04-21→06-21 · leads 1,2 · tiltλ 4 · mc-iters
+200 · fork-equality `1.2991°C` byte-match to db1 — the EMOS ladder IS the live model. 174 sharp-touched events
+of 473 seen had all three forecasters defined).**
+
+| Arm (vs MARKET baseline) | Lead 1 (24h) | Lead 2 (48h) |
+|---|---|---|
+| **★ M+S** (binding — does the sharp add over the market?) | **−1.74pp CI [−3.44, −0.04]** p=0.97 | **−1.20pp CI [−2.35, −0.05]** p=0.98 |
+| M+E (EMOS control — our forecast vs market) | −0.02pp CI [−0.21, +0.17] | +0.34pp CI [−0.17, +0.85] |
+| M+E+S (full smart-money consensus) | −1.74pp CI [−3.45, −0.04] | −0.83pp CI [−2.08, +0.42] |
+| marginal sharp (M+E − M+E+S) | −1.72pp CI [−3.41, −0.04] | −1.17pp CI [−2.32, −0.02] |
+| zero-skill P(PASS \| shuffled sharp) | **0.0%** (200 iters) | **0.0%** |
+| verdict | **KILL_ALREADY_PRICED** | **KILL** (stable ✓) |
+
+**Three reads:**
+1. **The sharp's distribution is value-NEGATIVE as a forecaster.** The binding M+S improvement (Brier_market −
+   Brier_stack) is **negative with a CI that excludes 0 in both leads** — tilting a calibrated market toward the
+   sharp's revealed cheap picks does not just fail to help, it makes the forecast *worse*. The walk-forward fit
+   picks up tiny in-sample noise in the sharp signal and pays for it out-of-sample (the honest OOS penalty for a
+   useless signal — exactly what walk-forward exists to expose).
+2. **WHY it's negative is the same mechanism as §12.** The sharp's cheap longshots mostly **lose** (their tail
+   hit rate is ~5–12%, §3/§13). Treating "the sharp bet this cheap bucket" as forecast signal moves mass off the
+   favourite (which usually wins) onto longshots (which usually don't). Their edge is the maker rebate + breadth,
+   **not a superior probability** — so it carries no forecasting information once you already have the market price.
+3. **Clean corroboration of the whole chain.** M+E ≈ 0 re-confirms KILL-GATE 2 (our EMOS adds nothing over the
+   market); the zero-skill MC at **0.0%** proves the gate isn't a false-positive machine; the result is stable
+   across leads. This is the **5th independent angle** (after forecast-beats-market, day-before-edge,
+   copy-trade-mirror, maker-spray) to land on the same finding from a new direction.
+
+**Conclusion.** Treating the #1 weather sharp as a forecaster and stacking its revealed distribution onto the
+market **adds no orthogonal skill — it subtracts** — stable across leads, with a clean zero-skill guard. The
+sharp's edge is confirmed, from a fifth angle, to be **pure microstructure** (maker resting + rebate + breadth
+across ~45 cities), not a superior view of the world the market hasn't priced. The "smart-money-consensus
+forecaster" is dominated by the market price; the measurement IS the analytics deliverable (Move 10). **The live
+trading rail stays DORMANT** — re-open only on genuinely new out-of-market information. The one remaining
+genuinely-distinct lever is **Move 4** (intraday running-max physics), which overlaps the closed WO-5 finding
+(low prior, not run).
+
+---
+
+## 15. FORENSIC PURCHASE MAP — every badatmath buy 2026-05-23 → 06-21 (the vertical window)
+
+**The ask.** Map every badatmath purchase in the vertical-PnL window, score every win/loss, describe the
+purchasing patterns in depth. Tool: `scripts/research/badatmath-purchase-map.ts` (read-only, no migration,
+no `packages/trading`; a no-network `sanity()` self-test; Gamma resolution cached to
+`out/badatmath-resolutions.json`). Complete per-position log: `out/badatmath-purchases-may23-jun21.csv`
+(8,780 rows). **Resolution: Polymarket Gamma `/markets?...&closed=true` → `outcomePrices` (Yes won iff
+["1","0"]) is AUTHORITATIVE and ~complete (97% scored); our DB resolves only ~45% (the resolution pipeline
+lags), so Gamma is primary, DB is enrichment (bucket label / region / tz-lead) + fallback.** `closed=true`
+is REQUIRED — Gamma's /markets defaults to ACTIVE markets and returns `[]` for resolved ones without it.
+
+**Scale.** 53,764 BUY fills (of 64,934 lifetime) in window → **8,780 positions** (city·day·bucket·side) across
+**1,336 city-days / 46 cities**; ~3 fills/position (max 112). **WINS 3,504 · LOSSES 5,012 · win rate 41.1%**
+(matches KILL-GATE 1's 40.6% net). **Net hold-to-resolution P&L +$22,350** (+12.9% ROI on $167k resolved
+stake) — reconciles to the public curve move (~$24.3k, $1,146→$25,407) within ~8% (residual = sells/merges/
+redeems the BUY-only cache can't net; this is per-purchase hold-to-resolution P&L, NOT the wallet's realized
+total).
+
+**Patterns (the detail):**
+1. **Engine = cheap Yes in the 0.10–0.25 band, NOT the cheapest.** ROI by entry band: [0,0.05) +62.5% (rare
+   50–100× hits — best bet KL 29°C @0.011 → +$4,118), **[0.05,0.10) −22.1% (a real DEAD ZONE)**, [0.10,0.15)
+   +23.2%, [0.15,0.25) +24.0%, [0.25,0.45) +11%, [0.45,0.75) +9%, [0.75,1] +11%. Refines §3/§13: the
+   low-MIDDLE band is the engine; the very cheapest is a lottery and 0.05–0.10 actively bleeds.
+2. **Yes carries it; No is a field-hedge.** Yes/cheap +$11,547 (+19.6%, 11% win), Yes/rich +$6,898 (+17%),
+   No/rich +$4,377 (+6.5%, 77% win — selling unlikely buckets for thin premium), No/cheap −$471 (−8.5%). In
+   THIS window the No book is mildly POSITIVE (vs the lifetime "No is pure bleed" read, which only saw top-50 winners).
+3. **Timing is the sharpest signal — he does NOT bet day-of.** Lead by band: <24h +2.0% (break-even!),
+   24–48h +18.3%, 48–72h +15.5%. Median lead 36.9h (~1.5d), range 7–72h (markets created ~2d out). The edge
+   is the calibrated day-before entry before the short-lived market converges — corroborates WO-5 (day-of the
+   market has already priced the running-max, no late edge).
+4. **Breadth:** median 3 distinct buckets per city·day·side (max 11) — sprays the plausible range, not one modal bucket.
+5. **Sizing:** micro-grind — per FILL median $1.69 (max $56), per POSITION median $12.12 (max $234). Never size at risk.
+6. **Geography:** tropical/stable climates pay (southeast-asia +84% ROI, KL alone +$8,233/+199%; east-asia
+   +$5,855 abs), volatile mid-latitudes bleed (south-asia, latam, na-central, europe-east negative). NA +$5,500
+   vs intl +$17,894 → global, not a US secret (confirms §3).
+7. **The vertical:** buy volume ramped ~10× (≈500 → ≈4,800 fills/day); cum P&L tracks the public curve; two
+   days dominate (Jun 17 +$5,506, Jun 21 +$3,967 — heat events resolving many cheap longshots together).
+8. **Biggest wins** are all cheap Yes longshots that hit (KL 29°C @0.011 +$4,118; Beijing 28°C @0.013 +$1,134);
+   **biggest losses** are capped at stake, mostly richer bets that missed (Houston No 88–89°F @0.53 −$234).
+
+**Every pattern reinforces the closed thesis:** calibration + day-before timing + breadth + maker micro-sizing
+across ~45 cities — a high-volume calibrated-longshot maker grind, structurally non-followable / non-replicable
+(the five falsified angles). Pure analytics; nothing reopens the dormant rail.

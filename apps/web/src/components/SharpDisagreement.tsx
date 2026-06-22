@@ -47,16 +47,31 @@ export function SharpDisagreement({ sharps }: { sharps: SharpsView }): ReactElem
     );
   }
 
+  // `disagreement` is count(DISTINCT bucket) over NON-NULL calls (0049), so distinct ≤ 1 also holds when
+  // the sharp's (or market's) bucket is null — a reachable state (sharp holds only NO legs, or no
+  // market_events row for the focus date yet). Gate "agreement" on all three calls actually being present,
+  // else we'd assert a 3-way consensus while a tile shows "—".
+  const sBidx = num(sharps.sharpBucketIdx);
+  const oBidx = num(sharps.ourBucketIdx);
+  const mBidx = num(sharps.marketBucketIdx);
+  const nCalls = [sBidx, oBidx, mBidx].filter((b) => b != null).length;
   const distinct = num(sharps.disagreement) ?? 0;
+  const agree = nCalls === 3 && distinct === 1;
+  const partial = nCalls < 3;
   const delta = sharps.signedDeltaIdx;
-  const agree = distinct <= 1;
-  // sharp vs our call read (delta ≈ °C in the whole-°C interior; sign = warmer/colder than us)
+  // Tail buckets ("…°C or below/above") are open-ended, so an index step across one is NOT a clean 1°C —
+  // drop the exact magnitude when either endpoint of the delta is a tail.
+  const tailEnd = (l: string | null): boolean => /or (?:below|above)/i.test(l ?? '');
+  const tailDelta = tailEnd(sharps.sharpLabel) || tailEnd(sharps.ourLabel);
+  // sharp vs our call read (delta ≈ °C across the whole-°C interior; sign = warmer/colder than us)
   const vsUs =
     delta == null
       ? 'no comparable forecast'
       : delta === 0
         ? 'same bucket as our forecast'
-        : `${Math.abs(delta)}°C ${delta < 0 ? 'colder' : 'warmer'} than our call`;
+        : tailDelta
+          ? `${delta < 0 ? 'colder' : 'warmer'} than our call`
+          : `${Math.abs(delta)}°C ${delta < 0 ? 'colder' : 'warmer'} than our call`;
 
   return (
     <>
@@ -88,6 +103,14 @@ export function SharpDisagreement({ sharps }: { sharps: SharpsView }): ReactElem
             <>
               <strong className="pos">Agreement.</strong> The sharp, our forecast and the market converge on the
               same bucket — a high-confidence read on this market.
+            </>
+          ) : partial ? (
+            <>
+              <strong>Partial read.</strong>{' '}
+              {sBidx == null
+                ? 'The sharp holds no comparable Yes bucket on this market yet (only No legs, or no Amsterdam position on the focus date).'
+                : 'Our forecast or the market isn’t priced on this market yet.'}{' '}
+              Their full position list is below.
             </>
           ) : (
             <>
