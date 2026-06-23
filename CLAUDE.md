@@ -15,11 +15,13 @@ dashboard, TypeScript monorepo (`packages/core|io|trading`, `supabase/functions`
 > the analytics/insight value** (calibrated forecast skill, model-vs-market scoring,
 > market-efficiency measurement), per the operator's decision. The trading machinery
 > (`packages/trading`, the `bets` surface) stays built but DORMANT — do not invest in
-> taker-edge work without new out-of-market information.
+> taker-edge work without new out-of-market information. **The complete verdict — all seven
+> falsified signals, with the numbers — is the canonical record `FINDINGS.md`.**
 
 - Hosted Supabase ref: `lenysiqxihsmxljvyybt` (eu-north-1) · Prod: `weather-edge-two.vercel.app`
-- Canonical docs: `BUILD-STATE.md` (status + Operator TODO), `RUNBOOK.md` (ops),
-  `REQUIREMENTS.md`, `ARCHITECTURE.md`. Tests: `pnpm test`, `pnpm typecheck`.
+- Canonical docs: **`FINDINGS.md`** (the R&D verdict — start here: is there a tradable edge? no, and why),
+  `BUILD-STATE.md` (status + Operator TODO), `RUNBOOK.md` (ops), `REQUIREMENTS.md`, `ARCHITECTURE.md`.
+  Tests: `pnpm test`, `pnpm typecheck`.
 - Build is COMPLETE (P0–P8). Remaining work is operator/deploy-gated — see BUILD-STATE.
 - **Headline analytics deliverable (2026-06-16): the Amsterdam paper-trade head-to-head** —
   `$10/day` on our predicted bucket at 13/14/15/16 local, racing to find the best time to bet,
