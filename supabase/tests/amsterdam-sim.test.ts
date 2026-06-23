@@ -573,6 +573,98 @@ describe('dash_amsterdam_sim — empty-state branches (no market / no intraday /
   });
 });
 
+describe('dash_amsterdam_sim — today, from the freshest same-day forecast (0052)', () => {
+  // An isolated DB so the freshest-capture selection + the lead-matched debias are fully controlled. Two
+  // captures land for today: an OLDER lead-1 (mean 20°C) and a NEWER lead-0 (mean 25°C). The today block must
+  // pick the freshest batch (lead 0, mean 25) — proving the headline tracks the most recent NWP view, the
+  // morning switch the operator asked for.
+  let tdb: PGlite;
+
+  beforeAll(async () => {
+    tdb = await freshDb();
+    await tdb.query(
+      `insert into cities (slug, display_name, country_code, unit, tz, region, first_seen, last_seen)
+       values ('amsterdam', 'Amsterdam', 'NL', 'C', 'Etc/GMT-2', 'europe-west', now(), now())`,
+    );
+    await tdb.query(
+      `insert into stations (icao, country_code, tz, source) values ('EHAM', 'NL', 'Etc/GMT-2', 'manual')
+       on conflict (icao) do nothing`,
+    );
+    const today = (await rows<{ d: string }>(tdb, `select ((now() at time zone 'Etc/GMT-2')::date)::text d`))[0]!.d;
+    // older lead-1 capture (yesterday's run) — mean 20.0; should NOT be the one chosen.
+    await tdb.query(
+      `insert into forecast_snapshots (icao, model, target_date, lead_days, tmax_c, snapshot_slot, source, captured_at)
+       values ('EHAM', 'gfs_seamless', $1, 1, 20.0, '22Z', 'forecast_api', now() - interval '12 hours')`,
+      [today],
+    );
+    // fresher lead-0 capture (last night's same-day run) — mean 25.0; the freshest → chosen.
+    await tdb.query(
+      `insert into forecast_snapshots (icao, model, target_date, lead_days, tmax_c, snapshot_slot, source, captured_at)
+       values ('EHAM', 'gfs_seamless', $1, 0, 25.0, '22Z', 'forecast_api', now())`,
+      [today],
+    );
+  });
+
+  afterAll(async () => {
+    await tdb?.close();
+  });
+
+  it('picks the freshest (lead-0) batch; raw display when <20 prior pairs; hasMarket false with no event', async () => {
+    const out = await asRole(tdb, 'authenticated', OPERATOR, async () => {
+      const r = await rows<{ dash_amsterdam_sim: Record<string, unknown> }>(
+        tdb,
+        `select public.dash_amsterdam_sim() as dash_amsterdam_sim`,
+      );
+      return r[0]!.dash_amsterdam_sim;
+    });
+    const d = out.today as Record<string, unknown>;
+    expect(Number(d.lead)).toBe(0); // the freshest capture, not the older lead-1
+    expect(Number(d.nModels)).toBe(1);
+    expect(Number(d.rawForecastC)).toBeCloseTo(25.0, 3);
+    expect(d.biasCorrected).toBe(false); // no prior (obs, lead-0 forecast) pairs yet
+    expect(Number(d.forecastC)).toBeCloseTo(25.0, 3);
+    expect(Number(d.predictedC)).toBe(25);
+    expect(d.hasMarket).toBe(false);
+    expect(d.capturedAt).toBeTruthy();
+  });
+
+  it('applies the matched-lead trailing debias once >=20 prior (obs, lead-0 forecast) pairs exist', async () => {
+    const today = (await rows<{ d: string }>(tdb, `select ((now() at time zone 'Etc/GMT-2')::date)::text d`))[0]!.d;
+    // 20 finalized pairs strictly before today, each residual +0.6 (actual 20.0 − lead-0 forecast 19.4) →
+    // bias +0.6. With today's freshest lead-0 mean 25.0, corrected = 25.6 → wuRound 26.
+    for (let i = 1; i <= 20; i++) {
+      const day = `2025-04-${String(i).padStart(2, '0')}`;
+      await tdb.query(
+        `insert into observations (icao, date_local, tmax_wu_native, unit, n_obs, provisional, finalized_at)
+         values ('EHAM', $1, 20, 'C', 30, false, now())
+         on conflict (icao, date_local) do update set tmax_wu_native = 20, finalized_at = now()`,
+        [day],
+      );
+      await tdb.query(
+        `insert into forecast_snapshots (icao, model, target_date, lead_days, tmax_c, snapshot_slot, source, captured_at)
+         values ('EHAM', 'gfs_seamless', $1, 0, 19.4, '22Z', 'forecast_api', now())`,
+        [day],
+      );
+    }
+
+    const out = await asRole(tdb, 'authenticated', OPERATOR, async () => {
+      const r = await rows<{ dash_amsterdam_sim: Record<string, unknown> }>(
+        tdb,
+        `select public.dash_amsterdam_sim() as dash_amsterdam_sim`,
+      );
+      return r[0]!.dash_amsterdam_sim;
+    });
+    const d = out.today as Record<string, unknown>;
+    expect(Number(d.lead)).toBe(0);
+    expect(d.biasCorrected).toBe(true);
+    expect(Number(d.biasN)).toBeGreaterThanOrEqual(20);
+    expect(Number(d.biasC)).toBeCloseTo(0.6, 2);
+    expect(Number(d.forecastC)).toBeCloseTo(25.6, 2);
+    expect(Number(d.predictedC)).toBe(26); // wuRound(25.6)
+    expect(today).toBeTruthy();
+  });
+});
+
 describe('amsterdam *_inputs RPC shape (0044 — the port invariant)', () => {
   it('grade_inputs / truth_inputs return { rows: [...] } (an object), never a top-level array', async () => {
     // A top-level jsonb array is misread by supabasePort as a RETURNS TABLE row set (arrays pass through

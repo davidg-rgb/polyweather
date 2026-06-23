@@ -154,13 +154,47 @@ operator watches.** Resolution uses our own DB's `winning_bucket_idx` (the trust
 
 ---
 
-## 8. Files
+## 8. The `/replica` web dashboard (2026-06-23)
+
+The trial used to live only as local markdown/CSV/JSON. The operator asked for a **visible web dashboard**
+next to `/amsterdam`, so the trial now **projects its state into Postgres** and renders there.
+
+- **Persistence (migration `0053`).** Two tables — `replica_positions` (one row per placed position = a core
+  `LockedBuy` + the forward bookkeeping; `source ∈ {backtest, forward}`) and `replica_runs` (one row per run:
+  the strategy, the computed whitelist, the funnel + open/closed tallies). Two **service-role** write RPCs
+  (`replica_record_positions(source, replace, rows)` / `replica_record_run(payload)` — the 0049 idiom,
+  idempotent) the local CLIs call. One **operator-gated** read RPC (`dash_replica_sim`).
+- **The writes are the ONLY thing the trial ships to prod** — and only because the operator chose the web
+  surface. The backtest persists behind `--persist`; the **forward run persists by default** (the dashboard is
+  a projection of the live state; `--no-persist` opts out). The daily Scheduled Task runs
+  `--mode forward --gamma --persist`. `replace=true` makes each source an exact mirror of the run's state.
+- **One source of truth with the scripts.** The loader (`getReplicaSim`, `apps/web/src/lib/loaders.ts`) reads
+  the raw positions and scores them through the **same core engine** the scripts use (`scoreLocked` →
+  `summarize`/`dailyLedger`/`rankCitiesByRoi`), so the web roll-ups (three curves, day-by-day ledger, best
+  cities, the spread + adverse-selection taxes) can never drift from the CLI ledger.
+- **The page** (`apps/web/src/app/(dash)/replica/page.tsx`, nav-linked, operator-auth, Terminal-Glass like
+  `/amsterdam`): a decision strip (backtest seed ROIs + forward placed/resolved/open + last run), the
+  three-curve tables + tax lines for both scopes, the forward equity curve + day-by-day ledger, the open
+  positions table, and the backtest detail folded behind a disclosure. Seeded 2026-06-23: backtest **180
+  resolved** (+19.3% / −13.4% / +3.9%), forward **16 open** ($192 at risk).
+
+> **postgres-js gotcha (recorded so it doesn't recur):** pass a **raw JS array/object** as the `$n::jsonb`
+> param — postgres-js encodes it to jsonb correctly, but a pre-`JSON.stringify`'d **string** is RE-encoded into
+> a jsonb **scalar** that `jsonb_array_elements` rejects ("cannot extract elements from a scalar"). The PGlite
+> test twin parses a text param fine, so this only bites the live driver — the manual prod seed verified it.
+
+## 9. Files
 
 | File | What |
 |---|---|
 | `packages/core/src/sim/badatmath-replica.ts` | the pure engine (strategy, 3-leg scoring, aggregation, city ranking) |
 | `packages/core/test/badatmath-replica.test.ts` | 22 unit tests |
-| `scripts/research/badatmath-replica.ts` | the impure spine — DB loaders, backtest, ledger/CSV render, CLI |
+| `scripts/research/badatmath-replica.ts` | the impure spine — DB loaders, backtest, ledger/CSV render, persistence, CLI |
 | `scripts/research/badatmath-replica-forward.ts` | the forward daily driver (reconcile → place → persist → render) |
+| `supabase/migrations/0053_replica_paper_trial.sql` | `replica_positions`/`replica_runs` + the 3 RPCs (the web surface) |
+| `apps/web/src/lib/loaders.ts` → `getReplicaSim` | scores persisted positions via the core engine for the page |
+| `apps/web/src/app/(dash)/replica/page.tsx` | the `/replica` dashboard |
+| `supabase/tests/replica-sim.test.ts`, `apps/web/test/replica-loader.test.ts` | RPC + loader tests |
 
-Read-only. No migration. Never imports `packages/trading`. 1,142 tests green; typecheck clean.
+The engine + scripts never import `packages/trading`. The only prod writes are the trial's own two tables.
+**1,157 tests green; typecheck clean. Not trading; no money.**

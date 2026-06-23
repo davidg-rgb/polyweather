@@ -38,7 +38,10 @@ import type { Db } from '../lib/backfill.ts';
 import {
   type ReplicaArgs,
   type ReplicaDeps,
+  type ReplicaPositionRow,
   loadCandidates,
+  persistPositions,
+  persistRun,
   renderCsv,
   renderLedger,
   resolveViaGamma,
@@ -89,6 +92,31 @@ export function saveState(outDir: string, state: ForwardState): void {
 const isoNow = (nowSec: number): string => new Date(nowSec * 1000).toISOString();
 const isoDayUtc = (unixSec: number): string => new Date(unixSec * 1000).toISOString().slice(0, 10);
 const posKey = (p: { eventId: string; bucketIdx: number }): string => `${p.eventId}|${p.bucketIdx}`;
+
+/** Map a forward position (open or closed) → a persisted-position row for /replica (migration 0053). */
+function forwardToRow(p: ForwardPosition): ReplicaPositionRow {
+  return {
+    conditionId: p.conditionId,
+    eventId: p.eventId,
+    citySlug: p.citySlug,
+    region: p.region,
+    targetDate: p.targetDate,
+    bucketIdx: p.bucketIdx,
+    bucketLabel: p.bucketLabel,
+    resolutionTs: p.resolutionTs,
+    entryTs: p.entryTs,
+    entryDayUtc: p.entryDayUtc,
+    makerPrice: p.makerPrice,
+    takerPrice: p.takerPrice,
+    stakeUsd: p.stakeUsd,
+    feeRate: p.feeRate,
+    bucketWon: p.bucketWon,
+    makerRealisticFilled: p.makerRealisticFilled,
+    status: p.bucketWon == null ? 'open' : 'resolved',
+    placedAtUtc: p.placedAtUtc,
+    closedAtUtc: p.closedAtUtc,
+  };
+}
 
 // ──────────────────────────────────────────────────────────────────────────────────────────────────
 // whitelist — "his best-performing cities", computed from the resolved backtest
@@ -398,6 +426,34 @@ export async function runForward(args: ReplicaArgs, deps: ReplicaDeps): Promise<
   log('');
   log(`Forward ledger → ${mdPath}`);
   log(`Closed-position CSV → ${csvPath} (${scored.length} rows)`);
+
+  // Project the live state (open + closed) into Postgres for /replica. Wrapped so a DB hiccup never fails the
+  // reconcile/place that already succeeded above. replace=true → the DB is an exact mirror of the state file.
+  if (args.persist) {
+    try {
+      const rows = [...state.open, ...state.closed].map(forwardToRow);
+      const n = await persistPositions(db, 'forward', rows);
+      await persistRun(db, {
+        mode: 'forward',
+        ranAt: isoNow(nowSec),
+        seedFrom: args.from,
+        seedTo: '',
+        whitelist: state.whitelist,
+        strat: state.strat,
+        nCandidates: summary.nCandidates,
+        nBand: summary.nBandEligible,
+        nSelected: summary.nSelected,
+        nAllocated: summary.nAllocated,
+        nOpen: state.open.length,
+        nClosed: state.closed.length,
+        nOpened: opened,
+        nReconciled: closed,
+      });
+      log(`Persisted ${n} forward positions → replica_positions (source=forward) for /replica.`);
+    } catch (e) {
+      log(`WARN: forward persistence skipped (${String(e)}). The state file + ledger were still written.`);
+    }
+  }
 
   if (args.json) log('\nJSON ' + JSON.stringify({ closed, opened, open: state.open.length, summary, daily }));
   return state;

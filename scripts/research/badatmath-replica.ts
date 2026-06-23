@@ -425,6 +425,83 @@ function writeFile(path: string, content: string): void {
 }
 
 // ──────────────────────────────────────────────────────────────────────────────────────────────────
+// persistence — project the trial into Postgres for /replica (the web dashboard; migration 0053)
+// ──────────────────────────────────────────────────────────────────────────────────────────────────
+
+/** One persisted-position jsonb row (camelCase, mirroring core LockedBuy + bookkeeping). */
+export interface ReplicaPositionRow {
+  conditionId: string;
+  eventId: string;
+  citySlug: string;
+  region: string;
+  targetDate: string;
+  bucketIdx: number;
+  bucketLabel: string;
+  resolutionTs: number;
+  entryTs: number;
+  entryDayUtc: string;
+  makerPrice: number;
+  takerPrice: number;
+  stakeUsd: number;
+  feeRate: number;
+  bucketWon: boolean | null;
+  makerRealisticFilled: boolean;
+  status: 'open' | 'resolved';
+  placedAtUtc: string | null;
+  closedAtUtc: string | null;
+}
+
+/** Map a scored BACKTEST buy → a persisted-position row (callers pass only allocated buys). */
+export function scoredToRow(s: ScoredBuy): ReplicaPositionRow {
+  const c = s.buy.candidate;
+  return {
+    conditionId: c.conditionId,
+    eventId: c.eventId,
+    citySlug: c.citySlug,
+    region: c.region,
+    targetDate: c.targetDate,
+    bucketIdx: c.bucketIdx,
+    bucketLabel: c.bucketLabel,
+    resolutionTs: c.resolutionTs,
+    entryTs: s.buy.entryTs,
+    entryDayUtc: s.buy.entryDayUtc,
+    makerPrice: s.buy.makerPrice,
+    takerPrice: s.buy.takerPrice,
+    stakeUsd: s.buy.stakeUsd,
+    feeRate: c.feeRate,
+    bucketWon: c.bucketWon,
+    makerRealisticFilled: s.makerRealistic.filled,
+    status: s.resolved ? 'resolved' : 'open',
+    placedAtUtc: null,
+    closedAtUtc: null,
+  };
+}
+
+/**
+ * Persist a source's full current position set (replace=true → an exact projection of the run's state) via
+ * the service-role write RPC. Returns the row count. Read-from-state, write-to-DB; idempotent.
+ */
+export async function persistPositions(
+  db: Db,
+  source: 'backtest' | 'forward',
+  rows: ReplicaPositionRow[],
+): Promise<number> {
+  // Pass the RAW array (NOT JSON.stringify'd): postgres-js encodes a JS array/object as jsonb directly, but
+  // JSON-RE-ENCODES a pre-stringified string into a jsonb SCALAR (which then can't be array-iterated).
+  const [r] = await db.query<{ replica_record_positions: number }>(
+    `select public.replica_record_positions($1, true, $2::jsonb) as replica_record_positions`,
+    [source, rows],
+  );
+  return Number(r?.replica_record_positions ?? 0);
+}
+
+/** Record one run row (the strategy + whitelist + funnel/tally counts) via the service-role write RPC. */
+export async function persistRun(db: Db, payload: Record<string, unknown>): Promise<void> {
+  // Raw object param (see persistPositions) so postgres-js binds it as a jsonb object, not a jsonb string.
+  await db.query(`select public.replica_record_run($1::jsonb) as id`, [payload]);
+}
+
+// ──────────────────────────────────────────────────────────────────────────────────────────────────
 // console summary (the quick read; the ledger file is the durable artifact)
 // ──────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -472,6 +549,8 @@ export interface ReplicaArgs {
   gamma: boolean;
   /** Disk cache for Gamma resolutions (re-runs are instant). */
   resCache: string;
+  /** Project the run into Postgres (replica_positions/_runs) so /replica can render it (migration 0053). */
+  persist: boolean;
 }
 
 export interface ReplicaDeps {
@@ -531,6 +610,34 @@ export async function runBacktest(args: ReplicaArgs, deps: ReplicaDeps): Promise
   log(`Ledger → ${mdPath}`);
   log(`Per-position CSV → ${csvPath} (${scored.length} rows)`);
 
+  // Project the backtest seed into Postgres for /replica (only the ALLOCATED buys — the ones that deploy
+  // stake). Wrapped so a DB hiccup never fails the (read-only) analytics run.
+  if (args.persist) {
+    try {
+      const rows = scored.filter((s) => s.buy.allocated).map(scoredToRow);
+      const n = await persistPositions(db, 'backtest', rows);
+      await persistRun(db, {
+        mode: 'backtest',
+        ranAt: new Date(deps.nowSec * 1000).toISOString(),
+        seedFrom: args.from,
+        seedTo: args.to,
+        whitelist: args.cities ?? [],
+        strat: args.strat,
+        nCandidates: summary.nCandidates,
+        nBand: summary.nBandEligible,
+        nSelected: summary.nSelected,
+        nAllocated: summary.nAllocated,
+        nOpen: summary.nPending,
+        nClosed: summary.nResolved,
+        nOpened: 0,
+        nReconciled: 0,
+      });
+      log(`Persisted ${n} backtest positions → replica_positions (source=backtest) for /replica.`);
+    } catch (e) {
+      log(`WARN: backtest persistence skipped (${String(e)}). The ledger/CSV were still written.`);
+    }
+  }
+
   if (args.json) log('\nJSON ' + JSON.stringify({ summary, daily, cities: cities.slice(0, args.top) }));
   return summary;
 }
@@ -585,6 +692,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       net: { type: 'boolean' },
       gamma: { type: 'boolean' },
       'res-cache': { type: 'string' },
+      persist: { type: 'boolean' },
+      'no-persist': { type: 'boolean' },
       json: { type: 'boolean' },
     },
   });
@@ -602,6 +711,13 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     rankOnly: Boolean(values['rank-cities']),
     gamma: Boolean(values.gamma),
     resCache: values['res-cache'] ?? 'scripts/research/out/badatmath-replica-resolutions.json',
+    // Forward runs persist by DEFAULT (the dashboard is a projection of the live state); --no-persist opts
+    // out for a dry run. Backtest persists only when asked (--persist), to seed /replica's headline.
+    persist: values['no-persist']
+      ? false
+      : values.mode === 'forward'
+        ? true
+        : Boolean(values.persist),
   };
   const db = makeScriptDb();
   const deps: ReplicaDeps = { db, log: console.log, nowSec: Math.floor(Date.now() / 1000) };

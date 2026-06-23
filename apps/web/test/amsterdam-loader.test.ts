@@ -285,6 +285,67 @@ describe('getAmsterdamSim — tomorrow / liveRunMax / overall (0046)', () => {
     expect(v.liveRunMax).toBeNull();
     expect(v.overall.nGradedAll).toBe(17);
   });
+
+  it('passes today through when the RPC provides it (0052)', async () => {
+    const payload = {
+      ...base,
+      today: {
+        targetDate: '2026-06-23', hasMarket: true, lead: 0, capturedAt: '2026-06-22T22:15:00Z', nModels: 9,
+        rawForecastC: 28.76, biasC: 0.53, biasN: 30, biasCorrected: true, forecastC: 29.29, predictedC: 29,
+        label: '24°C or higher', ask: 0.31,
+      },
+    };
+    const v = (await getAmsterdamSim(stubDb(payload)))!;
+    expect(v.today?.predictedC).toBe(29);
+    expect(v.today?.lead).toBe(0);
+    expect(v.today?.biasCorrected).toBe(true);
+    expect(v.today?.capturedAt).toBe('2026-06-22T22:15:00Z');
+  });
+
+  it('today is null when the RPC predates 0052', async () => {
+    expect((await getAmsterdamSim(stubDb(base)))!.today).toBeNull();
+  });
+});
+
+describe('getAmsterdamSim — today drives the hot-climatology selection (0052)', () => {
+  // Latest placed bets carry a COLD forecast (18°C — e.g. yesterday's), but today's fresh forecast is hot
+  // (28°C). The hot-day climatology must follow the FRESH today forecast, not the stale bet-carried one — so
+  // the best-time recommendation switches in the morning with the headline.
+  const base = {
+    config: { primaryHour: 15, armHours: [13, 14, 15, 16], compareDays: 14, stakeUsd: 10 },
+    coverage: { firstDate: '2026-06-01', lastDate: '2026-06-22', nDays: 22, nGradedDays: 22, nPending: 0 },
+    arms: [13, 14, 15, 16].map((hour) => ({
+      hour, nBets: 22, nGraded: 22, nPending: 0, nWon: 11, staked: 220, pnl: 0, roi: 0,
+      hitRate: 0.5, avgAsk: 0.5, pnlAtCompare: 0,
+    })),
+    leader: { hour: 15, pnl: 0, nGraded: 22 },
+    equityByArm: {},
+    betsByArm: {},
+    betLog: [],
+    latest: {
+      date: '2026-06-22',
+      byHour: {
+        15: { predictedC: 18, label: null, ask: 0.5, runMaxC: 17.5, forecastC: 18, status: 'pending', won: null, pnl: 0, actualC: null, actualDecimalC: null, signedErrorC: null, truthWon: null },
+      },
+    },
+  };
+  const june = new Date('2026-06-23T08:00:00Z');
+
+  it('uses the hot climatology because today.forecastC ≥ 25 even though the bet-carried forecast is cold', async () => {
+    const payload = {
+      ...base,
+      today: { targetDate: '2026-06-23', hasMarket: false, lead: 0, capturedAt: '2026-06-22T22:15:00Z', nModels: 9, rawForecastC: 28, biasC: 0.5, biasN: 30, biasCorrected: true, forecastC: 28.5, predictedC: 29, label: null, ask: null },
+    };
+    const v = (await getAmsterdamSim(stubDb(payload), { now: june }))!;
+    expect(v.bestTime.usedHotClimatology).toBe(true);
+    expect(v.peakHourChart.hot).toBe(true);
+  });
+
+  it('falls back to the bet-carried (cold) forecast when today is absent → not hot', async () => {
+    const v = (await getAmsterdamSim(stubDb(base), { now: june }))!;
+    expect(v.bestTime.usedHotClimatology).toBe(false);
+    expect(v.peakHourChart.hot).toBe(false);
+  });
 });
 
 describe('getAmsterdamSim — floor-truth point estimates share the CI population (0044)', () => {
