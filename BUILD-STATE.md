@@ -12,7 +12,10 @@
 > instrument, not a taker. Existing dashboard surface: `(dash)` home, `calibration`, `city/[slug]`,
 > `events`, `system` (analytics) + `bets` (trading — now dormant). Next: scope the first analytics-lean
 > deliverable (e.g. a polished forecast-skill + market-efficiency view as the product's headline). See the
-> updated project `CLAUDE.md` header and `FORECASTING-RD.md` WO-5 for the rationale.
+> updated project `CLAUDE.md` header and `FORECASTING-RD.md` WO-5 for the rationale. **The whole
+> investigation is now consolidated into one canonical R&D record — `FINDINGS.md` (2026-06-23):
+> the central question, the verdict, and the seven falsified signals with their numbers, linking
+> down to every deep doc. Read it first to understand what this project concluded.**
 
 **2026-06-23 milestone: WALLET-RECON COMPLETE — all FIVE replication angles falsified; the whole milestone is MERGED to `main` (PR #2).**
 The post-§9 wallet-recon work (the 4th/5th angles + the forensic map + the parallel code-review fixes) is now on `main`
