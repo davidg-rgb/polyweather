@@ -239,8 +239,9 @@ export function winnerFromGamma(outcomes: string[], prices: string[], closed: un
  * Resolve every conditionId to its winning Yes/No outcome via Gamma, cache-first. The cache stores
  * 'Yes'|'No'|'unresolved' per id so an open/archived market is not re-fetched. Degrades cleanly: a
  * failed chunk is skipped (its ids stay absent → scored as unresolved, surfaced in coverage).
+ * Exported so the badatmath-replica backtest reuses the SAME cache-first Gamma resolver (DRY).
  */
-async function fetchResolutions(
+export async function fetchResolutions(
   conditionIds: string[],
   opts: { cache: string; log: (m: string) => void; chunkSize?: number; delayMs?: number },
 ): Promise<Map<string, 'Yes' | 'No'>> {

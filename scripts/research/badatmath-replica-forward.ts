@@ -41,7 +41,11 @@ import {
   loadCandidates,
   renderCsv,
   renderLedger,
+  resolveViaGamma,
 } from './badatmath-replica.ts';
+import { fetchResolutions } from './badatmath-purchase-map.ts';
+
+const DEFAULT_RES_CACHE = 'scripts/research/out/badatmath-replica-resolutions.json';
 
 // ──────────────────────────────────────────────────────────────────────────────────────────────────
 // state
@@ -97,10 +101,18 @@ const posKey = (p: { eventId: string; bucketIdx: number }): string => `${p.event
  */
 export async function computeWhitelist(
   db: Db,
-  args: { from: string; to: string; strat: ReplicaStrategy; minResolved: number; topK: number },
+  args: { from: string; to: string; strat: ReplicaStrategy; minResolved: number; topK: number; gamma?: boolean; resCache?: string },
+  log: (m: string) => void = () => {},
 ): Promise<CityWhitelist> {
-  const candidates = await loadCandidates(db, { from: args.from, to: args.to, resolvedOnly: true });
-  const scored = scoreBuys(selectBuys(candidates, args.strat), args.strat);
+  const candidates = await loadCandidates(db, { from: args.from, to: args.to, resolvedOnly: !args.gamma });
+  const buys = selectBuys(candidates, args.strat);
+  if (args.gamma) {
+    await resolveViaGamma(
+      buys.filter((b) => b.allocated).map((b) => b.candidate),
+      { resCache: args.resCache ?? 'scripts/research/out/badatmath-replica-resolutions.json', log },
+    );
+  }
+  const scored = scoreBuys(buys, args.strat);
   const ranked = rankCitiesByRoi(scored, { leg: 'makerIdeal', minResolved: args.minResolved });
   const positive = ranked.filter((c) => Number.isFinite(c.roiGross) && c.roiGross > 0);
   return {
@@ -157,18 +169,49 @@ async function loadResolutions(db: Db, eventIds: string[]): Promise<Map<string, 
 }
 
 /**
- * Reconcile open positions against DB resolution. For each newly-resolved one: set bucketWon, replay the
- * full book to decide the maker-realistic fill (§12 ask-touch over the post-entry series), and move it to
- * closed. Mutates `state` in place; returns how many closed.
+ * Reconcile open positions against resolution. DB `winning_bucket_idx` is primary; when `gamma` is set,
+ * positions our (lagging, ~45%) DB hasn't resolved are checked against Polymarket Gamma (~97%, timely) by
+ * conditionId — so forward positions actually CLOSE promptly instead of waiting on the DB pipeline. For
+ * each newly-resolved one: set bucketWon, replay the full book to decide the maker-realistic fill (§12
+ * ask-touch), and move it to closed. Gamma degrades cleanly (a fetch failure just leaves it open for next
+ * run). Mutates `state` in place; returns how many closed.
  */
-export async function reconcile(db: Db, state: ForwardState, nowSec: number): Promise<number> {
+export async function reconcile(
+  db: Db,
+  state: ForwardState,
+  nowSec: number,
+  opts: { gamma?: boolean; resCache?: string; log?: (m: string) => void } = {},
+): Promise<number> {
   if (state.open.length === 0) return 0;
-  const resolutions = await loadResolutions(db, state.open.map((p) => p.eventId));
+  const dbWinners = await loadResolutions(db, state.open.map((p) => p.eventId));
+
+  // Gamma fallback for positions the DB hasn't resolved (timelier + wider coverage).
+  let gammaWin = new Map<string, 'Yes' | 'No'>();
+  if (opts.gamma) {
+    const need = state.open
+      .filter((p) => !dbWinners.has(p.eventId) && p.conditionId)
+      .map((p) => p.conditionId);
+    if (need.length > 0) {
+      // quiet log: the shared resolver reports whole-cache counts (misleading next to a 16-id call); the
+      // forward run prints its own accurate "Reconciled N" summary instead.
+      gammaWin = await fetchResolutions([...new Set(need)], {
+        cache: opts.resCache ?? DEFAULT_RES_CACHE,
+        log: () => {},
+      });
+    }
+  }
+
   const stillOpen: ForwardPosition[] = [];
   let closedCount = 0;
   for (const p of state.open) {
-    const winner = resolutions.get(p.eventId);
-    if (winner === undefined) {
+    let won: boolean | null = null;
+    const dbw = dbWinners.get(p.eventId);
+    if (dbw !== undefined) won = p.bucketIdx === dbw;
+    else if (p.conditionId) {
+      const g = gammaWin.get(p.conditionId);
+      if (g !== undefined) won = g === 'Yes';
+    }
+    if (won === null) {
       stillOpen.push(p);
       continue;
     }
@@ -176,7 +219,7 @@ export async function reconcile(db: Db, state: ForwardState, nowSec: number): Pr
     const series = await reloadAskSeries(db, p.conditionId);
     const postEntry = series.filter((s) => s.capturedAt >= p.entryCapturedTs);
     const fill = simulateFill(p.makerPrice, postEntry, 'ask_touch');
-    p.bucketWon = p.bucketIdx === winner;
+    p.bucketWon = won;
     p.makerRealisticFilled = fill.filled;
     p.closedAtUtc = isoNow(nowSec);
     state.closed.push(p);
@@ -293,7 +336,11 @@ export async function runForward(args: ReplicaArgs, deps: ReplicaDeps): Promise<
     const wl =
       args.cities && args.cities.length > 0
         ? { cities: args.cities, ranked: [] as CityWhitelist['ranked'] }
-        : await computeWhitelist(db, { from: args.from, to: isoDayUtc(nowSec), strat: args.strat, minResolved: args.minCityN, topK: args.top });
+        : await computeWhitelist(
+            db,
+            { from: args.from, to: isoDayUtc(nowSec), strat: args.strat, minResolved: args.minCityN, topK: args.top, gamma: args.gamma, resCache: args.resCache },
+            log,
+          );
     state = {
       version: 1,
       createdUtc: isoNow(nowSec),
@@ -310,7 +357,7 @@ export async function runForward(args: ReplicaArgs, deps: ReplicaDeps): Promise<
     if (args.cities && args.cities.length > 0) state.whitelist = args.cities;
   }
 
-  const closed = await reconcile(db, state, nowSec);
+  const closed = await reconcile(db, state, nowSec, { gamma: args.gamma, resCache: args.resCache, log });
   const opened = await placeBuys(db, state, nowSec);
   state.lastRunUtc = isoNow(nowSec);
   saveState(outDir, state);

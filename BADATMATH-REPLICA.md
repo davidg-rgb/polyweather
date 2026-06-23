@@ -85,15 +85,23 @@ Every buy is scored at three prices, side by side. The gaps between them are the
 # BACKTEST — seed the track record over the resolved history; writes the ledger + a per-position CSV
 pnpm tsx scripts/research/badatmath-replica.ts
 
+# …with Gamma resolution (~97% vs our DB's ~45%): loads the FULL window + settles every selected buy
+pnpm tsx scripts/research/badatmath-replica.ts --gamma
+
 # just rank cities (pick / inspect the whitelist)
 pnpm tsx scripts/research/badatmath-replica.ts --rank-cities
 
-# FORWARD — the daily loop: reconcile resolved, place today's buys on live markets, re-render the live ledger
-pnpm tsx scripts/research/badatmath-replica.ts --mode forward
+# FORWARD — the daily loop: reconcile resolved (DB + Gamma), place today's buys, re-render the live ledger
+pnpm tsx scripts/research/badatmath-replica.ts --mode forward --gamma
 ```
 
 Knobs (all optional, defaults = §15): `--from --to --cities <slugs> --cheap-lo --cheap-hi --lead-h --breadth
---stake --cap --min-city-n --top --out <dir> --net --json`.
+--stake --cap --min-city-n --top --out <dir> --gamma --res-cache <file> --net --json`.
+
+**`--gamma`** resolves each scored buy against Polymarket Gamma (authoritative, ~97% settled, cache-first) with
+our DB `winning_bucket_idx` as fallback — Gamma is primary because the DB pipeline lags (~45%). In the forward
+run it also makes positions **close promptly** instead of waiting on the DB. The daily Scheduled Task runs with
+`--gamma`. **Note (measured 2026-06-23):** Gamma did *not* enlarge the current seed — see §7.
 
 **Artifacts** (under `scripts/research/out/`, gitignored — regenerated on each run):
 - `badatmath-replica-ledger.md` — the backtest seed ledger (three curves + day-by-day + best cities).
@@ -129,8 +137,15 @@ operator watches.** Resolution uses our own DB's `winning_bucket_idx` (the trust
   *value here is the live measurement*, not a tradable edge. The live rail stays DORMANT.
 - **maker-ideal is a CEILING, not achievable.** It assumes you get his cheap fill on the buckets you pick — the
   §12 maker-spray study proved adverse selection eats that in practice (the maker-realistic curve is the honest one).
-- **Small n / DB-resolved coverage.** The backtest scores only events our DB has resolved (~45%, §15), and the
-  $250/day cap throttles to ~20/day, so the seed is ~180 positions with wide CIs. The forward run accrues more.
+- **The seed is bounded by SNAPSHOT density, not resolution (measured).** With `--gamma` every selected buy
+  resolves (180/180, ~97% Gamma + DB fallback) — yet the seed stays **~180** positions. Diagnosis (2026-06-23):
+  `market_snapshots` spans May 14→Jun 23 but is *dense* only from ~Jun 8 (Jun 15 week ≈ 397k rows vs May weeks
+  3–12k). The strategy needs a **36h-before-resolution book** to price an entry, so band-eligible buys only
+  exist for the ~2 recent dense weeks; the $250/day cap then throttles those to ~20/day → ~180, with wide CIs.
+  Resolution was never the bottleneck. **Gamma is still wired** (it guarantees resolution *completeness* and
+  makes forward positions close promptly), but **the real path to a bigger sample is the forward run accruing
+  dense data daily** — `poll-markets` is now dense, so the live ledger grows from here. (Raising `--cap` would
+  also enlarge it but breaks the chosen "his volume" sizing.)
 - **"Peak odds buying hours" = a fixed 36h instant.** Operationalized as his median lead (inside his 24–48h
   +ROI band) so the backtest and forward price identically. A retrospective "pick the cheapest in the window"
   would not be implementable forward.

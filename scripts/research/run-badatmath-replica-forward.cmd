@@ -10,4 +10,4 @@ cd /d "D:\Second Brain\03 Projects\Polyweather"
 if not exist "scripts\research\out" mkdir "scripts\research\out"
 echo. >> "scripts\research\out\badatmath-replica-forward.log"
 echo ===== %DATE% %TIME% ===== >> "scripts\research\out\badatmath-replica-forward.log"
-call pnpm tsx scripts\research\badatmath-replica.ts --mode forward >> "scripts\research\out\badatmath-replica-forward.log" 2>&1
+call pnpm tsx scripts\research\badatmath-replica.ts --mode forward --gamma >> "scripts\research\out\badatmath-replica-forward.log" 2>&1

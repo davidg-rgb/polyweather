@@ -53,6 +53,8 @@ import { loadEnv } from '../lib/load-env.ts';
 // cycle via function hoisting; a DYNAMIC import here deadlocks tsx mid-top-level-await (the cycle never
 // settles). Loading forward in backtest mode too is a no-op cost (pure declarations).
 import { runForward } from './badatmath-replica-forward.ts';
+// Reuse the purchase-map's cache-first, batched Gamma resolver (DRY) for the --gamma coverage widening.
+import { fetchResolutions } from './badatmath-purchase-map.ts';
 
 export const SCRIPT = 'badatmath-replica';
 
@@ -210,6 +212,36 @@ export async function loadCandidates(
     });
   }
   return candidates;
+}
+
+/**
+ * Widen resolution coverage with Polymarket Gamma (~97% settled vs our DB's ~45% — §15). For each
+ * candidate's bucket conditionId, Gamma's authoritative Yes/No OVERRIDES our DB-derived `bucketWon`
+ * (Gamma is primary; the DB resolution pipeline lags); where Gamma has no answer (still-open / archived)
+ * we keep the DB value. Cache-first (re-runs are instant). Mutates `bucketWon` in place; returns coverage
+ * counts. Read-only network. Resolve ONLY the buys you will score (selected/allocated) — not all candidates.
+ */
+export async function resolveViaGamma(
+  candidates: ReplicaCandidate[],
+  opts: { resCache: string; log: (m: string) => void },
+): Promise<{ nGamma: number; nDbFallback: number; nUnresolved: number }> {
+  const conditionIds = [...new Set(candidates.map((c) => c.conditionId).filter((id) => id !== ''))];
+  const winByCondition = await fetchResolutions(conditionIds, { cache: opts.resCache, log: opts.log });
+  let nGamma = 0;
+  let nDbFallback = 0;
+  let nUnresolved = 0;
+  for (const c of candidates) {
+    const g = c.conditionId ? winByCondition.get(c.conditionId) : undefined;
+    if (g !== undefined) {
+      c.bucketWon = g === 'Yes';
+      nGamma++;
+    } else if (c.bucketWon !== null) {
+      nDbFallback++;
+    } else {
+      nUnresolved++;
+    }
+  }
+  return { nGamma, nDbFallback, nUnresolved };
 }
 
 // ──────────────────────────────────────────────────────────────────────────────────────────────────
@@ -436,6 +468,10 @@ export interface ReplicaArgs {
   net: boolean;
   json: boolean;
   rankOnly: boolean;
+  /** Widen resolution with Gamma (~97%) over the FULL window instead of DB-resolved-only (~45%). */
+  gamma: boolean;
+  /** Disk cache for Gamma resolutions (re-runs are instant). */
+  resCache: string;
 }
 
 export interface ReplicaDeps {
@@ -449,11 +485,19 @@ export interface ReplicaDeps {
 export async function runBacktest(args: ReplicaArgs, deps: ReplicaDeps): Promise<ReplicaSummary> {
   const { db, log } = deps;
   log(`Loading candidates ${args.from} → ${args.to}${args.cities ? ` · cities ${args.cities.join(',')}` : ' · all cities'} …`);
-  const candidates = await loadCandidates(db, { from: args.from, to: args.to, cities: args.cities, resolvedOnly: true });
-  log(`Loaded ${candidates.length} buyable Yes-bucket candidates with a book.`);
+  // --gamma loads the FULL window (resolvedOnly=false) so the bigger seed isn't bottlenecked by the
+  // ~45% DB-resolved cluster; resolution is then filled by Gamma (~97%) on the selected buys.
+  const candidates = await loadCandidates(db, { from: args.from, to: args.to, cities: args.cities, resolvedOnly: !args.gamma });
+  log(`Loaded ${candidates.length} buyable Yes-bucket candidates with a book (${args.gamma ? 'full window; Gamma resolution' : 'DB-resolved only'}).`);
 
   const nBandEligible = candidates.filter((c) => bandEligible(c, args.strat)).length;
   const buys = selectBuys(candidates, args.strat);
+  if (args.gamma) {
+    const sel = buys.filter((b) => b.allocated).map((b) => b.candidate);
+    log(`Resolving ${sel.length} selected buys via Gamma (cache ${args.resCache}) …`);
+    const cov = await resolveViaGamma(sel, { resCache: args.resCache, log });
+    log(`  resolved: Gamma ${cov.nGamma} · DB-fallback ${cov.nDbFallback} · still-unresolved ${cov.nUnresolved}`);
+  }
   const scored = scoreBuys(buys, args.strat);
   const summary = summarize(scored, { nCandidates: candidates.length, nBandEligible });
   const daily = dailyLedger(scored, { net: args.net });
@@ -467,8 +511,8 @@ export async function runBacktest(args: ReplicaArgs, deps: ReplicaDeps): Promise
   if (args.rankOnly) return summary;
 
   const subtitle =
-    `backtest ${args.from} → ${args.to} · resolved-only · generated from ${candidates.length} candidates · ` +
-    `${args.cities ? args.cities.length + ' cities' : 'all cities'}`;
+    `backtest ${args.from} → ${args.to} · ${args.gamma ? 'Gamma-resolved (~97%)' : 'DB-resolved (~45%)'} · ` +
+    `${candidates.length} candidates · ${args.cities ? args.cities.length + ' cities' : 'all cities'}`;
   const ledger = renderLedger({
     title: 'badatmath replica — paper-trial ledger (backtest seed)',
     subtitle,
@@ -539,6 +583,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       out: { type: 'string' },
       'rank-cities': { type: 'boolean' },
       net: { type: 'boolean' },
+      gamma: { type: 'boolean' },
+      'res-cache': { type: 'string' },
       json: { type: 'boolean' },
     },
   });
@@ -554,6 +600,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     net: Boolean(values.net),
     json: Boolean(values.json),
     rankOnly: Boolean(values['rank-cities']),
+    gamma: Boolean(values.gamma),
+    resCache: values['res-cache'] ?? 'scripts/research/out/badatmath-replica-resolutions.json',
   };
   const db = makeScriptDb();
   const deps: ReplicaDeps = { db, log: console.log, nowSec: Math.floor(Date.now() / 1000) };
