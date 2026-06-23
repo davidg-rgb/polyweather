@@ -114,6 +114,14 @@ export interface MakerSprayOpts {
   feeRate?: number;
   /** Maker rebate per share (default 0 — ADR-06; `--maker-rebate` is an optimistic sensitivity only). */
   rebate?: number;
+  /**
+   * Maker rebate as a SHARE OF THE TAKER FEE (default 0). When > 0, switches `makerNetEvPerDollar` to
+   * the REALISTIC `weather_fees` model: on a `takerOnly:true` market the maker pays NO fee and earns
+   * `rebateRate × takerFee` on each fill (live config: rate 0.05, rebateRate 0.25). The default 0 keeps
+   * the frozen §12 conservative model (maker charged the full taker fee) byte-identical. NOT a kill-gate
+   * lever — the PASS threshold is unchanged; this only corrects the EV to the market's actual fee schedule.
+   */
+  rebateRate?: number;
   /** Seed for the EV bootstrap CIs + the zero-skill MC (default 42 — the repo reproducibility contract). */
   bootstrapSeed?: number;
   /** Zero-skill Monte-Carlo iterations (default 1000 — ADR-08/W4). */
@@ -356,24 +364,38 @@ export function simulateFill(
 }
 
 /**
- * Fee-net EV per $1 staked as a MAKER at `restPx`, using the canonical Polymarket weather fee
- * (`takerFeeTotal`, rate·p·(1−p)) less an optional maker rebate. Per $1: shares = 1/restPx;
- * win → shares·(1−restPx) profit; loss → −1; both minus `max(0, takerFeeTotal − rebate·shares)`.
- * A NEW fn — NOT a reuse of copy-trade's `netEvPerDollar` (which has no rebate arg, Pass-1 I1).
- * NaN on a degenerate restPx.
+ * Fee-net EV per $1 staked as a MAKER at `restPx`. Two models, selected by `rebateRate`:
+ *
+ *   • rebateRate === 0 (DEFAULT — the frozen §12 kill-gate, conservative): the maker is charged the full
+ *     taker fee (`takerFeeTotal`, rate·p·(1−p)) less an optional per-share `rebate`, floored at 0. This
+ *     DELIBERATELY over-penalises — it charges a fee `takerOnly:true` markets do NOT levy on makers — so
+ *     a PASS is robust. Per $1: win → shares·(1−restPx); loss → −1; minus max(0, fee − rebate·shares).
+ *
+ *   • rebateRate > 0 (the REALISTIC `weather_fees` model): on a `takerOnly:true` market the maker pays NO
+ *     fee and EARNS `rebateRate × takerFee` on the fill (live config: rate 0.05, rebateRate 0.25). Per $1:
+ *     win → shares·(1−restPx); loss → −1; PLUS rebateRate·takerFeeTotal. The per-share `rebate` arg is
+ *     ignored here (the rebate is a share of the fee, not a flat per-share credit).
+ *
+ * shares = 1/restPx. A NEW fn — NOT a reuse of copy-trade's `netEvPerDollar`. NaN on a degenerate restPx.
  */
 export function makerNetEvPerDollar(
   restPx: number,
   won: boolean,
   feeRate: number,
   rebate: number,
+  rebateRate = 0,
 ): number {
   if (!usablePrice(restPx)) return NaN;
   const shares = 1 / restPx;
   const feeUsd = takerFeeTotal(restPx, shares, feeRate);
+  const gross = won ? shares * (1 - restPx) : -1;
+  if (Number.isFinite(rebateRate) && rebateRate > 0) {
+    // realistic weather_fees maker model (takerOnly:true): no fee paid, + a share of the taker's fee.
+    return gross + rebateRate * feeUsd;
+  }
   const rebateUsd = (Number.isFinite(rebate) ? rebate : 0) * shares;
   const netFee = Math.max(0, feeUsd - rebateUsd);
-  return (won ? shares * (1 - restPx) : -1) - netFee;
+  return gross - netFee;
 }
 
 // ──────────────────────────────────────────────────────────────────────────────────────────────────
@@ -392,6 +414,7 @@ export function makerEntry(bid: RestingBid, opts: MakerSprayOpts = {}): MakerEnt
   const fillModel = opts.fillModel ?? 'ask_touch';
   const cheapMax = opts.cheapMax ?? 0.25;
   const rebate = opts.rebate ?? 0;
+  const rebateRate = opts.rebateRate ?? 0;
   const askOffset = opts.askOffset ?? 0.07;
   const tickSize =
     Number.isFinite(bid.tickSize) && bid.tickSize > 0 ? bid.tickSize : (opts.tickSize ?? 0.01);
@@ -452,7 +475,7 @@ export function makerEntry(bid: RestingBid, opts: MakerSprayOpts = {}): MakerEnt
   }
 
   const { filled, minAskAfter } = simulateFill(restPx, postEntry, fillModel);
-  const netEvFilled = filled ? makerNetEvPerDollar(restPx, won, feeRate, rebate) : NaN;
+  const netEvFilled = filled ? makerNetEvPerDollar(restPx, won, feeRate, rebate, rebateRate) : NaN;
   const edgeFilled = filled ? (won ? 1 : 0) - restPx : NaN;
 
   return {
@@ -550,6 +573,7 @@ export function simulateSpray(bids: RestingBid[], opts: MakerSprayOpts = {}): Ma
   const seed = opts.bootstrapSeed ?? 42;
   const mcIters = opts.mcIters ?? 1000;
   const rebate = opts.rebate ?? 0;
+  const rebateRate = opts.rebateRate ?? 0;
 
   const candidates = Array.isArray(bids) ? bids : [];
   const entries = candidates.map((b) => ({ bid: b, entry: makerEntry(b, opts) }));
@@ -653,7 +677,7 @@ export function simulateSpray(bids: RestingBid[], opts: MakerSprayOpts = {}): Ma
     feeRate: Number.isFinite(e.bid.feeRate) ? e.bid.feeRate : (opts.feeRate ?? 0.05),
     won: e.entry.won,
   }));
-  const zeroSkillMc = runZeroSkillMc(mcFilled, { seed, iters: mcIters, rebate });
+  const zeroSkillMc = runZeroSkillMc(mcFilled, { seed, iters: mcIters, rebate, rebateRate });
 
   return {
     nCandidates,
@@ -681,7 +705,7 @@ export function simulateSpray(bids: RestingBid[], opts: MakerSprayOpts = {}): Ma
  */
 function runZeroSkillMc(
   filled: { station: string; restPx: number; feeRate: number; won: boolean }[],
-  opts: { seed: number; iters: number; rebate: number; marginThreshold?: number },
+  opts: { seed: number; iters: number; rebate: number; rebateRate?: number; marginThreshold?: number },
 ): ZeroSkillMc {
   const iters = opts.iters;
   if (filled.length === 0 || iters <= 0) return { pPass: NaN, iters: Math.max(0, iters) };
@@ -695,7 +719,7 @@ function runZeroSkillMc(
     const shuffledWon = shuffler(rand);
     // re-grade fee-net EV under the shuffled outcome
     const netEvs = filled.map((f, i) =>
-      makerNetEvPerDollar(f.restPx, shuffledWon[i] === 1, f.feeRate, opts.rebate),
+      makerNetEvPerDollar(f.restPx, shuffledWon[i] === 1, f.feeRate, opts.rebate, opts.rebateRate),
     );
     const pooled = evCiOf(netEvs, opts.seed);
     // per-station mini CIs

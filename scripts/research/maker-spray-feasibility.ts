@@ -665,6 +665,8 @@ export interface MakerSprayArgs {
   lookbackDays: number;
   cheapMax: number;
   makerRebate: number;
+  /** Maker rebate as a SHARE OF THE TAKER FEE (default 0). >0 → the realistic weather_fees model. */
+  rebateRate: number;
   margin: number;
   mcIters: number;
   crossVal: boolean;
@@ -735,6 +737,7 @@ function sprayOptsFor(args: MakerSprayArgs): {
   askOffset: number;
   cheapMax: number;
   rebate: number;
+  rebateRate: number;
   mcIters: number;
   bootstrapSeed: number;
 } {
@@ -745,6 +748,7 @@ function sprayOptsFor(args: MakerSprayArgs): {
     askOffset: args.askOffset,
     cheapMax: args.cheapMax,
     rebate: args.makerRebate,
+    rebateRate: args.rebateRate,
     mcIters: args.mcIters,
     bootstrapSeed: 42, // the repo reproducibility contract (do NOT expose — determinism is load-bearing)
   };
@@ -1078,7 +1082,7 @@ export function report(res: MakerSprayResult, log: (m: string) => void): void {
   );
   log(`scope: ${res.nStations} stations · ${res.nEvents} resolved bucket events`);
   log(
-    `params: entry-lead ${args.entryLeadHours.join(',')}h  cheap<${args.cheapMax}  rebate ${args.makerRebate}  margin +${(args.margin * 100).toFixed(0)}%  mc-iters ${args.mcIters}  lookback ${args.lookbackDays}d`,
+    `params: entry-lead ${args.entryLeadHours.join(',')}h  cheap<${args.cheapMax}  rebate ${args.makerRebate}  rebate-rate ${args.rebateRate}${args.rebateRate > 0 ? ' (REALISTIC weather_fees: no maker fee + rebateRate×fee)' : ' (conservative §12 model)'}  margin +${(args.margin * 100).toFixed(0)}%  mc-iters ${args.mcIters}  lookback ${args.lookbackDays}d`,
   );
   log('');
 
@@ -1231,6 +1235,7 @@ export function report(res: MakerSprayResult, log: (m: string) => void): void {
             lookbackDays: args.lookbackDays,
             cheapMax: args.cheapMax,
             makerRebate: args.makerRebate,
+            rebateRate: args.rebateRate,
             margin: args.margin,
             mcIters: args.mcIters,
           },
@@ -1346,6 +1351,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       'lookback-days': { type: 'string' },
       'cheap-max': { type: 'string' },
       'maker-rebate': { type: 'string' },
+      'rebate-rate': { type: 'string' },
       margin: { type: 'string' },
       'mc-iters': { type: 'string' },
       'cross-val': { type: 'boolean' },
@@ -1367,6 +1373,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       lookbackDays: values['lookback-days'] ? Number(values['lookback-days']) : 3,
       cheapMax: values['cheap-max'] ? Number(values['cheap-max']) : 0.25,
       makerRebate: values['maker-rebate'] ? Number(values['maker-rebate']) : 0,
+      rebateRate: values['rebate-rate'] ? Number(values['rebate-rate']) : 0,
       margin: values.margin ? Number(values.margin) : 0.02,
       mcIters: values['mc-iters'] ? Number(values['mc-iters']) : 1000,
       crossVal: Boolean(values['cross-val']),

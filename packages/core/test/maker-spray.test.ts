@@ -143,6 +143,22 @@ describe('makerNetEvPerDollar (NEW fn — win/loss/fee/rebate)', () => {
     expect(makerNetEvPerDollar(0.25, true, 0, 0)).toBeCloseTo(3, 9); // 1/0.25 − 1
     expect(makerNetEvPerDollar(0.5, false, 0, 0)).toBeCloseTo(-1, 9);
   });
+  it('realistic weather_fees model (rebateRate>0): NO maker fee + rebateRate·fee earned', () => {
+    // restPx 0.1 → shares 10; taker fee = 10·0.05·0.1·0.9 = 0.045; maker pays NONE (takerOnly) and
+    // EARNS rebateRate·fee = 0.25·0.045 = 0.01125. win = 9 + 0.01125; loss = −1 + 0.01125.
+    expect(makerNetEvPerDollar(0.1, true, 0.05, 0, 0.25)).toBeCloseTo(9.01125, 6);
+    expect(makerNetEvPerDollar(0.1, false, 0.05, 0, 0.25)).toBeCloseTo(-0.98875, 6);
+    // the realistic branch is STRICTLY better than the conservative one (fee removed + rebate added):
+    expect(makerNetEvPerDollar(0.1, false, 0.05, 0, 0.25)).toBeGreaterThan(
+      makerNetEvPerDollar(0.1, false, 0.05, 0),
+    );
+    // the per-share `rebate` arg is IGNORED in the realistic branch (rebate=0.5 changes nothing):
+    expect(makerNetEvPerDollar(0.1, false, 0.05, 0.5, 0.25)).toBeCloseTo(-0.98875, 6);
+  });
+  it('rebateRate omitted/0 is byte-identical to the conservative model (frozen §12 gate untouched)', () => {
+    expect(makerNetEvPerDollar(0.1, true, 0.05, 0, 0)).toBe(makerNetEvPerDollar(0.1, true, 0.05, 0));
+    expect(makerNetEvPerDollar(0.1, false, 0.05, 0, 0)).toBe(makerNetEvPerDollar(0.1, false, 0.05, 0));
+  });
   it('NaN on a degenerate restPx', () => {
     expect(makerNetEvPerDollar(0, true, 0.05, 0)).toBeNaN();
     expect(makerNetEvPerDollar(1.5, true, 0.05, 0)).toBeNaN();
