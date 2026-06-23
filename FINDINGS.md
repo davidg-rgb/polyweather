@@ -26,6 +26,17 @@ rebate, across enormous breadth — and is **non-followable and non-replicable**
 | Copy-trading the #1 sharp's fills | No — taker-follower loses −6.05pp | WALLET-RECON §11 |
 | Resting our own cheap bids (maker-spray) | No — adverse selection, −1.5 to −1.7pp | WALLET-RECON §12 |
 | Stacking the sharp's picks onto the market | No — subtracts skill (−1.2 to −1.7pp) | WALLET-RECON §14 (Move 5) |
+| Learning the sharp's maker selection (REC-1) | Un-answerable today (data-limited); a learned selector overfits — OOS edge −5.7pp | SELECTOR-LEARNABILITY §10 |
+
+**On REC-1 (the one un-run maker lever, tested 2026-06-23).** After the maker-rebate reframe (net profit by
+*any* mechanism), the last distinct lever was: can WE *learn* which cheap buckets to rest on (vs. mirroring the
+sharp's revealed picks, which needs his fills)? A pre-registered L2 logistic selector over 6 leakage-free
+pre-entry features, scored leave-one-weather-day-out with a cluster-mean t-interval, was built and run. Result:
+the in-sample ceiling (+10.6pp) **collapses out-of-sample to −5.7pp** (overfitting — the same selection wall as
+§12, now with a larger model). But the binding fact is the cheap-eligible book lives on only **4 independent
+weather-days**, far below the validation floor → **`INSUFFICIENT_DATA`**. The lever is un-answerable on today's
+data (a book-density limit, not a modelling gap); the same harness re-runs decisively once density grows. The
+direction of the available signal is negative. The rail stays DORMANT; the closed-thesis framing is unchanged.
 
 **Consequence (operator decision 2026-06-15): the live-trading thesis is CLOSED.** The product is the
 **analytics instrument** — a calibrated forecast, a scored model-vs-market history, and a measured,
@@ -223,6 +234,8 @@ instrument the system is strong, and *that* is the product:
 | Day-before market efficiency (KILL-GATE 2) | `WALLET-RECON-HANDOFF.md` | §10 |
 | Copy-trade / maker-spray / sharp-as-forecaster falsified | `WALLET-RECON-HANDOFF.md` | §11, §12, §14 |
 | Tail-calibration diagnosis (ambiguous) | `WALLET-RECON-HANDOFF.md` | §13 |
+| Maker-rebate economics + selection ceiling | `MAKER-REBATE-HANDOFF.md` | §3, §8 |
+| Selector-learnability (REC-1) — data-limited, OOS overfit | `SELECTOR-LEARNABILITY.md` | §8, §10 |
 | Three-curve replica P&L | `BADATMATH-REPLICA.md` | — |
 | Analytics infrastructure buildout | `BLUEPRINT-analytics-buildout.md` | — |
 | Amsterdam analytics deliverable | `AMSTERDAM-SIM.md` | — |

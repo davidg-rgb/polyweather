@@ -9,6 +9,14 @@
 >
 > Read first: this doc. Then `WALLET-RECON-HANDOFF.md` §11/§12/§15, `FINDINGS.md`, and
 > `packages/core/src/sim/maker-spray.ts` + `scripts/research/m6-selection-mirror.ts`.
+>
+> **UPDATE 2026-06-23 — REC-1 RAN. Verdict `INSUFFICIENT_DATA`, leaning NOT-LEARNABLE (§8 below).** The
+> decisive maker-path test was built (`SELECTOR-LEARNABILITY.md`, `core/sim/selector-learn.ts`,
+> `scripts/research/m7-selector-learnability.ts`, +27 tests). A learned 6-feature selector's in-sample
+> ceiling (+10.6pp) **collapses out-of-sample to −5.7pp** (cluster-t −9.7pp) — overfitting, same wall as
+> §12, larger model. But the binding blocker is that the cheap-eligible book lives on only **4 independent
+> weather-days** (Jun 12–15) < MIN_CLUSTERS 8, so the result is data-limited, not a clean kill. **Rail stays
+> DORMANT.** Re-run the harness when book density grows (REC-3/REC-4 → more days).
 
 - **Branch:** `feat/maker-rebate-economics` (off `main`). **Commits:** `d746316` (rebate economics),
   `19b02a5` (m6 selection-mirror), + this doc. **State:** typecheck 0, full suite **1167 green**.
@@ -192,6 +200,34 @@ pnpm typecheck && pnpm test    # 0 errors, 1167 green at handoff
 ```
 
 ---
+
+## 8. REC-1 RESULT — is badatmath's selection learnable OOS? (run 2026-06-23)
+
+Full pre-registration + numbers: **`SELECTOR-LEARNABILITY.md`** (§8 frozen criterion, §10 result). Engine
+`packages/core/src/sim/selector-learn.ts` (+`test/selector-learn.test.ts`, 27 tests), spine
+`scripts/research/m7-selector-learnability.ts`. Reproduce: `pnpm tsx scripts/research/m7-selector-learnability.ts`.
+
+**Design (the honest small-sample walk-forward).** Train an L2 logistic selector on a frozen 6-feature
+pre-entry set (`calibratedP, restPx, edgeP, spread, restVsMid, drift` — all ≤ entry, no leakage), pick cheap
+[0.10,0.25) buckets where `pWin > restPx`, score the selection edge (won−restPx) **leave-one-weather-day-out**
+with a **cluster-mean t-interval** (the §0a calibration: a percentile cluster bootstrap was anti-conservative
+at few clusters; the t-interval controls H0 FPR ≈0% while keeping power). Universe assembled by REUSING the §12
+maker-spray loaders + `makerEntry`.
+
+**Verdict: `INSUFFICIENT_DATA`, leaning NOT-LEARNABLE.**
+- In-sample ceiling (optimistic): selection edge **+10.6pp** (cluster-t +13.6pp). OOS (honest): **−5.7pp**
+  (cluster-t **−9.66pp [−27.56, +8.24]**). The selector overfits in-sample and **does not generalise OOS**.
+- Universe = **202 cheap-band picks over 4 weather-days** (Jun 12/13/14/15). 4 < MIN_CLUSTERS 8 → the
+  data-sufficiency gate fires: you cannot validate a learned selector on 4 independent weather-days (outcomes
+  within a day are cross-sectionally correlated — the effective independent n is ~4). Zero-skill null quiet (2.0%).
+- **This is a book-DENSITY blocker, not a modelling gap.** The fix is more days (REC-3 ingest + REC-4 monitor),
+  then re-run this exact harness. If OOS stays negative as days accumulate → REC-6 (the honest kill). The live
+  rail stays **DORMANT** (no `tradingMode` flip, `packages/trading` never imported).
+
+**What's now unblocked / next:** REC-3 (ingest `feeSchedule`/`rewards` per market) and REC-4 (liquidity-rewards
+monitor) are the highest-value next steps — they grow the book-density base REC-1 needs AND are cheap/additive.
+REC-2 (execution realism) stays GATED on a REC-1 PASS (not reached). REC-5 doc hygiene + REC-7 (off-universe
+reward farming) unchanged.
 
 ## 6. Guardrails (unchanged)
 
