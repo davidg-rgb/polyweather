@@ -28,7 +28,14 @@ export interface RawGammaMarket {
   acceptingOrders?: boolean | null;
   gameStartTime?: string | null;
   resolutionSource?: string;
-  feeSchedule?: { rate: number } | null;
+  /** Full schedule (fixture: {exponent:1, rate:0.05, takerOnly:true, rebateRate:0.25}). REC-3. */
+  feeSchedule?: { rate: number; takerOnly?: boolean; rebateRate?: number; exponent?: number } | null;
+  /** Fee program tag, e.g. 'weather_fees'. REC-3. */
+  feeType?: string;
+  /** Liquidity-reward scaffolding (flattened on the Gamma market; funded rates live on CLOB). REC-3. */
+  rewardsMaxSpread?: number | null;
+  rewardsMinSize?: number | null;
+  holdingRewardsEnabled?: boolean | null;
 }
 
 export interface RawGammaEvent {
@@ -60,6 +67,18 @@ export interface ParsedBucket {
   tickSize: number | null;
   minOrderSize: number | null;
   feeRate: number | null;
+  /** feeSchedule.takerOnly — on weather_fees, makers pay no fee (REC-3). */
+  feeTakerOnly: boolean | null;
+  /** feeSchedule.rebateRate — maker rebate as a share of the taker fee (weather_fees: 0.25) (REC-3). */
+  feeRebateRate: number | null;
+  /** feeType tag, e.g. 'weather_fees' (REC-3). */
+  feeType: string | null;
+  /** rewardsMaxSpread — liquidity-reward scaffolding (REC-3). */
+  rewardMaxSpread: number | null;
+  /** rewardsMinSize — liquidity-reward scaffolding (REC-3). */
+  rewardMinSize: number | null;
+  /** holdingRewardsEnabled (REC-3). */
+  holdingRewardsEnabled: boolean | null;
   volume24h: number | null;
   outcomePricesResolved: [number, number] | null;
 }
@@ -242,6 +261,12 @@ export function parseGammaEvent(ev: RawGammaEvent, knownTz?: string): ParsedEven
       tickSize: m.orderPriceMinTickSize ?? null,
       minOrderSize: m.orderMinSize ?? null,
       feeRate: m.feeSchedule?.rate ?? null,
+      feeTakerOnly: m.feeSchedule?.takerOnly ?? null,
+      feeRebateRate: m.feeSchedule?.rebateRate ?? null,
+      feeType: m.feeType ?? null,
+      rewardMaxSpread: m.rewardsMaxSpread ?? null,
+      rewardMinSize: m.rewardsMinSize ?? null,
+      holdingRewardsEnabled: m.holdingRewardsEnabled ?? null,
       volume24h: m.volume24hr ?? null,
       outcomePricesResolved: resolved,
     };
@@ -306,7 +331,19 @@ const RawGammaMarketSchema = z
     acceptingOrders: z.boolean().nullable().optional(),
     gameStartTime: z.string().nullable().optional(),
     resolutionSource: z.string().optional(),
-    feeSchedule: z.object({ rate: z.number() }).nullable().optional(),
+    feeSchedule: z
+      .object({
+        rate: z.number(),
+        takerOnly: z.boolean().optional(),
+        rebateRate: z.number().optional(),
+        exponent: z.number().optional(),
+      })
+      .nullable()
+      .optional(),
+    feeType: z.string().optional(),
+    rewardsMaxSpread: z.number().nullable().optional(),
+    rewardsMinSize: z.number().nullable().optional(),
+    holdingRewardsEnabled: z.boolean().nullable().optional(),
   })
   .passthrough();
 

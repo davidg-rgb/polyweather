@@ -17,6 +17,16 @@
 > §12, larger model. But the binding blocker is that the cheap-eligible book lives on only **4 independent
 > weather-days** (Jun 12–15) < MIN_CLUSTERS 8, so the result is data-limited, not a clean kill. **Rail stays
 > DORMANT.** Re-run the harness when book density grows (REC-3/REC-4 → more days).
+>
+> **UPDATE 2026-06-24 — REC-3 + REC-4 BUILT, and REC-4 FIRED A MAJOR TRIGGER (§9 below).** The reward/fee
+> config is now ingested (REC-3), and the liquidity-rewards monitor (REC-4) was run live — it found that
+> **Polymarket has TURNED ON funded liquidity rewards on weather markets** (395/396 temperature markets in
+> the funded pool, real USDC daily rates, e.g. Madrid 226/day). This **reverses §0's "Liquidity Rewards
+> DEAD on weather"** and is the exact *genuinely-out-of-market information* that `FINDINGS.md` named as the
+> condition to reopen. **Liquidity-rewards farming is FORECAST-FREE and SELECTION-FREE** (paid for resting
+> near mid regardless of fill/outcome) — orthogonal to every falsified outcome-prediction signal. **This
+> warrants a NEW work order (reward-farming economics) — operator decision.** The trading rail per se stays
+> dormant pending that analysis.
 
 - **Branch:** `feat/maker-rebate-economics` (off `main`). **Commits:** `d746316` (rebate economics),
   `19b02a5` (m6 selection-mirror), + this doc. **State:** typecheck 0, full suite **1167 green**.
@@ -228,6 +238,45 @@ maker-spray loaders + `makerEntry`.
 monitor) are the highest-value next steps — they grow the book-density base REC-1 needs AND are cheap/additive.
 REC-2 (execution realism) stays GATED on a REC-1 PASS (not reached). REC-5 doc hygiene + REC-7 (off-universe
 reward farming) unchanged.
+
+## 9. REC-3 + REC-4 BUILT (2026-06-24) — and REC-4 reversed the §2 reward finding
+
+**REC-3 — per-market fee + reward config ingest (DONE, deploy-gated).** The Gamma event already carries
+the full `feeSchedule {rate, takerOnly, rebateRate}`, `feeType`, `rewardsMaxSpread/MinSize`,
+`holdingRewardsEnabled` per market (fixture-verified). Extended `core/polymarket/gamma.ts` to parse them,
+migration `0054` adds the `market_buckets` columns + extends `upsert_bucket` (drops the 12-arg overload,
+recreates with 6 defaulted params — the "function is not unique" trap), and `discover-markets` now passes
+them. +tests (`polymarket.test.ts`, migrations list). Existing rows stay null until a discover re-run; the
+downstream sims keep their conservative 0.05/0.25 fallback until then (frozen results unchanged). Deploy +
+the one-line `loadEvents` read-path: RUNBOOK "REC-3 fee/reward config ingest".
+
+**REC-4 — liquidity-rewards monitor (DONE) → MAJOR TRIGGER.** Pure detector `core/polymarket/rewards.ts`
+(`scanWeatherRewards`) + live script `scripts/reward-monitor.ts` paginate the CLOB `/sampling-markets`
+funded pool. **Run 2026-06-24: 395/396 temperature markets are FUNDED** — real USDC daily rates (Madrid
+226/day, Ankara 124/day, Helsinki 66/day, …), min_size 50, max_spread 4.5¢, all active/accepting.
+Independently re-verified against the raw API. **This REVERSES §0/§2 "Liquidity Rewards DEAD on weather."**
+
+**What it means (and doesn't).** Liquidity rewards pay for **resting orders near mid, regardless of fill or
+outcome** — a **forecast-free, selection-free** income path, orthogonal to every falsified signal (those
+were all outcome-prediction / bucket-selection). It does NOT contradict the efficiency verdict; it's a
+market-making mechanism that simply did not exist on this universe until now. The §2 reasoning ("nothing to
+optimise toward") is obsolete as of today.
+
+**The honest caveat (why this is a work order, not a green light).** The advertised `rewards_daily_rate` is
+a per-market POOL split among qualifying makers by Polymarket's scoring formula (closeness-to-mid × size ×
+time-live × two-sidedness; `<0.10`/`>0.90` mids need double-sided). Realized earnings = YOUR share of that
+pool, net of inventory + adverse-selection risk on any fills. So the next step is an **economics analysis**:
+model the reward-share vs. capital-at-risk + fill/inventory cost across the weather universe, decide whether
+net-of-risk yield clears a bar worth pursuing. That is a genuinely new direction (a market-making pivot, not
+a forecast/taker edge) and an **operator decision** — `FINDINGS.md` named exactly this as the reopening clause.
+
+### Recommended next work order (REC-8, NEW) — reward-farming economics
+Quantify forecast-free liquidity-reward yield on the weather universe: (a) ingest `/sampling-markets` reward
+rates per condition (extend REC-3 / a new `market_rewards` snapshot); (b) model per-market maker reward
+share = f(our resting size, pool size, max_spread, time-live) under the published scoring formula; (c) net
+out inventory + adverse-selection cost on fills (reuse the §12 fill model); (d) pre-register a yield bar +
+kill-criterion (WO-5). This is the first genuinely-forecast-INDEPENDENT money path the investigation has
+surfaced; it deserves its own spec before any capital. The live trading rail stays DORMANT until it clears.
 
 ## 6. Guardrails (unchanged)
 

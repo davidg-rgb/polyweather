@@ -221,6 +221,13 @@ export async function discoverMarkets(ctx: JobCtx, deps: DiscoverDeps): Promise<
         p_tick: b.tickSize,
         p_min_order: b.minOrderSize,
         p_fee_rate: b.feeRate,
+        // REC-3: full per-market fee + reward config (migration 0054)
+        p_fee_taker_only: b.feeTakerOnly,
+        p_fee_rebate_rate: b.feeRebateRate,
+        p_fee_type: b.feeType,
+        p_reward_max_spread: b.rewardMaxSpread,
+        p_reward_min_size: b.rewardMinSize,
+        p_holding_rewards_enabled: b.holdingRewardsEnabled,
       });
       stats.bucketsUpserted++;
     }

@@ -44,6 +44,20 @@ defensible *proof of market efficiency*. The trading machinery (`packages/tradin
 surface, the gated live rail) stays built but DORMANT. Do not reopen taker-edge work without
 genuinely out-of-market information.
 
+> **⚡ MATERIAL UPDATE 2026-06-24 — the reopening condition just triggered (NOT a taker edge).** The REC-4
+> monitor (`scripts/reward-monitor.ts`) found that **Polymarket has turned on FUNDED liquidity rewards on
+> weather markets**: 395/396 temperature markets are in the CLOB `/sampling-markets` funded pool, paying
+> real USDC daily rates (Madrid 226/day, Ankara 124/day, Helsinki 66/day; min_size 50, max_spread 4.5¢).
+> This **reverses** the earlier "Liquidity Rewards DEAD on weather" finding. Liquidity rewards are
+> **forecast-free and selection-free** — you are paid for *resting orders near mid regardless of fill or
+> outcome* — so this is **orthogonal to every falsified signal above** (all of which were about predicting
+> the outcome or picking the bucket). It does NOT contradict the efficiency verdict; it is a different,
+> market-making income mechanism that did not exist on this universe until now. **Caveat:** the daily rate
+> is a per-market POOL split among qualifying makers by a scoring formula — realized earnings = your share,
+> net of inventory / adverse-selection risk on fills; it needs its own economics analysis before any
+> capital. **This is the genuinely-out-of-market information the reopening clause named — it warrants a new
+> work order (reward-farming economics), an operator decision.** Detail: `MAKER-REBATE-HANDOFF.md` §9.
+
 ---
 
 ## The question, precisely

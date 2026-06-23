@@ -168,6 +168,11 @@ describe('migrations 0001–0010', () => {
       // replica_record_positions/_run (service-role writes) + dash_replica_sim (operator read, added to
       // WEB_AUTHENTICATED below). Powers the /replica dashboard. No cron. BADATMATH-REPLICA.md.
       '0053_replica_paper_trial.sql',
+      // 0054 = REC-3 per-market fee + reward config: market_buckets gains fee_taker_only,
+      // fee_rebate_rate, fee_type, reward_max_spread, reward_min_size, holding_rewards_enabled; the
+      // 12-arg upsert_bucket is dropped + recreated with the 6 new defaulted params. No cron.
+      // MAKER-REBATE-HANDOFF.md §4 / REC-3.
+      '0054_market_fee_reward_config.sql',
     ]);
   });
 });

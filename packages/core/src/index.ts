@@ -10,6 +10,7 @@ export * from './kelly.ts';
 export * from './risk.ts';
 export * from './polymarket/gamma.ts';
 export * from './polymarket/clob.ts';
+export * from './polymarket/rewards.ts';
 export * from './weather/openmeteo.ts';
 export * from './weather/wu.ts';
 export * from './weather/metar.ts';

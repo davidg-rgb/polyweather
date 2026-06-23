@@ -11,6 +11,12 @@ import {
   targetDateFromEvent,
   type RawGammaEvent,
 } from '../src/polymarket/gamma.ts';
+import {
+  type RawSamplingMarket,
+  isFunded,
+  isWeatherMarket,
+  scanWeatherRewards,
+} from '../src/polymarket/rewards.ts';
 
 const RESEARCH = join(import.meta.dirname, '..', '..', '..', 'research');
 
@@ -170,6 +176,37 @@ describe('parseGammaEvent (§6.9) — full city fixtures', () => {
     }
   });
 
+  // REC-3: the full per-market fee + reward config the Gamma event carries (migration 0054).
+  it.each(cases)('%s captures the REC-3 fee + reward config (weather_fees)', (file) => {
+    const parsed = parseGammaEvent(loadEvent(file));
+    for (const b of parsed.buckets) {
+      expect(b.feeTakerOnly).toBe(true); // makers pay no fee on weather_fees
+      expect(b.feeRebateRate).toBe(0.25); // 25% maker rebate share — the live config
+      expect(b.feeType).toBe('weather_fees');
+      expect(b.rewardMaxSpread).toBe(4.5);
+      expect(b.rewardMinSize).toBe(50);
+      expect(b.holdingRewardsEnabled).toBe(false);
+    }
+  });
+
+  it('REC-3 fields default to null when feeSchedule carries only rate (back-compat)', () => {
+    const ev = loadEvent('gamma-event-temperature-london-jun11.json') as unknown as {
+      markets: Array<Record<string, unknown>>;
+    };
+    // strip the extended fields from one market → the parser must degrade to null, not throw
+    ev.markets[0]!.feeSchedule = { rate: 0.05 };
+    delete ev.markets[0]!.feeType;
+    delete ev.markets[0]!.rewardsMaxSpread;
+    delete ev.markets[0]!.rewardsMinSize;
+    delete ev.markets[0]!.holdingRewardsEnabled;
+    const parsed = parseGammaEvent(ev as never);
+    const b0 = parsed.buckets.find((b) => b.feeRate === 0.05 && b.feeRebateRate === null);
+    expect(b0).toBeDefined();
+    expect(b0!.feeTakerOnly).toBeNull();
+    expect(b0!.feeType).toBeNull();
+    expect(b0!.rewardMaxSpread).toBeNull();
+  });
+
   it('both tick sizes (0.01 AND 0.001) are present across fixture buckets', () => {
     const all = cases.flatMap(([file]) => parseGammaEvent(loadEvent(file)).buckets);
     const ticks = new Set(all.map((b) => b.tickSize));
@@ -302,5 +339,64 @@ describe('parsePricesHistory (§6.22 market-history backfill input)', () => {
     expect(() => parsePricesHistory({ history: 'nope' })).toThrow(ClobShapeError);
     expect(() => parsePricesHistory({ history: [{ t: 'x', p: 0.5 }] })).toThrow(ClobShapeError);
     expect(() => parsePricesHistory({ history: [{ t: 1, p: null }] })).toThrow(ClobShapeError);
+  });
+});
+
+describe('rewards — REC-4 liquidity-rewards monitor detector', () => {
+  // Shapes mirror the live 2026-06 CLOB /sampling-markets response.
+  const worldCup: RawSamplingMarket = {
+    condition_id: '0xabc',
+    question: 'Will Uruguay win Group H in the 2026 FIFA World Cup?',
+    market_slug: 'will-uruguay-win-group-h',
+    tags: ['Sports', 'FIFA World Cup'],
+    rewards: { rates: [{ asset_address: '0x2791', rewards_daily_rate: 19 }], min_size: 100, max_spread: 4.5 },
+  };
+  const tempFunded: RawSamplingMarket = {
+    condition_id: '0xhot',
+    question: 'Highest temperature in NYC on June 30?',
+    market_slug: 'highest-temperature-in-nyc-on-june-30-2026',
+    tags: ['Weather'],
+    rewards: { rates: [{ asset_address: '0x2791', rewards_daily_rate: 12 }], min_size: 50, max_spread: 4.5 },
+  };
+  const tempUnfunded: RawSamplingMarket = {
+    condition_id: '0xcold',
+    question: 'Lowest temperature in London on July 1?',
+    market_slug: 'lowest-temperature-in-london-on-july-1-2026',
+    rewards: { rates: null, min_size: 50, max_spread: 4.5 },
+  };
+
+  it('isWeatherMarket: slug prefix, question fallback, and non-weather false', () => {
+    expect(isWeatherMarket(tempFunded)).toBe(true);
+    expect(isWeatherMarket(tempUnfunded)).toBe(true);
+    expect(isWeatherMarket(worldCup)).toBe(false);
+    // question fallback when the slug is opaque
+    expect(isWeatherMarket({ market_slug: 'opaque-id-123', question: 'Highest temperature in Paris?' })).toBe(true);
+    expect(isWeatherMarket({})).toBe(false); // total on junk
+  });
+
+  it('isFunded: non-empty rates funded, null/empty not', () => {
+    expect(isFunded(tempFunded)).toBe(true);
+    expect(isFunded(tempUnfunded)).toBe(false);
+    expect(isFunded({ rewards: { rates: [] } })).toBe(false);
+    expect(isFunded({})).toBe(false);
+  });
+
+  it('scanWeatherRewards separates weather from funded-weather (the REC-4 trigger)', () => {
+    const r = scanWeatherRewards([worldCup, tempFunded, tempUnfunded]);
+    expect(r.nScanned).toBe(3);
+    expect(r.weather.map((h) => h.conditionId).sort()).toEqual(['0xcold', '0xhot']);
+    expect(r.fundedWeather.map((h) => h.conditionId)).toEqual(['0xhot']);
+    expect(r.fundedWeather[0]!.dailyRateTotal).toBe(12);
+  });
+
+  it("today's reality: a pool of only non-weather funded markets ⇒ no weather trigger", () => {
+    const r = scanWeatherRewards([worldCup, worldCup]);
+    expect(r.weather).toEqual([]);
+    expect(r.fundedWeather).toEqual([]);
+  });
+
+  it('is total on empty / junk input', () => {
+    expect(scanWeatherRewards([]).nScanned).toBe(0);
+    expect(scanWeatherRewards(null as never).fundedWeather).toEqual([]);
   });
 });

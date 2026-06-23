@@ -347,6 +347,33 @@ Re-pull / extend any time: `pnpm tsx scripts/sharp-wallets.ts --leaderboard` (id
 just re-report). **Turn it off:** `select cron.unschedule('sharp-wallet-track');` (data + card remain). Builds
 #2 (wallet-forensics/PnL ledger) and #3 (day-before efficiency study) are not yet built — see the hand-off.
 
+## REC-3 fee/reward config ingest + REC-4 rewards monitor (MAKER-REBATE-HANDOFF.md §4)
+
+**REC-3 — capture the full per-market fee + reward config (migration `0054`).** Adds `market_buckets`
+columns (`fee_taker_only`, `fee_rebate_rate`, `fee_type`, `reward_max_spread`, `reward_min_size`,
+`holding_rewards_enabled`) and extends `upsert_bucket` (drops the 12-arg overload, recreates with 6 new
+defaulted params). The `discover-markets` parser already captures them from the Gamma event; existing rows
+stay null until a `discover` re-run repopulates them (downstream EV readers fall back to the conservative
+hardcoded 0.05/0.25 while null). Operator-gated deploy:
+```bash
+# 1) apply migration 0054 (idempotent; additive columns + function replace)
+supabase db push --project-ref "$SUPABASE_REF"        # or SQL editor / MCP apply_migration
+# 2) redeploy discover-markets so new discoveries persist the fee/reward config
+supabase functions deploy discover-markets --use-api --no-verify-jwt --project-ref "$SUPABASE_REF"
+# (no backfill needed — the next discover cycle fills the columns going forward)
+```
+Once populated, the maker-spray / m6 / m7 EV can read `fee_rebate_rate` per bucket instead of the assumed
+0.25 (a one-line change in `loadEvents`, with a null→0.25 fallback to keep frozen results byte-identical).
+
+**REC-4 — liquidity-rewards monitor (no deploy needed to RUN).** `pnpm tsx scripts/reward-monitor.ts`
+paginates the live CLOB `/sampling-markets` (the funded reward pool) and reports whether any weather market
+is funded. Exit 2 = TRIGGER (weather is in the pool); exit 0 = dormant. **2026-06-24: the trigger FIRED —
+395/396 temperature markets are in the funded pool with real USDC daily rates (this reverses the §2 "rewards
+DEAD on weather" finding).** Promotion to a continuous Edge+cron monitor (Slack-alert on a daily cron) is a
+small follow-up: wrap `scanWeatherRewards` in an Edge function + `cron.schedule`, alerting when
+`fundedWeather.length > 0` flips. Forecast-free reward farming on weather is now a live, un-analysed path —
+see the hand-off for the recommended next work order (reward-farming economics).
+
 ## Failure-drill log (each upstream killed under test)
 
 Every upstream's failure path is exercised by the committed suite — re-run
