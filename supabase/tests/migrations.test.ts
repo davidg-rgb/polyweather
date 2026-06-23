@@ -160,6 +160,14 @@ describe('migrations 0001–0010', () => {
       // (CONUS National Blend of Models, registered for the day-before bucket A/B; live-verified slug is
       // `ncep_nbm_conus`). No table, RLS, cron, or RPC change. WALLET-RECON-HANDOFF.md §6 Build #3 / §7 item 2.
       '0051_nbm_conus_model.sql',
+      // 0052 = today's predicted high from the freshest same-day forecast: dash_amsterdam_sim gains an
+      // additive `today` block (whole 0049 body re-stated; freshest forecast_snapshots capture for today,
+      // matched-lead trailing debias). Unchanged signature; stays in WEB_AUTHENTICATED.
+      '0052_amsterdam_today_forecast.sql',
+      // 0053 = badatmath-replica paper-trial persistence: replica_positions + replica_runs +
+      // replica_record_positions/_run (service-role writes) + dash_replica_sim (operator read, added to
+      // WEB_AUTHENTICATED below). Powers the /replica dashboard. No cron. BADATMATH-REPLICA.md.
+      '0053_replica_paper_trial.sql',
     ]);
   });
 });
@@ -616,7 +624,7 @@ describe('0034: internal-RPC lockdown — anon/authenticated revoked except the 
     'dash_today_overview', 'dash_events_list', 'dash_event_detail', 'dash_city_detail',
     'dash_calibration', 'dash_bets_ledger', 'dash_system_health', 'dash_admin_state',
     'dash_station_observations', 'dash_station_predictions',
-    'dash_amsterdam_sim',
+    'dash_amsterdam_sim', 'dash_replica_sim',
     'go_live_gate_inputs',
     'operator_halt', 'operator_resume', 'operator_update_config', 'operator_verify_station',
     'operator_set_champion', 'operator_skip_bet', 'operator_manual_bet',

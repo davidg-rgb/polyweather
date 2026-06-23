@@ -7,14 +7,28 @@
  */
 import {
   AMSTERDAM_CLIMATOLOGY,
+  DEFAULT_REPLICA_STRATEGY,
   armEdgeStats,
   armTruthStats,
+  dailyLedger,
   exposureSummary,
   parseConfigRows,
   peakHourWindow,
+  rankCitiesByRoi,
   recommendBestTime,
+  scoreLocked,
+  summarize,
 } from '@weather-edge/core';
-import type { AppConfig, BestTimeView, EdgeRow } from '@weather-edge/core';
+import type {
+  AppConfig,
+  BestTimeView,
+  CityRoi,
+  DailyRow,
+  EdgeRow,
+  LockedBuy,
+  ReplicaStrategy,
+  ReplicaSummary,
+} from '@weather-edge/core';
 import { goLiveGate, type GateDeps } from '@weather-edge/trading';
 import { compareEdgeRows, recomputeEdgeRows } from './edge-display.ts';
 import type { EdgeComparison, EventDetailForEdges, LadderRowPayload, StoredEdgeEval } from './edge-display.ts';
@@ -580,6 +594,38 @@ export interface TomorrowView {
   ask: unknown;
 }
 
+/**
+ * Today's prediction (0052) — the FRESHEST same-day forecast, so the "Predicted high" tile switches in the
+ * morning of the day (and tracks the latest NWP capture all day) instead of lagging on the afternoon's first
+ * placed bet. Same shape as TomorrowView plus `lead` (0 once the same-day run lands, else 1) and `capturedAt`
+ * (the freshness stamp). `forecastC` is the trailing-debias-corrected value when ≥20 prior pairs exist for the
+ * matched lead, else the raw cross-model mean (`biasCorrected` flags which); null fields when the NWP feed has
+ * no capture for today; the whole object is null when the RPC predates 0052 (the page degrades to the bet-
+ * carried forecast / running-max floor).
+ */
+export interface TodayView {
+  targetDate: string | null;
+  hasMarket: boolean;
+  /** The freshest capture's lead (0 = same-day run, 1 = previous night's run before today's lands). */
+  lead: unknown;
+  /** The freshest capture instant (UTC) — the "as of HH:mm" freshness stamp. */
+  capturedAt: string | null;
+  /** Distinct models behind the cross-model mean. */
+  nModels: unknown;
+  rawForecastC: unknown;
+  biasC: unknown;
+  biasN: unknown;
+  biasCorrected: boolean;
+  /** The forecast actually shown — corrected when trustworthy, else raw. */
+  forecastC: unknown;
+  /** wuRound(forecastC) — today's whole-°C call. */
+  predictedC: unknown;
+  /** Ladder label for that bucket on today's market, or null when no market/bucket. */
+  label: string | null;
+  /** Latest best-ask on that bucket, or null when no live quote. */
+  ask: unknown;
+}
+
 /** Live running-max-so-far for today (0046) — intraday_max, with the observation timestamp ("as of HH:mm"). */
 export interface LiveRunMax {
   date: string | null;
@@ -659,6 +705,8 @@ export interface AmsterdamSimView {
   truthCoverage: TruthCoverage | null;
   /** Tomorrow's prediction (0046); null when the RPC predates it. */
   tomorrow: TomorrowView | null;
+  /** Today's freshest prediction (0052); null when the RPC predates it. */
+  today: TodayView | null;
   /** Live running-max as of now (0046); null when no obs today or the RPC predates it. */
   liveRunMax: LiveRunMax | null;
   /** Sharp-wallet disagreement (0049); null when the RPC predates it. */
@@ -702,6 +750,8 @@ interface SimPayload {
   truthCoverage?: TruthCoverage | null;
   /** 0046 — present only once the RPC redefine ships; the loader tolerates their absence. */
   tomorrow?: TomorrowView | null;
+  /** 0052 — present only once the RPC redefine ships; the loader tolerates its absence. */
+  today?: TodayView | null;
   liveRunMax?: LiveRunMax | null;
   /** 0049 — present only once the RPC redefine ships; the loader tolerates its absence. */
   sharps?: SharpsView | null;
@@ -809,10 +859,11 @@ export async function getAmsterdamSim(db: WebDb, opts: { now?: Date } = {}): Pro
   // --- best-time-to-bet (0044): fuse the peak-hour climatology with the empirical arm hit rates ----------
   const month = amsterdamMonth(opts.now ?? new Date());
   const armHours = v.config.armHours ?? [];
-  // Today's de-biased forecast (one per-day scalar, written identically onto every arm by the place RPC) →
-  // selects the hot-day climatology. Prefer the primary arm's value explicitly, then fall back to the first
-  // arm that carries one — so the choice is principled, not iteration-order-dependent, if arms ever diverge.
+  // Today's de-biased forecast → selects the hot-day climatology. Prefer the FRESH same-day forecast (0052,
+  // available in the morning), then the primary arm's bet-carried value, then the first arm that carries one
+  // — so the hot-day flag also switches in the morning, not on the afternoon's first placed bet.
   const forecastC =
+    toNum(v.today?.forecastC) ??
     toNum(latestByHour[v.config.primaryHour]?.forecastC) ??
     armHours.map((h) => toNum(latestByHour[h]?.forecastC)).find((x) => x != null) ??
     null;
@@ -880,6 +931,7 @@ export async function getAmsterdamSim(db: WebDb, opts: { now?: Date } = {}): Pro
     latest: { date: v.latest?.date ?? null, byHour: latestByHour },
     truthCoverage: v.truthCoverage ?? null,
     tomorrow: v.tomorrow ?? null,
+    today: v.today ?? null,
     liveRunMax: v.liveRunMax ?? null,
     sharps: v.sharps ?? null,
     overall,
@@ -1047,5 +1099,222 @@ export async function getAdminState(db: WebDb, gateDeps?: GateDeps): Promise<Adm
     tradingMode: cfg.tradingMode,
     championSource: cfg.championSource,
     goLiveChecklist: checklist,
+  };
+}
+
+// --- /replica badatmath paper-trial dashboard (0053) -------------------------------------------------
+
+/** One persisted replica position row (dash_replica_sim), jsonb-string-safe (coerced below). */
+interface ReplicaPositionRow {
+  source: 'backtest' | 'forward';
+  conditionId: string | null;
+  eventId: string;
+  citySlug: string;
+  region: string | null;
+  targetDate: string;
+  bucketIdx: unknown;
+  bucketLabel: string | null;
+  resolutionTs: unknown;
+  entryTs: unknown;
+  entryDayUtc: string;
+  makerPrice: unknown;
+  takerPrice: unknown;
+  stakeUsd: unknown;
+  feeRate: unknown;
+  bucketWon: boolean | null;
+  makerRealisticFilled: boolean | null;
+  status: 'open' | 'resolved';
+  placedAtUtc: string | null;
+  closedAtUtc: string | null;
+}
+
+/** A persisted run row (the strategy + whitelist + funnel/tally counts). */
+interface ReplicaRunRow {
+  mode: string;
+  ranAt: string | null;
+  seedFrom: string | null;
+  seedTo: string | null;
+  whitelist: string[] | null;
+  strat: Record<string, unknown> | null;
+  nCandidates: unknown;
+  nBand: unknown;
+  nSelected: unknown;
+  nAllocated: unknown;
+  nOpen: unknown;
+  nClosed: unknown;
+  nOpened: unknown;
+  nReconciled: unknown;
+}
+
+interface ReplicaPayload {
+  positions: ReplicaPositionRow[];
+  runs: { backtest: ReplicaRunRow | null; forward: ReplicaRunRow | null };
+  recentRuns: { mode: string; ranAt: string; nOpen: unknown; nClosed: unknown; nOpened: unknown; nReconciled: unknown }[];
+}
+
+/** The per-scope (backtest / forward) roll-up — all from the SAME core engine the scripts use. */
+export interface ReplicaScopeView {
+  summary: ReplicaSummary;
+  daily: DailyRow[];
+  cities: CityRoi[];
+}
+
+/** One open (placed, awaiting-resolution) forward position for the live table. */
+export interface ReplicaOpenRow {
+  citySlug: string;
+  region: string;
+  targetDate: string;
+  bucketLabel: string;
+  makerPrice: number;
+  takerPrice: number;
+  stakeUsd: number;
+  resolutionTs: number;
+  placedAtUtc: string | null;
+}
+
+export interface ReplicaSimView {
+  /** The strategy actually used (latest forward run → backtest run → DEFAULT). */
+  strat: ReplicaStrategy;
+  /** "His best-performing cities" computed by the latest forward run (the live whitelist). */
+  whitelist: string[];
+  backtest: ReplicaScopeView;
+  forward: ReplicaScopeView;
+  /** Forward positions still open (placed, awaiting resolution), soonest-resolving first. */
+  open: ReplicaOpenRow[];
+  lastBacktestRunAt: string | null;
+  lastForwardRunAt: string | null;
+  recentRuns: { mode: string; ranAt: string; nOpen: number; nClosed: number; nOpened: number; nReconciled: number }[];
+  /** Forward funnel headline counts (placed = open+resolved). */
+  forwardPlaced: number;
+  forwardResolved: number;
+  forwardOpen: number;
+  /** Backtest resolved count (the seed sample size). */
+  backtestResolved: number;
+  /** Backtest funnel (from the run row) — candidates → band-eligible → selected → bought. */
+  backtestFunnel: { nCandidates: number; nBand: number; nSelected: number; nAllocated: number } | null;
+  hasData: boolean;
+}
+
+/** Coerce a persisted position row into the core LockedBuy the engine scores. */
+function toLockedBuy(r: ReplicaPositionRow): LockedBuy {
+  return {
+    conditionId: r.conditionId ?? '',
+    eventId: r.eventId,
+    citySlug: r.citySlug,
+    region: r.region ?? '',
+    targetDate: String(r.targetDate).slice(0, 10),
+    bucketIdx: toNum(r.bucketIdx) ?? 0,
+    bucketLabel: r.bucketLabel ?? '',
+    resolutionTs: toNum(r.resolutionTs) ?? 0,
+    entryTs: toNum(r.entryTs) ?? 0,
+    entryDayUtc: String(r.entryDayUtc).slice(0, 10),
+    makerPrice: toNum(r.makerPrice) ?? 0,
+    takerPrice: toNum(r.takerPrice) ?? 0,
+    stakeUsd: toNum(r.stakeUsd) ?? 0,
+    feeRate: toNum(r.feeRate) ?? 0,
+    bucketWon: r.bucketWon == null ? null : r.bucketWon === true,
+    makerRealisticFilled: r.makerRealisticFilled === true,
+  };
+}
+
+/** Coerce a persisted strat jsonb into a full ReplicaStrategy (fields missing → DEFAULT). */
+function parseReplicaStrat(raw: Record<string, unknown> | null | undefined): ReplicaStrategy {
+  const n = (k: keyof ReplicaStrategy): number => toNum(raw?.[k]) ?? DEFAULT_REPLICA_STRATEGY[k];
+  return {
+    cheapBandLo: n('cheapBandLo'),
+    cheapBandHi: n('cheapBandHi'),
+    entryLeadHours: n('entryLeadHours'),
+    breadthPerCityDay: n('breadthPerCityDay'),
+    positionStakeUsd: n('positionStakeUsd'),
+    dailyBankrollCapUsd: n('dailyBankrollCapUsd'),
+    tickSize: n('tickSize'),
+    feeRate: n('feeRate'),
+  };
+}
+
+/** Roll one scope's positions up through the core engine (one source of truth with the scripts). */
+function scopeView(rows: ReplicaPositionRow[], strat: ReplicaStrategy, minCityN: number): ReplicaScopeView {
+  const scored = rows.map((r) => scoreLocked(toLockedBuy(r), strat));
+  return {
+    summary: summarize(scored, { nCandidates: scored.length, nBandEligible: scored.length }),
+    daily: dailyLedger(scored),
+    cities: rankCitiesByRoi(scored, { leg: 'makerIdeal', minResolved: minCityN }),
+  };
+}
+
+/**
+ * The badatmath replica paper-trial (dash_replica_sim, 0053) for /replica. Returns the persisted positions +
+ * the latest runs; the loader scores them through the core engine (scoreLocked → summarize/dailyLedger/
+ * rankCitiesByRoi) so the web roll-ups can never drift from the scripts'. Degrades to null (not a thrown 500)
+ * if the RPC errors — the page can deploy ahead of the 0053 RPC.
+ */
+export async function getReplicaSim(db: WebDb): Promise<ReplicaSimView | null> {
+  let v: ReplicaPayload | null;
+  try {
+    v = await one<ReplicaPayload>(db, 'dash_replica_sim', {});
+  } catch {
+    return null;
+  }
+  if (!v) return null;
+
+  const positions = v.positions ?? [];
+  const backtestRows = positions.filter((p) => p.source === 'backtest');
+  const forwardRows = positions.filter((p) => p.source === 'forward');
+
+  // Strategy for scoring + display: latest forward run, else backtest run, else the §15 default.
+  const strat = parseReplicaStrat(v.runs?.forward?.strat ?? v.runs?.backtest?.strat ?? null);
+
+  // Forward cities surface sooner (small n) at minResolved 3; the backtest seed uses the fuller 8.
+  const backtest = scopeView(backtestRows, strat, 8);
+  const forward = scopeView(forwardRows, strat, 3);
+
+  const open: ReplicaOpenRow[] = forwardRows
+    .filter((p) => p.status === 'open')
+    .map((p) => ({
+      citySlug: p.citySlug,
+      region: p.region ?? '',
+      targetDate: String(p.targetDate).slice(0, 10),
+      bucketLabel: p.bucketLabel ?? '',
+      makerPrice: toNum(p.makerPrice) ?? 0,
+      takerPrice: toNum(p.takerPrice) ?? 0,
+      stakeUsd: toNum(p.stakeUsd) ?? 0,
+      resolutionTs: toNum(p.resolutionTs) ?? 0,
+      placedAtUtc: p.placedAtUtc,
+    }))
+    .sort((a, b) => a.resolutionTs - b.resolutionTs);
+
+  const forwardResolved = forwardRows.filter((p) => p.status === 'resolved').length;
+  const forwardOpen = forwardRows.length - forwardResolved;
+  const bRun = v.runs?.backtest ?? null;
+
+  return {
+    strat,
+    whitelist: v.runs?.forward?.whitelist ?? [],
+    backtest,
+    forward,
+    open,
+    lastBacktestRunAt: v.runs?.backtest?.ranAt ?? null,
+    lastForwardRunAt: v.runs?.forward?.ranAt ?? null,
+    recentRuns: (v.recentRuns ?? []).map((r) => ({
+      mode: r.mode,
+      ranAt: r.ranAt,
+      nOpen: toNum(r.nOpen) ?? 0,
+      nClosed: toNum(r.nClosed) ?? 0,
+      nOpened: toNum(r.nOpened) ?? 0,
+      nReconciled: toNum(r.nReconciled) ?? 0,
+    })),
+    forwardPlaced: forwardRows.length,
+    forwardResolved,
+    forwardOpen,
+    backtestResolved: backtestRows.filter((p) => p.status === 'resolved').length,
+    backtestFunnel: bRun
+      ? {
+          nCandidates: toNum(bRun.nCandidates) ?? 0,
+          nBand: toNum(bRun.nBand) ?? 0,
+          nSelected: toNum(bRun.nSelected) ?? 0,
+          nAllocated: toNum(bRun.nAllocated) ?? 0,
+        }
+      : null,
+    hasData: positions.length > 0,
   };
 }

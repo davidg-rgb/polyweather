@@ -133,7 +133,7 @@ export default async function AmsterdamPage(): Promise<ReactElement> {
 
   const {
     config, coverage, arms, leaderHour, chart, betLog, latest, truthCoverage, bestTime, peakHourChart,
-    tomorrow, liveRunMax, sharps, overall,
+    tomorrow, today, liveRunMax, sharps, overall,
   } = view;
   const hasTruth = (num(truthCoverage?.nBetsWithTruth) ?? 0) > 0;
   const nGradedDays = num(coverage.nGradedDays) ?? 0;
@@ -152,18 +152,30 @@ export default async function AmsterdamPage(): Promise<ReactElement> {
   const pc = bestTime.headline.predictiveConfidence;
   const fc = bestTime.headline.floorConfidence;
 
-  // ── decision-strip facts (0046) ──────────────────────────────────────────────────────────────────────
-  // Today's predicted high = the de-biased lead-1 forecast carried on today's bets (one per-day scalar);
-  // fall back to the running-max floor if no forecast was available for the day.
-  const fcToday =
+  // ── decision-strip facts (0046, 0052) ────────────────────────────────────────────────────────────────
+  // Today's predicted high prefers the FRESH same-day forecast (0052) — the freshest forecast_snapshots
+  // capture for today, debiased — so the tile switches in the morning of the day and tracks the latest NWP
+  // view, instead of lagging on the forecast carried by the afternoon's first placed bet. It falls back to
+  // that bet-carried forecast, then to the running-max floor.
+  const fcTodayLive = num(today?.forecastC);
+  const fcTodayBet =
     num(latest.byHour[config.primaryHour]?.forecastC) ??
     config.armHours.map((h) => num(latest.byHour[h]?.forecastC)).find((x) => x != null) ??
     null;
+  const fcToday = fcTodayLive ?? fcTodayBet;
   const runMaxToday = peakHourChart.todayRunMax.length
     ? Math.max(...peakHourChart.todayRunMax.map((p) => p.runMaxC))
     : null;
   const predictedHighC = fcToday ?? runMaxToday;
-  const predictedHighBucket = predictedHighC == null ? null : roundC(predictedHighC);
+  const todayPredBucket = num(today?.predictedC);
+  const predictedHighBucket =
+    fcTodayLive != null && todayPredBucket != null
+      ? todayPredBucket // the RPC's wuRound of the fresh forecast (one source of truth for the bucket)
+      : predictedHighC == null
+        ? null
+        : roundC(predictedHighC);
+  // The day the predicted high is FOR: today when the fresh forecast drives it; else the latest bet day.
+  const predictedHighDate = fcTodayLive != null ? (today?.targetDate ?? null) : latest.date;
 
   // Running max "now": the live intraday_max (0046) when present, else the last lock's frozen floor.
   const liveMaxC = num(liveRunMax?.maxTenthsC);
@@ -191,11 +203,15 @@ export default async function AmsterdamPage(): Promise<ReactElement> {
         <div className="tile">
           <div className="tile-head">
             <span className="cap">Predicted high</span>
-            {latest.date ? <span className="cap" style={{ color: 'var(--ams-secondary)' }}>{fmtDate(latest.date)}</span> : null}
+            {predictedHighDate ? <span className="cap" style={{ color: 'var(--ams-secondary)' }}>{fmtDate(predictedHighDate)}</span> : null}
           </div>
           <div className="big sky">{predictedHighBucket == null ? '—' : `${predictedHighBucket}°`}</div>
           <div className="sub">
-            {fcToday != null ? `debiased NWP forecast ${fcToday.toFixed(1)}°C` : 'from the running-max floor'}
+            {fcTodayLive != null
+              ? `debiased NWP forecast ${fcTodayLive.toFixed(1)}°C${today?.capturedAt ? ` · as of ${amsTime(today.capturedAt)}` : ''}`
+              : fcToday != null
+                ? `debiased NWP forecast ${fcToday.toFixed(1)}°C`
+                : 'from the running-max floor'}
           </div>
         </div>
 

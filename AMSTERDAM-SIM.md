@@ -371,3 +371,27 @@ universe was seeded **retrospectively** on 2026-06-16 from feeds that were still
   *reconstruction*, not a live record — the consistency framing is the chosen interpretation, documented here.
   **Post-state verified: 40/40 bets trace to a real in-lock-hour quote** (0 unvalidated); truth complete except
   06-20 (KNMI lag, fills on the daily tick). No deploy needed — `dash_amsterdam_sim` reads the table live.
+
+## 10. "Predicted high" → today's freshest forecast (2026-06-23, migration 0052)
+
+Operator report: the decision-strip **"Predicted high"** tile read the forecast carried on the **latest placed
+bet** (`latest.byHour[*].forecastC`). Today's four arms aren't placed until the afternoon lock hours, so all
+morning the tile showed **yesterday's** number and only flipped once the day's first bet landed (~the afternoon
+Edge tick). The ask was to switch it in the **morning** of the day and keep it as fresh as possible.
+
+- **Fix — migration 0052.** `dash_amsterdam_sim` gains a `today` block (mirrors the 0046 `tomorrow` block, but
+  for today and against the **freshest** capture): take the `forecast_snapshots` batch with the **latest
+  `captured_at`** for `target_date = today` (its cross-model mean is the most recent NWP view — the previous
+  night's **lead-0** 22Z run, then this morning's lead-0 10Z run as it lands ~12:15 local), debias it by **that
+  lead's** trailing-30 residual (the verbatim 0041 correction; ≥20 pairs to trust, else display the raw), wuRound
+  to the bucket, price against today's ladder. Whole 0049 body re-stated (create-or-replace); additive `today`
+  key; unchanged signature. Lead 0 exists in the feed (verified: 9 models, captured night-before + same-morning).
+- **Loader/page.** `getReplicaSim`'s sibling `getAmsterdamSim` surfaces `today` (`TodayView`) and the page's tile
+  prefers `today.forecastC`/`predictedC` over the bet-carried forecast (then the running-max floor), shows the
+  freshness stamp ("as of HH:mm" from `capturedAt`), and dates the tile to *today*. The fresh `today.forecastC`
+  also drives the hot-day climatology selection (so the best-time rec switches in the morning too). Because the
+  page is `force-dynamic`, every request re-runs the RPC → always the current prediction.
+- **Verified.** Applied to prod 2026-06-23; live computation for 2026-06-23 = lead-0 raw 28.76°C + 0.53 debias →
+  **29.28°C → 29°** (vs the stale latest-bet value it replaced). Loader + RPC tests added
+  (`amsterdam-loader.test.ts`, `amsterdam-sim.test.ts`); 1,157 tests green. Backward-compatible: the pre-deploy
+  page ignores the new `today` key.

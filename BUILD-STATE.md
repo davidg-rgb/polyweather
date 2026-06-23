@@ -5,7 +5,7 @@
 
 ## Active Phase
 
-### ▶ NEXT STEP — PIVOT TO ANALYTICS VALUE (operator chose 2026-06-15). Trading thesis CLOSED by WO-5 (iter-48, market efficient w.r.t. the hard running-max floor). The product is now forecast-skill + calibration + model-vs-market insight; trading machinery stays DORMANT. Analytics shipped: the **WALLET-RECON milestone** (sharp-wallet benchmark #1, wallet forensics #2, day-before efficiency study #3) ran end-to-end 2026-06-22 → **branch (b): the day-before market is EFFICIENT w.r.t. our forecast** (KILL-GATE 2 FAIL; the sharp's edge is real but not replicable as a follower). Live rail stays dormant. Build #1 now FULLY LIVE (`sharp-wallet-track` deployed 2026-06-22, cron active). Remaining operator follow-ups (non-blocking): merge feat→main, optional re-persist + nbm_conus A/B — see WALLET-RECON-HANDOFF.md §10. R&D round-2 reviewed (iter-47); RPC-lockdown DEPLOYED (iter-45)
+### ▶ NEXT STEP — PIVOT TO ANALYTICS VALUE (operator chose 2026-06-15). Trading thesis CLOSED by WO-5 (iter-48, market efficient w.r.t. the hard running-max floor). The product is now forecast-skill + calibration + model-vs-market insight; trading machinery stays DORMANT. Analytics shipped: the **WALLET-RECON milestone** (sharp-wallet benchmark #1, wallet forensics #2, day-before efficiency study #3) ran end-to-end 2026-06-22 → **branch (b): the day-before market is EFFICIENT w.r.t. our forecast** (KILL-GATE 2 FAIL; the sharp's edge is real but not replicable as a follower). Live rail stays dormant. Build #1 FULLY LIVE (`sharp-wallet-track` deployed 2026-06-22, cron active). **WALLET-RECON now COMPLETE (2026-06-23): all FIVE replication angles falsified (added maker-spray #4, M1 diagnosis, Move-5 sharp-as-forecaster #5, + the forensic purchase map §15) and the whole milestone is MERGED to `main` (PR #1 `9b8cb37` + PR #2 `b41da4a`); the parallel multi-agent code-review fixes are reviewed, validated (1120 tests, CI green), and merged.** Operator follow-ups all ✅ DONE (merge, re-persist, nbm_conus A/B) — see the 2026-06-23 entry + WALLET-RECON-HANDOFF.md §10–§15. R&D round-2 reviewed (iter-47); RPC-lockdown DEPLOYED (iter-45)
 
 > **PIVOT DECISION (2026-06-15):** after WO-5 closed the trading thesis, the operator chose **lean into
 > analytics value** (over seek-out-of-market-info / shelve). Polyweather is now an analytics & forecasting
@@ -13,6 +13,41 @@
 > `events`, `system` (analytics) + `bets` (trading — now dormant). Next: scope the first analytics-lean
 > deliverable (e.g. a polished forecast-skill + market-efficiency view as the product's headline). See the
 > updated project `CLAUDE.md` header and `FORECASTING-RD.md` WO-5 for the rationale.
+
+**2026-06-23 milestone: WALLET-RECON COMPLETE — all FIVE replication angles falsified; the whole milestone is MERGED to `main` (PR #2).**
+The post-§9 wallet-recon work (the 4th/5th angles + the forensic map + the parallel code-review fixes) is now on `main`
+via **PR #2 → merge commit `b41da4a`** (2026-06-22 21:50 UTC; `verify` CI green, Vercel deploy green). PR #1 had already
+merged the §9 batch (Builds #1–#3, merge `9b8cb37`, 12:56 UTC). The branch `feat/live-integration-readiness` is retained.
+- **Maker-spray — the 4th/last angle, FALSIFIED (`da541fd`; §12).** Resting our own cheap bids below the ask on our EMOS
+  forecast is also efficient: maker edge (won−restPx) −1.46% CI[−2.51,−0.41] (indiscriminate) / −1.73% CI[−3.16,−0.30]
+  (forecast-conditioned) — both exclude 0; adverse selection confirmed; our forecast is value-NEGATIVE as a cheap-tail
+  selector. (Numbers refreshed `8aa4724` at the de-duped n — see the code-review fix below; the FAIL is unchanged.)
+- **M1 tail-calibration diagnosis — AMBIGUOUS (`e340fac`; §13).** Do badatmath's revealed cheap picks beat our EMOS tail?
+  Gap +2.37pp/+2.76pp (lead 1/2), below the frozen +3pp Case-A bar; our tail ≈ calibrated to the sharp, market still
+  sharper (M3). → analytics input, NO forecast-lever reopen. `core/sim/tail-calibration.ts` + spine.
+- **Move 5 sharp-as-forecaster — the 5th angle, KILL / value-NEGATIVE (`154d2d9`; §14).** Stacking the sharp's revealed
+  distribution onto the market adds NO orthogonal skill — it subtracts (M+S improvement −1.74pp/−1.20pp, CI excludes 0;
+  zero-skill P(PASS)=0.0%). `core/sim/sharp-ensemble.ts` + `scripts/research/m5-sharp-ensemble.ts`.
+- **Forensic purchase map (`9ad9b69`; §15).** Every badatmath buy 2026-05-23→06-21 mapped + win/loss scored: 53,764 fills
+  → 8,780 positions, 97% resolved via Gamma (`closed=true` → outcomePrices), net hold-to-resolution +$22.4k reconciles to
+  the public curve within ~8%; 41.1% win rate. Engine = cheap Yes 0.10–0.25 (0.05–0.10 is a −22% dead zone); edge is the
+  24–72h day-before entry (<24h day-of is break-even). `scripts/research/badatmath-purchase-map.ts`.
+- **Integrated the parallel multi-agent code-review (`77c92f2`).** Reviewed every diff + validated the combined tree. Real
+  bug fixes: inverted db1 Brier sign (`brierSharperP`), the winner-unquoted market-Brier leak, the maker-spray
+  per-NWP-lead de-dup (n was 2× inflated), the wallet-forensics `resolvedWon` calibration-truth split, the crawl-incomplete
+  guard, + the new Deno/Node **seam-parity test** (the §6 anti-drift guard that never existed).
+- **Net:** all five angles (forecast-beats-market, day-before-edge, copy-trade-mirror, maker-spray, sharp-as-forecaster)
+  are now falsified — the edge is confirmed pure microstructure (maker rest + rebate + breadth), non-followable /
+  non-replicable. The live trading rail STAYS DORMANT; destination remains the analytics product (Move 10). The one
+  genuinely-distinct unrun lever is Move 4 (intraday running-max physics — low prior, overlaps closed WO-5).
+- **Verified:** `pnpm typecheck` 0, `pnpm test` **1120 green** (78 files), CI `verify` green on PR #2. Full record:
+  `WALLET-RECON-HANDOFF.md` §12–§15, `BADATMATH-GAP-PLAN.md`.
+
+**2026-06-23 analytics: two dashboard deliverables — `/amsterdam` "Predicted high" now switches in the morning, + a new `/replica` web dashboard. Migrations `0052`+`0053` LIVE; web TS pending a Vercel deploy.**
+Both on branch `feat/live-integration-readiness`; RPC layer is live on prod, the page/loader/nav TS ships on the next deploy of `main` (operator-gated push). 1,157 tests green, typecheck 0, web build clean.
+- **`/amsterdam` predicted-high freshness (migration `0052`).** The tile read the forecast carried on the latest PLACED bet, so all morning it showed *yesterday* (today's arms place in the afternoon). `dash_amsterdam_sim` gains a `today` block: the **freshest** `forecast_snapshots` capture for today (lead-0 night-before/same-morning run), matched-lead trailing debias, wuRound. Loader (`getAmsterdamSim` → `TodayView`) + page prefer it (+ freshness stamp + hot-climatology). Live check 2026-06-23: 28.76 + 0.53 → **29°**. Mirrors the 0046 `tomorrow` block; whole 0049 body re-stated. See AMSTERDAM-SIM.md §10.
+- **`/replica` web dashboard (migration `0053`).** The badatmath-replica paper-trial (BADATMATH-REPLICA.md) was local-only; the operator chose a visible web surface. New `replica_positions`/`replica_runs` tables + 2 service-role write RPCs + operator-gated `dash_replica_sim`; the local CLIs persist (backtest `--persist`, forward persists by default → daily task now `--persist`). Loader `getReplicaSim` scores persisted positions through the **same core engine** the scripts use (one source of truth). New `/replica` page (nav-linked, Terminal-Glass): three-curve tables + taxes for backtest + forward, forward equity + day-by-day ledger, open positions. **Seeded to prod**: backtest **180 resolved** (+19.3% / −13.4% / +3.9%, spread tax 15.4pp / adverse-sel tax 32.8pp), forward **16 open** ($192). Verified the persisted rows reproduce the headline byte-for-byte. See BADATMATH-REPLICA.md §8.
+- **OPEN THREAD:** the web TS (both pages, loader, nav) needs a `main` deploy to go live on Vercel; the RPCs are already live so the deployed-behind pages keep working (they ignore the new keys) until then. Push/PR is operator-gated.
 
 **2026-06-22 analytics: WALLET-RECON Builds #2–#3 + both KILL-GATES adjudicated — day-before market is EFFICIENT (branch b). LIVE & committed.**
 The synchronized §9 multi-agent workflow (WALLET-RECON-HANDOFF.md) ran to completion. Outcome: the badatmath
@@ -42,8 +77,11 @@ market is efficient w.r.t. our forecast (KILL-GATE 2). The deliverable is the an
   (`npx supabase functions deploy … --use-api --no-verify-jwt`), ACTIVE, cron `0 16 * * *` active → Build #1
   auto-refreshes daily. **Build #1 now FULLY LIVE** (0049 applied + seeded + fn deployed + cron). Remaining
   (non-blocking): (2) merge `feat/live-integration-readiness` → main to ship the `/amsterdam` sharp card + this
-  milestone (user's call); (3) re-persist forensics when Polymarket isn't rate-limiting; (4) OPTIONAL: apply
-  `0051` + run the `nbm_conus` US A/B (low prior). The live trading rail STAYS DORMANT (branch b).
+  milestone (user's call) — ✅ **DONE 2026-06-22** (PR #1 `9b8cb37` shipped Builds #1–#3 + the `/amsterdam` sharp card;
+  PR #2 `b41da4a` shipped the 4th/5th angles + the forensic map + the code-review fixes — see the 2026-06-23 entry above);
+  (3) ✅ re-persisted forensics 2026-06-22 (77 `wallet_pnl_daily` + 9,155 `wallet_bet_calibration` rows);
+  (4) ✅ `nbm_conus` US A/B RAN — no improvement (R²=0.6% prior holds; `0051` stays staged, `enabled=false`).
+  The live trading rail STAYS DORMANT (branch b).
 
 **2026-06-22 analytics: sharp-wallet & WEATHER-leaderboard benchmark tracker — migration `0049` + Edge `sharp-wallet-track`, BUILT & TESTED (deploy operator-gated).**
 WALLET-RECON-HANDOFF.md **Build #1**, on-pivot (analytics, NOT trading — no copy-trade; trading thesis stays closed).
