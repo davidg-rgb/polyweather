@@ -1318,3 +1318,140 @@ export async function getReplicaSim(db: WebDb): Promise<ReplicaSimView | null> {
     hasData: positions.length > 0,
   };
 }
+
+// --- /rewards — REC-8/9 Phase A reward-farming feed (dash_market_rewards, 0058) ----------------------------
+
+/** One per-capture point of the pool-vs-competing-capital time series (jsonb-string-safe; page coerces). */
+export interface RewardSeriesPoint {
+  capturedAt: string;
+  nMarkets: unknown;
+  totalPoolUsd: unknown;
+  totalInBandUsd: unknown;
+}
+
+/** One funded-weather market in the latest capture (top-by-pool). */
+export interface RewardMarketRow {
+  slug: string | null;
+  dailyPoolUsd: unknown;
+  mid: unknown;
+  bestBid: unknown;
+  bestAsk: unknown;
+  bidDepthUsd: unknown;
+  askDepthUsd: unknown;
+  maxSpreadCents: unknown;
+}
+
+export interface RewardLatest {
+  capturedAt: string | null;
+  nMarkets: unknown;
+  totalPoolUsd: unknown;
+  totalInBandUsd: unknown;
+}
+
+export interface RewardsView {
+  /** Per-capture series (pool vs in-band competing maker capital), ascending. */
+  series: RewardSeriesPoint[];
+  /** Most-recent capture headline (null when no captures yet). */
+  latest: RewardLatest | null;
+  /** Top funded markets by daily pool in the latest capture. */
+  topMarkets: RewardMarketRow[];
+  /** The window actually requested (days), echoed for the UI caption. */
+  days: number;
+}
+
+interface RewardsPayload {
+  series: RewardSeriesPoint[] | null;
+  latest: RewardLatest | null;
+  topMarkets: RewardMarketRow[] | null;
+}
+
+/**
+ * The funded-weather reward-farming feed (dash_market_rewards, 0058) for /rewards. The page watches the
+ * thin-book trend — is competing maker capital thickening (window closing) or staying thin (window open).
+ * Degrades to null (not a thrown 500) if the RPC errors — the page can deploy ahead of the 0058 RPC.
+ */
+export async function getMarketRewards(
+  db: WebDb,
+  opts: { days?: number; top?: number } = {},
+): Promise<RewardsView | null> {
+  const days = opts.days ?? 7;
+  let v: RewardsPayload | null;
+  try {
+    v = await one<RewardsPayload>(db, 'dash_market_rewards', { p_days: days, p_top: opts.top ?? 20 });
+  } catch {
+    return null;
+  }
+  if (!v) return null;
+  return {
+    series: v.series ?? [],
+    latest: v.latest ?? null,
+    topMarkets: v.topMarkets ?? [],
+    days,
+  };
+}
+
+// --- /whaletracker — past-N-days ≥$min Polymarket whale trades (dash_whale_tracker, 0058) ------------------
+
+/** One recorded ≥$min whale fill (rich row — profile link, bet link, what + value). */
+export interface WhaleBetRow {
+  tradedAt: string;
+  proxyWallet: string;
+  /** trader_name when present, else the proxy wallet (already coalesced in the RPC). */
+  trader: string;
+  side: string | null;
+  outcome: string | null;
+  title: string | null;
+  notionalUsd: unknown;
+  price: unknown;
+  sizeShares: unknown;
+  link: string | null;
+  txHash: string;
+  eventSlug: string | null;
+}
+
+/** One UTC-day aggregate for the daily-notional bar chart. */
+export interface WhaleDailyRow {
+  date: string;
+  count: unknown;
+  totalUsd: unknown;
+}
+
+export interface WhaleTrackerView {
+  /** Individual bets in the window, newest first (capped at 500). */
+  bets: WhaleBetRow[];
+  /** Per-UTC-day notional + count, ascending. */
+  daily: WhaleDailyRow[];
+  /** Window meta — uncapped totals (independent of the 500-row bets cap). */
+  meta: { days: number; minUsd: unknown; count: unknown; totalUsd: unknown };
+}
+
+interface WhaleTrackerPayload {
+  bets: WhaleBetRow[] | null;
+  daily: WhaleDailyRow[] | null;
+  meta: WhaleTrackerView['meta'] | null;
+}
+
+/**
+ * The Polymarket whale tracker (dash_whale_tracker, 0058) for /whaletracker. Window + min-USD are params so
+ * the planned filter expansion is purely additive (DASHBOARDS-HANDOFF §3). Degrades to null (not a thrown 500)
+ * if the RPC errors — the page can deploy ahead of the 0058 RPC.
+ */
+export async function getWhaleTracker(
+  db: WebDb,
+  opts: { days?: number; minUsd?: number } = {},
+): Promise<WhaleTrackerView | null> {
+  const days = opts.days ?? 10;
+  const minUsd = opts.minUsd ?? 100_000;
+  let v: WhaleTrackerPayload | null;
+  try {
+    v = await one<WhaleTrackerPayload>(db, 'dash_whale_tracker', { p_days: days, p_min_usd: minUsd });
+  } catch {
+    return null;
+  }
+  if (!v) return null;
+  return {
+    bets: v.bets ?? [],
+    daily: v.daily ?? [],
+    meta: v.meta ?? { days, minUsd, count: 0, totalUsd: 0 },
+  };
+}

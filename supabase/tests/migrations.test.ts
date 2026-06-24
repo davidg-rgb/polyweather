@@ -186,6 +186,11 @@ describe('migrations 0001–0010', () => {
       // 0057 = REC-8/9 Phase A: market_rewards time-series table + record_reward_snapshots (service-role
       // insert) + the reward-snapshot Edge tick's every-20-min cron. Analytics data capture; rail DORMANT.
       '0057_market_rewards_snapshot.sql',
+      // 0058 = read-only dashboard RPCs for /rewards + /whaletracker: dash_market_rewards (market_rewards
+      // pool-vs-in-band series, 0057) + NEW dash_whale_tracker (whale_trades ≥$min, 0055 — separate fn, not a
+      // dash_whale_watch re-signature, the 0054 overload trap). Both jsonb-OBJECT + operator_guard, added to
+      // WEB_AUTHENTICATED below. No table/cron change (cron count stays 18). DASHBOARDS-HANDOFF.md.
+      '0058_reward_and_whale_dashboards.sql',
     ]);
   });
 });
@@ -642,7 +647,7 @@ describe('0034: internal-RPC lockdown — anon/authenticated revoked except the 
     'dash_today_overview', 'dash_events_list', 'dash_event_detail', 'dash_city_detail',
     'dash_calibration', 'dash_bets_ledger', 'dash_system_health', 'dash_admin_state',
     'dash_station_observations', 'dash_station_predictions',
-    'dash_whale_watch',
+    'dash_whale_watch', 'dash_whale_tracker', 'dash_market_rewards',
     'dash_amsterdam_sim', 'dash_replica_sim',
     'go_live_gate_inputs',
     'operator_halt', 'operator_resume', 'operator_update_config', 'operator_verify_station',
