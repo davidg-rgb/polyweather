@@ -28,6 +28,8 @@ rebate, across enormous breadth — and is **non-followable and non-replicable**
 | Stacking the sharp's picks onto the market | No — subtracts skill (−1.2 to −1.7pp) | WALLET-RECON §14 (Move 5) |
 | Learning the sharp's maker selection (REC-1) | Un-answerable today (data-limited); a learned selector overfits — OOS edge −5.7pp | SELECTOR-LEARNABILITY §10 |
 | Forecast-free reward farming (two-sided MM) | No — measured fill cost ~−47%/day ≈ 8× the ~6%/day reward | REWARD-INVENTORY-BACKTEST §4 (REC-10) |
+| Complete-set structural arb (forecast-free) | No — fee-walled; raw book inconsistent ~16% of the time but the `takerOnly` fee > the residual mispricing (0.37%/0.06% of instants clear; live 0/107) | COMPLETE-SET-ARB.md (the 8th signal) |
+| Copy-trading the top **SPORTS** sharps (adjacent, off-weather) | No — volume machines' edge regresses to ≈0 (follower negative at every lag×spread); high-ROI specialists' "100% win / PASS" is survivorship + a non-executable book-sweep mark | SPORTS-TRADERS.md (the 9th signal) |
 
 **On REC-1 (the one un-run maker lever, tested 2026-06-23).** After the maker-rebate reframe (net profit by
 *any* mechanism), the last distinct lever was: can WE *learn* which cheap buckets to rest on (vs. mirroring the
@@ -73,6 +75,22 @@ genuinely out-of-market information.
 > history is 2 weather-days; the margin is far beyond what more days could overturn. Re-run when the
 > Phase-A cron accumulates ≥8 dense days.) **Consequence: there is no currently-known net-positive path;
 > the closed-thesis framing of this document is restored, now including the reward lever.**
+>
+> **↳ NEW 2026-06-24 — the last ORTHOGONAL mechanism tested and closed: structural complete-set
+> arbitrage (the 8th signal, `COMPLETE-SET-ARB.md`).** Every signal above asks *"is our forecast better
+> than the market?"*; this asks the orthogonal *"is the market consistent with **itself**?"* — a
+> forecast-free accounting identity (a negRisk ladder has exactly one \$1 winner, so a complete YES set
+> is worth exactly \$1 / a complete NO set exactly \$(N−1)). It dies to a **different wall than
+> efficiency: the fee wall.** Measured over the full resolved-ladder universe (827 events / 674k
+> snapshots, ≤30-min contemporaneity gate to kill the stale-quote trap) + a live probe of every open
+> ladder: the RAW book IS internally inconsistent (Σask<1 on **4.0%** of instants, Σbid>1 on **11.8%**),
+> but the per-leg `takerOnly` taker fee (~2–4%/ladder) is **larger than the residual mispricing** — only
+> **0.37% / 0.06%** of instants clear, and the survivors are freshly-opened-thin-book windows where
+> depth ≈ min-order-size (capacity ≈ pennies). Live: **0/107** open ladders clear. The maker route that
+> would dodge the taker fee re-opens the adverse-selection wall already falsified 7×. **MARGINAL →
+> closed: no net-positive structural path.** Reopens only if Polymarket drops/restructures the weather
+> fee (mechanical trigger: `complete-set-arb-live.ts` shows a non-zero UNDER/OVER count) or a forward
+> depth-capture proves the thin-open window is executable at size. Rail stays DORMANT.
 
 ---
 
