@@ -432,3 +432,72 @@ export async function fetchTrades(
   }
   return out;
 }
+
+// --- Gamma resolution (condition_id → winning Yes/No) — the replica forward reconcile fallback ----------------
+// Our DB resolves only ~45% of events and lags; the Polymarket Gamma /markets endpoint settles ~97% and is
+// timely, so the replica-forward Edge tick widens reconcile coverage with it (functions/replica-forward,
+// REPLICA-CLOUD-PORT.md). DELIBERATE parallel of the node script's resolver in
+// scripts/research/badatmath-purchase-map.ts (winnerFromGamma/fetchResolutions): that one carries an fs disk
+// cache the Deno Edge runtime can't use, so the pure decode lives here too — same idiom as parseTrades/
+// parsePositions mirroring core/polymarket/gamma.ts's strict parser with non-throwing semantics.
+
+/** Gamma's stringified Yes/No market endpoint (public, keyless). */
+export const POLYMARKET_GAMMA_API = 'https://gamma-api.polymarket.com';
+
+/** Decode Gamma's stringified-JSON string array (e.g. '["Yes","No"]'). Total — `[]` on junk, never throws. */
+function parseGammaStrArray(v: unknown): string[] {
+  if (Array.isArray(v) && v.every((x) => typeof x === 'string')) return v as string[];
+  if (typeof v !== 'string' || v === '') return [];
+  try {
+    const p = JSON.parse(v);
+    return Array.isArray(p) && p.every((x) => typeof x === 'string') ? (p as string[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * The winning Yes/No outcome of a resolved Gamma market, or null (open / non-Yes-No / un-decisive). A market
+ * is resolved when `closed === true` and exactly one outcome price is 1 (≥ 0.999). Pure + total.
+ */
+export function winnerFromGamma(outcomes: string[], prices: string[], closed: unknown): 'Yes' | 'No' | null {
+  if (closed !== true || outcomes.length !== prices.length) return null;
+  const i = prices.findIndex((p) => p === '1' || Number(p) >= 0.999);
+  if (i < 0) return null;
+  const w = outcomes[i];
+  return w === 'Yes' || w === 'No' ? w : null;
+}
+
+/**
+ * Resolve a set of conditionIds to their winning Yes/No via Gamma, batched (≤50/req — the API cap). `closed=true`
+ * is REQUIRED (Gamma's /markets defaults to ACTIVE markets and returns [] for resolved ones without it). No disk
+ * cache (the Edge re-fetches the handful of open ids each run — cheap). Only Yes/No-decisive markets land in the
+ * map; everything else (still-open / archived / multi-outcome) is simply absent. Throws (via fetchJson) on an
+ * exhausted/!ok upstream — the caller catches it as non-fatal (the position stays open for the next tick).
+ */
+export async function fetchGammaWinners(
+  fetchJson: FetchJsonLike,
+  conditionIds: string[],
+  opts: { chunkSize?: number; timeoutMs?: number; retries?: number } = {},
+): Promise<Map<string, 'Yes' | 'No'>> {
+  const ids = [...new Set(conditionIds.filter((c) => c !== ''))];
+  const chunkSize = Math.min(opts.chunkSize ?? 50, 50);
+  const out = new Map<string, 'Yes' | 'No'>();
+  for (let i = 0; i < ids.length; i += chunkSize) {
+    const chunk = ids.slice(i, i + chunkSize);
+    const qs = chunk.map((id) => `condition_ids=${encodeURIComponent(id)}`).join('&');
+    const payload = await fetchJson(
+      `${POLYMARKET_GAMMA_API}/markets?${qs}&limit=${chunkSize}&closed=true`,
+      { headers: REQUEST_HEADERS },
+      { timeoutMs: opts.timeoutMs, retries: opts.retries },
+    );
+    if (!Array.isArray(payload)) continue;
+    for (const m of payload as Record<string, unknown>[]) {
+      const cid = typeof m.conditionId === 'string' ? m.conditionId : '';
+      if (!cid) continue;
+      const w = winnerFromGamma(parseGammaStrArray(m.outcomes), parseGammaStrArray(m.outcomePrices), m.closed);
+      if (w) out.set(cid, w);
+    }
+  }
+  return out;
+}

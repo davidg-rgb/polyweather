@@ -413,6 +413,139 @@ const legOf = (s: ScoredBuy, leg: Leg): LegOutcome =>
   leg === 'makerIdeal' ? s.makerIdeal : leg === 'makerRealistic' ? s.makerRealistic : s.taker;
 
 // ──────────────────────────────────────────────────────────────────────────────────────────────────
+// forward paper-trade — the pure reconcile + place steps (the daily /loop engine)
+//
+// The FORWARD run reconciles resolved open positions and places today's live buys. It lives partly in the
+// impure spine (scripts/research/badatmath-replica-forward.ts — file state, the local task) and partly in the
+// Supabase Edge tick (functions/replica-forward — DB state, the cloud port). Both call these two PURE steps;
+// the only difference is WHERE the open positions / resolutions / book / candidates come from (a state.json
+// file vs the replica_forward_inputs RPC). Keeping the decision logic here means the local task and the cloud
+// tick can never drift. REPLICA-CLOUD-PORT.md.
+// ──────────────────────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * One forward paper position — a LockedBuy (the engine scores it) plus the forward bookkeeping. Lives in core
+ * (not the script) so the Edge handler can import it without pulling in node:fs. The maker-realistic fill is
+ * decided once at reconcile (replaying the live book) and frozen into `makerRealisticFilled` — `scoreLocked`
+ * trusts that flag rather than re-deriving it.
+ */
+export interface ForwardPosition extends LockedBuy {
+  /** The placement snapshot's capturedAt (the fill-window start; postEntry = book at/after this). */
+  entryCapturedTs: number;
+  /** ISO timestamp we placed it. */
+  placedAtUtc: string;
+  /** ISO timestamp we closed it (resolution observed); null while open. */
+  closedAtUtc: string | null;
+}
+
+/** Resolution sources for reconcile: our DB winners (eventId → bucket idx) + an optional Gamma overlay. */
+export interface ReconcileResolution {
+  /** eventId → winning_bucket_idx (our DB `market_events.winning_bucket_idx`). Primary, lags ~45%. */
+  dbWinners: Map<string, number>;
+  /** conditionId → 'Yes'|'No' (Polymarket Gamma, ~97% + timely). Fallback for events our DB hasn't resolved. */
+  gammaWinners?: Map<string, 'Yes' | 'No'>;
+}
+
+const forwardPosKey = (p: { eventId: string; bucketIdx: number }): string => `${p.eventId}|${p.bucketIdx}`;
+
+/**
+ * Reconcile open forward positions against resolution. For each: our DB `winning_bucket_idx` is primary (won =
+ * bucketIdx === winner); a Gamma Yes/No on the conditionId is the fallback when the DB hasn't resolved the event
+ * yet (so positions close promptly instead of waiting on the lagging pipeline). For each newly-resolved one:
+ * set bucketWon, replay the post-entry book to decide the §12 maker-realistic fill (`simulateFill` ask-touch
+ * over the bucket's ask series filtered to ≥ entryCapturedTs), stamp closedAtUtc, and move it to `newlyClosed`.
+ * Unresolved positions stay in `stillOpen`. Pure + total: returns NEW position objects (never mutates inputs);
+ * a missing ask series just yields an unfilled rest. The impure callers do the DB reads → pass the three maps.
+ */
+export function reconcilePure(
+  open: ForwardPosition[],
+  resolution: ReconcileResolution,
+  askSeriesByCondition: Map<string, BucketSnapshot[]>,
+  nowSec: number,
+): { stillOpen: ForwardPosition[]; newlyClosed: ForwardPosition[] } {
+  const closedAtUtc = new Date(nowSec * 1000).toISOString();
+  const stillOpen: ForwardPosition[] = [];
+  const newlyClosed: ForwardPosition[] = [];
+  for (const p of open) {
+    let won: boolean | null = null;
+    const dbw = resolution.dbWinners.get(p.eventId);
+    if (dbw !== undefined) won = p.bucketIdx === dbw;
+    else if (p.conditionId) {
+      const g = resolution.gammaWinners?.get(p.conditionId);
+      if (g !== undefined) won = g === 'Yes';
+    }
+    if (won === null) {
+      stillOpen.push(p);
+      continue;
+    }
+    // resolved → lock the outcome + the maker-realistic fill from the now-complete book.
+    const series = askSeriesByCondition.get(p.conditionId) ?? [];
+    const entryCaptured = Number.isFinite(p.entryCapturedTs) ? p.entryCapturedTs : p.entryTs;
+    const postEntry = series.filter((s) => s.capturedAt >= entryCaptured);
+    const fill = simulateFill(p.makerPrice, postEntry, 'ask_touch');
+    newlyClosed.push({ ...p, bucketWon: won, makerRealisticFilled: fill.filled, closedAtUtc });
+  }
+  return { stillOpen, newlyClosed };
+}
+
+/**
+ * Place today's buys from a pre-loaded candidate set: keep only LIVE candidates (unresolved, the 36h-before
+ * entry instant has arrived but resolution hasn't — entryTs ≤ now < resolutionTs), run the §15 playbook
+ * (`selectBuys`), drop anything already placed (`placedKeys` = posKey of every open+closed position), and
+ * return the newly-opened ForwardPositions with entry prices LOCKED at the placement book — the identical
+ * instant the backtest prices at. Pure + deterministic: the impure callers load the candidates (file state or
+ * the inputs RPC) and supply `placedKeys`; this is the placement DECISION only.
+ *
+ * `placedKeys` MUST include every already-placed position that could still match the live gate — OPEN positions
+ * AND any CLOSED-but-resolutionTs-still-future one (a market resolved early via Gamma). The live gate alone is
+ * not a substitute: such a closed position would otherwise be re-opened. Both callers pass open+closed keys.
+ */
+export function placeBuysPure(
+  candidates: ReplicaCandidate[],
+  placedKeys: Set<string>,
+  strat: ReplicaStrategy,
+  nowSec: number,
+): ForwardPosition[] {
+  const placedAtUtc = new Date(nowSec * 1000).toISOString();
+  const entryLeadSec = strat.entryLeadHours * 3600;
+  const live = candidates.filter(
+    (c) => c.bucketWon === null && c.resolutionTs > nowSec && c.resolutionTs - entryLeadSec <= nowSec,
+  );
+  const buys = selectBuys(live, strat);
+  const placed = new Set(placedKeys);
+  const opened: ForwardPosition[] = [];
+  for (const b of buys) {
+    if (!b.allocated) continue;
+    const c = b.candidate;
+    const key = forwardPosKey({ eventId: c.eventId, bucketIdx: c.bucketIdx });
+    if (placed.has(key)) continue;
+    placed.add(key);
+    opened.push({
+      conditionId: c.conditionId,
+      eventId: c.eventId,
+      citySlug: c.citySlug,
+      region: c.region,
+      targetDate: c.targetDate,
+      bucketIdx: c.bucketIdx,
+      bucketLabel: c.bucketLabel,
+      resolutionTs: c.resolutionTs,
+      entryTs: b.entryTs,
+      entryDayUtc: b.entryDayUtc,
+      entryCapturedTs: b.entrySnapshot.capturedAt,
+      makerPrice: b.makerPrice,
+      takerPrice: b.takerPrice,
+      stakeUsd: b.stakeUsd,
+      feeRate: Number.isFinite(c.feeRate) && c.feeRate > 0 ? c.feeRate : strat.feeRate,
+      bucketWon: null,
+      makerRealisticFilled: false,
+      placedAtUtc,
+      closedAtUtc: null,
+    });
+  }
+  return opened;
+}
+
+// ──────────────────────────────────────────────────────────────────────────────────────────────────
 // aggregate stats per leg
 // ──────────────────────────────────────────────────────────────────────────────────────────────────
 

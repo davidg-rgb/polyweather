@@ -11,6 +11,7 @@ import { describe, expect, it } from 'vitest';
 import type { BucketSnapshot } from '../src/sim/copy-trade.ts';
 import {
   DEFAULT_REPLICA_STRATEGY,
+  type ForwardPosition,
   type LockedBuy,
   type ReplicaCandidate,
   type ReplicaStrategy,
@@ -18,7 +19,9 @@ import {
   dailyLedger,
   entryQuote,
   legStats,
+  placeBuysPure,
   rankCitiesByRoi,
+  reconcilePure,
   scoreBuy,
   scoreBuys,
   scoreLocked,
@@ -299,6 +302,137 @@ describe('dailyLedger', () => {
   it('net=true deducts fees from each leg', () => {
     const rows = dailyLedger(scoreBuys(selectBuys([cand()], STRAT), STRAT), { net: true });
     expect(rows[0]!.makerIdealPnl).toBeCloseTo(88 - 0.528, 6);
+  });
+});
+
+describe('reconcilePure — the forward reconcile step (DB primary, Gamma fallback, §12 fill replay)', () => {
+  const NOW = RES + 1000; // any instant after resolution; only stamps closedAtUtc
+  const fwd = (over: Partial<ForwardPosition> = {}): ForwardPosition => ({
+    conditionId: '0xc',
+    eventId: 'E1',
+    citySlug: 'kuala-lumpur',
+    region: 'southeast-asia',
+    targetDate: '2026-06-10',
+    bucketIdx: 3,
+    bucketLabel: '29–30°C',
+    resolutionTs: RES,
+    entryTs: ENTRY,
+    entryDayUtc: '2026-06-08',
+    entryCapturedTs: ENTRY,
+    makerPrice: 0.12,
+    takerPrice: 0.18,
+    stakeUsd: 12,
+    feeRate: 0.05,
+    bucketWon: null,
+    makerRealisticFilled: false,
+    placedAtUtc: '2026-06-08T00:00:00.000Z',
+    closedAtUtc: null,
+    ...over,
+  });
+
+  it('closes a DB-resolved winner, replays the book for the maker fill, and does NOT mutate the input', () => {
+    const open = [fwd({ eventId: 'E1', bucketIdx: 3, conditionId: '0xc' })];
+    // post-entry ask 0.11 ≤ the 0.12 rested bid → ask-touch fill.
+    const askSeries = new Map([['0xc', [snap(ENTRY + 60, 0.12, 0.18), snap(ENTRY + 3600, 0.1, 0.11)]]]);
+    const { stillOpen, newlyClosed } = reconcilePure(open, { dbWinners: new Map([['E1', 3]]) }, askSeries, NOW);
+    expect(stillOpen).toHaveLength(0);
+    expect(newlyClosed).toHaveLength(1);
+    expect(newlyClosed[0]!.bucketWon).toBe(true); // bucketIdx 3 === winner 3
+    expect(newlyClosed[0]!.makerRealisticFilled).toBe(true);
+    expect(newlyClosed[0]!.closedAtUtc).toBe(new Date(NOW * 1000).toISOString());
+    expect(open[0]!.bucketWon).toBeNull(); // purity: input untouched
+    expect(open[0]!.closedAtUtc).toBeNull();
+  });
+
+  it('closes a loser and leaves the maker rest unfilled when the book never touches the bid', () => {
+    const open = [fwd({ eventId: 'E2', bucketIdx: 5, conditionId: '0xd' })];
+    const askSeries = new Map([['0xd', [snap(ENTRY + 60, 0.12, 0.18), snap(ENTRY + 3600, 0.13, 0.19)]]]);
+    const { newlyClosed } = reconcilePure(open, { dbWinners: new Map([['E2', 3]]) }, askSeries, NOW);
+    expect(newlyClosed[0]!.bucketWon).toBe(false); // 5 !== 3
+    expect(newlyClosed[0]!.makerRealisticFilled).toBe(false);
+  });
+
+  it('falls back to a Gamma Yes/No by conditionId when our DB has not resolved the event', () => {
+    const open = [fwd({ eventId: 'E3', conditionId: '0xg', bucketIdx: 3 })];
+    const askSeries = new Map([['0xg', [snap(ENTRY + 60, 0.12, 0.18)]]]);
+    const won = reconcilePure(open, { dbWinners: new Map(), gammaWinners: new Map([['0xg', 'Yes']]) }, askSeries, NOW);
+    expect(won.newlyClosed[0]!.bucketWon).toBe(true);
+    const lost = reconcilePure(open, { dbWinners: new Map(), gammaWinners: new Map([['0xg', 'No']]) }, askSeries, NOW);
+    expect(lost.newlyClosed[0]!.bucketWon).toBe(false);
+  });
+
+  it('keeps an unresolved position open (no DB winner, no Gamma)', () => {
+    const open = [fwd({ eventId: 'E4', conditionId: '0xh' })];
+    const { stillOpen, newlyClosed } = reconcilePure(open, { dbWinners: new Map() }, new Map(), NOW);
+    expect(stillOpen).toHaveLength(1);
+    expect(newlyClosed).toHaveLength(0);
+  });
+
+  it('prefers the DB winner over Gamma when both are present', () => {
+    const open = [fwd({ eventId: 'E5', conditionId: '0xi', bucketIdx: 3 })];
+    // DB says winner=5 (we lose); Gamma says Yes (we win) — DB is primary.
+    const { newlyClosed } = reconcilePure(
+      open,
+      { dbWinners: new Map([['E5', 5]]), gammaWinners: new Map([['0xi', 'Yes']]) },
+      new Map(),
+      NOW,
+    );
+    expect(newlyClosed[0]!.bucketWon).toBe(false);
+  });
+
+  it('falls back to entryTs for the fill window when entryCapturedTs is non-finite (legacy/pre-0056 state)', () => {
+    // The only ask ≤ the rested 0.12 bid sits at ENTRY+30 (inside the entryTs window). A NaN entryCapturedTs
+    // must fall back to entryTs — NOT filter on `>= NaN`, which would drop every snapshot → a wrongly-unfilled rest.
+    const open = [fwd({ eventId: 'L', bucketIdx: 3, conditionId: '0xL', entryCapturedTs: Number.NaN })];
+    const askSeries = new Map([['0xL', [snap(ENTRY + 30, 0.1, 0.1)]]]);
+    const { newlyClosed } = reconcilePure(open, { dbWinners: new Map([['L', 3]]) }, askSeries, NOW);
+    expect(newlyClosed[0]!.makerRealisticFilled).toBe(true);
+  });
+});
+
+describe('placeBuysPure — the forward place step (live filter + §15 playbook + dedupe)', () => {
+  const NOW_PLACE = RES - 3600; // 1h before resolution: entry instant (36h prior) has arrived, not yet resolved
+
+  it('opens a live, unresolved, band-eligible candidate with prices LOCKED at the placement book', () => {
+    const c = cand({ bucketWon: null, eventId: 'EV', bucketIdx: 3, conditionId: '0xc' });
+    const opened = placeBuysPure([c], new Set(), STRAT, NOW_PLACE);
+    expect(opened).toHaveLength(1);
+    expect(opened[0]!.eventId).toBe('EV');
+    expect(opened[0]!.bucketWon).toBeNull();
+    expect(opened[0]!.makerRealisticFilled).toBe(false);
+    expect(opened[0]!.entryCapturedTs).toBe(ENTRY + 60); // the placement snapshot's capturedAt
+    expect(opened[0]!.makerPrice).toBeCloseTo(0.12, 6);
+    expect(opened[0]!.takerPrice).toBeCloseTo(0.18, 6);
+    expect(opened[0]!.placedAtUtc).toBe(new Date(NOW_PLACE * 1000).toISOString());
+  });
+
+  it('skips a candidate already placed (dedupe by event|bucket)', () => {
+    const c = cand({ bucketWon: null, eventId: 'EV', bucketIdx: 3 });
+    expect(placeBuysPure([c], new Set(['EV|3']), STRAT, NOW_PLACE)).toHaveLength(0);
+  });
+
+  it('skips an already-resolved candidate even when otherwise live', () => {
+    const resolved = cand({ bucketWon: true, eventId: 'R', bucketIdx: 0 });
+    expect(placeBuysPure([resolved], new Set(), STRAT, NOW_PLACE)).toHaveLength(0);
+  });
+
+  it('skips a candidate whose 36h entry instant has not arrived yet', () => {
+    const c = cand({ bucketWon: null, eventId: 'F', bucketIdx: 1 });
+    expect(placeBuysPure([c], new Set(), STRAT, ENTRY - 7200)).toHaveLength(0);
+  });
+
+  it('opens only the bankroll-allocated buys (capped buys are not opened)', () => {
+    const cands = Array.from({ length: 25 }, (_, i) =>
+      cand({ citySlug: `c${i}`, conditionId: `0x${i}`, eventId: `E${i}`, bucketIdx: 0, bucketWon: null }),
+    );
+    const opened = placeBuysPure(cands, new Set(), { ...STRAT, positionStakeUsd: 12, dailyBankrollCapUsd: 250 }, NOW_PLACE);
+    expect(opened).toHaveLength(20); // floor(250 / 12)
+  });
+
+  it('falls back to strat.feeRate when a candidate carries feeRate 0 (a null-fee bucket)', () => {
+    const opened = placeBuysPure([cand({ bucketWon: null, eventId: 'F0', bucketIdx: 3, feeRate: 0 })], new Set(), STRAT, NOW_PLACE);
+    expect(opened).toHaveLength(1);
+    expect(opened[0]!.feeRate).toBe(STRAT.feeRate); // 0.05, not the candidate's 0
   });
 });
 

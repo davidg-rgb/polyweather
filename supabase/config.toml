@@ -65,3 +65,6 @@ verify_jwt = false
 
 [functions.whale-watch]
 verify_jwt = false
+
+[functions.replica-forward]
+verify_jwt = false

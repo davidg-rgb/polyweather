@@ -1,5 +1,16 @@
 # REPLICA-CLOUD-PORT — move the daily replica forward loop off the local PC → Supabase Edge + pg_cron
 
+> **BUILT 2026-06-24 (code complete; deploy operator-gated).** Migration `0056_replica_forward_cloud.sql`
+> (note: 0055 went to whale-watch, so this is **0056**, not the 0055 the plan below assumed) adds
+> `replica_positions.entry_captured_ts`, restates `replica_record_positions`/`dash_replica_sim` to carry it,
+> adds the `replica_forward_inputs` RPC, and registers the `replica-forward` cron (05:00 UTC). The reconcile/
+> place decision logic moved into core as the pure `reconcilePure`/`placeBuysPure` (+ `ForwardPosition`), shared
+> by the local task and the new `supabase/functions/replica-forward/{index,handler}.ts` Edge tick; a Gamma
+> fallback resolver lives in `_shared/polymarket-wallet.ts` (`fetchGammaWinners`). Tests:
+> `supabase/tests/replica-forward.test.ts` + new core cases — `pnpm typecheck` 0, `pnpm test` 1239 green. Deploy
+> + retire the local task per **RUNBOOK.md → "Replica forward — cloud go-live"**. The rest of this doc is the
+> original build spec, kept for provenance.
+
 > **Authored 2026-06-24.** The build spec for porting the **badatmath-replica forward loop** from a local
 > Windows Scheduled Task (`scripts/research/badatmath-replica-forward.ts`, runs 07:00 daily) to a **Supabase
 > Edge Function + pg_cron** — the `amsterdam-paper-trade` twin. Operator chose this target (over Vercel cron,

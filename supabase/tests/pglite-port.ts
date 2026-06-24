@@ -128,6 +128,9 @@ const FN_ARGS: Record<string, string[]> = {
   whale_mark_alerted: ['p_keys'],
   whale_settings: [],
   dash_whale_watch: ['p_limit'],
+  replica_record_positions: ['p_source', 'p_replace', 'p_rows'],
+  replica_record_run: ['p_payload'],
+  replica_forward_inputs: ['p_now', 'p_place_from', 'p_place_to'],
 };
 
 export function pglitePort(db: PGlite): DbPort {

@@ -24,6 +24,7 @@ const positionRow = (over: Record<string, unknown>) => ({
   resolutionTs: 1_700_000_000,
   entryTs: 1_699_870_000,
   entryDayUtc: '2026-04-29',
+  entryCapturedTs: 1_699_870_500,
   makerPrice: 0.2,
   takerPrice: 0.25,
   stakeUsd: 12,
@@ -81,6 +82,7 @@ describe('replica_record_positions / _run + dash_replica_sim (0053)', () => {
     expect(open.citySlug).toBe('busan');
     expect(open.bucketWon).toBeNull();
     expect(Number(open.stakeUsd)).toBe(12);
+    expect(Number(open.entryCapturedTs)).toBe(1_699_870_500); // 0056: the fill-window start round-trips through dash_replica_sim
 
     const runs = out.runs as { backtest: Record<string, unknown>; forward: Record<string, unknown> };
     expect(Number(runs.backtest.nAllocated)).toBe(180);
@@ -112,6 +114,19 @@ describe('replica_record_positions / _run + dash_replica_sim (0053)', () => {
     expect(Number(cnt[0]!.n)).toBe(1);
     const row = await rows<{ status: string; bucket_won: boolean }>(db, `select status, bucket_won from public.replica_positions where source='forward' and event_id=$1 and bucket_idx=5`, [UID(20)]);
     expect(row[0]!.status).toBe('resolved');
+    expect(row[0]!.bucket_won).toBe(true);
+  });
+
+  it('refuses to downgrade a resolved position back to open (resolution is final — the 0056 close-then-reopen guard)', async () => {
+    await recordPositions('forward', true, [
+      positionRow({ source: 'forward', eventId: UID(30), citySlug: 'osaka', bucketIdx: 7, bucketWon: true, status: 'resolved', closedAtUtc: '2026-06-25T07:00:00Z' }),
+    ]);
+    // a stale/duplicate placement of the SAME natural key as 'open' must NOT revert the resolved row.
+    await recordPositions('forward', false, [
+      positionRow({ source: 'forward', eventId: UID(30), citySlug: 'osaka', bucketIdx: 7, bucketWon: null, makerRealisticFilled: false, status: 'open', closedAtUtc: null }),
+    ]);
+    const row = await rows<{ status: string; bucket_won: boolean }>(db, `select status, bucket_won from public.replica_positions where source='forward' and event_id=$1 and bucket_idx=7`, [UID(30)]);
+    expect(row[0]!.status).toBe('resolved'); // unchanged — the ON CONFLICT WHERE status <> 'resolved' blocked the downgrade
     expect(row[0]!.bucket_won).toBe(true);
   });
 

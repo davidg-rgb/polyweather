@@ -178,6 +178,11 @@ describe('migrations 0001–0010', () => {
       // gate (claim_alert/list_unsent_alerts re-stated + slack_alert_suppressed) + the every-10-min whale-watch
       // cron (count 15 → 16). Operator ask 2026-06-24 (large-bet alarm + pause all other Slack alerts).
       '0055_whale_watch.sql',
+      // 0056 = replica forward loop → cloud: replica_positions gains entry_captured_ts (the §12 fill-window
+      // start), replica_record_positions + dash_replica_sim re-stated to carry it, new service-role
+      // replica_forward_inputs (the RPC-only reconstruction of the script's raw-SQL reads) + the daily
+      // replica-forward cron at 05:00 UTC (count 16 → 17). REPLICA-CLOUD-PORT.md.
+      '0056_replica_forward_cloud.sql',
     ]);
   });
 });
@@ -730,7 +735,7 @@ describe('0034: internal-RPC lockdown — anon/authenticated revoked except the 
 });
 
 describe('pg_cron registrations (§7.22, W11)', () => {
-  it('registers all 16 jobs with the §7.22 schedules', async () => {
+  it('registers all 17 jobs with the §7.22 schedules', async () => {
     const jobs = await rows<{ jobname: string; schedule: string }>(
       db,
       `select jobname, schedule from cron.job order by jobname`,
@@ -751,9 +756,10 @@ describe('pg_cron registrations (§7.22, W11)', () => {
       'snapshot-downsample': '0 3 * * *',
       'amsterdam-paper-trade': '30 15 * * *',
       'sharp-wallet-track': '0 16 * * *',
-      'whale-watch': '*/10 * * * *',
+      'whale-watch': '* * * * *',
+      'replica-forward': '0 5 * * *',
     };
-    expect(jobs.length).toBe(16);
+    expect(jobs.length).toBe(17);
     for (const j of jobs) {
       expect(j.schedule, `schedule for ${j.jobname}`).toBe(expected[j.jobname]);
     }

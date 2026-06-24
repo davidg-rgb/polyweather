@@ -22,18 +22,19 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import {
-  type LockedBuy,
+  type ForwardPosition,
   type ReplicaStrategy,
   type ScoredBuy,
   dailyLedger,
+  placeBuysPure,
   rankCitiesByRoi,
+  reconcilePure,
   scoreBuys,
   scoreLocked,
   selectBuys,
   summarize,
 } from '../../packages/core/src/sim/badatmath-replica.ts';
-import { snapshotAtOrAfter } from '../../packages/core/src/sim/copy-trade.ts';
-import { simulateFill } from '../../packages/core/src/sim/maker-spray.ts';
+import type { BucketSnapshot } from '../../packages/core/src/sim/copy-trade.ts';
 import type { Db } from '../lib/backfill.ts';
 import {
   type ReplicaArgs,
@@ -54,15 +55,10 @@ const DEFAULT_RES_CACHE = 'scripts/research/out/badatmath-replica-resolutions.js
 // state
 // ──────────────────────────────────────────────────────────────────────────────────────────────────
 
-/** One forward paper position — a LockedBuy plus the forward bookkeeping. */
-export interface ForwardPosition extends LockedBuy {
-  /** The actual entry snapshot's capturedAt (the placement book instant; for the fill-model window). */
-  entryCapturedTs: number;
-  /** ISO timestamp we placed it. */
-  placedAtUtc: string;
-  /** ISO timestamp we closed it (resolution observed); null while open. */
-  closedAtUtc: string | null;
-}
+// ForwardPosition + the pure reconcile/place steps moved to core (core/sim/badatmath-replica.ts) so the
+// Supabase Edge tick (functions/replica-forward) shares the identical decision logic — REPLICA-CLOUD-PORT.md.
+// Re-exported here so existing importers of the script keep working.
+export type { ForwardPosition };
 
 export interface ForwardState {
   version: 1;
@@ -106,6 +102,7 @@ function forwardToRow(p: ForwardPosition): ReplicaPositionRow {
     resolutionTs: p.resolutionTs,
     entryTs: p.entryTs,
     entryDayUtc: p.entryDayUtc,
+    entryCapturedTs: p.entryCapturedTs,
     makerPrice: p.makerPrice,
     takerPrice: p.takerPrice,
     stakeUsd: p.stakeUsd,
@@ -214,7 +211,7 @@ export async function reconcile(
   const dbWinners = await loadResolutions(db, state.open.map((p) => p.eventId));
 
   // Gamma fallback for positions the DB hasn't resolved (timelier + wider coverage).
-  let gammaWin = new Map<string, 'Yes' | 'No'>();
+  let gammaWinners = new Map<string, 'Yes' | 'No'>();
   if (opts.gamma) {
     const need = state.open
       .filter((p) => !dbWinners.has(p.eventId) && p.conditionId)
@@ -222,39 +219,28 @@ export async function reconcile(
     if (need.length > 0) {
       // quiet log: the shared resolver reports whole-cache counts (misleading next to a 16-id call); the
       // forward run prints its own accurate "Reconciled N" summary instead.
-      gammaWin = await fetchResolutions([...new Set(need)], {
+      gammaWinners = await fetchResolutions([...new Set(need)], {
         cache: opts.resCache ?? DEFAULT_RES_CACHE,
         log: () => {},
       });
     }
   }
 
-  const stillOpen: ForwardPosition[] = [];
-  let closedCount = 0;
-  for (const p of state.open) {
-    let won: boolean | null = null;
-    const dbw = dbWinners.get(p.eventId);
-    if (dbw !== undefined) won = p.bucketIdx === dbw;
-    else if (p.conditionId) {
-      const g = gammaWin.get(p.conditionId);
-      if (g !== undefined) won = g === 'Yes';
-    }
-    if (won === null) {
-      stillOpen.push(p);
-      continue;
-    }
-    // resolved → lock the outcome + the maker-realistic fill from the now-complete book
-    const series = await reloadAskSeries(db, p.conditionId);
-    const postEntry = series.filter((s) => s.capturedAt >= p.entryCapturedTs);
-    const fill = simulateFill(p.makerPrice, postEntry, 'ask_touch');
-    p.bucketWon = won;
-    p.makerRealisticFilled = fill.filled;
-    p.closedAtUtc = isoNow(nowSec);
-    state.closed.push(p);
-    closedCount++;
+  // Load the book series for each open position's conditionId (the §12 fill replay input), then hand the
+  // DB reads to the PURE reconcile step core shares with the cloud Edge tick.
+  const askSeriesByCondition = new Map<string, BucketSnapshot[]>();
+  for (const cid of new Set(state.open.map((p) => p.conditionId).filter((c) => c !== ''))) {
+    askSeriesByCondition.set(cid, await reloadAskSeries(db, cid));
   }
+  const { stillOpen, newlyClosed } = reconcilePure(
+    state.open,
+    { dbWinners, gammaWinners },
+    askSeriesByCondition,
+    nowSec,
+  );
   state.open = stillOpen;
-  return closedCount;
+  state.closed.push(...newlyClosed);
+  return newlyClosed.length;
 }
 
 // ──────────────────────────────────────────────────────────────────────────────────────────────────
@@ -278,44 +264,11 @@ export async function placeBuys(db: Db, state: ForwardState, nowSec: number): Pr
     cities: state.whitelist.length > 0 ? state.whitelist : undefined,
     resolvedOnly: false,
   });
-  // only OPEN events whose entry instant has arrived but not yet resolved
-  const entryLeadSec = strat.entryLeadHours * 3600;
-  const live = candidates.filter(
-    (c) => c.bucketWon === null && c.resolutionTs > nowSec && c.resolutionTs - entryLeadSec <= nowSec,
-  );
-  const buys = selectBuys(live, strat);
-
-  const placed = new Set<string>([...state.open, ...state.closed].map(posKey));
-  let opened = 0;
-  for (const b of buys) {
-    if (!b.allocated) continue;
-    const c = b.candidate;
-    if (placed.has(posKey({ eventId: c.eventId, bucketIdx: c.bucketIdx }))) continue;
-    placed.add(posKey({ eventId: c.eventId, bucketIdx: c.bucketIdx }));
-    state.open.push({
-      conditionId: c.conditionId,
-      eventId: c.eventId,
-      citySlug: c.citySlug,
-      region: c.region,
-      targetDate: c.targetDate,
-      bucketIdx: c.bucketIdx,
-      bucketLabel: c.bucketLabel,
-      resolutionTs: c.resolutionTs,
-      entryTs: b.entryTs,
-      entryDayUtc: b.entryDayUtc,
-      entryCapturedTs: b.entrySnapshot.capturedAt,
-      makerPrice: b.makerPrice,
-      takerPrice: b.takerPrice,
-      stakeUsd: b.stakeUsd,
-      feeRate: Number.isFinite(c.feeRate) && c.feeRate > 0 ? c.feeRate : strat.feeRate,
-      bucketWon: null,
-      makerRealisticFilled: false,
-      placedAtUtc: isoNow(nowSec),
-      closedAtUtc: null,
-    });
-    opened++;
-  }
-  return opened;
+  // hand the live-filter + §15 playbook + dedupe to the PURE place step core shares with the cloud Edge tick.
+  const placedKeys = new Set<string>([...state.open, ...state.closed].map(posKey));
+  const opened = placeBuysPure(candidates, placedKeys, strat, nowSec);
+  state.open.push(...opened);
+  return opened.length;
 }
 
 // ──────────────────────────────────────────────────────────────────────────────────────────────────

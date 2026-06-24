@@ -8,6 +8,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
+  fetchGammaWinners,
   fetchUserPnl,
   fetchWalletPositions,
   fetchWeatherLeaderboard,
@@ -16,8 +17,10 @@ import {
   parsePositions,
   parseUserPnl,
   POLYMARKET_DATA_API,
+  POLYMARKET_GAMMA_API,
   POLYMARKET_USER_PNL_API,
   SHARP_WALLET_ADDRESS,
+  winnerFromGamma,
 } from '../functions/_shared/polymarket-wallet.ts';
 
 const RESEARCH = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'research');
@@ -215,5 +218,79 @@ describe('fetch wrappers — the URL each builds (stubbed fetchJson)', () => {
     expect(seen).toBe(
       `${POLYMARKET_USER_PNL_API}/user-pnl?user_address=${SHARP_WALLET_ADDRESS}&interval=all&fidelity=1d`,
     );
+  });
+});
+
+describe('winnerFromGamma — resolved Yes/No decode (the replica-forward reconcile fallback)', () => {
+  it('returns Yes when the Yes leg priced 1 on a closed market', () => {
+    expect(winnerFromGamma(['Yes', 'No'], ['1', '0'], true)).toBe('Yes');
+  });
+  it('returns No when the No leg priced 1', () => {
+    expect(winnerFromGamma(['Yes', 'No'], ['0', '1'], true)).toBe('No');
+  });
+  it('treats a price ≥ 0.999 as the winner', () => {
+    expect(winnerFromGamma(['Yes', 'No'], ['0.9995', '0.0005'], true)).toBe('Yes');
+  });
+  it('returns null for an OPEN market (closed !== true)', () => {
+    expect(winnerFromGamma(['Yes', 'No'], ['1', '0'], false)).toBeNull();
+    expect(winnerFromGamma(['Yes', 'No'], ['1', '0'], undefined)).toBeNull();
+  });
+  it('returns null when no leg is decisive (no price hits 1)', () => {
+    expect(winnerFromGamma(['Yes', 'No'], ['0.5', '0.5'], true)).toBeNull();
+  });
+  it('returns null when the winning leg is not Yes/No (multi-outcome market)', () => {
+    expect(winnerFromGamma(['Under', 'Over'], ['1', '0'], true)).toBeNull();
+  });
+  it('returns null on a length mismatch (drifted payload)', () => {
+    expect(winnerFromGamma(['Yes', 'No'], ['1'], true)).toBeNull();
+  });
+});
+
+describe('fetchGammaWinners — decodes the STRINGIFIED-JSON Gamma payload (the production shape)', () => {
+  // Real Gamma /markets returns outcomes/outcomePrices as stringified JSON ('["Yes","No"]'), NOT native
+  // arrays — exercise the parseGammaStrArray JSON.parse branch end-to-end.
+  const market = (conditionId: string, prices: [string, string], closed = true) => ({
+    conditionId,
+    outcomes: '["Yes","No"]',
+    outcomePrices: JSON.stringify(prices),
+    closed,
+  });
+
+  it('resolves each closed market to its Yes/No winner and builds the closed=true query', async () => {
+    let seen = '';
+    const out = await fetchGammaWinners(
+      async (url) => {
+        seen = url;
+        return [market('c1', ['1', '0']), market('c2', ['0', '1'])];
+      },
+      ['c1', 'c2'],
+    );
+    expect(out.get('c1')).toBe('Yes');
+    expect(out.get('c2')).toBe('No');
+    expect(seen).toContain(`${POLYMARKET_GAMMA_API}/markets?`);
+    expect(seen).toContain('condition_ids=c1');
+    expect(seen).toContain('condition_ids=c2');
+    expect(seen).toContain('closed=true');
+  });
+
+  it('omits open / undecided markets (only Yes/No-decisive land in the map)', async () => {
+    const out = await fetchGammaWinners(
+      async () => [market('open', ['1', '0'], false), market('undecided', ['0.5', '0.5']), market('won', ['1', '0'])],
+      ['open', 'undecided', 'won'],
+    );
+    expect([...out.keys()]).toEqual(['won']);
+  });
+
+  it('does not fetch when there are no conditionIds', async () => {
+    let calls = 0;
+    const out = await fetchGammaWinners(
+      async () => {
+        calls += 1;
+        return [];
+      },
+      ['', ''], // all blank → filtered out
+    );
+    expect(calls).toBe(0);
+    expect(out.size).toBe(0);
   });
 });

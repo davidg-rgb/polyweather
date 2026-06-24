@@ -284,7 +284,7 @@ grant  execute on function public.whale_settings()            to service_role;
 revoke all on function public.dash_whale_watch(int) from public, anon, authenticated;
 grant  execute on function public.dash_whale_watch(int) to authenticated, service_role;
 
--- === 7. cron: poll the whale feed every 10 minutes ==========================================================
+-- === 7. cron: poll the whale feed every MINUTE (alert ASAP after a trade) ===================================
 -- Same Vault-secret pattern as 0009/0026/0039/0049; idempotent (cron.schedule upserts by jobname). PGlite has
 -- no real cron.schedule → the guard skips registration in the test harness.
 do $$
@@ -304,6 +304,6 @@ begin
   timeout_milliseconds := 4500
 )$cmd$;
 
-  perform cron.schedule('whale-watch', '*/10 * * * *', edge_command);
+  perform cron.schedule('whale-watch', '* * * * *', edge_command);
 end;
 $$;

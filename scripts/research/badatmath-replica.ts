@@ -440,6 +440,8 @@ export interface ReplicaPositionRow {
   resolutionTs: number;
   entryTs: number;
   entryDayUtc: string;
+  /** The placement snapshot's capturedAt (the §12 fill-window start; migration 0056). */
+  entryCapturedTs: number;
   makerPrice: number;
   takerPrice: number;
   stakeUsd: number;
@@ -465,6 +467,7 @@ export function scoredToRow(s: ScoredBuy): ReplicaPositionRow {
     resolutionTs: c.resolutionTs,
     entryTs: s.buy.entryTs,
     entryDayUtc: s.buy.entryDayUtc,
+    entryCapturedTs: s.buy.entrySnapshot.capturedAt,
     makerPrice: s.buy.makerPrice,
     takerPrice: s.buy.takerPrice,
     stakeUsd: s.buy.stakeUsd,

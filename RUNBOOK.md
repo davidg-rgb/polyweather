@@ -19,6 +19,28 @@ design/ops: `WHALE-WATCH.md`. Knobs live in the `config` table (set via SQL or /
 - **Mute the alarm without unpausing others:** drop `WHALE_TRADE` from `alerts_slack_allow_kinds`, or unschedule the
   `whale-watch` cron job.
 
+## Replica forward — cloud go-live (badatmath replica; REPLICA-CLOUD-PORT.md)
+
+Ports the daily replica forward loop off the local Windows Scheduled Task to a `replica-forward` Edge tick +
+pg_cron (05:00 UTC = 07:00 local, the local task's hour) — the amsterdam-paper-trade twin. The DB is the source
+of truth (migration `0053` already mirrors the forward state; `0056` adds the `entry_captured_ts` fill-window
+column + the `replica_forward_inputs` RPC). NOT trading; the live rail stays DORMANT. Operator-gated, one time:
+
+```bash
+# 1) apply migration 0056 (entry_captured_ts + replica_record_positions/dash_replica_sim restated +
+#    replica_forward_inputs + the 05:00Z replica-forward cron). The cron 404s harmlessly until step 2 lands.
+supabase db push --project-ref "$SUPABASE_REF"   # or the SQL editor / MCP apply_migration
+# 2) deploy the daily reconcile+place job (self-auth via x-cron-secret; cron self-registers)
+supabase functions deploy replica-forward --use-api --no-verify-jwt --project-ref "$SUPABASE_REF"
+```
+
+Then `/replica` is self-updating: each 05:00Z tick reconciles resolved open positions (DB winner + a Gamma
+fallback for the lagging ~45% our pipeline hasn't resolved) and places today's live cheap-Yes buys, upsert-only.
+Verify: `select public.dash_replica_sim();` (operator) → the `runs.forward` block + new positions advance.
+**After cloud go-live is verified, retire the local task:** `pwsh scripts/research/install-badatmath-replica-task.ps1 -Remove`
+(keep `scripts/research/badatmath-replica.ts --mode forward` for ad-hoc/backtest use — it writes the same DB).
+**Turn it off:** `select cron.unschedule('replica-forward');` (data + dashboard remain; no new positions).
+
 ## Incidents
 
 ### WU key incident (CRITICAL `WU_KEY`)
