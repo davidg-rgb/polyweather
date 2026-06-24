@@ -123,6 +123,19 @@ describe('whale-watch — records the global feed, alerts each new whale, is ide
     expect(out.paused).toBe(false);
     expect((out.recent as unknown[]).length).toBe(WHALES.length);
   });
+
+  // Regression guard (migration 0044 trap): a RETURNS jsonb fn must NOT return a top-level array — the live
+  // supabasePort misreads that as a TABLE row set and silently zeroes the handler's alert loop (the PGlite
+  // test port hides it by wrapping every return in a column). whale_pending_alerts must be `{ rows: [...] }`.
+  it('whale_pending_alerts returns a jsonb OBJECT { rows: [...] }, never a top-level array', async () => {
+    const r = await rows<{ typ: string; rows_is_array: boolean }>(
+      db,
+      `select jsonb_typeof(public.whale_pending_alerts(5)) as typ,
+              jsonb_typeof(public.whale_pending_alerts(5) -> 'rows') = 'array' as rows_is_array`,
+    );
+    expect(r[0]!.typ).toBe('object');
+    expect(r[0]!.rows_is_array).toBe(true);
+  });
 });
 
 describe('whale-watch — the Slack-alert pause gate (0055)', () => {

@@ -182,14 +182,18 @@ end;
 $$;
 
 -- The alert queue: trades not yet successfully Slack-posted, oldest-first (crash-safe at-least-once — a tick
--- that recorded then died re-finds them next run). Capped. Returns a jsonb array (no SETOF — db.ts contract).
+-- that recorded then died re-finds them next run). Capped.
+-- ⚠ Returns a jsonb OBJECT `{ rows: [...] }`, NEVER a top-level jsonb array (the migration-0044 trap): the
+-- production supabasePort (db.ts) misreads a top-level array as a RETURNS TABLE row set and the handler reads
+-- p[0].whale_pending_alerts.rows. (The PGlite test port wraps every return in a column, so a bare array passes
+-- tests but silently zeroes the live Edge tick.)
 create or replace function public.whale_pending_alerts(p_limit int default 50)
 returns jsonb
 language sql
 security definer
 set search_path = public
 as $$
-  select coalesce(jsonb_agg(jsonb_build_object(
+  select jsonb_build_object('rows', coalesce(jsonb_agg(jsonb_build_object(
     'tradeKey',    trade_key,
     'txHash',      transaction_hash,
     'proxyWallet', proxy_wallet,
@@ -202,7 +206,7 @@ as $$
     'notionalUsd', notional_usd,
     'link',        link,
     'tradedAt',    traded_at
-  ) order by traded_at), '[]'::jsonb)
+  ) order by traded_at), '[]'::jsonb))
   from (
     select * from public.whale_trades where alerted = false
     order by traded_at limit greatest(coalesce(p_limit, 50), 1)

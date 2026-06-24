@@ -165,8 +165,10 @@ export async function whaleWatch(ctx: JobCtx, deps: WhaleWatchDeps): Promise<Job
   // --- alert off the durable queue (crash-safe; mark only on a delivered post) --------------------
   let pending: PendingWhale[] = [];
   try {
-    const p = await db.rpc<{ whale_pending_alerts: PendingWhale[] }>('whale_pending_alerts', { p_limit: maxAlerts });
-    pending = p[0]?.whale_pending_alerts ?? [];
+    // whale_pending_alerts returns { rows: [...] } (NOT a bare array — the migration-0044 trap: a top-level
+    // jsonb array is misread by supabasePort as a TABLE row set, silently zeroing alerts). Read .rows.
+    const p = await db.rpc<{ whale_pending_alerts: { rows: PendingWhale[] } }>('whale_pending_alerts', { p_limit: maxAlerts });
+    pending = p[0]?.whale_pending_alerts?.rows ?? [];
   } catch (e) {
     log('whale_pending_alerts read failed (non-fatal)', { error: msg(e) });
   }
