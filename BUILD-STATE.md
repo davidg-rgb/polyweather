@@ -28,9 +28,14 @@ typecheck clean. Full doc: **`WHALE-WATCH.md`**.
   via a minimal idempotent `execute_sql` (gate fns + flag — the exact `0055` bodies, ledger-free, superseded by the deploy).
   Prod was emitting ~173 Slack alerts/day; now only whale alerts pass. ⚠ This also silences CRITICAL `JOB_FAIL`. Reverse:
   `update config set value='false' where key='alerts_slack_paused';`
-- **Operator TODO to make the ALARM live** (prod is applied through `0053`; `0054`+`0055` pending): set/confirm
-  `SLACK_WEBHOOK_URL` Edge secret → apply migrations `0054`, `0055` → `supabase functions deploy whale-watch`. The cron
-  self-registers on `0055`. Threshold is DB-tunable via `whale_min_usd` (no redeploy). Steps: `WHALE-WATCH.md` §4 / RUNBOOK.
+- **ALARM IS FULLY LIVE + VERIFIED (2026-06-24).** `0055` applied to prod (via MCP) + edge fn deployed (`npx supabase
+  functions deploy whale-watch`) + `*/10` cron live. Verified end-to-end: a **$753k BUY on "Spread: France (-2.5)"
+  alerted to Slack** (sent=true). Branch `feat/whale-watch` (commits `368be8c` + fix `7773896`), pushed.
+  - **Bug fixed live (`7773896`):** `whale_pending_alerts` returned a top-level jsonb array → prod supabasePort misread
+    it as a TABLE rowset (the migration-0044 trap) → 0 alerts despite 300 recorded. Wrapped in `{ rows: [...] }` + handler
+    reads `.rows` + a regression guard. First run's 300 historical whales were marked `alerted` (one-time backfill ack).
+  - Threshold DB-tunable via `whale_min_usd` (no redeploy). Pending non-whale alerts stay paused. `0054` still undeployed
+    on prod (independent). Full doc: `WHALE-WATCH.md`.
 
 **2026-06-23 milestone: WALLET-RECON COMPLETE — all FIVE replication angles falsified; the whole milestone is MERGED to `main` (PR #2).**
 The post-§9 wallet-recon work (the 4th/5th angles + the forensic map + the parallel code-review fixes) is now on `main`
