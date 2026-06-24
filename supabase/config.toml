@@ -68,3 +68,6 @@ verify_jwt = false
 
 [functions.replica-forward]
 verify_jwt = false
+
+[functions.reward-snapshot]
+verify_jwt = false

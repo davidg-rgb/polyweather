@@ -241,9 +241,8 @@ lows, mids 0.21–0.46, **33h to resolution**), `min_size` 20 each, **~$59 total
 $172/day (the optimistic number the probe TESTS).
 
 **Phase A logger (`scripts/reward-snapshot.ts`, +2 tests):** appends per-run rate + near-mid depth rows to
-`out/reward-snapshots.jsonl` (434 markets/run) so the competition denominator becomes time-integrated. **File-based
-on purpose** (anti-cathedral): the probe is the decider — graduate to a `market_rewards` DB table + Edge tick only
-on a probe CONFIRM. Schedule it (~15–30 min) to accumulate the epoch series; re-run the first-pass over it.
+`out/reward-snapshots.jsonl` (434 markets/run) so the competition denominator becomes time-integrated. Local/file
+form (run it ad-hoc); the cloud form is §11.
 
 ### Operator runbook — running the ~$59 REC-9 probe (flips the DORMANT rail)
 1. `pnpm tsx scripts/research/reward-probe.ts --mode plan` → read `out/reward-probe-order-sheet.md`.
@@ -255,7 +254,36 @@ on a probe CONFIRM. Schedule it (~15–30 min) to accumulate the epoch series; r
 4. `pnpm tsx scripts/research/reward-probe.ts --mode reconcile` → the GROUND_TRUTH verdict. CONFIRM → the full
    Phase A→D study + a two-sided MM bot spec are justified (separate operator go). OVER_ADVERTISED → record the
    finding, rail stays dormant, REC-8 closes as "advertised ≠ paid."
-- Parallel, zero-risk: schedule `pnpm tsx scripts/reward-snapshot.ts` every ~20 min to build the denominator series.
+- Parallel, zero-risk: the Phase A denominator series now runs in the CLOUD (§11) — no local scheduling needed.
+
+---
+
+## 11. Phase A logger CLOUD-PORTED (2026-06-24) — Supabase Edge fn + pg_cron, every 20 min (the replica-forward twin)
+
+Operator asked to put the snapshot schedule online (like today's replica-forward port) rather than a local Windows
+task. A cloud cron runs 24/7 regardless of the PC — but a cloud function can't append to a local JSONL, so this
+**brings forward the `market_rewards` DB table** that §9/§10 deferred. That deferral was right *while* the destination
+was a local file (anti-cathedral); choosing the online schedule is exactly the trigger that justifies the table. Built:
+- **Migration `0057_market_rewards_snapshot.sql`:** `market_rewards` time-series table (RLS on, service-role-only) +
+  `record_reward_snapshots(p_rows jsonb)` insert RPC + the `reward-snapshot` cron `*/20 * * * *` (vault `project_url`
+  + `cron_secret`, pglite-guarded). Migrations test: names + cron count **17 → 18**.
+- **Edge fn `supabase/functions/reward-snapshot/`** (`index.ts` + `handler.ts`): paginates the live `/sampling-markets`
+  + batch `/books`, reduces each funded weather market via the SHARED core `reduceBookDepth` (the local logger now
+  uses the same core fn — one depth definition), and bulk-inserts the capture. `runJob`-wrapped (cron-auth + claim +
+  best-effort). `config.toml` registers it (`verify_jwt = false`). Analytics-only; `packages/trading` never imported.
+- **Shared core (`core/polymarket/rewards.ts`):** new pure `reduceBookDepth` + exported `fundedDailyRate` (+4 tests).
+
+1305 tests green; typecheck 0.
+
+### Operator go-live (deploy-gated, the only remaining step — mirrors the replica-forward go-live)
+```
+supabase db push                                              # apply 0057 (table + RPC + cron)
+supabase functions deploy reward-snapshot --use-api --no-verify-jwt
+```
+The `*/20` cron self-registers on `db push`; until the fn is deployed it 404s harmlessly. Verify a capture landed:
+`select captured_at, count(*), round(sum(daily_pool_usd)) pool from public.market_rewards group by 1 order by 1 desc limit 3;`
+No new secrets (Polymarket is public/keyless; reuses the existing `project_url`/`cron_secret` vault entries). After a
+few days of captures, re-run the first-pass over the series for a time-integrated competition denominator. Rail DORMANT.
 ```
 PRE-REGISTERED KILL-CRITERION (to FREEZE before any REC-8 run):
   PASS = net P&L / capital-at-risk ≥ <bar>% (annualised), at the REALISTIC competition denominator, 95% CI

@@ -416,9 +416,11 @@ see the hand-off for the recommended next work order (reward-farming economics).
 (469 funded weather markets); frozen criterion PASSes but is NOT actionable (load-bearing on advertised
 rate being paid). `pnpm tsx scripts/research/reward-probe.ts --mode plan` → an ~$59 real-money probe order
 sheet that settles "do the pools pay as advertised?" (operator funds + rests + `--mode reconcile` after 24h —
-full steps in `REWARD-FARMING-HANDOFF.md` §10, "Operator runbook"). `pnpm tsx scripts/reward-snapshot.ts` —
-Phase A: appends the rate + near-mid book-depth time-series (run on a ~20-min schedule to make the
-competition denominator time-integrated). All read-only/public; the live trading rail stays DORMANT.
+full steps in `REWARD-FARMING-HANDOFF.md` §10, "Operator runbook"). Phase A (the rate + near-mid book-depth
+time-series that makes the competition denominator time-integrated) is CLOUD-PORTED — Edge fn `reward-snapshot`
++ pg_cron `*/20 * * * *` (migration `0057`); deploy-gated go-live (`supabase db push` + `functions deploy
+reward-snapshot --use-api --no-verify-jwt`) in `REWARD-FARMING-HANDOFF.md` §11. (Local ad-hoc form:
+`pnpm tsx scripts/reward-snapshot.ts`.) All read-only/public; the live trading rail stays DORMANT.
 
 ## Failure-drill log (each upstream killed under test)
 

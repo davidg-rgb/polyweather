@@ -34,8 +34,9 @@ describe('toSnapshotRow', () => {
     expect(r.capturedUtc).toBe('2026-06-24T00:00:00Z');
   });
 
-  it('handles a market with no usable mid (depth 0)', () => {
-    const r = toSnapshotRow(mkt({ bestBid: null, bestAsk: null }), 't');
+  it('handles a market with no usable book (null mid, depth 0)', () => {
+    // mid is derived from the book itself (reduceBookDepth) — an empty book ⇒ null mid + zero depth.
+    const r = toSnapshotRow(mkt({ bestBid: null, bestAsk: null, bids: [], asks: [] }), 't');
     expect(r.mid).toBeNull();
     expect(r.bidDepthShares).toBe(0);
     expect(r.askDepthUsd).toBe(0);

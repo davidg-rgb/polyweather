@@ -183,6 +183,9 @@ describe('migrations 0001–0010', () => {
       // replica_forward_inputs (the RPC-only reconstruction of the script's raw-SQL reads) + the daily
       // replica-forward cron at 05:00 UTC (count 16 → 17). REPLICA-CLOUD-PORT.md.
       '0056_replica_forward_cloud.sql',
+      // 0057 = REC-8/9 Phase A: market_rewards time-series table + record_reward_snapshots (service-role
+      // insert) + the reward-snapshot Edge tick's every-20-min cron. Analytics data capture; rail DORMANT.
+      '0057_market_rewards_snapshot.sql',
     ]);
   });
 });
@@ -735,7 +738,7 @@ describe('0034: internal-RPC lockdown — anon/authenticated revoked except the 
 });
 
 describe('pg_cron registrations (§7.22, W11)', () => {
-  it('registers all 17 jobs with the §7.22 schedules', async () => {
+  it('registers all 18 jobs with the §7.22 schedules', async () => {
     const jobs = await rows<{ jobname: string; schedule: string }>(
       db,
       `select jobname, schedule from cron.job order by jobname`,
@@ -758,8 +761,9 @@ describe('pg_cron registrations (§7.22, W11)', () => {
       'sharp-wallet-track': '0 16 * * *',
       'whale-watch': '* * * * *',
       'replica-forward': '0 5 * * *',
+      'reward-snapshot': '*/20 * * * *',
     };
-    expect(jobs.length).toBe(17);
+    expect(jobs.length).toBe(18);
     for (const j of jobs) {
       expect(j.schedule, `schedule for ${j.jobname}`).toBe(expected[j.jobname]);
     }

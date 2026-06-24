@@ -19,6 +19,7 @@ import { parseArgs } from 'node:util';
 import { pathToFileURL } from 'node:url';
 import { buildUniverse } from './research/reward-farming-firstpass.ts';
 import type { MarketRewardInputs } from '../packages/core/src/sim/reward-farming.ts';
+import { reduceBookDepth } from '../packages/core/src/polymarket/rewards.ts';
 
 const DEFAULT_OUT = 'scripts/research/out/reward-snapshots.jsonl';
 
@@ -43,10 +44,7 @@ export interface RewardSnapshotRow {
 
 /** Reduce one market's live book to its near-mid depth row (the competition-denominator inputs). */
 export function toSnapshotRow(m: MarketRewardInputs, capturedUtc: string): RewardSnapshotRow {
-  const mid = m.bestBid != null && m.bestAsk != null ? (m.bestBid + m.bestAsk) / 2 : null;
-  const band = m.maxSpreadCents / 100;
-  const inBidBand = mid == null ? [] : m.bids.filter((o) => mid - o.price <= band + 1e-9);
-  const inAskBand = mid == null ? [] : m.asks.filter((o) => o.price - mid <= band + 1e-9);
+  const d = reduceBookDepth(m.bids, m.asks, m.maxSpreadCents);
   return {
     capturedUtc,
     conditionId: m.conditionId,
@@ -54,13 +52,13 @@ export function toSnapshotRow(m: MarketRewardInputs, capturedUtc: string): Rewar
     dailyPoolUsd: m.dailyPoolUsd,
     minSize: m.minSize,
     maxSpreadCents: m.maxSpreadCents,
-    mid,
-    bestBid: m.bestBid,
-    bestAsk: m.bestAsk,
-    bidDepthShares: inBidBand.reduce((a, o) => a + o.size, 0),
-    askDepthShares: inAskBand.reduce((a, o) => a + o.size, 0),
-    bidDepthUsd: inBidBand.reduce((a, o) => a + o.size * o.price, 0),
-    askDepthUsd: inAskBand.reduce((a, o) => a + o.size * (1 - o.price), 0),
+    mid: d.mid,
+    bestBid: d.bestBid,
+    bestAsk: d.bestAsk,
+    bidDepthShares: d.bidDepthShares,
+    askDepthShares: d.askDepthShares,
+    bidDepthUsd: d.bidDepthUsd,
+    askDepthUsd: d.askDepthUsd,
   };
 }
 

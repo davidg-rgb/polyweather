@@ -13,8 +13,10 @@ import {
 } from '../src/polymarket/gamma.ts';
 import {
   type RawSamplingMarket,
+  fundedDailyRate,
   isFunded,
   isWeatherMarket,
+  reduceBookDepth,
   scanWeatherRewards,
 } from '../src/polymarket/rewards.ts';
 
@@ -398,5 +400,49 @@ describe('rewards — REC-4 liquidity-rewards monitor detector', () => {
   it('is total on empty / junk input', () => {
     expect(scanWeatherRewards([]).nScanned).toBe(0);
     expect(scanWeatherRewards(null as never).fundedWeather).toEqual([]);
+  });
+
+  it('fundedDailyRate sums the rates (0 when unfunded/junk)', () => {
+    expect(fundedDailyRate(tempFunded)).toBe(12);
+    expect(fundedDailyRate({ rewards: { rates: [{ rewards_daily_rate: 5 }, { rewards_daily_rate: 7 }] } })).toBe(12);
+    expect(fundedDailyRate(tempUnfunded)).toBe(0);
+    expect(fundedDailyRate({})).toBe(0);
+  });
+});
+
+describe('reduceBookDepth — REC-8/9 Phase A near-mid depth (the competition denominator)', () => {
+  it('computes mid/best + in-band depth, excluding orders beyond max_spread', () => {
+    const d = reduceBookDepth(
+      [
+        { price: 0.1, size: 100 }, // 1.5c from mid 0.115 → in band
+        { price: 0.05, size: 999 }, // 6.5c away → out
+      ],
+      [{ price: 0.13, size: 200 }], // 1.5c from mid → in band
+      4.5,
+    );
+    expect(d.bestBid).toBe(0.1);
+    expect(d.bestAsk).toBe(0.13);
+    expect(d.mid).toBeCloseTo(0.115, 9);
+    expect(d.bidDepthShares).toBe(100);
+    expect(d.askDepthShares).toBe(200);
+    expect(d.bidDepthUsd).toBeCloseTo(100 * 0.1, 9);
+    expect(d.askDepthUsd).toBeCloseTo(200 * (1 - 0.13), 9);
+  });
+
+  it('accepts string price/size (raw CLOB shape) and ignores junk levels', () => {
+    const d = reduceBookDepth(
+      [{ price: '0.20', size: '50' }, { price: '0', size: '10' }] as never,
+      [{ price: '0.22', size: '40' }] as never,
+      4.5,
+    );
+    expect(d.bidDepthShares).toBe(50);
+    expect(d.askDepthShares).toBe(40);
+  });
+
+  it('one-sided / empty book → null mid + zero depth (never throws)', () => {
+    const oneSided = reduceBookDepth([{ price: 0.1, size: 100 }], [], 4.5);
+    expect(oneSided.mid).toBeNull();
+    expect(oneSided.bidDepthShares).toBe(0);
+    expect(reduceBookDepth(undefined, undefined, 4.5).mid).toBeNull();
   });
 });
