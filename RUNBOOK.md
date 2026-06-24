@@ -411,6 +411,15 @@ small follow-up: wrap `scanWeatherRewards` in an Edge function + `cron.schedule`
 `fundedWeather.length > 0` flips. Forecast-free reward farming on weather is now a live, un-analysed path —
 see the hand-off for the recommended next work order (reward-farming economics).
 
+**REC-8 economics first-pass + REC-9 probe (no deploy/capital needed to RUN).**
+`pnpm tsx scripts/research/reward-farming-firstpass.ts` — live economics of forecast-free reward farming
+(469 funded weather markets); frozen criterion PASSes but is NOT actionable (load-bearing on advertised
+rate being paid). `pnpm tsx scripts/research/reward-probe.ts --mode plan` → an ~$59 real-money probe order
+sheet that settles "do the pools pay as advertised?" (operator funds + rests + `--mode reconcile` after 24h —
+full steps in `REWARD-FARMING-HANDOFF.md` §10, "Operator runbook"). `pnpm tsx scripts/reward-snapshot.ts` —
+Phase A: appends the rate + near-mid book-depth time-series (run on a ~20-min schedule to make the
+competition denominator time-integrated). All read-only/public; the live trading rail stays DORMANT.
+
 ## Failure-drill log (each upstream killed under test)
 
 Every upstream's failure path is exercised by the committed suite — re-run

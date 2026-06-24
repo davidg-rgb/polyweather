@@ -149,6 +149,8 @@ export interface MarketRewardInputs {
   /** Full resting bid / ask orders on the YES token (price, size) — the competition denominator. */
   bids: BookOrder[];
   asks: BookOrder[];
+  /** Market resolution time (ISO, from sampling `end_date_iso`) — for the probe's time-to-resolution gate. */
+  endDateIso?: string | null;
 }
 
 /** The pre-registered, swept parameters of a hypothetical small-operator two-sided quote. */
@@ -169,6 +171,12 @@ export interface RewardFarmingParams {
   feeRate: number;
   /** The single-sidedness divisor c. Default 3.0. */
   c: number;
+  /**
+   * When set (>0), rest EXACTLY this many shares per side instead of deriving size from the capital
+   * budget — the REC-9 probe mode (rest the minimum qualifying size to minimise capital at risk). Capital
+   * is then derived from the size. Default undefined (capital-budget mode).
+   */
+  fixedSizeShares?: number;
 }
 
 export const DEFAULT_PARAMS: RewardFarmingParams = {
@@ -261,7 +269,11 @@ export function estimateMarketEconomics(
   // Two-sided collateral ≈ S·bid + S·(1−ask) per share-pair; size from the capital budget.
   const collatPerShare = myBidPx + (1 - myAskPx);
   if (!(collatPerShare > 0)) return base;
-  const mySizeShares = p.capitalPerMarketUsd / collatPerShare;
+  // Probe mode (REC-9): rest a FIXED size per side; else derive size from the capital budget.
+  const mySizeShares =
+    Number.isFinite(p.fixedSizeShares) && (p.fixedSizeShares ?? 0) > 0
+      ? p.fixedSizeShares!
+      : p.capitalPerMarketUsd / collatPerShare;
   if (!(mySizeShares > 0)) return base;
   // Honour the program min_size: below it, the quote earns nothing.
   if (mySizeShares < (m.minSize > 0 ? m.minSize : 0)) {

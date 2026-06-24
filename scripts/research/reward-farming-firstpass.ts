@@ -39,6 +39,7 @@ const CLOB_BASE = 'https://clob.polymarket.com';
 /** Runtime-richer view of a sampling market (the type omits these; the live payload carries them). */
 interface SamplingMarketFull extends RawSamplingMarket {
   tokens?: { token_id?: string; outcome?: string; price?: number }[];
+  end_date_iso?: string;
 }
 
 interface RawBook {
@@ -128,6 +129,7 @@ export async function buildUniverse(
       bestAsk: bestAsk(asks),
       bids,
       asks,
+      endDateIso: typeof m.end_date_iso === 'string' ? m.end_date_iso : null,
     });
   }
   log(`fetched ${books.size} live order books → ${inputs.length} modellable markets`);

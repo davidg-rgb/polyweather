@@ -165,6 +165,16 @@ describe('estimateMarketEconomics', () => {
     expect(hi.netUsd).toBeLessThan(lo.netUsd);
   });
 
+  it('fixedSizeShares (probe mode): rests exactly N shares and derives capital from size', () => {
+    const e = estimateMarketEconomics(market(), { ...DEFAULT_PARAMS, fixedSizeShares: 50 });
+    expect(e.skipped).toBe(false);
+    expect(e.mySizeShares).toBe(50);
+    // capital = 50 × two-sided collateral (mid≈0.115) ≪ the $100 budget it ignores
+    expect(e.capitalUsd).toBeGreaterThan(0);
+    expect(e.capitalUsd).toBeLessThan(60);
+    expect(e.share).toBeGreaterThan(0);
+  });
+
   it('honours min_size: a capital too small to meet min_size scores nothing', () => {
     // capital $1 at mid≈0.115 → ~ a few shares ≪ min_size 50 → skipped-but-modelled, zero reward
     const e = estimateMarketEconomics(market(), { ...DEFAULT_PARAMS, capitalPerMarketUsd: 1 });

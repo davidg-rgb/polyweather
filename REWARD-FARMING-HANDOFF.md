@@ -216,6 +216,46 @@ load-bearing on TWO unverified assumptions, and the magnitude is too good to be 
 optimistic — an instantaneous snapshot understates time-integrated competing liquidity. The gate is not moved
 (discipline), but the full study MUST make the denominator empirical. Verdict label stands at PASS-per-criterion;
 operational recommendation is **PROBE before capital**.
+
+---
+
+## 10. REC-9 PROBE HARNESS + Phase A logger BUILT (2026-06-24) — no capital yet, rail DORMANT
+
+Operator chose "build the REC-9 probe so it can be flipped on + funded ~$50." Built, fully tested, **nothing
+placed** (`packages/trading` never imported; no rail flip; the harness only emits an order sheet + scores
+operator-entered actuals). 1301 tests green; typecheck 0.
+
+**Pure brain (`core/sim/reward-probe.ts`, +14 tests):**
+- `buildProbePlan(inputs, opts)` — picks the top-N funded markets by predicted reward, rests EXACTLY `min_size`
+  shares two-sided `offsetCents` inside the mid (minimum qualifying capital), predicts reward/fill/net via the
+  tested `estimateMarketEconomics` (new `fixedSizeShares` mode). **Probe-validity gates:** `minHoursToResolution`
+  (default 18h — a full reward epoch must lie ahead, NOT a same-day resolver) + a degenerate-mid guard (drop ~0/~1).
+- `scoreProbe(plan, actuals)` — the ground-truth decider: mean **reward ratio = actual/predicted**. ≥0.5 & net>0
+  → `GROUND_TRUTH_CONFIRMS` (pays as advertised, survives fills → scale up / design the bot); <0.5 →
+  `OVER_ADVERTISED` (the first-pass PASS was an artifact; rail dormant); else `INCONCLUSIVE` (fills ate it).
+
+**Driver (`scripts/research/reward-probe.ts`):** `--mode plan` pulls the live universe → writes
+`out/reward-probe-plan.json` + a human `out/reward-probe-order-sheet.md`; `--mode reconcile` reads the plan +
+`out/reward-probe-actuals.json` → the verdict. **Live plan (2026-06-24):** 3 mid-range markets (Paris/Seoul/HK
+lows, mids 0.21–0.46, **33h to resolution**), `min_size` 20 each, **~$59 total capital**, predicted reward
+$172/day (the optimistic number the probe TESTS).
+
+**Phase A logger (`scripts/reward-snapshot.ts`, +2 tests):** appends per-run rate + near-mid depth rows to
+`out/reward-snapshots.jsonl` (434 markets/run) so the competition denominator becomes time-integrated. **File-based
+on purpose** (anti-cathedral): the probe is the decider — graduate to a `market_rewards` DB table + Edge tick only
+on a probe CONFIRM. Schedule it (~15–30 min) to accumulate the epoch series; re-run the first-pass over it.
+
+### Operator runbook — running the ~$59 REC-9 probe (flips the DORMANT rail)
+1. `pnpm tsx scripts/research/reward-probe.ts --mode plan` → read `out/reward-probe-order-sheet.md`.
+2. Fund ~$59 on Polymarket; for each row rest a **maker BUY @ bidPx** and **maker SELL @ askPx** of `size` shares
+   on the market's YES token. Leave them live ~24h. (Strict-two-sided rows need BOTH legs to earn — none in the
+   current plan.) Do NOT chase fills; this is a resting-liquidity test.
+3. After ~24h, read each market's ACTUAL reward earned (Polymarket portfolio → rewards) and any fills; enter them
+   into `out/reward-probe-actuals.json` (a starter template is written on first `reconcile`).
+4. `pnpm tsx scripts/research/reward-probe.ts --mode reconcile` → the GROUND_TRUTH verdict. CONFIRM → the full
+   Phase A→D study + a two-sided MM bot spec are justified (separate operator go). OVER_ADVERTISED → record the
+   finding, rail stays dormant, REC-8 closes as "advertised ≠ paid."
+- Parallel, zero-risk: schedule `pnpm tsx scripts/reward-snapshot.ts` every ~20 min to build the denominator series.
 ```
 PRE-REGISTERED KILL-CRITERION (to FREEZE before any REC-8 run):
   PASS = net P&L / capital-at-risk ≥ <bar>% (annualised), at the REALISTIC competition denominator, 95% CI
