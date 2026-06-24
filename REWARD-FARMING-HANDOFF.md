@@ -168,6 +168,54 @@ revert, or be alarmed by it.** Stage only REC-8 files explicitly.
 
 **First moves next session:** (1) read the live liquidity-rewards docs for the exact current scoring formula +
 epoch; (2) Phase A data capture (reward rates + near-mid depth); (3) pre-register the Phase D bar; then B→C→D.
+
+---
+
+## 9. FIRST-PASS RESULT (run 2026-06-24) — PASS-per-criterion, but NOT actionable; the real test is empirical
+
+**Built (pure + tested + live):** `core/sim/reward-farming.ts` (the docs-verbatim scoring formula —
+`spreadScore` S(v,s)=((v−s)/v)², `sideScore` size-weighted, `makerQmin` two-sidedness rule incl. the
+strict <0.10 regime + the /c=3.0 single-sided penalty, `rewardShare`, `estimateMarketEconomics`,
+`summarizeUniverse`, the frozen `rewardFarmingVerdict`) + `test/reward-farming.test.ts` (28 tests) +
+`scripts/research/reward-farming-firstpass.ts` (live `/sampling-markets` + batch `/books` pull → the
+universe economics + κ×φ×τ×capital sweep + verdict). 1284 tests green; typecheck 0; nothing shipped;
+`packages/trading` never imported; rail DORMANT. Reproduce: `pnpm tsx scripts/research/reward-farming-firstpass.ts`.
+
+**The pre-registered criterion FIRED PASS** (frozen §4.D / module header, before the number was seen):
+- 469 funded weather markets, total pool **~$31.4k/day** (live, 2026-06-24).
+- REALISTIC corner (κ=1 aggregate-book competition, capital $100/mkt, restOffset 1c, φ=0.5, τ=0.05, rebate 0.25):
+  per-market net **mean $28.10 [95% CI $24.25, $32.56], median $12.54, 100% of markets net-positive** →
+  PASS (mean>0, CI LB>0, median>0). Net stays positive across **every** sweep corner — even the pessimistic
+  adverse-selection tail (τ=0.328, the replica tax) holds **+22%/day**; fills do NOT erase it in the model.
+
+**Why the PASS is NOT actionable (the honest caveat — do not deploy capital on this):** the result is
+load-bearing on TWO unverified assumptions, and the magnitude is too good to be a standing forecast-free return:
+1. **The advertised `rewards_daily_rate` is assumed paid in full.** A 7.5–29%/day forecast-free yield on a
+   public exchange would be the best trade in DeFi; the crowding prior says it can't be a *standing* return.
+2. **The decisive diagnostic — the thin-book paradox check:** ~**$420k of maker capital is ALREADY resting
+   in-band** across the universe (not a green field). If that existing capital alone split the pool, the
+   implied gross yield is **7.48%/day** — STILL implausibly high. Two readings, opposite, unresolved by a snapshot:
+   (a) **real-but-ephemeral** — Polymarket turned these pools on *2026-06-24* (REC-4); pros under-arrived, the
+   high share is real *now* and decays as capital enters; or (b) **artifact** — the advertised rates overstate
+   realized payouts, OR the in-band notional scores far below face (most of it is far-from-mid / sub-min_size /
+   one-sided), OR holding inventory through binary resolution costs more than the reduced-form τ models.
+
+**The binding next step is EMPIRICAL, not more modeling (avoid the cathedral).** The single unsure thing —
+*"do these pools actually pay what they advertise?"* — is answerable far more cheaply than Phase A→D modeling:
+- **REC-9 (recommended): a minimal real-money ground-truth probe.** Rest ONE min-size (50-share) two-sided
+  position 1c off mid in 2–3 funded weather markets for 24h; observe the ACTUAL USDC reward paid + the realized
+  fills, vs. this model's prediction. ~$50–150 at risk, forecast-free, bounded. It resolves (a) vs (b)
+  definitively and is worth more than any further simulation. **It requires flipping the live rail (operator-gated,
+  currently DORMANT)** — a tiny, near-mid, no-forecast probe, categorically different from the falsified
+  taker/selection bets. Operator decision.
+- **Phase A (parallel, no capital):** persist `/sampling-markets` rates + per-minute near-mid book depth over a
+  full epoch, so the competition denominator becomes time-integrated (not a snapshot) and the share is measured,
+  not assumed. Then re-run this exact harness on real series.
+
+**Lesson logged (WO-5):** the frozen gate's "realistic corner" (κ=1 = *instantaneous* aggregate book) is itself
+optimistic — an instantaneous snapshot understates time-integrated competing liquidity. The gate is not moved
+(discipline), but the full study MUST make the denominator empirical. Verdict label stands at PASS-per-criterion;
+operational recommendation is **PROBE before capital**.
 ```
 PRE-REGISTERED KILL-CRITERION (to FREEZE before any REC-8 run):
   PASS = net P&L / capital-at-risk ≥ <bar>% (annualised), at the REALISTIC competition denominator, 95% CI
