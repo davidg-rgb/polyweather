@@ -685,3 +685,65 @@ export async function fetchTrades(
   }
   return out;
 }
+
+// --- CLOB market resolution (authoritative winner; for grading held-to-resolution P&L) ---------------
+// The CLOB `/markets/{conditionId}` endpoint is keyless and serves ARCHIVED/resolved markets (where gamma's
+// condition_ids query returns empty). Its tokens[] carry a per-outcome `winner` boolean — the authoritative
+// resolved outcome — plus `closed` and `end_date_iso`. This is the grading spine for the whale-insider scan
+// (scripts/research/whale-insider-scan.ts) and the forward one-off grader (scripts/whale-grade.ts).
+
+/** CLOB host powering the resolution/winner lookup. */
+export const POLYMARKET_CLOB_API = 'https://clob.polymarket.com';
+
+export interface MarketResolution {
+  /** True only when the market is closed AND a winning token is flagged. */
+  resolved: boolean;
+  /** The outcome string of the winning token ('Yes'|'No'|…), or null if unresolved/unknown. */
+  winnerOutcome: string | null;
+  /** Resolution/end time (unix seconds) from end_date_iso, or null. */
+  endTs: number | null;
+}
+
+interface RawClobToken {
+  outcome?: unknown;
+  winner?: unknown;
+}
+interface RawClobMarket {
+  closed?: unknown;
+  tokens?: unknown;
+  end_date_iso?: unknown;
+}
+
+/**
+ * Parse a CLOB /markets/{conditionId} payload into a MarketResolution. Pure + total — an unresolved /
+ * junk / non-object payload yields `{ resolved:false, winnerOutcome:null, endTs:null }`, never throws.
+ */
+export function parseClobMarket(payload: unknown): MarketResolution {
+  const d = (payload && typeof payload === 'object' ? payload : {}) as RawClobMarket;
+  const tokens = Array.isArray(d.tokens) ? (d.tokens as RawClobToken[]) : [];
+  const winTok = tokens.find((t) => t?.winner === true);
+  const endIso = typeof d.end_date_iso === 'string' ? d.end_date_iso : null;
+  const endMs = endIso ? Date.parse(endIso) : Number.NaN;
+  return {
+    resolved: d.closed === true && winTok != null,
+    winnerOutcome: typeof winTok?.outcome === 'string' ? winTok.outcome : null,
+    endTs: Number.isFinite(endMs) ? Math.floor(endMs / 1000) : null,
+  };
+}
+
+/**
+ * Fetch a market's authoritative resolution (winning outcome + end time) from CLOB. Throws (via fetchJson)
+ * on an exhausted/!ok upstream — callers treat it as "unresolved" (best-effort grading).
+ */
+export async function fetchMarketResolution(
+  fetchJson: FetchJsonLike,
+  conditionId: string,
+  opts: { timeoutMs?: number; retries?: number } = {},
+): Promise<MarketResolution> {
+  const url = `${POLYMARKET_CLOB_API}/markets/${encodeURIComponent(conditionId)}`;
+  const payload = await fetchJson(url, { headers: REQUEST_HEADERS }, {
+    timeoutMs: opts.timeoutMs,
+    retries: opts.retries,
+  });
+  return parseClobMarket(payload);
+}

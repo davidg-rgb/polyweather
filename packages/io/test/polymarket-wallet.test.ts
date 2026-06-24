@@ -3,14 +3,17 @@ import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
+  fetchMarketResolution,
   fetchTrades,
   parseActivity,
+  parseClobMarket,
   parseLeaderboard,
   parseMarketsMeta,
   parsePositionMarket,
   parsePositions,
   parseTrades,
   parseUserPnl,
+  POLYMARKET_CLOB_API,
   POLYMARKET_DATA_API,
   POLYMARKET_USER_PNL_API,
   SHARP_WALLET_ADDRESS,
@@ -423,5 +426,41 @@ describe('fetchTrades (URL building + paging)', () => {
     expect(c.urls[0]).toContain('offset=0');
     expect(c.urls[1]).toContain('offset=100');
     expect(rows).toEqual([]); // the {} rows have no txHash → all dropped by parseTrades
+  });
+});
+
+describe('parseClobMarket / fetchMarketResolution', () => {
+  it('reads the winning outcome + end time from a resolved market', () => {
+    const r = parseClobMarket({
+      closed: true,
+      end_date_iso: '2026-05-17T12:00:00Z',
+      tokens: [
+        { outcome: 'Yes', winner: false, price: 0 },
+        { outcome: 'No', winner: true, price: 1 },
+      ],
+    });
+    expect(r.resolved).toBe(true);
+    expect(r.winnerOutcome).toBe('No');
+    expect(r.endTs).toBe(Math.floor(Date.parse('2026-05-17T12:00:00Z') / 1000));
+  });
+  it('is unresolved when not closed or no winner flagged', () => {
+    expect(parseClobMarket({ closed: false, tokens: [{ outcome: 'Yes', winner: false }] }).resolved).toBe(false);
+    expect(parseClobMarket({ closed: true, tokens: [{ outcome: 'Yes', winner: false }] }).resolved).toBe(false);
+  });
+  it('is total on junk / missing fields', () => {
+    expect(parseClobMarket(null)).toEqual({ resolved: false, winnerOutcome: null, endTs: null });
+    expect(parseClobMarket({ tokens: 'nope' })).toEqual({ resolved: false, winnerOutcome: null, endTs: null });
+    expect(parseClobMarket({ closed: true, tokens: [] }).resolved).toBe(false);
+  });
+  it('fetchMarketResolution hits CLOB /markets/{cid} and parses the body', async () => {
+    let calledUrl = '';
+    const fetchJson = (url: string) => {
+      calledUrl = url;
+      return Promise.resolve({ closed: true, tokens: [{ outcome: 'Yes', winner: true }] });
+    };
+    const r = await fetchMarketResolution(fetchJson, '0xabc');
+    expect(calledUrl).toBe(`${POLYMARKET_CLOB_API}/markets/0xabc`);
+    expect(r.winnerOutcome).toBe('Yes');
+    expect(r.resolved).toBe(true);
   });
 });

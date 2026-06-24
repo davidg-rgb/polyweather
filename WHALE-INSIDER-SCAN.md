@@ -236,3 +236,41 @@ just confirmed — it is sharpened into the cleanest possible disproof:
 longshot-fading** (BowlOfPunch), and it's sub-significant. There is no insider-information signature at
 $25k or $100k. If you want one wallet to eyeball, BowlOfPunch is it — labelled honestly as a skilled
 political-tail fader, not an insider.
+
+---
+
+## 8. Forward one-off detector — `scripts/whale-grade.ts`
+
+The scan above finds *systematic* (repeated) edge. A true insider trade is often a **single** event — bet
+once, win, vanish — which a per-wallet z-test can't see and which a point-in-time scan can miss. So the
+detector runs **forward**, on top of the capture that already exists:
+
+```
+whale-watch (0055, LIVE, every minute)        whale-grade.ts (this, scheduled daily)
+  global /trades CASH≥$100k  ─────────────▶     read whale_trades  ─▶ resolve settled markets (CLOB)
+  → records every big bet in whale_trades         → grade held-to-resolution + score the insider shape
+                                                  → flag one-offs: resolved · WON · non-sports · ≤0.90 · >1d lead
+                                                  → incremental ledger  scripts/research/out/whale-oneoffs.{json,md}
+```
+
+- **The capture is already autonomous** (whale-watch Edge fn + pg_cron, live on prod). `whale-grade` is the
+  grading half: **read-only** (SELECTs `whale_trades`, writes a local ledger — no DB writes, no orders), and
+  **idempotent + incremental** — each run only grades bets whose market has newly settled, then re-derives
+  the flagged shortlist over the whole ledger. Safe to run on a schedule forever.
+- **It reuses the scan's exact primitives** (`core/polymarket/insider` + io `fetchMarketResolution`), so a
+  captured bet grades byte-identically to how the scan graded it. Shared logic is unit-tested.
+- **An empty flagged list is the expected steady state** (today: 282 graded, 0 flagged — all sports). A
+  *hit* — a single non-sports, underdog, early, winning ≥$100k bet — is exactly the one-off worth
+  investigating, surfaced the moment its market resolves.
+
+```bash
+# grade newly-settled captured whales and refresh the one-off ledger (run daily)
+pnpm tsx scripts/whale-grade.ts                 # defaults: --min-age-hours 12 --threshold 0
+pnpm tsx scripts/whale-grade.ts --threshold 250000   # only flag the very largest one-offs
+```
+
+**Promotion path (optional):** to make grading fully cloud-autonomous like the capture, port this to an Edge
+Function + pg_cron + a `whale_trade_grades` table (mirrors the `replica-forward` / `reward-snapshot`
+cloud-ports), and Slack-alert a newly-flagged one-off under a `WHALE_INSIDER` kind (add it to
+`alerts_slack_allow_kinds` so it survives the pause gate). Until then, a scheduled local run is sufficient —
+markets resolve over hours/days, so daily grading loses nothing.

@@ -44,46 +44,28 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { fetchJson } from '../../packages/io/src/index.ts';
 import {
+  fetchMarketResolution,
   fetchTrades,
   fetchUserPnlSeries,
+  type MarketResolution,
   parseLeaderboard,
   POLYMARKET_DATA_API,
   SHARP_WALLET_ADDRESS,
   type LeaderboardEntry,
   type Trade,
 } from '../../packages/io/src/polymarket-wallet.ts';
+import {
+  categorizeMarket,
+  fillHeldPnl,
+  INSIDER_DEFAULTS,
+  isInformativeBet,
+  type MarketCategory,
+} from '../../packages/core/src/polymarket/insider.ts';
 
-const CLOB_API = 'https://clob.polymarket.com';
-const REQUEST_HEADERS = { 'User-Agent': 'polyweather-analytics/1.0', Accept: 'application/json' };
+type Category = MarketCategory;
+const { extremeLo: EXTREME_LO, extremeHi: EXTREME_HI } = INSIDER_DEFAULTS;
 const DAY = 86_400;
-/** Entries this near to 0/1 carry ~no information (pure microstructure) → excluded from the z statistic. */
-const EXTREME_LO = 0.02;
-const EXTREME_HI = 0.98;
-/** Lead time (days, bet→resolution) at/under which a win is "live/last-minute" (e.g. in-game sports), not early information. */
-const LIVE_LEAD_DAYS = 1;
-/** An "informative" entry — odds not already near-decided — for the insider-shaped statistic. */
-const INFO_ODDS_HI = 0.9;
-
-type Category = 'sports' | 'crypto' | 'politics' | 'weather' | 'macro' | 'other';
-/**
- * Coarse market category from title/slug. The point is to separate SPORTS (huge, live-tradeable — a high win
- * rate there is skill/live-betting, not material non-public info) from the markets where "insider" information
- * is the natural explanation (a crypto move, a political/appointment outcome, a world event). Best-effort, total.
- */
-function categorize(title: string, slug: string): Category {
-  const t = `${title} ${slug}`.toLowerCase();
-  if (/temperature-in-|highest temperature|lowest temperature/.test(t)) return 'weather';
-  if (
-    /\bvs\.?\b|spread:|o\/u|moneyline|\b(nba|nfl|nhl|mlb|epl|ufc|atp|wta|cfb|laliga|serie a|bundesliga)\b|\bwin on \d{4}-\d{2}-\d{2}|\bopen:|\bgrand prix\b|dota|valorant|counter-strike|league of legends|\bcs2\b/.test(
-      t,
-    )
-  )
-    return 'sports';
-  if (/bitcoin|ethereum|\bbtc\b|\beth\b|solana|\bxrp\b|crypto|dogecoin|price of|\$\d+k? by|reach \$/.test(t)) return 'crypto';
-  if (/election|president|nominee|congress|senate|\btrump\b|\bbiden\b|government|prime minister|cabinet|resign|impeach|parliament|\bfed\b|nominee|appoint/.test(t)) return 'politics';
-  if (/\b(cpi|inflation|rate cut|interest rate|gdp|jobs report|recession|tariff)\b/.test(t)) return 'macro';
-  return 'other';
-}
+const REQUEST_HEADERS = { 'User-Agent': 'polyweather-analytics/1.0', Accept: 'application/json' };
 
 // ── helpers ───────────────────────────────────────────────────────────────────────────────────────────
 const num = (v: unknown): number | null => {
@@ -160,28 +142,11 @@ async function fetchRecentWhaleFeed(threshold: number, pages: number): Promise<T
   return out;
 }
 
-// ── market resolution (authoritative winner via CLOB; cached + shared) ──────────────────────────────────
-interface MarketResolution {
-  resolved: boolean;
-  winnerOutcome: string | null;
-  endTs: number | null;
-}
-async function fetchMarketResolution(cid: string): Promise<MarketResolution> {
+// ── market resolution: authoritative winner via CLOB (io fetchMarketResolution), cached + shared ────────
+/** Best-effort wrapper: an upstream error/unknown market is treated as unresolved (never throws). */
+async function resolveMarket(cid: string): Promise<MarketResolution> {
   try {
-    const d = (await fetchJson(`${CLOB_API}/markets/${cid}`, { headers: REQUEST_HEADERS }, {
-      timeoutMs: 12_000,
-      retries: 2,
-    })) as Record<string, unknown>;
-    const tokens = Array.isArray(d?.tokens) ? (d.tokens as Record<string, unknown>[]) : [];
-    const closed = d?.closed === true;
-    const winTok = tokens.find((t) => t?.winner === true);
-    const endIso = typeof d?.end_date_iso === 'string' ? (d.end_date_iso as string) : null;
-    const endTs = endIso ? Math.floor(Date.parse(endIso) / 1000) : null;
-    return {
-      resolved: closed && winTok != null,
-      winnerOutcome: typeof winTok?.outcome === 'string' ? (winTok.outcome as string) : null,
-      endTs: Number.isFinite(endTs) ? endTs : null,
-    };
+    return await fetchMarketResolution(fetchJson, cid, { timeoutMs: 12_000, retries: 2 });
   } catch {
     return { resolved: false, winnerOutcome: null, endTs: null };
   }
@@ -282,22 +247,17 @@ function buildWalletReport(
     let daysToResolve: number | null = null;
     if (res.resolved) {
       resolved = true;
-      // held-to-resolution P&L summed over the big fills (inventory-correct: each fill is cash↔shares, marked
-      // to the resolved winner). BUY of outcome O: shares×((O won?1:0)−price); SELL: shares×(price−(O won?1:0)).
-      heldPnlUsd = fills.reduce((s, f) => {
-        const oWon = f.outcome === res.winnerOutcome ? 1 : 0;
-        return s + (f.side === 'SELL' ? f.sizeShares * (f.price - oWon) : f.sizeShares * (oWon - f.price));
-      }, 0);
+      // held-to-resolution P&L summed over the big fills (inventory-correct; shared fillHeldPnl).
+      heldPnlUsd = fills.reduce(
+        (s, f) => s + fillHeldPnl(f.side, f.outcome, f.sizeShares, f.price, res.winnerOutcome),
+        0,
+      );
       win = heldPnlUsd > 0;
       if (res.endTs != null) daysToResolve = Math.max(0, (res.endTs - lastBigTs) / DAY);
     }
-    const category = categorize(fills[0]!.title, fills[0]!.eventSlug);
+    const category = categorizeMarket(fills[0]!.title, fills[0]!.eventSlug);
     const extreme = entryPrice >= EXTREME_HI || entryPrice <= EXTREME_LO;
-    const informative =
-      !extreme &&
-      entryPrice <= INFO_ODDS_HI &&
-      category !== 'sports' &&
-      (daysToResolve == null || daysToResolve > LIVE_LEAD_DAYS);
+    const informative = isInformativeBet(category, entryPrice, daysToResolve);
     markets.push({
       conditionId: cid,
       title: fills[0]!.title,
@@ -486,7 +446,7 @@ async function main(): Promise<void> {
   let resolvedN = 0;
   const resByCid = new Map<string, MarketResolution>();
   const resResults = await mapPool(cidList, Math.max(concurrency, 10), async (cid) => {
-    const r = await fetchMarketResolution(cid);
+    const r = await resolveMarket(cid);
     if (++resolvedN % 200 === 0) log(`   …resolved ${resolvedN}/${cidList.length}`);
     return [cid, r] as const;
   });
