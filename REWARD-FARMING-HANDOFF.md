@@ -275,15 +275,17 @@ was a local file (anti-cathedral); choosing the online schedule is exactly the t
 
 1305 tests green; typecheck 0.
 
-### Operator go-live (deploy-gated, the only remaining step — mirrors the replica-forward go-live)
-```
-supabase db push                                              # apply 0057 (table + RPC + cron)
-supabase functions deploy reward-snapshot --use-api --no-verify-jwt
-```
-The `*/20` cron self-registers on `db push`; until the fn is deployed it 404s harmlessly. Verify a capture landed:
-`select captured_at, count(*), round(sum(daily_pool_usd)) pool from public.market_rewards group by 1 order by 1 desc limit 3;`
-No new secrets (Polymarket is public/keyless; reuses the existing `project_url`/`cron_secret` vault entries). After a
-few days of captures, re-run the first-pass over the series for a time-integrated competition denominator. Rail DORMANT.
+### DEPLOYED + VERIFIED on prod (2026-06-24) ✅
+Migration `0057` applied via Supabase MCP `apply_migration` (the project's established path — remote history is
+timestamp-versioned, not `db push`); table + RPC + RLS + the `*/20` cron confirmed live. Edge fn deployed via
+`npx supabase functions deploy reward-snapshot --project-ref lenysiqxihsmxljvyybt --use-api --no-verify-jwt`
+(the CLI was authed; `--use-api` bundled the full monorepo closure — the real committed code, no divergence).
+**End-to-end verified:** a manual cron-secret trigger returned 202 → job_run `ok` → **429 funded weather markets
+captured** (`poolUsd 32,178`, in-band maker capital `$512,680`), 429 rows in `market_rewards`. The cron now
+captures every 20 min automatically. No new secrets (reuses `project_url`/`cron_secret`). Re-check anytime:
+`select captured_at, count(*), round(sum(daily_pool_usd)) pool from public.market_rewards group by 1 order by 1 desc limit 5;`
+After a few days, re-run the first-pass over the accumulated series for a time-integrated competition denominator. Rail DORMANT.
+(Note: `0056` replica-forward remains UNapplied on prod — a separate feature, operator's call, untouched here.)
 ```
 PRE-REGISTERED KILL-CRITERION (to FREEZE before any REC-8 run):
   PASS = net P&L / capital-at-risk ≥ <bar>% (annualised), at the REALISTIC competition denominator, 95% CI

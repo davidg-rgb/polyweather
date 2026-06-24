@@ -417,10 +417,12 @@ see the hand-off for the recommended next work order (reward-farming economics).
 rate being paid). `pnpm tsx scripts/research/reward-probe.ts --mode plan` → an ~$59 real-money probe order
 sheet that settles "do the pools pay as advertised?" (operator funds + rests + `--mode reconcile` after 24h —
 full steps in `REWARD-FARMING-HANDOFF.md` §10, "Operator runbook"). Phase A (the rate + near-mid book-depth
-time-series that makes the competition denominator time-integrated) is CLOUD-PORTED — Edge fn `reward-snapshot`
-+ pg_cron `*/20 * * * *` (migration `0057`); deploy-gated go-live (`supabase db push` + `functions deploy
-reward-snapshot --use-api --no-verify-jwt`) in `REWARD-FARMING-HANDOFF.md` §11. (Local ad-hoc form:
-`pnpm tsx scripts/reward-snapshot.ts`.) All read-only/public; the live trading rail stays DORMANT.
+time-series that makes the competition denominator time-integrated) is CLOUD-PORTED + **LIVE on prod** (2026-06-24):
+Edge fn `reward-snapshot` + pg_cron `*/20 * * * *` (migration `0057`), verified — a trigger captured 429 funded
+weather markets into `market_rewards`. Captures run every 20 min automatically. (Local ad-hoc form:
+`pnpm tsx scripts/reward-snapshot.ts`; redeploy: `npx supabase functions deploy reward-snapshot --project-ref
+lenysiqxihsmxljvyybt --use-api --no-verify-jwt`.) Details: `REWARD-FARMING-HANDOFF.md` §11. All read-only/public;
+the live trading rail stays DORMANT.
 
 ## Failure-drill log (each upstream killed under test)
 
