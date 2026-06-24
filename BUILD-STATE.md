@@ -17,6 +17,21 @@
 > the central question, the verdict, and the seven falsified signals with their numbers, linking
 > down to every deep doc. Read it first to understand what this project concluded.**
 
+**2026-06-24: WHALE-WATCH shipped (branch `feat/maker-rebate-economics`) — Polymarket large-trade alarm + a global Slack-alert pause.**
+A read-only monitor that Slack-alerts on any single Polymarket trade ≥ $100k cash notional across ALL markets (global
+`/trades` feed, server-side `filterType=CASH` floor), with the market/side/size/price/trader + a `polymarket.com/event`
+link. NOT trading — rail stays DORMANT. Migration `0055` (`whale_trades` + record/queue RPCs + `dash_whale_watch` + an
+every-10-min cron) + Edge `whale-watch` + `parseTrades`/`fetchTrades` on both Polymarket client twins. 1223 tests green,
+typecheck clean. Full doc: **`WHALE-WATCH.md`**.
+- **Alert pause is LIVE on prod NOW** (operator ask): a config-flag gate (`slack_alert_suppressed` in `claim_alert` +
+  `list_unsent_alerts`) suppresses every kind except the `WHALE_TRADE` allowlist while `alerts_slack_paused=true`. Applied
+  via a minimal idempotent `execute_sql` (gate fns + flag — the exact `0055` bodies, ledger-free, superseded by the deploy).
+  Prod was emitting ~173 Slack alerts/day; now only whale alerts pass. ⚠ This also silences CRITICAL `JOB_FAIL`. Reverse:
+  `update config set value='false' where key='alerts_slack_paused';`
+- **Operator TODO to make the ALARM live** (prod is applied through `0053`; `0054`+`0055` pending): set/confirm
+  `SLACK_WEBHOOK_URL` Edge secret → apply migrations `0054`, `0055` → `supabase functions deploy whale-watch`. The cron
+  self-registers on `0055`. Threshold is DB-tunable via `whale_min_usd` (no redeploy). Steps: `WHALE-WATCH.md` §4 / RUNBOOK.
+
 **2026-06-23 milestone: WALLET-RECON COMPLETE — all FIVE replication angles falsified; the whole milestone is MERGED to `main` (PR #2).**
 The post-§9 wallet-recon work (the 4th/5th angles + the forensic map + the parallel code-review fixes) is now on `main`
 via **PR #2 → merge commit `b41da4a`** (2026-06-22 21:50 UTC; `verify` CI green, Vercel deploy green). PR #1 had already

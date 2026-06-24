@@ -173,6 +173,11 @@ describe('migrations 0001–0010', () => {
       // 12-arg upsert_bucket is dropped + recreated with the 6 new defaulted params. No cron.
       // MAKER-REBATE-HANDOFF.md §4 / REC-3.
       '0054_market_fee_reward_config.sql',
+      // 0055 = Polymarket whale-trade watcher (whale_trades + record/pending/mark/settings service-role RPCs +
+      // dash_whale_watch on authenticated, added to WEB_AUTHENTICATED below) + a config-flag Slack-alert pause
+      // gate (claim_alert/list_unsent_alerts re-stated + slack_alert_suppressed) + the every-10-min whale-watch
+      // cron (count 15 → 16). Operator ask 2026-06-24 (large-bet alarm + pause all other Slack alerts).
+      '0055_whale_watch.sql',
     ]);
   });
 });
@@ -629,6 +634,7 @@ describe('0034: internal-RPC lockdown — anon/authenticated revoked except the 
     'dash_today_overview', 'dash_events_list', 'dash_event_detail', 'dash_city_detail',
     'dash_calibration', 'dash_bets_ledger', 'dash_system_health', 'dash_admin_state',
     'dash_station_observations', 'dash_station_predictions',
+    'dash_whale_watch',
     'dash_amsterdam_sim', 'dash_replica_sim',
     'go_live_gate_inputs',
     'operator_halt', 'operator_resume', 'operator_update_config', 'operator_verify_station',
@@ -724,7 +730,7 @@ describe('0034: internal-RPC lockdown — anon/authenticated revoked except the 
 });
 
 describe('pg_cron registrations (§7.22, W11)', () => {
-  it('registers all 14 jobs with the §7.22 schedules', async () => {
+  it('registers all 16 jobs with the §7.22 schedules', async () => {
     const jobs = await rows<{ jobname: string; schedule: string }>(
       db,
       `select jobname, schedule from cron.job order by jobname`,
@@ -745,8 +751,9 @@ describe('pg_cron registrations (§7.22, W11)', () => {
       'snapshot-downsample': '0 3 * * *',
       'amsterdam-paper-trade': '30 15 * * *',
       'sharp-wallet-track': '0 16 * * *',
+      'whale-watch': '*/10 * * * *',
     };
-    expect(jobs.length).toBe(15);
+    expect(jobs.length).toBe(16);
     for (const j of jobs) {
       expect(j.schedule, `schedule for ${j.jobname}`).toBe(expected[j.jobname]);
     }

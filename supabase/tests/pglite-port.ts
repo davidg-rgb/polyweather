@@ -123,6 +123,11 @@ const FN_ARGS: Record<string, string[]> = {
   dash_amsterdam_sim: [],
   sharp_wallet_record_positions: ['p_address', 'p_label', 'p_as_of', 'p_rows'],
   sharp_wallet_record_leaderboard: ['p_captured_at', 'p_time_period', 'p_rows'],
+  whale_record_trades: ['p_rows'],
+  whale_pending_alerts: ['p_limit'],
+  whale_mark_alerted: ['p_keys'],
+  whale_settings: [],
+  dash_whale_watch: ['p_limit'],
 };
 
 export function pglitePort(db: PGlite): DbPort {

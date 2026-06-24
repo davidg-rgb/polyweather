@@ -4,6 +4,21 @@ Operator procedures for incidents, manual actions, backfills, and the
 recurring hygiene the go-live gate depends on. The dashboard (/admin, /system)
 is the primary console; every mutation there is audited.
 
+## Whale-watch + Slack-alert pause (2026-06-24)
+
+Polymarket large-trade alarm (`whale-watch` Edge, every 10 min) + a global Slack-alert pause gate. Full
+design/ops: `WHALE-WATCH.md`. Knobs live in the `config` table (set via SQL or /admin):
+
+- **Pause every Slack alert except whales (LIVE now):** `update config set value='true' where key='alerts_slack_paused';`
+- **Resume all alerts:** `update config set value='false' where key='alerts_slack_paused';`
+  ⚠ While paused, CRITICAL `JOB_FAIL` and every other kind is silenced — only `WHALE_TRADE` gets through.
+- **Allow extra kinds through while paused:** `update config set value='WHALE_TRADE,DEAD_MAN,JOB_FAIL' where key='alerts_slack_allow_kinds';`
+- **Change the whale threshold (e.g. $50k):** `update config set value='50000' where key='whale_min_usd';` (no redeploy)
+- **Deploy the alarm** (prod applied through `0053`): set `SLACK_WEBHOOK_URL` Edge secret → apply `0054`,`0055`
+  → `supabase functions deploy whale-watch` (cron self-registers). Verify: `select public.dash_whale_watch(20);` (operator).
+- **Mute the alarm without unpausing others:** drop `WHALE_TRADE` from `alerts_slack_allow_kinds`, or unschedule the
+  `whale-watch` cron job.
+
 ## Incidents
 
 ### WU key incident (CRITICAL `WU_KEY`)

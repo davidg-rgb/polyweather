@@ -62,3 +62,6 @@ verify_jwt = false
 
 [functions.execute-bet]
 verify_jwt = false
+
+[functions.whale-watch]
+verify_jwt = false

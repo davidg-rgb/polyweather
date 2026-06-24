@@ -118,3 +118,38 @@ describe('seam parity — fetch-wrapper URLs match across the >500 limit boundar
     expect(n.url).not.toContain('user=abc&evil=1');
   });
 });
+
+describe('seam parity — the whale-watch additions (parseTrades + fetchTrades) stay byte-identical', () => {
+  it('parseTrades agrees on the live whale fixture and on junk', () => {
+    const trades = loadFixture('dataapi-trades-whales-sample.json');
+    expect(node.parseTrades(trades)).toEqual(deno.parseTrades(trades));
+    for (const junk of [null, undefined, {}, 42, 'x', [null, { transactionHash: '' }, { size: 1 }]]) {
+      expect(node.parseTrades(junk)).toEqual(deno.parseTrades(junk));
+    }
+  });
+
+  it('fetchTrades builds an identical GLOBAL + CASH-filtered URL on both twins', async () => {
+    const n = urlCapture();
+    const d = urlCapture();
+    await node.fetchTrades(n.fetchJson, { filterType: 'CASH', filterAmount: 100000, limit: 1000 });
+    await deno.fetchTrades(d.fetchJson, { filterType: 'CASH', filterAmount: 100000, limit: 1000 });
+    expect(n.url).toContain('limit=500'); // clamp present on both (first param: ?limit=500)
+    expect(n.url).toContain('&filterType=CASH&filterAmount=100000');
+    expect(n.url).toBe(d.url); // full URL identity on the shared fetcher
+  });
+
+  it('fetchTrades builds an identical default + scoped URL on both twins', async () => {
+    const n1 = urlCapture();
+    const d1 = urlCapture();
+    await node.fetchTrades(n1.fetchJson);
+    await deno.fetchTrades(d1.fetchJson);
+    expect(n1.url).toBe(d1.url);
+
+    const n2 = urlCapture();
+    const d2 = urlCapture();
+    await node.fetchTrades(n2.fetchJson, { market: 'a&b', user: 'x y' });
+    await deno.fetchTrades(d2.fetchJson, { market: 'a&b', user: 'x y' });
+    expect(n2.url).toBe(d2.url);
+    expect(n2.url).toContain('market=a%26b');
+  });
+});

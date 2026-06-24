@@ -3,11 +3,13 @@ import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
+  fetchTrades,
   parseActivity,
   parseLeaderboard,
   parseMarketsMeta,
   parsePositionMarket,
   parsePositions,
+  parseTrades,
   parseUserPnl,
   POLYMARKET_DATA_API,
   POLYMARKET_USER_PNL_API,
@@ -24,6 +26,7 @@ const positionsFixture = fixture('dataapi-positions-badatmath-sample.json');
 const leaderboardFixture = fixture('dataapi-weather-leaderboard-sample.json');
 const userPnlFixture = fixture('userpnl-badatmath.json');
 const activityFixture = fixture('dataapi-activity-badatmath-sample.json');
+const tradesFixture = fixture('dataapi-trades-whales-sample.json');
 
 // Pure tests only — no network, no fetch stubbing. These pin the parsers to the LIVE fixtures and to
 // the documented Deno/Node seam (supabase/functions/_shared/polymarket-wallet.ts must stay behaviourally
@@ -316,5 +319,109 @@ describe('exported constants (the documented Deno/Node seam values)', () => {
     expect(POLYMARKET_USER_PNL_API).toBe('https://user-pnl-api.polymarket.com');
     expect(SHARP_WALLET_ADDRESS).toBe('0x8fbd7cf5f806f563080864694415829f7229a959');
     expect(SHARP_WALLET_LABEL).toBe('badatmath.');
+  });
+});
+
+describe('parseTrades (whale-watch — global /trades feed)', () => {
+  it('parses the live whale fixture: notional = size × price, trader/side/outcome/link fields', () => {
+    const rows = parseTrades(tradesFixture);
+    expect(rows.length).toBe(4); // every fixture row carries a txHash → all kept
+    const first = rows[0]!;
+    expect(first.sizeShares).toBeCloseTo(121597.59, 2);
+    expect(first.price).toBeCloseTo(0.999, 3);
+    expect(first.notionalUsd).toBeCloseTo(121475.99241, 2); // derived = size × price
+    expect(first.side).toBe('SELL');
+    expect(first.outcome).toBe('Under'); // multi-outcome market — NOT Yes/No
+    expect(first.traderName).toBe('Iconicsoundsdk'); // `name` wins
+    expect(first.eventSlug).toBe('fifwc-eng-gha-2026-06-23-more-markets');
+    expect(first.transactionHash).toBe(
+      '0x3c4c44fb8c4e45dd6d96152a4f5729087b8437414900fed525af4f9c5dadc45f',
+    );
+  });
+
+  it('traderName falls back name → pseudonym → ""', () => {
+    const rows = parseTrades([
+      { transactionHash: '0x1', size: 1, price: 0.5, timestamp: 1, name: '', pseudonym: 'Severe-Bootie' },
+      { transactionHash: '0x2', size: 1, price: 0.5, timestamp: 1 },
+    ]);
+    expect(rows[0]!.traderName).toBe('Severe-Bootie');
+    expect(rows[1]!.traderName).toBe('');
+  });
+
+  it('maps BUY/SELL and leaves an unknown side null', () => {
+    const rows = parseTrades([
+      { transactionHash: '0x1', size: 1, price: 0.5, timestamp: 1, side: 'buy' },
+      { transactionHash: '0x2', size: 1, price: 0.5, timestamp: 1, side: 'weird' },
+    ]);
+    expect(rows[0]!.side).toBe('BUY'); // case-insensitive
+    expect(rows[1]!.side).toBeNull();
+  });
+
+  it('drops rows without a txHash or with non-finite size/price/timestamp; never throws', () => {
+    const rows = parseTrades([
+      null,
+      { size: 1, price: 0.5, timestamp: 1 }, // no txHash → cannot dedup/alert
+      { transactionHash: '', size: 1, price: 0.5, timestamp: 1 }, // empty txHash
+      { transactionHash: '0xa', price: 0.5, timestamp: 1 }, // no size
+      { transactionHash: '0xb', size: 'x', price: 0.5, timestamp: 1 }, // non-finite size
+      { transactionHash: '0xc', size: 1, price: 'x', timestamp: 1 }, // non-finite price
+      { transactionHash: '0xd', size: 1, price: 0.5 }, // no timestamp
+      { transactionHash: '0xKEEP', size: 2, price: 0.5, timestamp: 1782000000 }, // valid
+    ]);
+    expect(rows.length).toBe(1);
+    expect(rows[0]!.transactionHash).toBe('0xKEEP');
+    expect(rows[0]!.notionalUsd).toBe(1);
+  });
+
+  it('is pure + total: [] on non-array / junk', () => {
+    expect(parseTrades(null)).toEqual([]);
+    expect(parseTrades(undefined)).toEqual([]);
+    expect(parseTrades({})).toEqual([]);
+    expect(parseTrades('nope')).toEqual([]);
+  });
+});
+
+describe('fetchTrades (URL building + paging)', () => {
+  /** Capture every URL the fetcher builds; return a fixed-size page so paging is controllable. */
+  function capture(pageLens: number[]) {
+    const urls: string[] = [];
+    let call = 0;
+    const fetchJson = (url: string): Promise<unknown> => {
+      urls.push(url);
+      const len = pageLens[call] ?? 0;
+      call++;
+      return Promise.resolve(Array.from({ length: len }, () => ({}))); // rawLen drives paging
+    };
+    return { urls, fetchJson };
+  }
+
+  it('builds the GLOBAL feed URL by default (no market/user, takerOnly=true)', async () => {
+    const c = capture([0]);
+    await fetchTrades(c.fetchJson);
+    expect(c.urls[0]).toBe(`${POLYMARKET_DATA_API}/trades?limit=100&offset=0&takerOnly=true`);
+  });
+
+  it('appends the server-side CASH filter (the whale floor) and clamps limit ≤500', async () => {
+    const c = capture([0]);
+    await fetchTrades(c.fetchJson, { filterType: 'CASH', filterAmount: 100000, limit: 1000 });
+    expect(c.urls[0]).toContain('limit=500'); // clamped (first param: ?limit=500)
+    expect(c.urls[0]).not.toContain('limit=1000');
+    expect(c.urls[0]).toContain('&filterType=CASH&filterAmount=100000');
+  });
+
+  it('URL-encodes market and user when scoping is requested', async () => {
+    const c = capture([0]);
+    await fetchTrades(c.fetchJson, { market: 'a&b', user: 'x y' });
+    expect(c.urls[0]).toContain('market=a%26b');
+    expect(c.urls[0]).toContain('user=x%20y');
+  });
+
+  it('pages by offset and stops at the first short page', async () => {
+    const c = capture([100, 3]); // full page then short page
+    const rows = await fetchTrades(c.fetchJson, { limit: 100, maxPages: 5, pageDelayMs: 0 });
+    expect(c.urls.length).toBe(2); // stopped after the short page, not all 5
+    expect(c.urls[0]).toContain('offset=0');
+    expect(c.urls[1]).toContain('offset=100');
+    expect(rows).toEqual([]); // the {} rows have no txHash → all dropped by parseTrades
   });
 });

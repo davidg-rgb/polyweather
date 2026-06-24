@@ -286,3 +286,149 @@ export async function fetchUserPnl(
   });
   return parseUserPnl(payload);
 }
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+// --- global trade feed + whale detection (whale-watch, migration 0055) -------
+// The Data API /trades endpoint is GLOBAL and keyless: with no `market`/`user` filter it returns the
+// most-recent taker fills across ALL of Polymarket, newest-first. It supports a SERVER-SIDE size floor
+// (`filterType=CASH&filterAmount=N` → only fills whose USDC notional ≥ N), so a whale watcher pulls only the
+// handful of large trades per poll — well under the 200-req/10s /trades budget. Notional = size × price
+// (live-verified: filterAmount thresholds on size × price). One row = one taker order = one "bet".
+
+export interface Trade {
+  /** Polygon proxy wallet that placed the (taker) trade. */
+  proxyWallet: string;
+  /** Display handle if set, else the pseudonym, else '' — the "who" for the alert. */
+  traderName: string;
+  /** 'BUY' | 'SELL' (taker side); null on an unrecognised value. */
+  side: 'BUY' | 'SELL' | null;
+  /** ERC-1155 token id traded. */
+  asset: string;
+  /** Market condition id. */
+  conditionId: string;
+  /** Outcome bought/sold ('Yes'|'No'|'Under'|… raw casing — multi-outcome markets are not Yes/No). */
+  outcome: string;
+  /** Shares transacted (Polymarket field `size`, NOT `shares`). */
+  sizeShares: number;
+  /** Fill price in 0..1 (the implied probability). */
+  price: number;
+  /** USDC notional = sizeShares × price (what the CASH filter thresholds on). */
+  notionalUsd: number;
+  /** Unix seconds. */
+  timestamp: number;
+  title: string;
+  /** Market-leg slug. */
+  slug: string;
+  /** Event slug → the https://polymarket.com/event/{eventSlug} permalink. */
+  eventSlug: string;
+  /** Polygon tx hash — the stable per-trade id; the alert/dedupe spine. */
+  transactionHash: string;
+}
+
+interface RawTrade {
+  proxyWallet?: unknown;
+  name?: unknown;
+  pseudonym?: unknown;
+  side?: unknown;
+  asset?: unknown;
+  conditionId?: unknown;
+  outcome?: unknown;
+  size?: unknown;
+  price?: unknown;
+  timestamp?: unknown;
+  title?: unknown;
+  slug?: unknown;
+  eventSlug?: unknown;
+  transactionHash?: unknown;
+}
+
+/**
+ * Parse a /trades payload into Trade[]. Pure + total — `[]` on a non-array payload; never throws on drift.
+ * Drop rule: a row needs a non-empty `transactionHash` (the stable id we dedup + alert on) and finite
+ * `size`/`price`/`timestamp`; everything else is permissive. notionalUsd is derived (size × price). `name`
+ * falls back to `pseudonym` then '' for the trader label. `side`/`outcome` are kept verbatim (multi-outcome
+ * markets carry outcomes like 'Under', not just Yes/No).
+ */
+export function parseTrades(payload: unknown): Trade[] {
+  if (!Array.isArray(payload)) return [];
+  const out: Trade[] = [];
+  for (const raw of payload as RawTrade[]) {
+    if (!raw) continue;
+    const transactionHash = typeof raw.transactionHash === 'string' ? raw.transactionHash : '';
+    if (transactionHash === '') continue; // no stable id → cannot dedup or alert safely
+    const sizeShares = num(raw.size);
+    const price = num(raw.price);
+    const timestamp = num(raw.timestamp);
+    if (sizeShares === null || price === null || timestamp === null) continue;
+    const sideRaw = typeof raw.side === 'string' ? raw.side.toUpperCase() : '';
+    const side: 'BUY' | 'SELL' | null = sideRaw === 'BUY' ? 'BUY' : sideRaw === 'SELL' ? 'SELL' : null;
+    const name = typeof raw.name === 'string' && raw.name !== '' ? raw.name : '';
+    const pseudonym = typeof raw.pseudonym === 'string' && raw.pseudonym !== '' ? raw.pseudonym : '';
+    out.push({
+      proxyWallet: typeof raw.proxyWallet === 'string' ? raw.proxyWallet : '',
+      traderName: name || pseudonym,
+      side,
+      asset: typeof raw.asset === 'string' ? raw.asset : '',
+      conditionId: typeof raw.conditionId === 'string' ? raw.conditionId : '',
+      outcome: typeof raw.outcome === 'string' ? raw.outcome : '',
+      sizeShares,
+      price,
+      notionalUsd: sizeShares * price,
+      timestamp: Math.trunc(timestamp),
+      title: typeof raw.title === 'string' ? raw.title : '',
+      slug: typeof raw.slug === 'string' ? raw.slug : '',
+      eventSlug: typeof raw.eventSlug === 'string' ? raw.eventSlug : '',
+      transactionHash,
+    });
+  }
+  return out;
+}
+
+/**
+ * Fetch recent trades from the Data API /trades feed. With no `market`/`user` it is the GLOBAL feed (all of
+ * Polymarket, newest-first); pass `filterType:'CASH'` + `filterAmount` for the server-side USD-notional floor
+ * (the whale filter). Pages by offset up to `maxPages`, stopping at the first short page; dedup is the
+ * caller's job (trade rows are stable by transactionHash). Throws (via fetchJson) on an exhausted/!ok
+ * upstream — the cron path catches it as non-fatal.
+ */
+export async function fetchTrades(
+  fetchJson: FetchJsonLike,
+  opts: {
+    filterType?: 'CASH' | 'TOKENS';
+    filterAmount?: number;
+    takerOnly?: boolean;
+    market?: string;
+    user?: string;
+    limit?: number;
+    offset?: number;
+    maxPages?: number;
+    pageDelayMs?: number;
+    timeoutMs?: number;
+    retries?: number;
+  } = {},
+): Promise<Trade[]> {
+  const limit = Math.min(opts.limit ?? 100, 500); // ≤500 API page cap
+  const takerOnly = opts.takerOnly ?? true;
+  const maxPages = opts.maxPages ?? 1;
+  const pageDelayMs = opts.pageDelayMs ?? 120;
+  const baseOffset = opts.offset ?? 0;
+  const out: Trade[] = [];
+  for (let page = 0; page < maxPages; page++) {
+    if (page > 0 && pageDelayMs > 0) await sleep(pageDelayMs);
+    const offset = baseOffset + page * limit;
+    let url = `${POLYMARKET_DATA_API}/trades?limit=${limit}&offset=${offset}&takerOnly=${takerOnly}`;
+    if (opts.filterType) url += `&filterType=${opts.filterType}`;
+    if (typeof opts.filterAmount === 'number') url += `&filterAmount=${Math.trunc(opts.filterAmount)}`;
+    if (opts.market) url += `&market=${encodeURIComponent(opts.market)}`;
+    if (opts.user) url += `&user=${encodeURIComponent(opts.user)}`;
+    const payload = await fetchJson(url, { headers: REQUEST_HEADERS }, {
+      timeoutMs: opts.timeoutMs,
+      retries: opts.retries,
+    });
+    const rawLen = Array.isArray(payload) ? payload.length : 0;
+    out.push(...parseTrades(payload));
+    if (rawLen < limit) break; // short/empty page = last page
+  }
+  return out;
+}
