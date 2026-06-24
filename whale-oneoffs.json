@@ -1,0 +1,13 @@
+{
+  "meta": {
+    "lastRunAt": "2026-06-24T20:42:31.616Z",
+    "thresholds": {
+      "extremeLo": 0.02,
+      "extremeHi": 0.98,
+      "infoOddsHi": 0.9,
+      "liveLeadDays": 1
+    },
+    "note": "Forward one-off-insider grades over whale_trades (whale-watch 0055 capture). flagged = a resolved, WON, INSIDER-SHAPED big bet (non-sports, odds ≤0.90, >1d lead). Incremental + idempotent."
+  },
+  "grades": {}
+}
