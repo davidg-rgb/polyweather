@@ -293,3 +293,42 @@ PRE-REGISTERED KILL-CRITERION (to FREEZE before any REC-8 run):
   FAIL = realistic-share reward income ≤ the two-sided fill cost (adverse selection + inventory) → uneconomic;
          record as the next finding; rail stays DORMANT. (Likely, per the crowding prior — an honest early kill.)
 ```
+
+---
+
+## 12. REC-10 — the fill cost MEASURED (not guessed) → FAIL (2026-06-24). Full record: `REWARD-INVENTORY-BACKTEST.md`
+
+The §9 first-pass PASS was load-bearing on a **guessed** `τ` (adverse-selection tax, default 5%, swept to
+32.8%). REC-10 is the Phase-C "exact two-sided fill simulation over the real `market_snapshots` series"
+named in §4.C — it **measures** the cost instead. **Fictive capital, real odds.**
+
+**Built (pure + tested):** `core/sim/reward-inventory.ts` (`simulateBucketInventory` — a continuously
+re-centred two-sided maker quote over a resolved bucket's real best-bid/ask series, fills via the
+two-sided generalisation of `maker-spray.simulateFill`, inventory carried to the real `win`/`lose`
+outcome, `inv-cap`, `weather_fees` rebate; + `regimeFillCost` cluster-mean-t CI, `rewardYieldPerDay`
+capital-share income, `regimeNet`, `runInventoryStudy`, the frozen `rewardInventoryVerdict`) + 34 tests
+(100% line/fn coverage) + spine `scripts/research/reward-inventory-backtest.ts`. 1368 tests green;
+typecheck 0; `packages/trading` never imported; rail DORMANT. Reproduce:
+`pnpm tsx scripts/research/reward-inventory-backtest.ts`.
+
+**The decisive reduction.** A small operator's gross reward yield ≈ `pool ÷ in-band capital` ≈ the observed
+**6.55%/day**, independent of stake. So the whole question is: *is the measured two-sided fill cost smaller
+than ~6%/day?*
+
+**Measured (realistic κ=1, $100/market, 1¢ off mid):**
+- **MID-RANGE (93% of pool):** reward **+6.04%/day** − measured fill **−47.40%/day** = **net −41.4%/day**.
+  95% of buckets net-negative; resolution mark (−47.40%) ≈ flatten-at-last-mid mark (−47.37%) → NOT a
+  hold-to-resolution artifact; adverse-sel signature winners −72% / losers −38%.
+- **CHEAP:** reward +4.05% − fill −8.32% = net −4.3%/day (the gentlest regime still fails).
+- **κ sweep:** net negative until the alone-in-market ceiling κ=0.05 (52.8%/day reward ⇒ ~90% of every
+  pool — implausible). The first-pass τ=5% was **~10× too small**.
+
+**VERDICT: FAIL (directional).** Forecast-free farming is net-negative — resting near mid on a binary that
+resolves to 0/1 the same day forces adversely-selected inventory through convergence (the §12 / replica
+wall, two-sided). Capturing it net-positive requires active inventory management = the falsified
+forecasting/latency skill. **The forecast-free thesis (the only reason rewards were a *new* lever) is dead;
+rail stays DORMANT.** Caveat: dense book history is **2 weather-days** (the REC-1 density wall), so the
+cluster CI is uninformative — DIRECTIONAL, not CI-certified, but the margin (cost ≈ 8× reward) is far beyond
+what more days could flip. **Re-run when the Phase-A cron (`market_rewards`) + dense `market_snapshots`
+accumulate ≥8 distinct weather-days** — the same harness adjudicates decisively (`MIN_CI_DAYS` guard built
+in). **REC-8/REC-10 close as "the reward is real, but you pay more than it in adverse fills."**

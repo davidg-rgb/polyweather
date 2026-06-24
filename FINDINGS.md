@@ -27,6 +27,7 @@ rebate, across enormous breadth — and is **non-followable and non-replicable**
 | Resting our own cheap bids (maker-spray) | No — adverse selection, −1.5 to −1.7pp | WALLET-RECON §12 |
 | Stacking the sharp's picks onto the market | No — subtracts skill (−1.2 to −1.7pp) | WALLET-RECON §14 (Move 5) |
 | Learning the sharp's maker selection (REC-1) | Un-answerable today (data-limited); a learned selector overfits — OOS edge −5.7pp | SELECTOR-LEARNABILITY §10 |
+| Forecast-free reward farming (two-sided MM) | No — measured fill cost ~−47%/day ≈ 8× the ~6%/day reward | REWARD-INVENTORY-BACKTEST §4 (REC-10) |
 
 **On REC-1 (the one un-run maker lever, tested 2026-06-23).** After the maker-rebate reframe (net profit by
 *any* mechanism), the last distinct lever was: can WE *learn* which cheap buckets to rest on (vs. mirroring the
@@ -57,6 +58,21 @@ genuinely out-of-market information.
 > net of inventory / adverse-selection risk on fills; it needs its own economics analysis before any
 > capital. **This is the genuinely-out-of-market information the reopening clause named — it warrants a new
 > work order (reward-farming economics), an operator decision.** Detail: `MAKER-REBATE-HANDOFF.md` §9.
+>
+> **↳ RESOLVED 2026-06-24 — the reopening is CLOSED again (net-negative, measured). REC-10
+> (`REWARD-INVENTORY-BACKTEST.md`).** The REC-8 first-pass's +$28/market PASS rode on a *guessed*
+> adverse-selection cost (`τ`=5%). REC-10 **measured** it: an event-driven two-sided maker simulation over
+> the real `market_snapshots` book series of resolved weather buckets, inventory carried to the real
+> outcome. The measured fill+inventory cost is **−47%/day in the mid-range markets that carry 93% of the
+> pool** (−8%/day even in the gentlest cheap regime), ~**8× the ~6%/day reward income** and ~10× the guessed
+> τ. **Net −41%/day; 95% of mid buckets lose money on fills; negative at every realistic competition level.**
+> The "free" reward is not free — resting near mid on a binary that resolves to 0/1 the same day forces you
+> to hold adversely-selected inventory through convergence (the §12 / replica wall, two-sided). Capturing it
+> net-positive needs active inventory management = the forecasting/latency skill already shown efficiently
+> priced. **The forecast-free thesis FAILS; the live rail stays DORMANT.** (Directional — the dense book
+> history is 2 weather-days; the margin is far beyond what more days could overturn. Re-run when the
+> Phase-A cron accumulates ≥8 dense days.) **Consequence: there is no currently-known net-positive path;
+> the closed-thesis framing of this document is restored, now including the reward lever.**
 
 ---
 
