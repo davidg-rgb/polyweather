@@ -15,7 +15,8 @@ import { pathToFileURL } from 'node:url';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import {
-  MIN_DEPTH_SHARES,
+  MIN_CITIES,
+  MIN_DISTINCT_DAYS,
   MIN_PANEL_DAYS,
   MIN_WIN_FRAC,
   type PanelDay,
@@ -34,7 +35,6 @@ export interface PanelRow extends PanelDay {
   meanDiffF: number;
   maxAbsGap: number;
   direction: string;
-  hasRealDepth: boolean;
 }
 
 /** Load the latest capture per (city, target_date) within the look-back window. */
@@ -43,14 +43,13 @@ export async function loadPanel(db: Db, days: number): Promise<PanelRow[]> {
     city: string;
     target_date: string | Date;
     best_net_edge: string | number | null;
-    limit_depth: string | number | null;
     has_real_depth: boolean;
     mean_diff_f: string | number | null;
     max_abs_gap: string | number | null;
     direction: string | null;
   }>(
     `select distinct on (city, target_date)
-       city, target_date, best_net_edge, limit_depth, has_real_depth, mean_diff_f, max_abs_gap, direction
+       city, target_date, best_net_edge, has_real_depth, mean_diff_f, max_abs_gap, direction
      from cross_venue_captures
      where captured_at >= now() - ($1 || ' days')::interval
      order by city, target_date, captured_at desc`,
@@ -60,11 +59,10 @@ export async function loadPanel(db: Db, days: number): Promise<PanelRow[]> {
     city: r.city,
     targetDate: String(r.target_date).slice(0, 10),
     netEdge: Number(r.best_net_edge ?? 0),
-    depth: Number(r.limit_depth ?? 0),
+    hasRealDepth: !!r.has_real_depth,
     meanDiffF: Number(r.mean_diff_f ?? NaN),
     maxAbsGap: Number(r.max_abs_gap ?? NaN),
     direction: r.direction ?? 'none',
-    hasRealDepth: !!r.has_real_depth,
   }));
 }
 
@@ -83,15 +81,19 @@ function perCity(panel: PanelRow[]): CityAgg[] {
   for (const r of panel) (by.get(r.city) ?? by.set(r.city, []).get(r.city)!).push(r);
   const mean = (xs: number[]): number => (xs.length ? xs.reduce((a, v) => a + v, 0) / xs.length : NaN);
   return [...by.entries()]
-    .map(([city, rs]) => ({
-      city,
-      days: rs.length,
-      realDepthDays: rs.filter((r) => r.depth >= MIN_DEPTH_SHARES).length,
-      netPosDays: rs.filter((r) => r.depth >= MIN_DEPTH_SHARES && r.netEdge > 0).length,
-      meanDiffF: mean(rs.map((r) => r.meanDiffF).filter(Number.isFinite)),
-      meanAbsGap: mean(rs.map((r) => r.maxAbsGap).filter(Number.isFinite)),
-      bestEdge: Math.max(...rs.map((r) => r.netEdge)),
-    }))
+    .map(([city, rs]) => {
+      const depthRows = rs.filter((r) => r.hasRealDepth);
+      return {
+        city,
+        days: rs.length,
+        realDepthDays: depthRows.length,
+        netPosDays: depthRows.filter((r) => r.netEdge > 0).length,
+        meanDiffF: mean(rs.map((r) => r.meanDiffF).filter(Number.isFinite)),
+        meanAbsGap: mean(rs.map((r) => r.maxAbsGap).filter(Number.isFinite)),
+        // headline best edge over REAL-DEPTH rows only (a thin-book edge is not executable — phantom-Denver class)
+        bestEdge: depthRows.length ? Math.max(...depthRows.map((r) => r.netEdge)) : NaN,
+      };
+    })
     .sort((a, b) => a.city.localeCompare(b.city));
 }
 
@@ -117,11 +119,11 @@ export function buildReport(panel: PanelRow[], days: number): { lines: string[];
   }
   P('');
   P('THE EXECUTABLE, BASIS-ADJUSTED EDGE (the gate input — real-depth city-days only):');
-  P(`  real-depth city-days (limit ≥ ${MIN_DEPTH_SHARES}): ${verdict.nDepthDays}`);
+  P(`  real-depth city-days: ${verdict.nDepthDays}  ·  ${verdict.nCities} cities  ·  ${verdict.nDistinctDays} distinct dates`);
   P(`  net-positive fraction:  ${pct(verdict.winFrac)}  (bar ≥ ${pct(MIN_WIN_FRAC)})`);
-  P(`  mean net edge:          ${usd(verdict.meanNetEdge)}  95% CI [${usd(verdict.ciLow)}, ${usd(verdict.ciHigh)}]`);
+  P(`  city-clustered mean edge: ${usd(verdict.meanNetEdge)}  95% CI [${usd(verdict.ciLow)}, ${usd(verdict.ciHigh)}]`);
   P('');
-  P(`VERDICT (frozen gate, min ${MIN_PANEL_DAYS} real-depth days):  ${verdict.label}`);
+  P(`VERDICT (frozen gate: ≥${MIN_PANEL_DAYS} rows, ≥${MIN_CITIES} cities, ≥${MIN_DISTINCT_DAYS} dates):  ${verdict.label}`);
   P(`  ${verdict.reason}`);
 
   return { lines, json: { generatedAt: new Date().toISOString(), windowDays: days, panelDays: panel.length, verdict, perCity: cities } };

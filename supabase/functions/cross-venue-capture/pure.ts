@@ -7,7 +7,8 @@
  */
 import { type ParsedEvent } from '../../../packages/core/src/index.ts';
 import {
-  MIN_DEPTH_SHARES,
+  MIN_KALSHI_OI,
+  MIN_POLY_VOL_USD,
   NEUTRAL_BASIS,
   crossVenueDivergence,
   crossVenueEdge,
@@ -120,7 +121,9 @@ export function buildCaptureRow(
     cashflow: fin(edge.cashflow),
     expPayoff: fin(edge.expPayoff),
     limitDepth: fin(edge.limitDepth),
-    hasRealDepth: edge.ok && Number.isFinite(edge.limitDepth) && edge.limitDepth >= MIN_DEPTH_SHARES,
+    // Real depth = BOTH books liquid, per venue-appropriate units (Kalshi OI contracts, Poly 24h USD) —
+    // decoupled from edge sign so efficient (≤0-edge) liquid days count toward the KILL denominator.
+    hasRealDepth: edge.ok && edge.kalshiBookDepth >= MIN_KALSHI_OI && edge.polyBookDepth >= MIN_POLY_VOL_USD,
     netPositive: edge.ok && edge.bestNetEdge > 0,
   };
 }

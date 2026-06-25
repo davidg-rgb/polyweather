@@ -135,7 +135,8 @@ export async function crossVenueCapture(ctx: JobCtx, deps: CrossVenueCaptureDeps
     asOf: capturedAt,
     polyEvents: allEvents.length,
     overlapEvents: overlap.length,
-    citiesMatched: kalshiByCity.size,
+    citiesProbed: kalshiByCity.size,
+    citiesMatched: new Set(rows.map((r) => r.city)).size, // cities that actually produced a captured row
     captured: rows.length,
     inserted,
     netPositive: rows.filter((r) => r.netPositive).length,

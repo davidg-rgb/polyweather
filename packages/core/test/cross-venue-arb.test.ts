@@ -14,6 +14,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_BASIS_PRIOR,
+  NEUTRAL_BASIS,
   GRID_LO_F,
   KALSHI_FEE_RATE,
   POLY_FEE_RATE,
@@ -183,10 +184,34 @@ describe('crossVenueEdge — a genuine dislocation survives; the bin offset alon
   it('the basis adjustment never INFLATES a Kalshi-rich dislocation edge (it is a cost)', () => {
     const poly = impliedLadder(polyFromPmf(TRUE_PMF));
     const kalshi = impliedLadder(kalshiFromPmf(shiftPmf(TRUE_PMF, 5)));
-    const noBasis = crossVenueEdge(poly, kalshi, { pmf: { 0: 1 } });
-    const withBasis = crossVenueEdge(poly, kalshi); // default CLI-hot prior
+    const noBasis = crossVenueEdge(poly, kalshi, NEUTRAL_BASIS); // = the default now
+    const withBasis = crossVenueEdge(poly, kalshi, DEFAULT_BASIS_PRIOR); // explicit CLI-hot prior
     expect(withBasis.direction).toBe('buyPolySellKalshi');
     expect(withBasis.bestNetEdge).toBeLessThanOrEqual(noBasis.bestNetEdge + 1e-9);
+  });
+
+  it('defaults to NEUTRAL_BASIS — the CLI-hot prior must not silently manufacture a buy-Kalshi edge', () => {
+    // Two venues pricing the SAME WU distribution on offset grids. Under the default (now NEUTRAL) the
+    // edge is sub-bin noise; under the explicit CLI-hot prior it is a larger phantom buy-Kalshi edge.
+    const poly = impliedLadder(polyFromPmf(TRUE_PMF));
+    const kalshi = impliedLadder(kalshiFromPmf(TRUE_PMF));
+    const dft = crossVenueEdge(poly, kalshi); // default
+    const prior = crossVenueEdge(poly, kalshi, DEFAULT_BASIS_PRIOR);
+    expect(dft.bestNetEdge).toBeCloseTo(crossVenueEdge(poly, kalshi, NEUTRAL_BASIS).bestNetEdge, 9);
+    expect(prior.bestNetEdge).toBeGreaterThan(dft.bestNetEdge); // the prior inflates the phantom
+  });
+
+  it('an EFFICIENT (≤0-edge) day still reports ok:true + real book depth — NOT a zeroed/no-depth edge', () => {
+    // The winners-only-denominator BLOCKER: edge used to be tracked only when >0, so agreeing (efficient)
+    // days fell through to a zeroed edge with limitDepth/bookDepth 0 and were dropped from the gate. Now a
+    // constructible efficient day reports its true ≤0 edge AND the real book depth, so it counts as a KILL day.
+    const poly = impliedLadder(polyFromPmf(TRUE_PMF, 0.02, 400));
+    const kalshi = impliedLadder(kalshiFromPmf(TRUE_PMF, 0.02, 600));
+    const e = crossVenueEdge(poly, kalshi);
+    expect(e.ok).toBe(true);
+    expect(e.polyBookDepth).toBe(400);
+    expect(e.kalshiBookDepth).toBe(600);
+    expect(e.bestNetEdge).toBeLessThan(0.05); // efficient — small/≤0 edge, but the day is NOT dropped
   });
 
   it('is total: a degenerate side → ok:false, zero edge, no throw', () => {
@@ -204,39 +229,67 @@ describe('crossVenueEdge — a genuine dislocation survives; the bin offset alon
 
 // ── the frozen verdict ──────────────────────────────────────────────────────────────────────────────
 
-describe('crossVenueVerdict — the operator-ratified kill gate', () => {
-  const day = (city: string, netEdge: number, depth = 100): PanelDay => ({ city, targetDate: '2026-06-25', netEdge, depth });
+describe('crossVenueVerdict — the operator-ratified kill gate (clustered by city)', () => {
+  const CITIES6 = ['nyc', 'la', 'chi', 'mia', 'aus', 'den'];
+  const DATES5 = ['2026-06-21', '2026-06-22', '2026-06-23', '2026-06-24', '2026-06-25'];
+  /** Build a panel: edgeFn(cityIdx, dateIdx) → netEdge; depth on by default. */
+  const mkPanel = (
+    edgeFn: (ci: number, di: number) => number,
+    o: { cities?: string[]; dates?: string[]; depth?: boolean } = {},
+  ): PanelDay[] => {
+    const cities = o.cities ?? CITIES6;
+    const dates = o.dates ?? DATES5;
+    return cities.flatMap((c, ci) => dates.map((dt, di) => ({ city: c, targetDate: dt, netEdge: edgeFn(ci, di), hasRealDepth: o.depth ?? true })));
+  };
 
-  it('INSUFFICIENT_DATA below the minimum panel size', () => {
-    expect(crossVenueVerdict([day('nyc', 0.05), day('miami', 0.03)]).label).toBe('INSUFFICIENT_DATA');
+  it('INSUFFICIENT_DATA below the minimum row count', () => {
+    expect(crossVenueVerdict(mkPanel(() => 0.05, { cities: ['nyc', 'la'], dates: ['2026-06-24', '2026-06-25'] })).label).toBe('INSUFFICIENT_DATA');
+  });
+
+  it('INSUFFICIENT_DATA with enough rows but too FEW CITIES (a single-city signal is not cross-venue)', () => {
+    const v = crossVenueVerdict(mkPanel(() => 0.05, { cities: ['nyc', 'la', 'chi'] })); // 3 cities × 5 dates = 15 rows
+    expect(v.nDepthDays).toBe(15);
+    expect(v.nCities).toBe(3);
+    expect(v.label).toBe('INSUFFICIENT_DATA');
+  });
+
+  it('INSUFFICIENT_DATA with enough rows/cities but too FEW DISTINCT DATES (~1 calendar day is not a week)', () => {
+    const v = crossVenueVerdict(mkPanel(() => 0.05, { dates: ['2026-06-24', '2026-06-25'] })); // 6 cities × 2 dates = 12 rows
+    expect(v.nDistinctDays).toBe(2);
+    expect(v.label).toBe('INSUFFICIENT_DATA');
   });
 
   it('KILL when fewer than 10% of real-depth days are net-positive', () => {
-    const panel = Array.from({ length: 20 }, (_, i) => day(`c${i}`, i === 0 ? 0.02 : -0.03));
-    const v = crossVenueVerdict(panel);
+    const v = crossVenueVerdict(mkPanel((ci, di) => (ci === 0 && di === 0 ? 0.02 : -0.03))); // 1/30 positive
     expect(v.label).toBe('KILL');
-    expect(v.winFrac).toBeCloseTo(0.05, 9);
+    expect(v.winFrac).toBeCloseTo(1 / 30, 6);
   });
 
-  it('KILL when many win but the mean-edge CI still straddles 0', () => {
-    const panel = Array.from({ length: 30 }, (_, i) => day(`c${i}`, i % 2 === 0 ? 0.25 : -0.25));
-    const v = crossVenueVerdict(panel);
-    expect(v.winFrac).toBeCloseTo(0.5, 9);
+  it('KILL when half the days win but the CITY-CLUSTERED CI straddles 0', () => {
+    // alternate cities strongly +/−: winFrac≈0.5 but the 6 city means straddle 0 → CI includes 0.
+    const v = crossVenueVerdict(mkPanel((ci) => (ci % 2 === 0 ? 0.25 : -0.25)));
+    expect(v.winFrac).toBeCloseTo(0.5, 6);
     expect(v.ciLow).toBeLessThan(0);
     expect(v.label).toBe('KILL');
   });
 
-  it('PASS when ≥10% win AND the mean-edge CI excludes 0', () => {
-    const panel = Array.from({ length: 30 }, (_, i) => day(`c${i}`, 0.04 + (i % 3) * 0.005));
-    const v = crossVenueVerdict(panel);
+  it('PASS only when ≥10% win AND the city-clustered CI excludes 0', () => {
+    const v = crossVenueVerdict(mkPanel((ci, di) => 0.04 + ((ci + di) % 3) * 0.003)); // all positive, low between-city var
     expect(v.winFrac).toBe(1);
+    expect(v.nCities).toBe(6);
     expect(v.ciLow).toBeGreaterThan(0);
     expect(v.label).toBe('PASS');
   });
 
-  it('excludes thin-depth days from the panel (the "real depth" filter)', () => {
-    const thin = Array.from({ length: 20 }, (_, i) => day(`c${i}`, 0.05, 1));
-    const v = crossVenueVerdict(thin);
+  it('clustering is conservative: a per-CITY artifact (one city carries all the edge) does NOT PASS', () => {
+    // only nyc is strongly positive; the other 5 cities ~0. Naive i.i.d. might over-weight nyc's many rows;
+    // city-clustering makes nyc one observation among 6 → between-city variance is large → CI straddles 0.
+    const v = crossVenueVerdict(mkPanel((ci) => (ci === 0 ? 0.5 : 0.001)));
+    expect(v.label).not.toBe('PASS');
+  });
+
+  it('excludes non-real-depth days from the panel (the book-liquidity filter)', () => {
+    const v = crossVenueVerdict(mkPanel(() => 0.05, { depth: false }));
     expect(v.nDepthDays).toBe(0);
     expect(v.label).toBe('INSUFFICIENT_DATA');
   });

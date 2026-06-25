@@ -210,6 +210,9 @@ describe('migrations 0001–0010', () => {
       // dash_cross_venue (operator read) + record_cross_venue_captures + cross-venue-capture cron
       // (cron count 20 → 21). The 10th-signal candidate — CROSS-VENUE-SPIKE.md.
       '0062_cross_venue_capture.sql',
+      // 0063 = code-review fix (rank 8): scope dash_cross_venue bestEdgeSeen / per-city bestEdge to
+      // real-depth rows (no table/cron change; CREATE OR REPLACE preserves grants).
+      '0063_cross_venue_dash_realdepth.sql',
     ]);
   });
 });
