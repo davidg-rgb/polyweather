@@ -206,6 +206,10 @@ describe('migrations 0001–0010', () => {
       // (RLS-only-via-RPC, matching 0057/0059) + clamp dash_complete_set_depth p_days to [1,60].
       // No table/cron change (cron count stays 20). Review findings #7/#8.
       '0061_arb_dash_polish.sql',
+      // 0062 = cross-venue (Kalshi↔Polymarket) RV panel capture: cross_venue_captures table +
+      // dash_cross_venue (operator read) + record_cross_venue_captures + cross-venue-capture cron
+      // (cron count 20 → 21). The 10th-signal candidate — CROSS-VENUE-SPIKE.md.
+      '0062_cross_venue_capture.sql',
     ]);
   });
 });
@@ -666,6 +670,7 @@ describe('0034: internal-RPC lockdown — anon/authenticated revoked except the 
     'dash_amsterdam_sim', 'dash_replica_sim',
     'dash_sharps',  // 0059: /sharps roster + fingerprints operator read
     'dash_complete_set_depth',  // 0060: Move 1 forward depth-capture operator read
+    'dash_cross_venue',  // 0062: cross-venue (Kalshi↔Polymarket) RV panel operator read
     'go_live_gate_inputs',
     'operator_halt', 'operator_resume', 'operator_update_config', 'operator_verify_station',
     'operator_set_champion', 'operator_skip_bet', 'operator_manual_bet',
@@ -760,12 +765,13 @@ describe('0034: internal-RPC lockdown — anon/authenticated revoked except the 
 });
 
 describe('pg_cron registrations (§7.22, W11)', () => {
-  it('registers all 20 jobs with the §7.22 schedules', async () => {
+  it('registers all 21 jobs with the §7.22 schedules', async () => {
     const jobs = await rows<{ jobname: string; schedule: string }>(
       db,
       `select jobname, schedule from cron.job order by jobname`,
     );
     const expected: Record<string, string> = {
+      'cross-venue-capture': '*/30 * * * *',  // 0062: cross-venue (Kalshi↔Polymarket) RV panel capture
       'arb-depth-capture':   '*/30 * * * *',  // 0060: Move 1 depth-capture + Move 3 reopen monitor
       'sharps-snapshot':     '0 2 * * *',     // 0059: daily SPORTS-sharps roster + fingerprints
       'discover-markets':    '10 2,4,5,11,17 * * *',
@@ -787,7 +793,7 @@ describe('pg_cron registrations (§7.22, W11)', () => {
       'replica-forward':     '0 5 * * *',
       'reward-snapshot':     '*/20 * * * *',
     };
-    expect(jobs.length).toBe(20);
+    expect(jobs.length).toBe(21);
     for (const j of jobs) {
       expect(j.schedule, `schedule for ${j.jobname}`).toBe(expected[j.jobname]);
     }

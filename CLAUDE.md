@@ -22,7 +22,10 @@ dashboard, TypeScript monorepo (`packages/core|io|trading`, `supabase/functions`
 - Canonical docs: **`FINDINGS.md`** (the R&D verdict — start here: is there a tradable edge? no, and why),
   `BUILD-STATE.md` (status + Operator TODO), `RUNBOOK.md` (ops), `REQUIREMENTS.md`, `ARCHITECTURE.md`,
   **`WHALE-WATCH.md`** (2026-06-24: Polymarket large-trade alarm — Slack-alerts any single bet ≥ $100k across
-  ALL markets — + a global Slack-alert pause gate, LIVE on prod). Tests: `pnpm test`, `pnpm typecheck`.
+  ALL markets — + a global Slack-alert pause gate, LIVE on prod),
+  **`CROSS-VENUE-SPIKE.md`** (2026-06-25: the 10th signal — Kalshi↔Polymarket cross-venue relative value, the first
+  genuinely-EXECUTABLE orthogonal lever; forward gated paper panel LIVE via migration 0062, verdict ~2026-07-02; rail
+  DORMANT). Tests: `pnpm test`, `pnpm typecheck`.
 - Build is COMPLETE (P0–P8). Remaining work is operator/deploy-gated — see BUILD-STATE.
 - **Headline analytics deliverable (2026-06-16): the Amsterdam paper-trade head-to-head** —
   `$10/day` on our predicted bucket at 13/14/15/16 local, racing to find the best time to bet,

@@ -5,6 +5,20 @@
 
 ## Active Phase
 
+**2026-06-25: CROSS-VENUE SPIKE built + LIVE (the 10th signal) — branch `feat/cross-venue-spike`.**
+The first genuinely-EXECUTABLE, forecast-free, orthogonal lever: does the *same US city's daily high* price
+differently on **Kalshi (NWS-CLI)** vs **Polymarket (Wunderground)** beyond the cost to harvest it? Both venues are
+reachable from Sweden (verified). NOT a clean arb — a **1°F bin offset** (even- vs odd-start ladders) + a **dual
+resolution source** (CLI ≥ WU) are the prime suspects for a fee/offset/basis wall, same shape as the 8th signal. Built:
+pure engine `core/sim/cross-venue-arb.ts` (implied-PMF + neutral-consensus executable edge + frozen gate) + Kalshi
+parsers `core/kalshi/markets.ts` (6-city overlap: NYC/LA/Chicago/Miami/Austin/Denver) + migration **0062**
+(`cross_venue_captures` + `dash_cross_venue` + recorder + `*/30` cron, count 20→21) + Edge `cross-venue-capture` +
+scan `cross-venue-arb-scan.ts` + basis estimator `cross-venue-basis.ts`. +56 tests, full suite **1463 green**, typecheck
+clean. **Forward gated paper panel; no capital, rail DORMANT.** Day-1 NYC read: venues agree on the modal high to ~1¢ →
+strong prior **KILL**. Verdict after ~1 week: `dash_cross_venue(7)` / the scan. Operator-ratified frozen gate: net-
+positive on ≥10% of real-depth city-days with a pooled 95% CI excluding 0, else the 10th falsified signal. Full record:
+**`CROSS-VENUE-SPIKE.md`**.
+
 ### ▶ NEXT STEP — PIVOT TO ANALYTICS VALUE (operator chose 2026-06-15). Trading thesis CLOSED by WO-5 (iter-48, market efficient w.r.t. the hard running-max floor). The product is now forecast-skill + calibration + model-vs-market insight; trading machinery stays DORMANT. Analytics shipped: the **WALLET-RECON milestone** (sharp-wallet benchmark #1, wallet forensics #2, day-before efficiency study #3) ran end-to-end 2026-06-22 → **branch (b): the day-before market is EFFICIENT w.r.t. our forecast** (KILL-GATE 2 FAIL; the sharp's edge is real but not replicable as a follower). Live rail stays dormant. Build #1 FULLY LIVE (`sharp-wallet-track` deployed 2026-06-22, cron active). **WALLET-RECON now COMPLETE (2026-06-23): all FIVE replication angles falsified (added maker-spray #4, M1 diagnosis, Move-5 sharp-as-forecaster #5, + the forensic purchase map §15) and the whole milestone is MERGED to `main` (PR #1 `9b8cb37` + PR #2 `b41da4a`); the parallel multi-agent code-review fixes are reviewed, validated (1120 tests, CI green), and merged.** Operator follow-ups all ✅ DONE (merge, re-persist, nbm_conus A/B) — see the 2026-06-23 entry + WALLET-RECON-HANDOFF.md §10–§15. R&D round-2 reviewed (iter-47); RPC-lockdown DEPLOYED (iter-45)
 
 > **PIVOT DECISION (2026-06-15):** after WO-5 closed the trading thesis, the operator chose **lean into
