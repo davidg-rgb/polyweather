@@ -23,9 +23,11 @@ dashboard, TypeScript monorepo (`packages/core|io|trading`, `supabase/functions`
   `BUILD-STATE.md` (status + Operator TODO), `RUNBOOK.md` (ops), `REQUIREMENTS.md`, `ARCHITECTURE.md`,
   **`WHALE-WATCH.md`** (2026-06-24: Polymarket large-trade alarm — Slack-alerts any single bet ≥ $100k across
   ALL markets — + a global Slack-alert pause gate, LIVE on prod),
-  **`CROSS-VENUE-SPIKE.md`** (2026-06-25: the 10th signal — Kalshi↔Polymarket cross-venue relative value, the first
-  genuinely-EXECUTABLE orthogonal lever; forward gated paper panel LIVE via migration 0062, verdict ~2026-07-02; rail
-  DORMANT). Tests: `pnpm test`, `pnpm typecheck`.
+  **`CROSS-VENUE-SPIKE.md`** (the 10th signal — Kalshi↔Polymarket cross-venue relative value, the first
+  genuinely-EXECUTABLE orthogonal lever. **VERDICT 2026-06-26: KILL — a capacity wall.** Real quoted gap (6/7
+  city-days net-positive) but the cumulative synthetic fills at only 1–10 contracts of TRUE both-book depth; the
+  24h-vol/OI proxy would have FALSE-PASSED (winFrac 0.857), hardened by migration 0064 to gate WINS on true
+  executable depth → winFrac 0 → KILL. Rail DORMANT). Tests: `pnpm test`, `pnpm typecheck`.
 - Build is COMPLETE (P0–P8). Remaining work is operator/deploy-gated — see BUILD-STATE.
 - **Headline analytics deliverable (2026-06-16): the Amsterdam paper-trade head-to-head** —
   `$10/day` on our predicted bucket at 13/14/15/16 local, racing to find the best time to bet,

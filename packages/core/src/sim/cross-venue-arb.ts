@@ -398,11 +398,25 @@ export interface CrossVenueEdge {
   polyBookDepth: number;
   /** Kalshi book liquidity = max bin open interest (contracts) — the venue-appropriate depth gate input. */
   kalshiBookDepth: number;
+  /** Venue we go LONG (buy YES, hit ask) in the best position. */
+  buyVenue: VenueName;
+  /** Venue we go SHORT (sell YES, hit bid) in the best position. */
+  sellVenue: VenueName;
+  /**
+   * loF of each ladder leg BOUGHT on buyVenue (the cumulative YES≥atF synthetic — hit the ASK), and each
+   * leg SOLD on sellVenue (YES≥kClean — hit the BID). The TRUE executable size of the position is the
+   * BINDING (min) resting size across ALL these legs, because every one must fill to be hedged — see
+   * `bindingExecutable`. The capture (24h-vol/OI) `limitDepth` is only a PROXY; a net-positive day's real
+   * executability is decided by walking these legs' order books (CROSS-VENUE-SPIKE.md depth-wall finding).
+   */
+  buyLegsLoF: number[];
+  sellLegsLoF: number[];
 }
 
 const EMPTY_EDGE: CrossVenueEdge = {
   ok: false, bestNetEdge: 0, atF: NaN, direction: 'none', cashflow: 0, expPayoff: 0,
   limitDepth: 0, polyBookDepth: 0, kalshiBookDepth: 0,
+  buyVenue: 'polymarket', sellVenue: 'kalshi', buyLegsLoF: [], sellLegsLoF: [],
 };
 
 /** Max top-of-book size across a ladder's quoted spans — a venue's representative book liquidity. */
@@ -461,6 +475,10 @@ export function crossVenueEdge(
       best = {
         ok: true, bestNetEdge: netEdge, atF: k, direction, cashflow, expPayoff,
         limitDepth: Math.min(buy.minSize, sell.minSize), polyBookDepth, kalshiBookDepth,
+        buyVenue: longV.venue, sellVenue: shortV.venue,
+        // the legs that must ALL fill to be hedged — the buy synthetic (loF≥k) and the sell synthetic (loF≥kClean)
+        buyLegsLoF: longV.spans.filter((s) => s.loF >= k).map((s) => s.loF),
+        sellLegsLoF: shortV.spans.filter((s) => s.loF >= sell.kClean).map((s) => s.loF),
       };
     }
   };
@@ -479,6 +497,39 @@ export function crossVenueEdge(
 }
 
 // ──────────────────────────────────────────────────────────────────────────────────────────────────
+// true executable depth (the v2 gate input — replaces the 24h-vol/OI proxy for WINS)
+// ──────────────────────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Minimum binding executable size for a net-positive cross-venue position to count as a real WIN (not a
+ * top-of-book mirage). Units are ≈ $1-face contracts/shares on the THINNER leg (Kalshi contracts and
+ * Polymarket shares are both ~$1 binary units; the cross-venue min is approximate across venues, but the
+ * live finding — every net-positive city-day executes at 1–10 units — is an order of magnitude below any
+ * tradable floor, so the verdict is robust to a 2× unit error). 25 ≈ a token $25 position; if you cannot
+ * put on even that, there is no harvestable cross-venue edge. See CROSS-VENUE-SPIKE.md (the capacity wall).
+ */
+export const MIN_EXEC_SIZE = 25;
+
+/**
+ * The TRUE executable size of a cross-venue position: the BINDING (min) resting size across every leg
+ * (buy legs hit the ask, sell legs hit the bid) that must fill to be hedged. A single thin or missing
+ * leg (size ≤ 0 / non-finite ⇒ cannot construct that side of the cumulative synthetic) caps the whole
+ * position at 0. The cumulative YES≥k synthetic is routinely throttled to single-digit size by its thin
+ * tail legs even when the modal bin is deep — which is exactly why a quoted edge is not capturable money.
+ * Pure + total.
+ */
+export function bindingExecutable(buyLegSizes: number[], sellLegSizes: number[]): number {
+  const all = [...(buyLegSizes ?? []), ...(sellLegSizes ?? [])];
+  if (all.length === 0) return 0;
+  let m = Number.POSITIVE_INFINITY;
+  for (const s of all) {
+    if (!Number.isFinite(s) || s <= 0) return 0; // a leg you cannot fill ⇒ no hedged position
+    if (s < m) m = s;
+  }
+  return Number.isFinite(m) ? m : 0;
+}
+
+// ──────────────────────────────────────────────────────────────────────────────────────────────────
 // the panel + the frozen verdict
 // ──────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -487,8 +538,15 @@ export interface PanelDay {
   city: string;
   targetDate: string;
   netEdge: number;
-  /** Both venues' books are liquid enough to trade (computed per-venue in buildCaptureRow — see below). */
+  /** Both venues' books pass the liquidity (24h-vol/OI) PROXY — the denominator filter (market exists). */
   hasRealDepth: boolean;
+  /**
+   * The net-positive position is executable at real touch depth (binding size ≥ MIN_EXEC_SIZE), walked on
+   * BOTH order books. A WIN requires this — a quoted edge on a 1-contract touch is not money. Optional:
+   * undefined (legacy/untested rows) is treated as executable so the gate is unchanged where unmeasured;
+   * the live capture + scan set it explicitly, and an explicit `false` excludes the day from the wins.
+   */
+  executable?: boolean;
 }
 
 /** Min Kalshi bin open interest (contracts) for the Kalshi book to count as tradable. */
@@ -575,8 +633,10 @@ export function crossVenueVerdict(
     };
   }
 
-  // win fraction over day-rows (the ≥10% bar)
-  const wins = rows.filter((d) => d.netEdge > 0).length;
+  // win fraction over day-rows (the ≥10% bar). A WIN is a net-positive edge that is ALSO executable at
+  // real touch depth — a quoted edge on a 1-contract book is a mirage (CROSS-VENUE-SPIKE.md capacity
+  // wall). `executable !== false` keeps legacy/unmeasured rows counted; the live path sets it explicitly.
+  const wins = rows.filter((d) => d.netEdge > 0 && d.executable !== false).length;
   const winFrac = wins / n;
 
   // significance CLUSTERED BY CITY: each city's mean netEdge is one observation
@@ -596,17 +656,20 @@ export function crossVenueVerdict(
     return {
       label: 'PASS', ...base, winFrac, meanNetEdge: mean, ciLow, ciHigh,
       reason:
-        `PASS — ${pct(winFrac)} of ${n} real-depth city-days net-positive (≥ ${pct(minWinFrac)} bar) AND the ` +
-        `city-clustered mean edge ${usd(mean)} has a 95% CI [${usd(ciLow)}, ${usd(ciHigh)}] (t, ${C} cities) excluding 0. ` +
-        `A standing cross-venue dislocation beyond fees + offset + basis. Escalate to an executor design.`,
+        `PASS — ${pct(winFrac)} of ${n} real-depth city-days net-positive AND EXECUTABLE at touch depth ` +
+        `(≥ ${pct(minWinFrac)} bar) AND the city-clustered mean edge ${usd(mean)} has a 95% CI ` +
+        `[${usd(ciLow)}, ${usd(ciHigh)}] (t, ${C} cities) excluding 0. A standing, executable cross-venue ` +
+        `dislocation beyond fees + offset + basis. Escalate to an executor design + a true depth-walk.`,
     };
   }
   return {
     label: 'KILL', ...base, winFrac, meanNetEdge: mean, ciLow, ciHigh,
     reason:
-      `KILL (10th signal) — ${pct(winFrac)} of ${n} real-depth city-days net-positive (vs ${pct(minWinFrac)} bar); ` +
-      `city-clustered mean edge ${usd(mean)}, 95% CI [${usd(ciLow)}, ${usd(ciHigh)}] (t, ${C} cities). ` +
-      `The cross-venue price difference does not clear the combined fee + the 1°F bin-offset stub + the ` +
-      `NWS-CLI-vs-Wunderground basis. Structurally walled like the complete-set arb. Rail stays DORMANT.`,
+      `KILL (10th signal) — ${pct(winFrac)} of ${n} real-depth city-days net-positive AND executable ` +
+      `(vs ${pct(minWinFrac)} bar); city-clustered mean edge ${usd(mean)}, 95% CI [${usd(ciLow)}, ${usd(ciHigh)}] ` +
+      `(t, ${C} cities). The cross-venue price difference does not clear the combined fee + the 1°F bin-offset ` +
+      `stub + the NWS-CLI-vs-Wunderground basis AT EXECUTABLE TOUCH DEPTH (the quoted gap exists but the ` +
+      `cumulative synthetic throttles to single-digit size on its thin legs). Structurally walled like the ` +
+      `complete-set arb. Rail stays DORMANT.`,
   };
 }

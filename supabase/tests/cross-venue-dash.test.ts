@@ -22,6 +22,7 @@ const ROW = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
   bestNetEdge: 0.05346, edgeAtF: 83, direction: 'buyKalshiSellPoly',
   cashflow: 0.3816, expPayoff: -0.3281,
   limitDepth: 891, hasRealDepth: true, netPositive: true,
+  execSize: 120, isExecutable: true, // 0064: a net-positive row is a WIN only if executable at touch depth
   ...over,
 });
 
@@ -54,6 +55,8 @@ describe('record_cross_venue_captures — TS ↔ SQL round-trip (rank 4)', () =>
     expect(got.direction).toBe('buyKalshiSellPoly');
     expect(got.has_real_depth).toBe(true);
     expect(got.net_positive).toBe(true);
+    expect(Number(got.exec_size)).toBe(120); // 0064 true-depth round-trip
+    expect(got.is_executable).toBe(true);
   });
 
   it('absent optionals become NULL (nullif), not 0 — a sparse row', async () => {
@@ -99,7 +102,30 @@ describe('dash_cross_venue — shape, collapse, denominator, guard (rank 7)', ()
     expect(Number(out.matchedDays)).toBe(5); // nyc(collapsed), la, chi, mia, den
     expect(Number(out.realDepthDays)).toBe(4); // den excluded (thin)
     expect(Number(out.netPositiveDepthDays)).toBe(1); // only nyc (latest 0.06)
+    expect(Number(out.executableWinDays)).toBe(1); // nyc's win fills at depth (ROW default isExecutable)
     expect(Number(out.winFrac)).toBeCloseTo(0.25, 4); // 1 of 4 real-depth days
+  });
+
+  it('the capacity wall: a net-positive but NON-executable row is quoted, NOT a win (0064)', async () => {
+    const fresh = await freshDb();
+    try {
+      await record(fresh, [
+        ROW({ city: 'nyc', bestNetEdge: 0.30, netPositive: true, isExecutable: true, execSize: 60 }), // real win
+        ROW({ city: 'mia', bestNetEdge: 0.25, netPositive: true, isExecutable: false, execSize: 6 }), // quoted only — thin
+        ROW({ city: 'la', bestNetEdge: 0.18, netPositive: true, isExecutable: false, execSize: 8 }),  // quoted only — thin
+        ROW({ city: 'chi', bestNetEdge: -0.01, netPositive: false, isExecutable: false }),            // efficient
+      ]);
+      const out = await asRole(fresh, 'authenticated', OPERATOR, async () =>
+        (await rows<{ out: Record<string, unknown> }>(fresh, `select public.dash_cross_venue(14) as out`, []))[0]!.out,
+      );
+      expect(Number(out.realDepthDays)).toBe(4);
+      expect(Number(out.netPositiveDepthDays)).toBe(3); // quoted net-positive (nyc, mia, la)
+      expect(Number(out.executableWinDays)).toBe(1); // only nyc fills at real touch depth
+      expect(Number(out.winFrac)).toBeCloseTo(0.25, 4); // 1 executable win / 4 real-depth — NOT 0.75
+      expect(Number(out.maxExecSize)).toBe(60);
+    } finally {
+      await fresh.close();
+    }
   });
 
   it('headline bestEdgeSeen is scoped to real-depth (0063) — the thin den 0.40 does NOT surface', async () => {

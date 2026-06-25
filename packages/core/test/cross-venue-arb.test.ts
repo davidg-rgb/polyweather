@@ -18,12 +18,14 @@ import {
   GRID_LO_F,
   KALSHI_FEE_RATE,
   POLY_FEE_RATE,
+  MIN_EXEC_SIZE,
   type BasisModel,
   type PanelDay,
   type VenueBucket,
   type VenueLadder,
   type VenueName,
   basisStraddleProb,
+  bindingExecutable,
   crossVenueDivergence,
   crossVenueEdge,
   crossVenueVerdict,
@@ -227,6 +229,22 @@ describe('crossVenueEdge — a genuine dislocation survives; the bin offset alon
   });
 });
 
+// ── true executable depth (the capacity wall) ────────────────────────────────────────────────────────
+
+describe('bindingExecutable — capacity wall (min resting size across all legs that must fill)', () => {
+  it('is the MIN across both legs’ sizes — every leg must fill to be hedged', () => {
+    expect(bindingExecutable([100, 40, 250], [80, 6])).toBe(6);
+  });
+  it('a single thin / zero / non-finite leg caps the whole position at 0', () => {
+    expect(bindingExecutable([100, 0], [50])).toBe(0);
+    expect(bindingExecutable([100, Number.NaN], [50])).toBe(0);
+    expect(bindingExecutable([], [])).toBe(0);
+  });
+  it('the live 1–10-unit wall fails the MIN_EXEC_SIZE tradable floor', () => {
+    expect(bindingExecutable([8], [10])).toBeLessThan(MIN_EXEC_SIZE);
+  });
+});
+
 // ── the frozen verdict ──────────────────────────────────────────────────────────────────────────────
 
 describe('crossVenueVerdict — the operator-ratified kill gate (clustered by city)', () => {
@@ -235,11 +253,13 @@ describe('crossVenueVerdict — the operator-ratified kill gate (clustered by ci
   /** Build a panel: edgeFn(cityIdx, dateIdx) → netEdge; depth on by default. */
   const mkPanel = (
     edgeFn: (ci: number, di: number) => number,
-    o: { cities?: string[]; dates?: string[]; depth?: boolean } = {},
+    o: { cities?: string[]; dates?: string[]; depth?: boolean; executable?: boolean } = {},
   ): PanelDay[] => {
     const cities = o.cities ?? CITIES6;
     const dates = o.dates ?? DATES5;
-    return cities.flatMap((c, ci) => dates.map((dt, di) => ({ city: c, targetDate: dt, netEdge: edgeFn(ci, di), hasRealDepth: o.depth ?? true })));
+    return cities.flatMap((c, ci) =>
+      dates.map((dt, di) => ({ city: c, targetDate: dt, netEdge: edgeFn(ci, di), hasRealDepth: o.depth ?? true, executable: o.executable })),
+    );
   };
 
   it('INSUFFICIENT_DATA below the minimum row count', () => {
@@ -279,6 +299,15 @@ describe('crossVenueVerdict — the operator-ratified kill gate (clustered by ci
     expect(v.nCities).toBe(6);
     expect(v.ciLow).toBeGreaterThan(0);
     expect(v.label).toBe('PASS');
+  });
+
+  it('KILL — quoted edges that are NOT executable at touch depth are not wins (the capacity wall)', () => {
+    // the SAME all-positive, CI-excludes-0 panel that PASSes when executable → KILL when not executable.
+    const edge = (ci: number, di: number): number => 0.04 + ((ci + di) % 3) * 0.003;
+    expect(crossVenueVerdict(mkPanel(edge, { executable: true })).label).toBe('PASS');
+    const v = crossVenueVerdict(mkPanel(edge, { executable: false }));
+    expect(v.winFrac).toBe(0);
+    expect(v.label).toBe('KILL');
   });
 
   it('clustering is conservative: a per-CITY artifact (one city carries all the edge) does NOT PASS', () => {
