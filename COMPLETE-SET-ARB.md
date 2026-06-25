@@ -183,28 +183,36 @@ Filters to open ladders with lead≤2d, fetches the full CLOB book for every buc
 - `exec_sets == 0` always → capacity ≈ min-order-size → fully closed.
 Read: `SELECT dash_complete_set_depth(7)` or call the RPC from the operator dashboard.
 
-**Move 2 — persistence classifier (code-only, runs over historical data).**
+**Move 2 — persistence classifier (MEASURED 2026-06-25).**
 `classifyPersistence` in `packages/core/src/sim/complete-set-arb.ts` classifies each clearing instant as
-`persistent` (≥2 consecutive polls) or `singlePollBlip`. `complete-set-arb-scan.ts` now prints a
-persistence section. Strong prior: mostly blips — if confirmed, the window closes independently of depth.
-Re-run: `pnpm tsx scripts/research/complete-set-arb-scan.ts` (needs DB connection).
+`persistent` (≥2 consecutive polls) or `singlePollBlip`. Run over the full universe (41,356 instants):
+**185 fee-clearing instants → 117 persistent (63%) vs 68 single-poll blips (37%)**. This **overturns the
+"mostly blips" prior** — when a dislocation clears the fee it tends to *persist* across consecutive polls
+(wuhan 11/11, seattle 33/34). So persistence does **not** close the window on its own; the binding unknown
+remains **depth** — exactly what Move 1 now captures forward. Verdict unchanged: **MARGINAL** (0.45%
+fee-cleared vs 15.45% raw, < 2% bar). Re-run: `pnpm tsx scripts/research/complete-set-arb-scan.ts`.
 
 **Move 3 — fee-structure reopening monitor (embedded in Move 1 tick, daily at UTC 10h).**
 Top-of-book check over all open ladders. Slack-alerts kind `ARB_REOPEN` if any ladder shows `fee_cleared`.
 This is the mechanical trigger for a Polymarket fee restructure — the one out-of-market event that un-walls
 the whole signal. No additional deploy needed: it's part of the `arb-depth-capture` Edge tick.
 
-**Operator go-live steps** (all three moves go live together):
-```bash
-# 1. Apply migration
-supabase migration apply --file supabase/migrations/0060_complete_set_depth_capture.sql
-# 2. Deploy edge function
-npx supabase functions deploy arb-depth-capture --use-api --project-ref lenysiqxihsmxljvyybt
-# 3. Verify cron
-select jobname, schedule from cron.job where jobname = 'arb-depth-capture';
-# 4. Verify first capture (after 30 min)
-select count(*) from complete_set_depth_captures;
-```
+**Deployment — LIVE on prod (2026-06-25).** Migration 0060 applied via Supabase MCP; the
+`arb-depth-capture` Edge fn deployed; the `*/30` cron is registered and firing. **First capture verified:**
+9 thin candidates (Σask ≤ 1.02) captured with full 11-leg depth — incl. **cape-town Σask=0.987** (raw
+underround) and **amsterdam Σask=0.999**, both `under_net < 0` (fee-walled, `fee_cleared=false`,
+`exec_sets=0`) — the live confirmation of the closed verdict, now accruing forward every 30 min.
+
+> **Post-deploy perf fix (load-bearing).** The `lead ≤ 2d` filter alone matched ~every open ladder (the
+> `age < 2h` guard rarely fires — Gamma's `gameStartTime` is usually absent), so the original sequential
+> per-bucket CLOB fetch (~100 ladders × ~11 buckets ≈ 1000 calls) blew the Edge wall-time and was killed
+> mid-loop, capturing nothing. The fn now **pre-ranks on the FREE Gamma top-of-book Σask** and deep-fetches
+> full CLOB depth **only for thin candidates** (Σask ≤ 1.02, capped at 25, buckets fetched concurrently) —
+> runtime dropped from a 7.5-min timeout to **1.3 s**. A non-thin ladder cannot be an underround
+> dislocation regardless of depth, so this both bounds wall-time and sharpens the target.
+
+Read the depth verdict after a week (operator role): `select dash_complete_set_depth(7)` — watch
+`anyExecSets` (still 0 ⇒ capacity ≈ min-order-size ⇒ fully closed; > 0 on a persistent clear ⇒ MARGINAL → PASS candidate).
 
 ---
 
