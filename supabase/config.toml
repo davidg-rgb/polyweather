@@ -71,3 +71,9 @@ verify_jwt = false
 
 [functions.reward-snapshot]
 verify_jwt = false
+
+[functions.sharps-snapshot]
+verify_jwt = false
+
+[functions.arb-depth-capture]
+verify_jwt = false
