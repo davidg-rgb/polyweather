@@ -124,4 +124,38 @@ describe('computeFingerprint', () => {
     expect(fp.vwapEntry).toBe(0);
     expect(fp.sportsMix).toEqual({});
   });
+
+  // ── boundary hardening (code-review finding: thresholds were only tested far from their edges) ──
+
+  it('sweepFraction pins the same-second-burst boundary: run-of-2 = 1.0, all-distinct = 0, all-same = 1.0', () => {
+    expect(computeFingerprint([buy({ timestamp: 100 }), buy({ timestamp: 100 })], 0.5).sweepFraction).toBe(1.0);
+    expect(
+      computeFingerprint([buy({ timestamp: 1 }), buy({ timestamp: 2 }), buy({ timestamp: 3 })], 0.5).sweepFraction,
+    ).toBe(0);
+    expect(
+      computeFingerprint([buy({ timestamp: 5 }), buy({ timestamp: 5 }), buy({ timestamp: 5 })], 0.5).sweepFraction,
+    ).toBe(1.0);
+  });
+
+  it('odds histogram: each bin edge lands in the HIGHER (half-open) bin and Σ count === nFills', () => {
+    const edges = [0.05, 0.15, 0.3, 0.5, 0.7, 0.85];
+    const fp = computeFingerprint(edges.map((p) => buy({ price: p })), 0.5);
+    const count = (label: string) => fp.oddsHistogram.find((b) => b.label === label)!.count;
+    expect(count('≤5¢')).toBe(0); // 0.05 belongs to 5–15¢, not ≤5¢
+    expect(count('5–15¢')).toBe(1);
+    expect(count('15–30¢')).toBe(1);
+    expect(count('30–50¢')).toBe(1);
+    expect(count('50–70¢')).toBe(1);
+    expect(count('70–85¢')).toBe(1);
+    expect(count('>85¢')).toBe(1);
+    expect(fp.oddsHistogram.reduce((s, b) => s + b.count, 0)).toBe(fp.nFills);
+  });
+
+  it('archetype pins both thresholds: nFills>=50 AND roiProxy<0.05 (strict)', () => {
+    const f50 = Array.from({ length: 50 }, (_, i) => buy({ timestamp: i }));
+    const f49 = Array.from({ length: 49 }, (_, i) => buy({ timestamp: i }));
+    expect(computeFingerprint(f50, 0.049).archetype).toBe('volume-machine'); // 50 fills, ROI just under 0.05
+    expect(computeFingerprint(f50, 0.05).archetype).toBe('high-roi-specialist'); // ROI == 0.05 is NOT < 0.05
+    expect(computeFingerprint(f49, 0.01).archetype).toBe('high-roi-specialist'); // 49 fills < 50
+  });
 });

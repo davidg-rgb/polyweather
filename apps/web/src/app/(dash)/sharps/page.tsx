@@ -66,6 +66,7 @@ function RosterTable({ rows }: { rows: SharpTraderRow[] }): ReactElement {
             const traderLabel = r.trader === r.wallet ? shortWallet(r.wallet) : r.trader;
             const roi = num(r.roiProxy);
             const roiColor = roi === null ? undefined : roi >= 0 ? 'var(--ams-tertiary)' : 'var(--ams-red)';
+            const pnlColor = (num(r.pnlAllUsd) ?? 0) >= 0 ? 'var(--ams-tertiary)' : 'var(--ams-red)';
             const arc = r.archetype ?? 'high-roi-specialist';
             return (
               <tr key={`${r.wallet}-${i}`}>
@@ -80,7 +81,7 @@ function RosterTable({ rows }: { rows: SharpTraderRow[] }): ReactElement {
                     {arc}
                   </span>
                 </td>
-                <td className="num" style={{ color: roiColor }}>
+                <td className="num" style={{ color: pnlColor }}>
                   {fmtUsd(r.pnlAllUsd, 0)}
                 </td>
                 <td className="num">{fmtUsd(r.volAllUsd, 0)}</td>
@@ -122,6 +123,7 @@ function FingerprintCard({ r }: { r: SharpTraderRow }): ReactElement {
 
   const roi = num(r.roiProxy);
   const roiColor = roi === null ? undefined : roi >= 0 ? 'var(--ams-tertiary)' : 'var(--ams-red)';
+  const pnlColor = (num(r.pnlAllUsd) ?? 0) >= 0 ? 'var(--ams-tertiary)' : 'var(--ams-red)';
 
   return (
     <div className="panel" style={{ marginBottom: '1rem' }}>
@@ -141,7 +143,7 @@ function FingerprintCard({ r }: { r: SharpTraderRow }): ReactElement {
       <div className="strip" style={{ marginBottom: '0.75rem' }}>
         <div className="tile" style={{ minWidth: 0 }}>
           <div className="cap">PnL (all-time)</div>
-          <div className="big" style={{ color: roiColor }}>{fmtUsd(r.pnlAllUsd, 0)}</div>
+          <div className="big" style={{ color: pnlColor }}>{fmtUsd(r.pnlAllUsd, 0)}</div>
           <div className="sub">ROI proxy {roi !== null ? fmtPct(roi, 1) : '—'}</div>
         </div>
         <div className="tile" style={{ minWidth: 0 }}>
@@ -157,7 +159,7 @@ function FingerprintCard({ r }: { r: SharpTraderRow }): ReactElement {
         <div className="tile" style={{ minWidth: 0 }}>
           <div className="cap">Sweep / burst %</div>
           <div className="big">{fmtPct(r.sweepFraction)}</div>
-          <div className="sub">fills priced ≥ 0.80</div>
+          <div className="sub">same-second book-sweep fills</div>
         </div>
         <div className="tile" style={{ minWidth: 0 }}>
           <div className="cap">Mid-odds %</div>
@@ -328,7 +330,7 @@ export default async function SharpsPage(): Promise<ReactElement> {
           <h2>Fingerprint cards — per-trader style</h2>
           <p className="muted small">
             Each card shows the entry-odds distribution (histogram of fill prices; bar height = fills count, tag =
-            notional), sweep/burst % (fills ≥ 0.80 — near-certain outcomes), mid-odds % (35¢–65¢ balanced band),
+            notional), sweep/burst % (fills sharing a same-second timestamp — the book-sweep signature), mid-odds % (35¢–65¢ balanced band),
             VWAP entry, and the top sub-sports by notional share.
           </p>
           {roster.slice(0, 10).map((r, i) => (

@@ -4,10 +4,10 @@
  *
  * Each tick (every 30 min):
  *   STEP 1 — enumerate all open temperature ladders from Gamma (tag 104596, active, not closed).
- *   STEP 2 — filter to lead≤2d (days until targetDate) — the thin-open-book window where any
- *            fee-clearing dislocation lives in our historical data. These are the ladders whose
- *            depth market_snapshots cannot answer (book_top3 is NULL there).
- *   STEP 3 — for each qualifying ladder, fetch the full CLOB book for every bucket's YES token.
+ *   STEP 2 — select the deep-capture set with ZERO CLOB calls: lead≤2d + ≥3 buckets, then pre-rank on
+ *            the FREE Gamma top-of-book Σask and keep only the thinnest candidates (the wall-time bound;
+ *            a richly-quoted ladder can't be an underround dislocation regardless of depth).
+ *   STEP 3 — for each selected ladder, fetch the full CLOB book for every bucket's YES token.
  *   STEP 4 — compute Σ best-ask, underNet (per-leg taker fee), executableArb (profit-maximising
  *            set count by walking the full depth). Bulk-insert via record_complete_set_depth_captures.
  *   STEP 5 (Move 3, once per day at DAILY_ALERT_UTC_HOUR) — check the FULL universe (all open
@@ -31,6 +31,12 @@ import {
   completeSetEdge,
   underroundExecutable,
 } from '../../../packages/core/src/sim/complete-set-arb.ts';
+import {
+  buildPerLegDepth,
+  computeLeadDays,
+  type PerLegDepth,
+  selectDeepCandidates,
+} from './pure.ts';
 import type { FetchJsonLike } from '../_shared/polymarket-wallet.ts';
 import { notifySlack } from '../_shared/slack.ts';
 import type { JobCtx, JobStats } from '../_shared/runJob.ts';
@@ -43,20 +49,8 @@ const HEADERS: Record<string, string> = {
   Accept: 'application/json',
 };
 
-/** Lead (days until targetDate close) at which to capture. The thin-open-book window lives ≤ 2d. */
-const MAX_LEAD_DAYS = 2;
-/**
- * Only deep-capture (full-CLOB) ladders whose Gamma top-of-book Σ best-ask is at or below this. A
- * ladder can only be an underround dislocation if its Σask is thin; a richly-quoted ladder cannot
- * clear regardless of depth. The lead≤2d set alone is ~every open ladder (the age<2h guard rarely
- * applies — gameStartTime is usually absent), so deep-fetching all of them (~100 ladders × ~11
- * buckets) blows the Edge wall-time. Pre-ranking on the FREE Gamma top-of-book targets the Move-1
- * question (is the thin window executable at depth?) AND bounds the per-tick CLOB fetch count.
- * 1.02 keeps real underrounds (<1) plus near-misses (the live probe saw chengdu 0.981, miami 1.011).
- */
-const CAPTURE_SUM_ASK_MAX = 1.02;
-/** Hard cap on deep (full-CLOB) captures per tick — a safety bound on wall-time. */
-const MAX_DEEP_CAPTURES = 25;
+// The deep-capture selection constants (MAX_LEAD_DAYS, CAPTURE_SUM_ASK_MAX, MAX_DEEP_CAPTURES) + the
+// pure selection logic live in ./pure.ts so they are unit-testable in Node (handler.test.ts).
 /** UTC hour at which the once-daily full-universe reopening check fires (Move 3). */
 const DAILY_ALERT_UTC_HOUR = 10;
 /** Slack alert kind for the reopening monitor. */
@@ -67,13 +61,6 @@ const msg = (e: unknown): string => (e instanceof Error ? e.message : String(e))
 export interface ArbDepthCaptureDeps {
   now: Date;
   fetchJson: FetchJsonLike;
-}
-
-interface PerLegDepth {
-  bucketIdx: number;
-  topPrice: number | null;
-  topSize: number | null;
-  totalSize: number;
 }
 
 interface CaptureRow {
@@ -90,26 +77,6 @@ interface CaptureRow {
   perLegDepth: PerLegDepth[];
   rawUnderround: boolean;
   feeCleared: boolean;
-}
-
-/** Days until targetDate (the market close / resolution date). Negative = past. */
-function computeLeadDays(targetDate: string, now: Date): number {
-  const target = new Date(`${targetDate}T23:59:59Z`);
-  return (target.getTime() - now.getTime()) / (1000 * 60 * 60 * 24);
-}
-
-/**
- * Age in hours since the market was opened, estimated from gameStartTime on the raw Gamma payload.
- * Markets that opened ≥ MAX_LEAD_DAYS ago are almost certainly not in the thin-open-book window;
- * if gameStartTime is absent, return null (caller treats as unfiltered — err on the side of capture).
- */
-function computeAgeHours(gameStartTime: string | null | undefined, now: Date): number | null {
-  if (!gameStartTime) return null;
-  // Gamma's format: '2026-06-24 15:00:00+00' (with a space before T)
-  const iso = String(gameStartTime).replace(' ', 'T').replace(/([+-]\d{2})$/, '$1:00');
-  const start = new Date(iso);
-  if (isNaN(start.getTime())) return null;
-  return (now.getTime() - start.getTime()) / (1000 * 60 * 60);
 }
 
 /** Page all active open temperature events from Gamma, returning raw+parsed pairs. */
@@ -159,23 +126,6 @@ async function fetchBook(
   return normalizeBook(raw);
 }
 
-/** Build the per-leg depth summary from normalized books. */
-function buildPerLegDepth(books: NormalizedBook[]): PerLegDepth[] {
-  return books.map((bk, idx) => {
-    const topAsk = bk.asks[0];
-    const totalSize = bk.asks.reduce(
-      (s, lv) => s + (Number.isFinite(lv.size) ? lv.size : 0),
-      0,
-    );
-    return {
-      bucketIdx: idx,
-      topPrice: topAsk ? topAsk.price : null,
-      topSize: topAsk ? topAsk.size : null,
-      totalSize,
-    };
-  });
-}
-
 export async function arbDepthCapture(ctx: JobCtx, deps: ArbDepthCaptureDeps): Promise<JobStats> {
   const { db, log } = ctx;
   const { now, fetchJson } = deps;
@@ -184,45 +134,18 @@ export async function arbDepthCapture(ctx: JobCtx, deps: ArbDepthCaptureDeps): P
   // ── STEP 1: enumerate open ladders (raw+parsed) ──────────────────────────────────────────────
   const allEvents = await fetchOpenEvents(fetchJson, log);
 
-  // ── STEP 2: filter to thin-open-book window (lead ≤ 2d) ─────────────────────────────────────
-  // Age < 2h filter uses gameStartTime when available; we include the ladder if age is unknown.
-  const qualifying = allEvents.filter(({ raw, parsed }) => {
-    if (parsed.buckets.length < 3) return false;
-    const lead = computeLeadDays(parsed.targetDate, now);
-    if (lead > MAX_LEAD_DAYS) return false;
-    // Optional age filter: skip if gameStartTime shows the ladder is clearly old (>6h open)
-    const age = computeAgeHours(raw.gameStartTime, now);
-    if (age !== null && age > 6) return false; // conservative cap — capture if uncertain
-    return true;
-  });
-
-  log('thin-open-book filter', { total: allEvents.length, qualifying: qualifying.length });
-
-  // ── Pre-rank on Gamma top-of-book (NO fetch): deep-capture only the thinnest candidates ──────
-  // Σask is computed from the bestAsk already on the Gamma payload, so this costs zero CLOB calls.
-  // Only ladders at/under CAPTURE_SUM_ASK_MAX can be (near-)dislocations and are worth full depth.
-  const ranked = qualifying
-    .map((ev) => ({
-      ev,
-      topSumAsk: completeSetEdge(
-        ev.parsed.buckets.map((b) => b.bestAsk),
-        ev.parsed.buckets.map((b) => b.bestBid),
-        FEE_RATE_WEATHER,
-      ).sumAsk,
-    }))
-    .filter((x) => x.topSumAsk !== null && x.topSumAsk <= CAPTURE_SUM_ASK_MAX)
-    .sort((a, b) => (a.topSumAsk ?? 9) - (b.topSumAsk ?? 9))
-    .slice(0, MAX_DEEP_CAPTURES);
-
+  // ── STEP 2: select the deep-capture set (lead ≤ 2d + thinnest top-of-book), ZERO CLOB calls ──
+  // selectDeepCandidates encapsulates the wall-time bound: ≥3 buckets, lead ≤ MAX_LEAD_DAYS, then the
+  // FREE Gamma-top-of-book Σask pre-rank (Σask ≤ CAPTURE_SUM_ASK_MAX, capped). See pure.ts (+ tests).
+  const ranked = selectDeepCandidates(allEvents, now);
   log('thin-candidate pre-rank (deep-capture set)', {
-    qualifying: qualifying.length,
+    total: allEvents.length,
     deepCandidates: ranked.length,
-    cap: MAX_DEEP_CAPTURES,
   });
 
   // ── STEPS 3 & 4: fetch CLOB books + compute depth (buckets concurrently per ladder) ──────────
   const captureRows: CaptureRow[] = [];
-  for (const { ev: { raw, parsed } } of ranked) {
+  for (const { ev: { parsed } } of ranked) {
     let books: NormalizedBook[];
     try {
       books = await Promise.all(parsed.buckets.map((bucket) => fetchBook(fetchJson, bucket.tokenYes)));
@@ -236,13 +159,14 @@ export async function arbDepthCapture(ctx: JobCtx, deps: ArbDepthCaptureDeps): P
     const edge = completeSetEdge(asks, bids, FEE_RATE_WEATHER);
     const exec = underroundExecutable(books.map((bk) => bk.asks), FEE_RATE_WEATHER);
     const lead = computeLeadDays(parsed.targetDate, now);
-    const age = computeAgeHours(raw.gameStartTime, now);
 
     captureRows.push({
       capturedAt,
       eventSlug: parsed.slug,
       leadDays: lead,
-      ageHours: age,
+      // age_hours is reserved/null: Gamma gameStartTime is target-day midnight, not market-open, so a
+      // real "age since open" can't be derived from it (see pure.ts selectDeepCandidates note).
+      ageHours: null,
       nBuckets: parsed.buckets.length,
       sumBestAsk: edge.sumAsk,
       underNet: edge.underNet,
@@ -323,7 +247,6 @@ export async function arbDepthCapture(ctx: JobCtx, deps: ArbDepthCaptureDeps): P
   const stats = {
     asOf: capturedAt,
     eventsTotal: allEvents.length,
-    qualifying: qualifying.length,
     deepCandidates: ranked.length,
     captured: captureRows.length,
     inserted,

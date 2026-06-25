@@ -202,6 +202,10 @@ describe('migrations 0001–0010', () => {
       // in the same Edge tick (daily at UTC 10h, Slack-alerts if ANY fee-clearing found). COMPLETE-SET-ARB-HANDOFF.md.
       // 0059 + 0060 each register one new cron → combined cron count 18 → 20.
       '0060_complete_set_depth_capture.sql',
+      // 0061 = code-review polish (NITs): drop the dead table-grant on complete_set_depth_captures
+      // (RLS-only-via-RPC, matching 0057/0059) + clamp dash_complete_set_depth p_days to [1,60].
+      // No table/cron change (cron count stays 20). Review findings #7/#8.
+      '0061_arb_dash_polish.sql',
     ]);
   });
 });

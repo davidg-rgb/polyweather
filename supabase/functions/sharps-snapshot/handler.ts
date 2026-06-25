@@ -6,21 +6,21 @@
  * PNL), dedup by wallet (keep the row with the most filled-in fields), and bulk-insert the capture into
  * sports_sharps via record_sports_sharps. Lightweight fingerprint computed inline (volume-machine vs
  * high-roi-specialist archetype; entry-odds histogram; sweep/burst fraction; mid-odds fraction; VWAP;
- * sub-sport mix). Bounds to 200 fills per wallet via /trades?user — within the cron wall-time budget.
+ * sub-sport mix). WALL-TIME BOUNDED: cap to the top MAX_WALLETS by PnL, fetch trades in
+ * bounded-concurrency chunks, and stop at a wall-time deadline — inserting the PARTIAL capture rather
+ * than letting a slow/rate-limited data-api kill the isolate mid-loop (200 fills/wallet via /trades).
  *
  * NOT trading — analytics / insight page only; copy-trade rail DORMANT (9th signal, FINDINGS.md §9).
  * Best-effort: a Polymarket outage just yields a smaller/empty capture, never a failed job.
  *
- * API surface (all public, keyless):
+ * API surface (all public, keyless) — fingerprint is computed from the wallet's own fills, no book fetch:
  *   GET  https://data-api.polymarket.com/v1/leaderboard?category=SPORTS&timePeriod=X&orderBy=PNL&limit=50
  *   GET  https://data-api.polymarket.com/trades?user=<wallet>&takerOnly=false&limit=200
- *   POST https://clob.polymarket.com/books  (batch YES-token book snapshot — mid-odds ref for fingerprint)
  */
 import type { FetchJsonLike } from '../_shared/polymarket-wallet.ts';
 import type { JobCtx, JobStats } from '../_shared/runJob.ts';
 
 const DATA_API = 'https://data-api.polymarket.com';
-const CLOB_BASE = 'https://clob.polymarket.com';
 const REQUEST_HEADERS = { 'User-Agent': 'polyweather-analytics/1.0', Accept: 'application/json' };
 
 export interface SharpsSnapshotDeps {
@@ -255,6 +255,11 @@ export function computeFingerprint(trades: ParsedTrade[], roiProxy: number): Tra
 const LEADERBOARD_PERIODS = ['ALL', 'MONTH', 'WEEK', 'DAY'] as const;
 const LEADERBOARD_LIMIT = 50;
 const TRADES_LIMIT = 200; // bounded per wallet for cron wall-time budget
+const MAX_WALLETS = 80; // cap the deep-fingerprint set by PnL (page shows top 20; 80 gives headroom)
+const FETCH_CONCURRENCY = 6; // bounded in-flight trade fetches (vs strictly sequential)
+// Stop fetching + insert the PARTIAL capture before the ~150s Edge wall limit (config.jobWallLimitSec):
+// a slow/rate-limited data-api then yields a smaller capture instead of a killed, un-completed run.
+const WALL_BUDGET_MS = 110_000;
 
 export async function sharpsSnapshot(ctx: JobCtx, deps: SharpsSnapshotDeps): Promise<JobStats> {
   const { db, log } = ctx;
@@ -283,27 +288,45 @@ export async function sharpsSnapshot(ctx: JobCtx, deps: SharpsSnapshotDeps): Pro
     return { asOf: capturedAt, wallets: 0, inserted: 0 };
   }
 
-  // Step 2: per-wallet trades + fingerprint (bounded to TRADES_LIMIT fills).
+  // Step 2: per-wallet trades + fingerprint, WALL-TIME BOUNDED (the named Edge wall-time trap).
+  // Cap to the top MAX_WALLETS by PnL (the page shows top 20), fetch in bounded-concurrency chunks,
+  // and stop at the deadline — inserting the PARTIAL capture rather than letting a slow data-api kill
+  // the isolate mid-loop (which would lose the whole capture). Mirrors grade-bets' deadline guard.
+  const ranked = [...wallets].sort((a, b) => b.pnlAllUsd - a.pnlAllUsd).slice(0, MAX_WALLETS);
+  const deadlineMs = deps.now.getTime() + WALL_BUDGET_MS;
   const rows: Record<string, unknown>[] = [];
-  for (const leader of wallets) {
-    const trades = await fetchWalletTrades(deps.fetchJson, leader.wallet, TRADES_LIMIT, log);
-    const fp = computeFingerprint(trades, leader.roiProxy);
-    rows.push({
-      capturedAt,
-      wallet: leader.wallet,
-      traderName: leader.traderName,
-      rank: leader.rank,
-      pnlAllUsd: leader.pnlAllUsd,
-      volAllUsd: leader.volAllUsd,
-      roiProxy: leader.roiProxy,
-      archetype: fp.archetype,
-      nFills: fp.nFills,
-      sweepFraction: fp.sweepFraction,
-      midOddsFraction: fp.midOddsFraction,
-      vwapEntry: fp.vwapEntry,
-      sportsMix: JSON.stringify(fp.sportsMix),
-      oddsHistogram: JSON.stringify(fp.oddsHistogram),
-    });
+  let truncated = false;
+  for (let i = 0; i < ranked.length; i += FETCH_CONCURRENCY) {
+    if (Date.now() > deadlineMs) {
+      truncated = true;
+      break;
+    }
+    const chunkRows = await Promise.all(
+      ranked.slice(i, i + FETCH_CONCURRENCY).map(async (leader) => {
+        const trades = await fetchWalletTrades(deps.fetchJson, leader.wallet, TRADES_LIMIT, log);
+        const fp = computeFingerprint(trades, leader.roiProxy);
+        return {
+          capturedAt,
+          wallet: leader.wallet,
+          traderName: leader.traderName,
+          rank: leader.rank,
+          pnlAllUsd: leader.pnlAllUsd,
+          volAllUsd: leader.volAllUsd,
+          roiProxy: leader.roiProxy,
+          archetype: fp.archetype,
+          nFills: fp.nFills,
+          sweepFraction: fp.sweepFraction,
+          midOddsFraction: fp.midOddsFraction,
+          vwapEntry: fp.vwapEntry,
+          sportsMix: JSON.stringify(fp.sportsMix),
+          oddsHistogram: JSON.stringify(fp.oddsHistogram),
+        };
+      }),
+    );
+    rows.push(...chunkRows);
+  }
+  if (truncated) {
+    log('wall-time budget hit — inserting partial capture', { captured: rows.length, of: ranked.length });
   }
 
   // Step 3: bulk insert.
@@ -313,7 +336,14 @@ export async function sharpsSnapshot(ctx: JobCtx, deps: SharpsSnapshotDeps): Pro
     inserted = Number(res[0]?.record_sports_sharps ?? rows.length);
   }
 
-  const stats = { asOf: capturedAt, wallets: wallets.length, tradesPulled: rows.reduce((a, r) => a + (Number(r.nFills) || 0), 0), inserted };
+  const stats = {
+    asOf: capturedAt,
+    wallets: wallets.length,
+    captured: rows.length,
+    truncated,
+    tradesPulled: rows.reduce((a, r) => a + (Number(r.nFills) || 0), 0),
+    inserted,
+  };
   log('sharps-snapshot complete', stats);
   return stats;
 }
