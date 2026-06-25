@@ -191,6 +191,13 @@ describe('migrations 0001–0010', () => {
       // dash_whale_watch re-signature, the 0054 overload trap). Both jsonb-OBJECT + operator_guard, added to
       // WEB_AUTHENTICATED below. No table/cron change (cron count stays 18). DASHBOARDS-HANDOFF.md.
       '0058_reward_and_whale_dashboards.sql',
+      // 0060 = Move 1 forward depth-capture for the complete-set arbitrage (8th signal, COMPLETE-SET-ARB.md):
+      // complete_set_depth_captures table (append-only, lead≤2d thin-book window) + record_complete_set_depth_captures
+      // (service-role insert) + dash_complete_set_depth (operator read, added to WEB_AUTHENTICATED above) +
+      // arb-depth-capture cron every 30 min (count 18 → 19). Move 3 (fee-structure reopening monitor) is embedded
+      // in the same Edge tick (daily at UTC 10h, Slack-alerts if ANY fee-clearing found). COMPLETE-SET-ARB-HANDOFF.md.
+      // NOTE: migration 0059 (sharps analytics page) lives in a sibling branch — the integrator bumps to 20 on merge.
+      '0060_complete_set_depth_capture.sql',
     ]);
   });
 });
@@ -649,6 +656,7 @@ describe('0034: internal-RPC lockdown — anon/authenticated revoked except the 
     'dash_station_observations', 'dash_station_predictions',
     'dash_whale_watch', 'dash_whale_tracker', 'dash_market_rewards',
     'dash_amsterdam_sim', 'dash_replica_sim',
+    'dash_complete_set_depth',  // 0060: Move 1 forward depth-capture operator read
     'go_live_gate_inputs',
     'operator_halt', 'operator_resume', 'operator_update_config', 'operator_verify_station',
     'operator_set_champion', 'operator_skip_bet', 'operator_manual_bet',
@@ -743,32 +751,35 @@ describe('0034: internal-RPC lockdown — anon/authenticated revoked except the 
 });
 
 describe('pg_cron registrations (§7.22, W11)', () => {
-  it('registers all 18 jobs with the §7.22 schedules', async () => {
+  it('registers all 19 jobs with the §7.22 schedules', async () => {
+    // NOTE: a sibling migration (0059 sharps) in this batch also adds a cron;
+    // the integrator bumps this to 20 on merge.
     const jobs = await rows<{ jobname: string; schedule: string }>(
       db,
       `select jobname, schedule from cron.job order by jobname`,
     );
     const expected: Record<string, string> = {
-      'discover-markets': '10 2,4,5,11,17 * * *',
-      'snapshot-forecasts': '15 10,22 * * *',
-      'snapshot-ensembles': '35 10,22 * * *',
-      'snapshot-sources': '25 10,22 * * *',
+      'arb-depth-capture':   '*/30 * * * *',  // 0060: Move 1 depth-capture + Move 3 reopen monitor
+      'discover-markets':    '10 2,4,5,11,17 * * *',
+      'snapshot-forecasts':  '15 10,22 * * *',
+      'snapshot-ensembles':  '35 10,22 * * *',
+      'snapshot-sources':    '25 10,22 * * *',
       'build-distributions': '50 10,22 * * *',
-      'poll-markets': '*/5 * * * *',
-      'metar-nowcast': '*/15 * * * *',
-      'fetch-actuals': '20 * * * *',
-      'run-calibration': '30 11 * * *',
-      'grade-bets': '0 6 * * *',
-      'daily-digest': '0 7 * * *',
-      'health-monitor': '*/30 * * * *',
+      'poll-markets':        '*/5 * * * *',
+      'metar-nowcast':       '*/15 * * * *',
+      'fetch-actuals':       '20 * * * *',
+      'run-calibration':     '30 11 * * *',
+      'grade-bets':          '0 6 * * *',
+      'daily-digest':        '0 7 * * *',
+      'health-monitor':      '*/30 * * * *',
       'snapshot-downsample': '0 3 * * *',
       'amsterdam-paper-trade': '30 15 * * *',
-      'sharp-wallet-track': '0 16 * * *',
-      'whale-watch': '* * * * *',
-      'replica-forward': '0 5 * * *',
-      'reward-snapshot': '*/20 * * * *',
+      'sharp-wallet-track':  '0 16 * * *',
+      'whale-watch':         '* * * * *',
+      'replica-forward':     '0 5 * * *',
+      'reward-snapshot':     '*/20 * * * *',
     };
-    expect(jobs.length).toBe(18);
+    expect(jobs.length).toBe(19);
     for (const j of jobs) {
       expect(j.schedule, `schedule for ${j.jobname}`).toBe(expected[j.jobname]);
     }

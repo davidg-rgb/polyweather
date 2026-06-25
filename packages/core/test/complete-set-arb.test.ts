@@ -12,8 +12,10 @@ import {
   FEE_RATE_WEATHER,
   MAX_STALE_MIN,
   type ArbScanSummary,
+  type ArbSnapshot,
   type BookLevel,
   type CompleteSetEdge,
+  classifyPersistence,
   completeSetArbVerdict,
   completeSetEdge,
   executableArb,
@@ -241,5 +243,126 @@ describe('summarizeScan + completeSetArbVerdict — the frozen economic criterio
     expect(summarizeScan(null as never).instants).toBe(0);
     const v = completeSetArbVerdict(summarizeScan([]));
     expect(v.label).toBe('FAIL');
+  });
+});
+
+// ── Move 2: persistence classifier ────────────────────────────────────────────────────────────────
+
+const snap = (capturedAt: string, clearing: boolean): ArbSnapshot => ({ capturedAt, clearing });
+
+describe('classifyPersistence — Move 2 (blip vs consecutive-clearing runs)', () => {
+  it('empty input → zeroed summary, no tagged snapshots', () => {
+    const { tagged, summary } = classifyPersistence([]);
+    expect(tagged).toHaveLength(0);
+    expect(summary.clearingCount).toBe(0);
+    expect(summary.persistentCount).toBe(0);
+    expect(summary.blipCount).toBe(0);
+    expect(summary.persistentFrac).toBe(0);
+    expect(summary.persistentRuns).toBe(0);
+    expect(summary.blipRuns).toBe(0);
+    expect(summary.meanPersistentRunLength).toBe(0);
+    expect(() => classifyPersistence(null as never)).not.toThrow();
+  });
+
+  it('a single clearing snapshot is a BLIP (1 poll, gone before re-verification)', () => {
+    const snaps = [snap('T0', false), snap('T1', true), snap('T2', false)];
+    const { tagged, summary } = classifyPersistence(snaps);
+    expect(tagged[1]!.persistenceClass).toBe('singlePollBlip');
+    expect(tagged[1]!.runLength).toBe(1);
+    expect(summary.blipCount).toBe(1);
+    expect(summary.persistentCount).toBe(0);
+    expect(summary.blipRuns).toBe(1);
+    expect(summary.persistentRuns).toBe(0);
+  });
+
+  it('two consecutive clearing snapshots are PERSISTENT', () => {
+    const snaps = [snap('T0', true), snap('T1', true), snap('T2', false)];
+    const { tagged, summary } = classifyPersistence(snaps);
+    expect(tagged[0]!.persistenceClass).toBe('persistent');
+    expect(tagged[1]!.persistenceClass).toBe('persistent');
+    expect(tagged[0]!.runLength).toBe(2);
+    expect(summary.persistentCount).toBe(2);
+    expect(summary.blipCount).toBe(0);
+    expect(summary.persistentRuns).toBe(1);
+    expect(summary.blipRuns).toBe(0);
+    expect(summary.persistentFrac).toBe(1);
+  });
+
+  it('mixed blips and persistent runs are classified independently', () => {
+    // [blip] [gap] [persistent-3] [gap] [blip]
+    const snaps = [
+      snap('T0', true),  // blip
+      snap('T1', false),
+      snap('T2', true),  // persistent run of 3
+      snap('T3', true),
+      snap('T4', true),
+      snap('T5', false),
+      snap('T6', true),  // blip
+    ];
+    const { tagged, summary } = classifyPersistence(snaps);
+    expect(tagged[0]!.persistenceClass).toBe('singlePollBlip');
+    expect(tagged[2]!.persistenceClass).toBe('persistent');
+    expect(tagged[3]!.persistenceClass).toBe('persistent');
+    expect(tagged[4]!.persistenceClass).toBe('persistent');
+    expect(tagged[6]!.persistenceClass).toBe('singlePollBlip');
+    expect(summary.clearingCount).toBe(5); // T0, T2, T3, T4, T6
+    expect(summary.persistentCount).toBe(3); // T2, T3, T4
+    expect(summary.blipCount).toBe(2); // T0, T6
+    expect(summary.persistentRuns).toBe(1);
+    expect(summary.blipRuns).toBe(2);
+    expect(summary.persistentFrac).toBeCloseTo(3 / 5, 9);
+    expect(summary.meanPersistentRunLength).toBe(3);
+  });
+
+  it('all non-clearing snapshots → zeroed clearing stats', () => {
+    const snaps = [snap('T0', false), snap('T1', false), snap('T2', false)];
+    const { tagged, summary } = classifyPersistence(snaps);
+    expect(tagged.every((s) => s.persistenceClass === 'singlePollBlip')).toBe(true);
+    expect(summary.clearingCount).toBe(0);
+    expect(summary.persistentCount).toBe(0);
+    expect(summary.blipCount).toBe(0);
+  });
+
+  it('all clearing → one persistent run, persistentFrac = 1', () => {
+    const snaps = [snap('T0', true), snap('T1', true), snap('T2', true)];
+    const { summary } = classifyPersistence(snaps);
+    expect(summary.clearingCount).toBe(3);
+    expect(summary.persistentCount).toBe(3);
+    expect(summary.blipCount).toBe(0);
+    expect(summary.persistentFrac).toBe(1);
+    expect(summary.persistentRuns).toBe(1);
+    expect(summary.blipRuns).toBe(0);
+    expect(summary.meanPersistentRunLength).toBe(3);
+  });
+
+  it('run of exactly 2 is persistent; run of 1 at the boundary is a blip', () => {
+    const snaps = [snap('T0', true), snap('T1', true), snap('T2', false), snap('T3', true)];
+    const { tagged, summary } = classifyPersistence(snaps);
+    expect(tagged[0]!.persistenceClass).toBe('persistent');
+    expect(tagged[1]!.persistenceClass).toBe('persistent');
+    expect(tagged[3]!.persistenceClass).toBe('singlePollBlip');
+    expect(summary.persistentRuns).toBe(1);
+    expect(summary.blipRuns).toBe(1);
+    expect(summary.meanPersistentRunLength).toBe(2);
+  });
+
+  it('the strong prior: real history should be mostly blips (the load-bearing interpretation)', () => {
+    // Simulate the historical pattern: 186 fee-clearing instants scattered across 473 events,
+    // mostly in single-poll thin-book windows. Construct a pessimistic synthetic: 150 blips + 36 persistent.
+    const blips = Array.from({ length: 150 }, (_, i) => [
+      snap(`T${i * 3}`, false),
+      snap(`T${i * 3 + 1}`, true),   // the clearing instant
+      snap(`T${i * 3 + 2}`, false),
+    ]).flat();
+    const persistent = Array.from({ length: 18 }, (_, i) => [
+      snap(`P${i * 2}`, true),
+      snap(`P${i * 2 + 1}`, true),   // a 2-poll run
+    ]).flat();
+    const { summary } = classifyPersistence([...blips, ...persistent]);
+    expect(summary.blipCount).toBe(150);
+    expect(summary.persistentCount).toBe(36);
+    // blips dominate: ~80% of clearing instants are single-poll
+    expect(summary.persistentFrac).toBeCloseTo(36 / 186, 4);
+    expect(summary.persistentFrac).toBeLessThan(0.25);
   });
 });

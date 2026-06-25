@@ -22,6 +22,7 @@ import { dirname } from 'node:path';
 import {
   type ArbScanSummary,
   type CompleteSetEdge,
+  classifyPersistence,
   completeSetArbVerdict,
   completeSetEdge,
   summarizeScan,
@@ -114,23 +115,44 @@ interface EventBest {
   bestOverNet: number;
   underCleared: number;
   overCleared: number;
+  /** Move 2: persistence classification for fee-cleared instants. */
+  persistentClears: number;
+  blipClears: number;
 }
 
 function perEventBests(instants: Instant[], edges: CompleteSetEdge[]): EventBest[] {
   const by = new Map<string, EventBest>();
+  // Build per-slug clearing timeseries for Move 2 persistence pass
+  const clearingSeries = new Map<string, Array<{ capturedAt: string; clearing: boolean }>>();
+
   instants.forEach((ins, i) => {
     const e = edges[i]!;
     let b = by.get(ins.slug);
     if (!b) {
-      b = { slug: ins.slug, instants: 0, bestUnderNet: -Infinity, bestOverNet: -Infinity, underCleared: 0, overCleared: 0 };
+      b = { slug: ins.slug, instants: 0, bestUnderNet: -Infinity, bestOverNet: -Infinity, underCleared: 0, overCleared: 0, persistentClears: 0, blipClears: 0 };
       by.set(ins.slug, b);
     }
     b.instants++;
     if (Number.isFinite(e.underNet as number)) b.bestUnderNet = Math.max(b.bestUnderNet, e.underNet!);
     if (Number.isFinite(e.overNet as number)) b.bestOverNet = Math.max(b.bestOverNet, e.overNet!);
+    const isClearing = (e.underNet ?? -1) > 0 || (e.overNet ?? -1) > 0;
     if ((e.underNet ?? -1) > 0) b.underCleared++;
     if ((e.overNet ?? -1) > 0) b.overCleared++;
+    // Accumulate for persistence classifier
+    const series = clearingSeries.get(ins.slug) ?? [];
+    series.push({ capturedAt: ins.capturedAt, clearing: isClearing });
+    clearingSeries.set(ins.slug, series);
   });
+
+  // Run persistence classifier per-event and attach to the bests record
+  for (const [slug, series] of clearingSeries) {
+    const b = by.get(slug);
+    if (!b) continue;
+    const { summary } = classifyPersistence(series);
+    b.persistentClears = summary.persistentCount;
+    b.blipClears = summary.blipCount;
+  }
+
   return [...by.values()];
 }
 
@@ -152,6 +174,17 @@ export function buildReport(
   );
   const events = new Set(instants.map((i) => i.slug)).size;
 
+  // Move 2: universe-level persistence summary (aggregate all-slug clearing series)
+  const allSeries = instants.map((ins, i) => {
+    const e = edges[i]!;
+    return { capturedAt: ins.capturedAt, clearing: (e.underNet ?? -1) > 0 || (e.overNet ?? -1) > 0 };
+  });
+  // Note: the universe-wide series mixes ladders, so run per-event and aggregate
+  const totalClearing = bests.reduce((a, b) => a + b.underCleared + b.overCleared, 0);
+  const totalPersistent = bests.reduce((a, b) => a + b.persistentClears, 0);
+  const totalBlips = bests.reduce((a, b) => a + b.blipClears, 0);
+  void allSeries; // accumulated but aggregate is per-event above
+
   P('');
   P('=== Complete-set (structural / forecast-free) arbitrage scan — the 8th signal ===');
   P(`generated ${new Date().toISOString()}`);
@@ -167,12 +200,19 @@ export function buildReport(
   P(`  overround  NET > 0 (buy all NO,  hold → $(N−1)): ${summary.overFeeCleared} / ${summary.instants}  (${pct(summary.overFeeCleared / summary.instants)})`);
   P(`  best underround net ${pct(summary.bestUnderNet)} · best overround net ${pct(summary.bestOverNet)} · mean underround net ${pct(summary.meanUnderNet)}`);
   P('');
+  P('MOVE 2 — PERSISTENCE of the fee-clearing instants (blip vs consecutive):');
+  P(`  total fee-clearing instants: ${totalClearing}`);
+  P(`  persistent (≥2 consecutive polls): ${totalPersistent}  (${pct(totalClearing > 0 ? totalPersistent / totalClearing : 0)})`);
+  P(`  single-poll blips:                 ${totalBlips}  (${pct(totalClearing > 0 ? totalBlips / totalClearing : 0)})`);
+  P('  (strong prior: mostly blips → confirms the thin-open-book window is not continuously executable)');
+  P('');
   P('TOP 12 events by best net edge (where the rare fee-clearing dislocation lives):');
-  P('  event                                          inst  bestUnderNet  bestOverNet  under✓  over✓');
+  P('  event                                          inst  bestUnderNet  bestOverNet  under✓  over✓  persist  blips');
   for (const b of bests.slice(0, 12)) {
     P(
       `  ${b.slug.replace('highest-temperature-in-', '').padEnd(44).slice(0, 44)} ${String(b.instants).padStart(4)}  ` +
-        `${pct(b.bestUnderNet).padStart(11)}  ${pct(b.bestOverNet).padStart(10)}  ${String(b.underCleared).padStart(5)}  ${String(b.overCleared).padStart(4)}`,
+        `${pct(b.bestUnderNet).padStart(11)}  ${pct(b.bestOverNet).padStart(10)}  ${String(b.underCleared).padStart(5)}  ${String(b.overCleared).padStart(4)}  ` +
+        `${String(b.persistentClears).padStart(7)}  ${String(b.blipClears).padStart(5)}`,
     );
   }
   P('');
@@ -187,6 +227,7 @@ export function buildReport(
       events,
       summary,
       verdict,
+      persistence: { totalClearing, totalPersistent, totalBlips },
       topEvents: bests.slice(0, 25),
     },
   };

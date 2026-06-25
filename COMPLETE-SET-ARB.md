@@ -167,14 +167,58 @@ Re-run anytime: `pnpm tsx scripts/research/complete-set-arb-live.ts` (live) and
 
 ---
 
+---
+
+## Forward depth-capture (Moves 1/2/3 — built 2026-06-25, pending operator deploy)
+
+The original scan established the SIGNAL (161 fee-cleared instants, all in freshly-opened thin-book windows)
+but not the CAPACITY (book_top3 is NULL in exactly those windows in market_snapshots). Three follow-up moves
+resolve this — all built and tested on branch `agent/arb-depth-capture`, suite **1402 green**:
+
+**Move 1 — forward depth-capture (decisive, ~7-day runway).**
+`complete_set_depth_captures` (migration 0060) + `arb-depth-capture` Edge Function (every 30 min).
+Filters to open ladders with lead≤2d, fetches the full CLOB book for every bucket, computes `exec_sets`
+(profit-maximising whole sets at depth), and logs the result. After a week:
+- `exec_sets > 0` on a `fee_cleared` row AND `classifyPersistence` shows ≥2 consecutive polls → escalate.
+- `exec_sets == 0` always → capacity ≈ min-order-size → fully closed.
+Read: `SELECT dash_complete_set_depth(7)` or call the RPC from the operator dashboard.
+
+**Move 2 — persistence classifier (code-only, runs over historical data).**
+`classifyPersistence` in `packages/core/src/sim/complete-set-arb.ts` classifies each clearing instant as
+`persistent` (≥2 consecutive polls) or `singlePollBlip`. `complete-set-arb-scan.ts` now prints a
+persistence section. Strong prior: mostly blips — if confirmed, the window closes independently of depth.
+Re-run: `pnpm tsx scripts/research/complete-set-arb-scan.ts` (needs DB connection).
+
+**Move 3 — fee-structure reopening monitor (embedded in Move 1 tick, daily at UTC 10h).**
+Top-of-book check over all open ladders. Slack-alerts kind `ARB_REOPEN` if any ladder shows `fee_cleared`.
+This is the mechanical trigger for a Polymarket fee restructure — the one out-of-market event that un-walls
+the whole signal. No additional deploy needed: it's part of the `arb-depth-capture` Edge tick.
+
+**Operator go-live steps** (all three moves go live together):
+```bash
+# 1. Apply migration
+supabase migration apply --file supabase/migrations/0060_complete_set_depth_capture.sql
+# 2. Deploy edge function
+npx supabase functions deploy arb-depth-capture --use-api --project-ref lenysiqxihsmxljvyybt
+# 3. Verify cron
+select jobname, schedule from cron.job where jobname = 'arb-depth-capture';
+# 4. Verify first capture (after 30 min)
+select count(*) from complete_set_depth_captures;
+```
+
+---
+
 ## Where it lives
 
 | Piece | Path |
 |---|---|
-| Pure model + frozen verdict (edge math, fee wall, contemporaneity gate, depth-limited exec, verdict) | `packages/core/src/sim/complete-set-arb.ts` |
-| Tests (17) | `packages/core/test/complete-set-arb.test.ts` |
-| Historical scan spine (full universe) | `scripts/research/complete-set-arb-scan.ts` → `scripts/research/out/complete-set-arb-scan.{json,md}` |
+| Pure model + frozen verdict + `classifyPersistence` (Move 2) | `packages/core/src/sim/complete-set-arb.ts` |
+| Tests (26: 17 original + 9 persistence) | `packages/core/test/complete-set-arb.test.ts` |
+| Historical scan spine + Move 2 persistence columns | `scripts/research/complete-set-arb-scan.ts` |
 | Live probe (open ladders + CLOB depth) | `scripts/research/complete-set-arb-live.ts` |
+| Move 1 depth-capture table + RPC + cron | `supabase/migrations/0060_complete_set_depth_capture.sql` |
+| Move 1+3 Edge Function | `supabase/functions/arb-depth-capture/{index,handler}.ts` |
+| Handover + next-steps | `COMPLETE-SET-ARB-HANDOFF.md` |
 | The prior-art aside that named it | `research/REPORT-strategy-prior-art.md` §2d, §3 |
 
 _Analytics & forecasting record. Nothing here is trading advice; the live rail is DORMANT._

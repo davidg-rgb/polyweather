@@ -298,6 +298,162 @@ export function summarizeScan(edges: CompleteSetEdge[]): ArbScanSummary {
   };
 }
 
+// ──────────────────────────────────────────────────────────────────────────────────────────────────
+// persistence classifier — Move 2 (historical clears, forward captures)
+// ──────────────────────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * A single timestamped snapshot for persistence analysis — whether the complete-set dislocation
+ * was present (clearing or raw-inconsistent) and when the snapshot was taken.
+ */
+export interface ArbSnapshot {
+  /** ISO-8601 timestamp of the snapshot. */
+  capturedAt: string;
+  /** True if the snapshot showed ANY fee-clearing (under or over net > 0). */
+  clearing: boolean;
+}
+
+/** Classification of a fee-clearing dislocation: real persistent opportunity vs. blip. */
+export type PersistenceClass = 'persistent' | 'singlePollBlip';
+
+/** Per-snapshot persistence tag + context. */
+export interface TaggedSnapshot extends ArbSnapshot {
+  /** Whether this snapshot belongs to a persistent run (≥2 consecutive clears). */
+  persistenceClass: PersistenceClass;
+  /** Length of the consecutive-clearing run this snapshot belongs to (1 for blips). */
+  runLength: number;
+}
+
+/** Summary of persistence analysis over a set of snapshots. */
+export interface PersistenceSummary {
+  /** Total clearing snapshots evaluated. */
+  clearingCount: number;
+  /** Clearing snapshots belonging to runs of ≥2 consecutive polls. */
+  persistentCount: number;
+  /** Single-poll blips: fee-clearing for exactly one capture, then gone. */
+  blipCount: number;
+  /** Fraction of clearing snapshots that are persistent. */
+  persistentFrac: number;
+  /** Number of distinct persistent runs (≥2 consecutive clears). */
+  persistentRuns: number;
+  /** Number of single-poll blip events. */
+  blipRuns: number;
+  /** Mean run length for persistent runs (0 if none). */
+  meanPersistentRunLength: number;
+}
+
+/**
+ * Classify a series of timestamped snapshots (within a single ladder/event) by whether each
+ * fee-clearing instant was part of a PERSISTENT run (≥2 consecutive polls also clearing) or a
+ * SINGLE-POLL BLIP (clearing for exactly one capture, then gone or pre-gap).
+ *
+ * Key design: "consecutive" means consecutive in the snapshots array, NOT within an absolute
+ * time window. The caller is responsible for supplying snapshots from a single ladder ordered by
+ * capturedAt. A clearing snapshot is PERSISTENT if the immediately preceding OR following snapshot
+ * (in the same array) is also clearing. Pure + total.
+ *
+ * This answers the load-bearing question: even if Σask<1 clears the fee, can you assemble 11 legs
+ * across the ladder in the time between polls? If the dislocation only lives for one 30-min
+ * capture and is gone by the next, it's a blip — not executable in practice.
+ */
+export function classifyPersistence(snapshots: ArbSnapshot[]): {
+  tagged: TaggedSnapshot[];
+  summary: PersistenceSummary;
+} {
+  const snaps = Array.isArray(snapshots) ? snapshots : [];
+  if (snaps.length === 0) {
+    return {
+      tagged: [],
+      summary: {
+        clearingCount: 0,
+        persistentCount: 0,
+        blipCount: 0,
+        persistentFrac: 0,
+        persistentRuns: 0,
+        blipRuns: 0,
+        meanPersistentRunLength: 0,
+      },
+    };
+  }
+
+  // Walk the array and compute run lengths for consecutive clearing snapshots.
+  // A "run" is a maximal block of consecutive (by array index) clearing snapshots.
+  const runLengths: number[] = new Array(snaps.length).fill(0);
+  let i = 0;
+  while (i < snaps.length) {
+    if (!snaps[i]!.clearing) {
+      i++;
+      continue;
+    }
+    // find the end of this clearing run
+    let j = i;
+    while (j < snaps.length && snaps[j]!.clearing) j++;
+    const len = j - i;
+    for (let k = i; k < j; k++) runLengths[k] = len;
+    i = j;
+  }
+
+  const tagged: TaggedSnapshot[] = snaps.map((snap, idx) => ({
+    ...snap,
+    persistenceClass: (runLengths[idx]! >= 2 ? 'persistent' : 'singlePollBlip') as PersistenceClass,
+    runLength: runLengths[idx]!,
+  }));
+
+  const clearing = tagged.filter((s) => s.clearing);
+  const persistent = clearing.filter((s) => s.persistenceClass === 'persistent');
+  const blips = clearing.filter((s) => s.persistenceClass === 'singlePollBlip');
+
+  // Count distinct runs
+  let persistentRuns = 0;
+  let blipRuns = 0;
+  {
+    let k = 0;
+    while (k < snaps.length) {
+      if (!snaps[k]!.clearing) { k++; continue; }
+      let j = k;
+      while (j < snaps.length && snaps[j]!.clearing) j++;
+      const len = j - k;
+      if (len >= 2) persistentRuns++;
+      else blipRuns++;
+      k = j;
+    }
+  }
+
+  const persistentRunLengths = tagged
+    .filter((s) => s.clearing && s.persistenceClass === 'persistent' && s.runLength > 0)
+    .map((s) => s.runLength);
+  // De-dup to get one entry per run (each run length appears runLength times)
+  const uniqueRunLengths: number[] = [];
+  {
+    let k = 0;
+    while (k < snaps.length) {
+      if (!snaps[k]!.clearing) { k++; continue; }
+      let j = k;
+      while (j < snaps.length && snaps[j]!.clearing) j++;
+      const len = j - k;
+      if (len >= 2) uniqueRunLengths.push(len);
+      k = j;
+    }
+  }
+  const meanPersistentRunLength =
+    uniqueRunLengths.length > 0
+      ? uniqueRunLengths.reduce((a, v) => a + v, 0) / uniqueRunLengths.length
+      : 0;
+
+  return {
+    tagged,
+    summary: {
+      clearingCount: clearing.length,
+      persistentCount: persistent.length,
+      blipCount: blips.length,
+      persistentFrac: clearing.length > 0 ? persistent.length / clearing.length : 0,
+      persistentRuns,
+      blipRuns,
+      meanPersistentRunLength,
+    },
+  };
+}
+
 export type ArbVerdictLabel = 'PASS' | 'MARGINAL' | 'FAIL';
 
 export interface ArbVerdict {

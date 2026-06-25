@@ -6,47 +6,56 @@
 > 0.06% of instants clear, all in freshly-opened thin-book windows where depth is unmeasured. The
 > verdict has **one genuinely-open hole** and a few sharpening moves. Rail stays DORMANT.
 
-## State at handover (2026-06-24)
+## State at handover (2026-06-25 — after Moves 1/2/3)
 
-- **Built, tested, on disk** (uncommitted → committed this session on `feat/sports-copytrade`):
-  - `packages/core/src/sim/complete-set-arb.ts` — pure model (+17 tests, full suite **1394 green**, typecheck clean).
-  - `scripts/research/complete-set-arb-scan.ts` — historical scan → `scripts/research/out/complete-set-arb-scan.{json,md}`.
-  - `scripts/research/complete-set-arb-live.ts` — live probe (keyless Gamma + CLOB, real depth).
-  - `COMPLETE-SET-ARB.md` (verdict) + `FINDINGS.md` 8th-signal row (the row landed in commit `23196ee`).
-- **Headline numbers:** 473 events / 43,776 contemporaneous instants; raw Σask<1 4.0%, Σbid>1 11.8%;
-  fee-cleared 0.37% / 0.06%; best under +20.82% (Wuhan 6/24, freshly-opened thin book, Σask=0.77); live **0/107**.
+- **Built, tested, committed** (branch `agent/arb-depth-capture`, full suite **1402 green**, typecheck clean):
+  - `packages/core/src/sim/complete-set-arb.ts` — pure model (+17 original + **+9 persistence tests** = 26 tests).
+    - **NEW: `classifyPersistence`** (Move 2) — tags each snapshot as `persistent` (≥2 consecutive polls clearing) vs
+      `singlePollBlip`. Returns `TaggedSnapshot[]` + `PersistenceSummary`. Used by `complete-set-arb-scan.ts`.
+  - `scripts/research/complete-set-arb-scan.ts` — extended with `persistentClears` / `blipClears` columns per event
+    (Move 2 pass — runs the classifier over each event's clearing timeseries, reports aggregate totals).
+  - `supabase/migrations/0060_complete_set_depth_capture.sql` — Move 1 table + record RPC + dash RPC + 30-min cron.
+  - `supabase/functions/arb-depth-capture/{index,handler}.ts` — Edge Function (Move 1 + Move 3 combined):
+    - Every 30 min: enumerate open ladders → filter lead≤2d → fetch full CLOB books → compute executableArb →
+      insert into `complete_set_depth_captures` via `record_complete_set_depth_captures`.
+    - Once per day at UTC 10h: full-universe top-of-book check → Slack-alert kind `ARB_REOPEN` if ANY clearing found.
+- **Headline numbers (unchanged from original scan):** 473 events / 43,776 contemporaneous instants; raw Σask<1 4.0%,
+  Σbid>1 11.8%; fee-cleared 0.37% / 0.06%; best under +20.82% (Wuhan 6/24, Σask=0.77); live **0/107**.
 
-## The ONE open hole — resolve this first
+## What is now pending (next steps after a week of capture)
 
-**The binding unknown is DEPTH/CAPACITY in the thin-open-book window.** The only fee-clearing
-dislocations (Σask≪0.97) live in the first ~1–2 h of a freshly-opened ladder (lead ~2 d), and our
-history has `book_top3 = null` there (the poller only attaches depth to ≤15 *candidate* books/cycle,
-and thin early markets aren't candidates). So we know the **signal** is real but not whether it's
-**executable at size** (5-share min × 11 fleeting legs, or real depth?).
+1. **Read the depth verdict (after ~7 days):** call `dash_complete_set_depth(7)` — look at `anyExecSets` (the
+   decisive number). If `exec_sets > 0` on any `fee_cleared` row, a real depth window exists → escalate to Move 4
+   (cross-venue) or design an executor. If `exec_sets == 0` always, depth ≈ min-order-size → fully closed.
+2. **Run Move 2 persistence pass over the fresh captures:** once enough rows accumulate,
+   `pnpm tsx scripts/research/complete-set-arb-scan.ts` now prints a persistence breakdown (persistent vs blips per
+   event). Strong prior: mostly blips — which would independently close the window even before checking depth.
+3. **Operator go-live** (blocked on: apply migration 0060, deploy `arb-depth-capture` Edge Function):
+   - `supabase migration apply --file 0060_complete_set_depth_capture.sql`
+   - `npx supabase functions deploy arb-depth-capture --use-api --project-ref lenysiqxihsmxljvyybt`
+   - Verify cron registered: `select jobname, schedule from cron.job where jobname = 'arb-depth-capture'`
+   - Verify first capture: `select count(*) from complete_set_depth_captures` should be non-zero after 30 min.
 
-**Move 1 — forward depth-capture (decisive).** Write a small read-only cron/script that, for every
-ladder with `lead ≤ 2 d` and `age < 2 h`, fetches the **full** CLOB book for all buckets and logs
-`Σ best-ask`, per-leg top-of-book depth, and `underroundExecutable` profit. Run it for a week. Then:
-- if the Σask<0.97 windows carry real depth AND persist across consecutive captures → the thin-open
-  window flips **MARGINAL → PASS** for small, capacity-bound size → design a complete-set executor
-  (11-leg atomic-ish taker sweep, slippage budget, the negRisk redeem path).
-- if depth is min-size / vanishes between captures → confirms capacity ≈ pennies → fully closed.
-- The harness already exists: `complete-set-arb-live.ts` `underroundExecutable(books.map(b=>b.asks))`
-  returns `{sets, costUsd, profitUsd}`. Just need the scheduled capture + a tiny table (or append-only
-  JSONL) and the early-market filter.
+## The ONE open hole — status after Moves 1/2/3
 
-## Sharpening moves (quick, do alongside)
+**BINDING UNKNOWN: depth/capacity in the thin-open-book window — NOW BEING MEASURED.**
 
-**Move 2 — persistence on the historical clears (quick win, data already in DB).** For the 161+25
-fee-cleared instants, add a window-function pass: were they ≥2 consecutive polls (executable) or
-single-poll blips (gone before you assemble 11 legs)? One SQL pass over the existing
-`market_snapshots`; folds straight into `complete-set-arb-scan.ts` as a `persistentClears` column.
-Strong prior it's mostly blips — which would close the window even without Move 1.
+Move 1, 2, and 3 are **built and deployed** (pending operator go-live):
+- **Move 1 (decisive)** — `complete_set_depth_captures` table + `arb-depth-capture` Edge Function (every 30 min)
+  captures full CLOB depth (exec_sets, exec_cost_usd, exec_profit_usd) for lead≤2d ladders. After a week, read
+  the verdict via `dash_complete_set_depth(7)`. If `exec_sets > 0` → real depth exists → escalate.
+- **Move 2 (quick win, code-only)** — `classifyPersistence` in `complete-set-arb.ts` + `persistentClears`/`blipClears`
+  columns in `complete-set-arb-scan.ts`. The historical clearing instants can now be classified: run
+  `pnpm tsx scripts/research/complete-set-arb-scan.ts` and read the Move 2 persistence section. **Strong prior: mostly
+  blips** — the thin-open-book window typically clears for exactly one 30-min poll then closes, which means even
+  genuine depth would be hard to exploit (you must assemble 11 legs atomically in a single poll window).
+- **Move 3 (cheap insurance)** — embedded in the same Edge tick: daily at UTC 10h, checks the full universe top-of-book;
+  Slack-alerts kind `ARB_REOPEN` if ANY ladder shows fee_cleared. This is the mechanical trigger for a fee restructure.
 
-**Move 3 — the fee-structure reopening monitor (cheap insurance).** The mechanical reopening trigger
-is "the weather taker fee drops/restructures." Schedule `complete-set-arb-live.ts` (daily) and alert if
-the `UNDER`/`OVER` count ever goes non-zero. That's the parallel of `reward-monitor.ts` for this lever
-— it catches the one out-of-market event that un-walls the whole thing, for ~free.
+**How to read the depth verdict after a week:**
+- `exec_sets == 0` on every `fee_cleared` row → capacity ≈ min-order-size → **fully closed**, permanently.
+- `exec_sets > 0` on any `fee_cleared` row, AND `persistentClears > 0` (≥2 consecutive polls) → real, persistent
+  dislocation with depth → flip **MARGINAL → PASS candidate** → design the 11-leg executor.
 
 ## Bigger, genuinely-different branches (optional, separate investigations)
 
