@@ -50,6 +50,15 @@ export const KALSHI_FEE_RATE = 0.07;
 /** The integer-°F grid the implied distributions are reconstructed on (covers all realistic Tmax). */
 export const GRID_LO_F = 20;
 export const GRID_HI_F = 130;
+/**
+ * Width (°F) over which an OPEN tail bin's mass is concentrated near its boundary, instead of spread
+ * across the whole grid. The lesson that forced this (Denver, 2026-06-25): on a cool day Kalshi priced
+ * 83% on "74° or below"; spreading that mass uniformly down to GRID_LO_F dragged the implied mean to
+ * ~53°F and manufactured a phantom 21°F cross-venue divergence + a phantom edge — when both venues in
+ * fact agreed the high was ~73-74°F. A "≤74" outcome almost always means low-70s, not 30s; concentrate
+ * the tail within TAIL_SPREAD_F of the boundary. 3°F ≈ one-and-a-half interior bins.
+ */
+export const TAIL_SPREAD_F = 3;
 
 const usablePx = (p: number | null | undefined): p is number =>
   p != null && Number.isFinite(p) && p > 0 && p < 1;
@@ -121,8 +130,24 @@ export function impliedLadder(ladder: VenueLadder): ImpliedLadder {
   for (const b of buckets) {
     const mid = bucketMid(b);
     if (mid == null || mid <= 0) continue;
-    const lo = b.loF == null ? GRID_LO_F : Math.max(GRID_LO_F, Math.round(b.loF));
-    const hi = b.hiF == null ? GRID_HI_F : Math.min(GRID_HI_F, Math.round(b.hiF));
+    const lowTail = b.loF == null;
+    const highTail = b.hiF == null;
+    if (lowTail && highTail) continue; // a bin with no bounds is degenerate
+    // Open tails concentrate their mass within TAIL_SPREAD_F of the boundary (see TAIL_SPREAD_F): a
+    // "≤X" bin spans [X−(TAIL_SPREAD_F−1), X]; a "≥X" bin spans [X, X+(TAIL_SPREAD_F−1)]. Interior
+    // (between) bins keep their exact range.
+    let lo: number;
+    let hi: number;
+    if (lowTail) {
+      hi = Math.min(GRID_HI_F, Math.max(GRID_LO_F, Math.round(b.hiF!)));
+      lo = Math.max(GRID_LO_F, hi - (TAIL_SPREAD_F - 1));
+    } else if (highTail) {
+      lo = Math.max(GRID_LO_F, Math.min(GRID_HI_F, Math.round(b.loF!)));
+      hi = Math.min(GRID_HI_F, lo + (TAIL_SPREAD_F - 1));
+    } else {
+      lo = Math.max(GRID_LO_F, Math.round(b.loF!));
+      hi = Math.min(GRID_HI_F, Math.round(b.hiF!));
+    }
     if (hi < lo) continue;
     spans.push({
       loF: lo,
@@ -222,8 +247,19 @@ export interface BasisModel {
   pmf: Record<number, number>;
 }
 
-/** Conservative default: CLI = WU 78% of days, +1°F 18%, +2°F 4%. Refined by the basis estimator. */
+/** The research prior: CLI = WU 78% of days, +1°F 18%, +2°F 4% (CLI runs ≥ WU). */
 export const DEFAULT_BASIS_PRIOR: BasisModel = { pmf: { 0: 0.78, 1: 0.18, 2: 0.04 } };
+
+/**
+ * Basis-NEUTRAL (CLI = WU). The v1 LIVE capture uses THIS, not the CLI-hot prior — empirically (the
+ * first 6-city panel, 2026-06-25) an unverified CLI-hot prior SYSTEMATICALLY manufactures a
+ * buy-Kalshi edge even when the two venues' implied means agree to <1°F: the CLI premium is already in
+ * Kalshi's price (cashflow) and re-crediting it in the expected payoff double-counts it. Measuring the
+ * PURE price dislocation basis-neutral is the conservative kill-gate stance (won't false-PASS); the
+ * REALIZED (CLI − WU) basis from settled outcomes (cross-venue-basis.ts) then refines it, and a
+ * basis-driven edge is only believed once the realized basis confirms it.
+ */
+export const NEUTRAL_BASIS: BasisModel = { pmf: { 0: 1 } };
 
 /**
  * P(the two resolution sources straddle the threshold k) under a market PMF + a basis model: the

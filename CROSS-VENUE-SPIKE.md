@@ -102,10 +102,28 @@ for the 6 overlap cities, runs the engine, and appends one row per matched city-
   per-bucket 24h volume. A net-positive day would trigger a **true CLOB/orderbook depth-walk** before any
   capital (the executor-design step). The orderbook parser (`parseKalshiOrderbook`) is built and tested
   for that seam.
-- **Basis (v1):** the conservative research prior `DEFAULT_BASIS_PRIOR` (CLI = WU 78% / +1°F 18% / +2°F
-  4%). `scripts/research/cross-venue-basis.ts` refines it empirically from the captured implied-mean
-  differences once ≥20 days accrue; the gold-standard refinement is the realized (CLI − WU) from each
-  venue's settled outcome.
+- **Basis (v1 = NEUTRAL):** the live capture measures the **pure price dislocation** with a basis-neutral
+  model (`NEUTRAL_BASIS`, CLI = WU), **not** the CLI-hot prior. The first 6-city panel (2026-06-25)
+  showed an unverified CLI-hot prior *manufactures* a systematic buy-Kalshi edge even when the venues'
+  implied means agree to <1°F (the CLI premium is already in Kalshi's price AND re-credited in the
+  expected payoff → double-counted). Neutral is the conservative kill-gate stance (won't false-PASS);
+  `scripts/research/cross-venue-basis.ts` + the realized (CLI − WU) from settled outcomes refine it, and
+  a basis-driven edge is only believed once the realized basis confirms it. `DEFAULT_BASIS_PRIOR` stays
+  in the engine for that basis-aware re-analysis.
+
+### Two engine refinements the live data forced (2026-06-25)
+
+The first capture over all 6 cities surfaced — and verified the fix for — two robustness issues:
+
+1. **Open-tail mass distortion (the Denver lesson).** On a cool day Kalshi priced 83% on "74° or below";
+   spreading that mass uniformly to the grid floor (20°F) dragged the implied mean to ~53°F and faked a
+   **21°F divergence + a phantom edge** — when both venues in fact agreed the high was ~73-74°F. Fix:
+   `TAIL_SPREAD_F` concentrates an open tail's mass within 3°F of its boundary. Denver now reads
+   poly 73.73 / kalshi 73.81 (−0.08°F) — agreement, no phantom.
+2. **Basis-prior directional bias** → the neutral-basis decision above.
+
+After both: all 6 cities agree on the implied mean to **<1°F**, the day-1 read is **agreement, not edge** —
+the strong-prior **KILL** is intact, now measured cleanly.
 
 ## Reading the verdict
 
