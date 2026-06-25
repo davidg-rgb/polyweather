@@ -8,6 +8,7 @@
 import { type ParsedEvent } from '../../../packages/core/src/index.ts';
 import {
   MIN_DEPTH_SHARES,
+  NEUTRAL_BASIS,
   crossVenueDivergence,
   crossVenueEdge,
   impliedLadder,
@@ -98,7 +99,9 @@ export function buildCaptureRow(
   if (!polyImpl.ok || !kalshiImpl.ok) return null;
 
   const div = crossVenueDivergence(polyImpl, kalshiImpl);
-  const edge = crossVenueEdge(polyImpl, kalshiImpl);
+  // v1: basis-NEUTRAL — measure the pure cross-venue price dislocation (a CLI-hot prior manufactures a
+  // systematic buy-Kalshi edge even when the venues agree; the realized basis refines later). See NEUTRAL_BASIS.
+  const edge = crossVenueEdge(polyImpl, kalshiImpl, NEUTRAL_BASIS);
 
   return {
     capturedAt,

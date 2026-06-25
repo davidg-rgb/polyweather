@@ -92,6 +92,26 @@ describe('impliedLadder — overround removed, proper PMF', () => {
     expect(survivalAt(impl, 131)).toBe(0); // nothing above the grid ceiling
   });
 
+  it('concentrates a dominant open tail near its boundary — no phantom mean distortion (the Denver fix)', () => {
+    // Live lesson (Denver 2026-06-25): a cool day put 83% on "74° or below". Spreading that uniformly to
+    // GRID_LO_F dragged the implied mean to ~53°F and faked a 21°F divergence. The mean must sit low-70s.
+    const coolDenver: VenueLadder = {
+      venue: 'kalshi',
+      buckets: [
+        { loF: null, hiF: 74, yesAsk: 0.84, yesBid: 0.83, topAskSize: 100, topBidSize: 100 },
+        { loF: 75, hiF: 76, yesAsk: 0.11, yesBid: 0.09, topAskSize: 100, topBidSize: 100 },
+        { loF: 77, hiF: 78, yesAsk: 0.04, yesBid: 0.03, topAskSize: 100, topBidSize: 100 },
+        { loF: 79, hiF: 80, yesAsk: 0.01, yesBid: null, topAskSize: 100, topBidSize: 100 },
+        { loF: 81, hiF: 82, yesAsk: 0.03, yesBid: null, topAskSize: 100, topBidSize: 100 },
+        { loF: 83, hiF: null, yesAsk: 0.01, yesBid: null, topAskSize: 100, topBidSize: 100 },
+      ],
+    };
+    const impl = impliedLadder(coolDenver);
+    expect(impl.ok).toBe(true);
+    expect(impl.meanF).toBeGreaterThan(71);
+    expect(impl.meanF).toBeLessThan(76);
+  });
+
   it('is total: junk / empty input → ok:false, never throws', () => {
     expect(impliedLadder({ venue: 'polymarket', buckets: [] }).ok).toBe(false);
     // @ts-expect-error — deliberately malformed
