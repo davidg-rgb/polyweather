@@ -377,7 +377,12 @@ function buildWuConsensus(poly: ImpliedLadder, kalshi: ImpliedLadder, weights: A
 
 export interface CrossVenueEdge {
   ok: boolean;
-  /** Best net edge per $1 of threshold notional, after fees, with each leg valued under the consensus. */
+  /**
+   * Best net edge per $1 of threshold notional — the MAX over all constructible positions, of EITHER
+   * SIGN. (It used to be tracked only when > 0, which silently made every efficient day return a
+   * zeroed/no-depth edge and dropped it from the gate — the winners-only-denominator bug. It now
+   * reports the real best edge, positive or negative, so efficient days carry their true ≤0 edge.)
+   */
   bestNetEdge: number;
   /** The threshold (°F) of the best edge. */
   atF: number;
@@ -387,13 +392,23 @@ export interface CrossVenueEdge {
   cashflow: number;
   /** Expected resolution payoff E[long(≥k)] − E[short(≥k')], each under its own source via the consensus. */
   expPayoff: number;
-  /** Limiting top-of-book size (contracts/shares) across the two legs at the best edge — the depth. */
+  /** Limiting top-of-book size across the two legs at the best position (informational; mixed units). */
   limitDepth: number;
+  /** Polymarket book liquidity = max bucket 24h volume (USD) — the venue-appropriate depth gate input. */
+  polyBookDepth: number;
+  /** Kalshi book liquidity = max bin open interest (contracts) — the venue-appropriate depth gate input. */
+  kalshiBookDepth: number;
 }
 
 const EMPTY_EDGE: CrossVenueEdge = {
-  ok: false, bestNetEdge: 0, atF: NaN, direction: 'none', cashflow: 0, expPayoff: 0, limitDepth: 0,
+  ok: false, bestNetEdge: 0, atF: NaN, direction: 'none', cashflow: 0, expPayoff: 0,
+  limitDepth: 0, polyBookDepth: 0, kalshiBookDepth: 0,
 };
+
+/** Max top-of-book size across a ladder's quoted spans — a venue's representative book liquidity. */
+function maxBookDepth(impl: ImpliedLadder): number {
+  return impl.spans.reduce((m, s) => Math.max(m, Number.isFinite(s.topAskSize) ? s.topAskSize : 0), 0);
+}
 
 /**
  * The executable, basis-adjusted cross-venue edge for one matched city-day snapshot. For each integer
@@ -413,15 +428,21 @@ const EMPTY_EDGE: CrossVenueEdge = {
 export function crossVenueEdge(
   poly: ImpliedLadder,
   kalshi: ImpliedLadder,
-  basis: BasisModel = DEFAULT_BASIS_PRIOR,
+  basis: BasisModel = NEUTRAL_BASIS,
 ): CrossVenueEdge {
   if (!poly?.ok || !kalshi?.ok) return EMPTY_EDGE;
+  // Book liquidity is a property of the BOOKS, not the position — compute it independent of edge sign so
+  // the depth gate (buildCaptureRow) counts efficient liquid days too, not just winners.
+  const polyBookDepth = maxBookDepth(poly);
+  const kalshiBookDepth = maxBookDepth(kalshi);
   const weights = basisWeights(basis);
   const wu = buildWuConsensus(poly, kalshi, weights);
   const eOwn = (venue: VenueName, k: number): number =>
     venue === 'polymarket' ? survivalOfPmf(wu, k) : cliSurvival(wu, weights, k);
 
-  let best = EMPTY_EDGE;
+  // Track the best CONSTRUCTIBLE position by netEdge regardless of sign (bestVal seeded at −Infinity, not 0).
+  let best: CrossVenueEdge | null = null;
+  let bestVal = Number.NEGATIVE_INFINITY;
   const consider = (
     longV: ImpliedLadder, longRate: number,
     shortV: ImpliedLadder, shortRate: number,
@@ -435,8 +456,12 @@ export function crossVenueEdge(
     const cashflow = sell.proceeds - buy.cost;
     const expPayoff = eOwn(longV.venue, k) - eOwn(shortV.venue, sell.kClean);
     const netEdge = cashflow + expPayoff;
-    if (netEdge > best.bestNetEdge) {
-      best = { ok: true, bestNetEdge: netEdge, atF: k, direction, cashflow, expPayoff, limitDepth: Math.min(buy.minSize, sell.minSize) };
+    if (netEdge > bestVal) {
+      bestVal = netEdge;
+      best = {
+        ok: true, bestNetEdge: netEdge, atF: k, direction, cashflow, expPayoff,
+        limitDepth: Math.min(buy.minSize, sell.minSize), polyBookDepth, kalshiBookDepth,
+      };
     }
   };
 
@@ -449,38 +474,63 @@ export function crossVenueEdge(
     consider(poly, POLY_FEE_RATE, kalshi, KALSHI_FEE_RATE, k, 'buyPolySellKalshi');
     consider(kalshi, KALSHI_FEE_RATE, poly, POLY_FEE_RATE, k, 'buyKalshiSellPoly');
   }
-  return best.ok ? best : { ...EMPTY_EDGE, ok: poly.ok && kalshi.ok };
+  // best=null ⇒ no constructible position (a degenerate book) ⇒ ok:false, excluded. Book depth carried for telemetry.
+  return best ?? { ...EMPTY_EDGE, ok: false, polyBookDepth, kalshiBookDepth };
 }
 
 // ──────────────────────────────────────────────────────────────────────────────────────────────────
 // the panel + the frozen verdict
 // ──────────────────────────────────────────────────────────────────────────────────────────────────
 
-/** One matched city-day observation: the best executable net edge + whether it had real depth. */
+/** One matched city-day observation: the best executable net edge + whether the BOOKS had real depth. */
 export interface PanelDay {
   city: string;
   targetDate: string;
   netEdge: number;
-  /** Limiting top-of-book size at the best edge (contracts/shares). */
-  depth: number;
+  /** Both venues' books are liquid enough to trade (computed per-venue in buildCaptureRow — see below). */
+  hasRealDepth: boolean;
 }
 
-/** Minimum limiting top-of-book size for a city-day to count as having "real depth" (not pennies). */
-export const MIN_DEPTH_SHARES = 20;
+/** Min Kalshi bin open interest (contracts) for the Kalshi book to count as tradable. */
+export const MIN_KALSHI_OI = 50;
+/** Min Polymarket bucket 24h volume (USD) for the Polymarket book to count as tradable. */
+export const MIN_POLY_VOL_USD = 100;
 /** The frozen win-fraction bar: ≥10% of real-depth city-days must be net-positive. */
 export const MIN_WIN_FRAC = 0.10;
-/** Minimum real-depth city-days before the gate can render a non-INSUFFICIENT verdict. */
+/** Minimum real-depth city-day rows before the gate can render a non-INSUFFICIENT verdict. */
 export const MIN_PANEL_DAYS = 12;
+/** Minimum distinct cities (clusters) — a cross-venue edge must show across cities, not in one. */
+export const MIN_CITIES = 4;
+/** Minimum distinct target dates — the panel must span real calendar time, not one day's snapshots. */
+export const MIN_DISTINCT_DAYS = 5;
+
+/** Two-sided 95% t critical value by degrees of freedom (small-sample; → 1.96 in the tail). */
+function tCrit(df: number): number {
+  if (df <= 0) return Number.POSITIVE_INFINITY;
+  const T: Record<number, number> = {
+    1: 12.706, 2: 4.303, 3: 3.182, 4: 2.776, 5: 2.571, 6: 2.447,
+    7: 2.365, 8: 2.306, 9: 2.262, 10: 2.228,
+  };
+  if (df <= 10) return T[df]!;
+  if (df <= 15) return 2.131;
+  if (df <= 20) return 2.086;
+  if (df <= 30) return 2.042;
+  return 1.96;
+}
 
 export type CrossVenueLabel = 'PASS' | 'KILL' | 'INSUFFICIENT_DATA';
 
 export interface CrossVenueVerdict {
   label: CrossVenueLabel;
-  /** Real-depth city-days evaluated. */
+  /** Real-depth city-day rows evaluated. */
   nDepthDays: number;
-  /** Fraction of real-depth days with a net-positive executable edge. */
+  /** Distinct cities (clusters) with real-depth days. */
+  nCities: number;
+  /** Distinct target dates spanned. */
+  nDistinctDays: number;
+  /** Fraction of real-depth day-rows with a net-positive executable edge. */
   winFrac: number;
-  /** Mean net edge over real-depth days + its 95% CI (normal approx). */
+  /** Grand mean of the per-CITY mean net edges + its t-based 95% CI (clustered by city). */
   meanNetEdge: number;
   ciLow: number;
   ciHigh: number;
@@ -490,50 +540,73 @@ export interface CrossVenueVerdict {
 /**
  * The pre-registered, operator-ratified (2026-06-25) kill criterion. PASS only if a NON-NEGLIGIBLE
  * fraction of matched, real-depth city-days carries a positive executable basis-adjusted edge AND the
- * pooled mean edge is significantly > 0 (95% CI excludes 0). Anything else with enough data is a KILL
- * (the 10th falsified signal — the same structural-wall destination as the 8th). Pure + total.
+ * mean edge is significantly > 0. The significance test is CLUSTERED BY CITY (each city's mean netEdge
+ * is ONE observation, t-interval on C−1 df) — the panel's rows share a city's persistent microstructure
+ * + per-station CLI-vs-WU basis, so treating same-city / multi-target-date rows as i.i.d. understates
+ * the SE and risks a false PASS (a per-city artifact faking significance). INSUFFICIENT_DATA until the
+ * panel has enough rows AND enough distinct cities AND spans enough distinct target dates (≥1 calendar
+ * day of 6-city snapshots is NOT a week). Anything else with enough data is a KILL (the 10th falsified
+ * signal — the same structural-wall destination as the 8th). Pure + total.
  */
-export function crossVenueVerdict(panel: PanelDay[], opts: { minWinFrac?: number; minDepth?: number; minDays?: number } = {}): CrossVenueVerdict {
+export function crossVenueVerdict(
+  panel: PanelDay[],
+  opts: { minWinFrac?: number; minDays?: number; minCities?: number; minDistinctDays?: number } = {},
+): CrossVenueVerdict {
   const minWinFrac = opts.minWinFrac ?? MIN_WIN_FRAC;
-  const minDepth = opts.minDepth ?? MIN_DEPTH_SHARES;
   const minDays = opts.minDays ?? MIN_PANEL_DAYS;
+  const minCities = opts.minCities ?? MIN_CITIES;
+  const minDistinctDays = opts.minDistinctDays ?? MIN_DISTINCT_DAYS;
   const rows = (Array.isArray(panel) ? panel : []).filter(
-    (d) => d && Number.isFinite(d.netEdge) && Number.isFinite(d.depth) && d.depth >= minDepth,
+    (d) => d && Number.isFinite(d.netEdge) && d.hasRealDepth === true,
   );
   const n = rows.length;
+  const cities = [...new Set(rows.map((d) => d.city))];
+  const nDistinctDays = new Set(rows.map((d) => d.targetDate)).size;
   const pct = (v: number): string => `${(v * 100).toFixed(2)}%`;
   const usd = (v: number): string => `$${v.toFixed(4)}`;
+  const base = { nDepthDays: n, nCities: cities.length, nDistinctDays };
 
-  if (n < minDays) {
+  if (n < minDays || cities.length < minCities || nDistinctDays < minDistinctDays) {
     return {
-      label: 'INSUFFICIENT_DATA', nDepthDays: n, winFrac: NaN, meanNetEdge: NaN, ciLow: NaN, ciHigh: NaN,
-      reason: `INSUFFICIENT_DATA — only ${n} matched real-depth city-days (need ≥ ${minDays}). Keep capturing.`,
+      label: 'INSUFFICIENT_DATA', ...base, winFrac: NaN, meanNetEdge: NaN, ciLow: NaN, ciHigh: NaN,
+      reason:
+        `INSUFFICIENT_DATA — ${n} real-depth city-days across ${cities.length} cities / ${nDistinctDays} distinct dates ` +
+        `(need ≥ ${minDays} rows, ≥ ${minCities} cities, ≥ ${minDistinctDays} dates). Keep capturing.`,
     };
   }
 
+  // win fraction over day-rows (the ≥10% bar)
   const wins = rows.filter((d) => d.netEdge > 0).length;
   const winFrac = wins / n;
-  const mean = rows.reduce((a, d) => a + d.netEdge, 0) / n;
-  const variance = n > 1 ? rows.reduce((a, d) => a + (d.netEdge - mean) ** 2, 0) / (n - 1) : 0;
-  const se = Math.sqrt(variance / n);
-  const ciLow = mean - 1.96 * se;
-  const ciHigh = mean + 1.96 * se;
+
+  // significance CLUSTERED BY CITY: each city's mean netEdge is one observation
+  const cityMeans = cities.map((c) => {
+    const cr = rows.filter((d) => d.city === c);
+    return cr.reduce((a, d) => a + d.netEdge, 0) / cr.length;
+  });
+  const C = cityMeans.length;
+  const mean = cityMeans.reduce((a, v) => a + v, 0) / C;
+  const variance = C > 1 ? cityMeans.reduce((a, v) => a + (v - mean) ** 2, 0) / (C - 1) : 0;
+  const se = Math.sqrt(variance / C);
+  const t = tCrit(C - 1);
+  const ciLow = mean - t * se;
+  const ciHigh = mean + t * se;
 
   if (winFrac >= minWinFrac && ciLow > 0) {
     return {
-      label: 'PASS', nDepthDays: n, winFrac, meanNetEdge: mean, ciLow, ciHigh,
+      label: 'PASS', ...base, winFrac, meanNetEdge: mean, ciLow, ciHigh,
       reason:
-        `PASS — ${pct(winFrac)} of ${n} real-depth city-days carry a positive executable basis-adjusted edge ` +
-        `(≥ ${pct(minWinFrac)} bar) AND the mean net edge ${usd(mean)} has a 95% CI [${usd(ciLow)}, ${usd(ciHigh)}] ` +
-        `excluding 0. A standing cross-venue dislocation beyond fees + offset + basis. Escalate to an executor design.`,
+        `PASS — ${pct(winFrac)} of ${n} real-depth city-days net-positive (≥ ${pct(minWinFrac)} bar) AND the ` +
+        `city-clustered mean edge ${usd(mean)} has a 95% CI [${usd(ciLow)}, ${usd(ciHigh)}] (t, ${C} cities) excluding 0. ` +
+        `A standing cross-venue dislocation beyond fees + offset + basis. Escalate to an executor design.`,
     };
   }
   return {
-    label: 'KILL', nDepthDays: n, winFrac, meanNetEdge: mean, ciLow, ciHigh,
+    label: 'KILL', ...base, winFrac, meanNetEdge: mean, ciLow, ciHigh,
     reason:
       `KILL (10th signal) — ${pct(winFrac)} of ${n} real-depth city-days net-positive (vs ${pct(minWinFrac)} bar); ` +
-      `mean net edge ${usd(mean)}, 95% CI [${usd(ciLow)}, ${usd(ciHigh)}]. ` +
-      `The cross-venue price difference does not clear the combined Polymarket+Kalshi fee, the 1°F bin-offset stub, ` +
-      `and the NWS-CLI-vs-Wunderground basis. Structurally walled like the complete-set arb. Rail stays DORMANT.`,
+      `city-clustered mean edge ${usd(mean)}, 95% CI [${usd(ciLow)}, ${usd(ciHigh)}] (t, ${C} cities). ` +
+      `The cross-venue price difference does not clear the combined fee + the 1°F bin-offset stub + the ` +
+      `NWS-CLI-vs-Wunderground basis. Structurally walled like the complete-set arb. Rail stays DORMANT.`,
   };
 }
