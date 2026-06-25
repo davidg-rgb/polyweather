@@ -6,10 +6,16 @@
 > the orthogonal question: **do two independent venues price the same day's high differently — beyond
 > what it costs to harvest the difference?** It needs zero forecast skill.
 >
-> **Status (2026-06-25): BUILT + LIVE (forward capture).** Pre-registered, operator-ratified gated
-> paper measurement; no capital, the live trading rail stays DORMANT. The verdict renders after ~1 week
-> of matched panel. Strong prior from the day-1 NYC read: **lands KILL (fee/offset/basis-walled), like
-> the 8th signal** — but it is the only executable orthogonal lever, so it earns one clean measurement.
+> **Status (2026-06-26): VERDICT = KILL — a CAPACITY WALL (the 10th falsified signal).** The forward
+> paper panel + a live both-venue depth verification settled it early and decisively: a real quoted
+> cross-venue price gap exists (day-1: 6 of 7 real-depth city-days net-positive, NYC +0.26 / Miami +0.23),
+> but the cumulative YES≥k synthetic fills at only **1–10 contracts/shares of TRUE touch depth** on its
+> thin tail legs — below any tradable floor — on *every* net-positive city-day, stable across samples. A
+> quoted edge that is not capturable money. Same structural-wall destination as the 8th signal (there the
+> fee; here touch depth). No capital, rail stays DORMANT. **What this forced:** the original gate scored
+> the quoted edge against a 24h-volume/OI **proxy** that would have FALSE-PASSED (winFrac 0.857); it is now
+> hardened to require true both-book executable depth (migration **0064** — winFrac over *executable* wins
+> = **0 → KILL**). Verification harness: `scripts/research/cross-venue-verify.ts`. See §"The capacity wall".
 
 ---
 
@@ -32,11 +38,13 @@ both counts:
 Two structural frictions stand between "the prices differ" and "you can lock a profit". The whole
 measurement is whether the cross-venue price gap ever clears **both**:
 
-1. **A 1°F bin offset.** Polymarket bins start EVEN (80-81, 82-83…); Kalshi bins start ODD (79-80,
-   81-82…) — verified live on both books. Their clean cumulative thresholds **interleave** (Polymarket
-   gives P(high≥K) at even K, Kalshi at odd K), so the two venues **never share a constructible
-   threshold**. Any cross-venue position carries a ~1°F directional stub. The engine prices that stub
-   (`offset`) so the "free" cashflow from selling a broader event than you bought is netted back out.
+1. **A 1°F bin offset — but only for SOME cities (premise corrected 2026-06-26).** Polymarket bins start
+   EVEN (80-81, 82-83…). Kalshi's parity is **city-dependent**, not universally odd as first stated:
+   live, **NYC is odd-start** (79-80, 81-82…) — a real 1°F offset — but **Miami/LA/Denver are EVEN-start**
+   (90-91, 92-93… / 70-71, 72-73…) = the *same* grid as Polymarket, so those venues **DO share clean
+   thresholds** (the engine confirms `expPayoff = 0` there). For the offset cities the engine prices the
+   ~1°F directional stub (`offset`) so the "free" cashflow from selling a broader event than you bought is
+   netted back out; for the aligned cities the cross-venue gap is a direct same-threshold comparison.
 
 2. **A dual resolution source.** NWS CLI is QC'd and runs **≥ Wunderground** (occasionally +1°F —
    `research/REPORT-weather-data.md §d`). So even a bin-aligned position is **not market-neutral**: the
@@ -125,24 +133,57 @@ The first capture over all 6 cities surfaced — and verified the fix for — tw
 After both: all 6 cities agree on the implied mean to **<1°F**, the day-1 read is **agreement, not edge** —
 the strong-prior **KILL** is intact, now measured cleanly.
 
+## The capacity wall — why it KILLs (verdict 2026-06-26)
+
+The day-1 panel did **not** read as agreement. Across the 6 cities it showed **6 of 7 real-depth
+city-days net-positive** — NYC **+0.26**, Miami **+0.23**, persistent across ticks. On the original
+24h-volume/OI depth **proxy** that is winFrac **0.857** → a screaming (and **false**) PASS. The strong
+prior said KILL, so the trend was investigated before the panel could render, with a live both-venue
+verification (`scripts/research/cross-venue-verify.ts` — re-runs the pure engine against live books AND
+walks the TRUE order book on **both** venues at the touch):
+
+1. **The edges are real quoted gaps, not noise** — reproduced across ticks and across an independent
+   live re-fetch; driven by a standing ~1°F inter-venue mean disagreement. (Not sub-bin reconstruction
+   noise either — NYC's cashflow exceeds the *maximum* P(offset integer) a 2°F bin can hold.)
+2. **…but not capturable money.** Harvesting the gap means constructing the cumulative YES≥k synthetic on
+   both venues, and that synthetic is throttled by its **thinnest leg** — the thin TAIL bins. TRUE touch
+   depth: **NYC 36–72, Miami 6, LA 5, Denver 5–6 contracts/shares** — `min` over both books, stable across
+   samples. The proxy overstated executable capacity by **1–3 orders of magnitude**.
+3. **The biggest raw edges are same-day running-max LATENCY** (the WO-5 effect — Polymarket's Wunderground
+   running max already sees today's high while Kalshi's CLI book lags), not the cross-venue forecast thesis.
+
+**The gate fix (migration 0064).** A WIN now requires `is_executable` — the binding both-book touch depth
+≥ `MIN_EXEC_SIZE` (=25), walked live for net-positive rows in the capture handler (STEP 3.5) — **not** the
+volume proxy. `has_real_depth` stays the proxy DENOMINATOR (else it collapses to 0 and the verdict
+deadlocks at INSUFFICIENT_DATA). Live result: **winFrac 0/7 → KILL.** The rail stays DORMANT.
+
 ## Reading the verdict
 
-- **Operator dash:** `select dash_cross_venue(7);` — matched days, real-depth days, win fraction, mean
-  net edge, per-city divergence, recent captures (jsonb object, `operator_guard`).
+- **Operator dash:** `select dash_cross_venue(7);` — now reports `netPositiveDepthDays` (QUOTED) vs
+  `executableWinDays` (REAL), `winFrac` over executable wins, and `maxExecSize` (the capacity wall in
+  units). jsonb object, `operator_guard`.
 - **Full verdict:** `pnpm tsx scripts/research/cross-venue-arb-scan.ts --days 14` — collapses to one
-  city-day per (city, target_date) and renders the frozen `crossVenueVerdict`.
-- **Reopening trigger:** a non-zero, CI-clean net-positive fraction in the scan → escalate to an executor
-  design (and a real depth-walk). Otherwise: KILL, logged as the 10th signal in `FINDINGS.md`.
+  city-day per (city, target_date); the report shows the quoted-vs-executable split and renders the
+  frozen `crossVenueVerdict`.
+- **Live depth check:** `pnpm tsx scripts/research/cross-venue-verify.ts [--rounds 3]` — one-shot both-
+  venue executable-capacity probe (the harness that settled the verdict).
+- **Reopening trigger:** an `executableWinDays > 0` with a CI-clean positive fraction → escalate to an
+  executor design + a full depth-walk. Otherwise it stays the 10th falsified signal in `FINDINGS.md`.
 
 ## Build inventory
 
 | Piece | File |
 |---|---|
-| Pure engine + frozen gate | `packages/core/src/sim/cross-venue-arb.ts` (+ `test/cross-venue-arb.test.ts`) |
-| Kalshi venue parsers | `packages/core/src/kalshi/markets.ts` (+ `test/kalshi-markets.test.ts`) |
+| Pure engine + frozen gate + **executable-depth gate** (`bindingExecutable`, `MIN_EXEC_SIZE`, leg exposure on `CrossVenueEdge`, `executable` on `PanelDay`) | `packages/core/src/sim/cross-venue-arb.ts` (+ `test/cross-venue-arb.test.ts`) |
+| Kalshi venue parsers + orderbook walker | `packages/core/src/kalshi/markets.ts` (+ `test/kalshi-markets.test.ts`) |
 | Capture migration | `supabase/migrations/0062_cross_venue_capture.sql` |
-| Capture Edge Function | `supabase/functions/cross-venue-capture/{index,handler,pure}.ts` (+ `handler.test.ts`) |
-| Verdict scan | `scripts/research/cross-venue-arb-scan.ts` |
+| Dash real-depth headline fix | `supabase/migrations/0063_cross_venue_dash_realdepth.sql` |
+| **Executable-depth gate migration** (`exec_size` + `is_executable`; winFrac over executable wins) | `supabase/migrations/0064_cross_venue_executable_depth.sql` |
+| Capture Edge Function (+ STEP 3.5 both-book depth walk; pure `executableLegSpecs`) | `supabase/functions/cross-venue-capture/{index,handler,pure}.ts` (+ `handler.test.ts`) |
+| Verdict scan (quoted-vs-executable split) | `scripts/research/cross-venue-arb-scan.ts` |
+| **Live both-venue capacity verification harness** | `scripts/research/cross-venue-verify.ts` |
 | Basis estimator | `scripts/research/cross-venue-basis.ts` |
 
-Tests: +56 across the four new test files; full suite green; typecheck clean.
+Tests: full suite **1483 green**; typecheck clean. The executable-depth gate adds `bindingExecutable` +
+verdict executable-gating + `executableLegSpecs` mapping + the capacity-wall DB test (a net-positive but
+non-executable row is quoted, NOT a win).

@@ -35,6 +35,8 @@ export interface PanelRow extends PanelDay {
   meanDiffF: number;
   maxAbsGap: number;
   direction: string;
+  /** TRUE binding executable size (both order books); NaN for non-walked / efficient rows. */
+  execSize: number;
 }
 
 /** Load the latest capture per (city, target_date) within the look-back window. */
@@ -44,12 +46,14 @@ export async function loadPanel(db: Db, days: number): Promise<PanelRow[]> {
     target_date: string | Date;
     best_net_edge: string | number | null;
     has_real_depth: boolean;
+    is_executable: boolean;
+    exec_size: string | number | null;
     mean_diff_f: string | number | null;
     max_abs_gap: string | number | null;
     direction: string | null;
   }>(
     `select distinct on (city, target_date)
-       city, target_date, best_net_edge, has_real_depth, mean_diff_f, max_abs_gap, direction
+       city, target_date, best_net_edge, has_real_depth, is_executable, exec_size, mean_diff_f, max_abs_gap, direction
      from cross_venue_captures
      where captured_at >= now() - ($1 || ' days')::interval
      order by city, target_date, captured_at desc`,
@@ -60,6 +64,9 @@ export async function loadPanel(db: Db, days: number): Promise<PanelRow[]> {
     targetDate: String(r.target_date).slice(0, 10),
     netEdge: Number(r.best_net_edge ?? 0),
     hasRealDepth: !!r.has_real_depth,
+    // a WIN requires real executable touch depth (the capacity-wall gate), not just a quoted edge
+    executable: !!r.is_executable,
+    execSize: r.exec_size == null ? NaN : Number(r.exec_size),
     meanDiffF: Number(r.mean_diff_f ?? NaN),
     maxAbsGap: Number(r.max_abs_gap ?? NaN),
     direction: r.direction ?? 'none',
@@ -71,6 +78,8 @@ interface CityAgg {
   days: number;
   realDepthDays: number;
   netPosDays: number;
+  execWinDays: number;
+  maxExecSize: number;
   meanDiffF: number;
   meanAbsGap: number;
   bestEdge: number;
@@ -83,11 +92,14 @@ function perCity(panel: PanelRow[]): CityAgg[] {
   return [...by.entries()]
     .map(([city, rs]) => {
       const depthRows = rs.filter((r) => r.hasRealDepth);
+      const netPos = depthRows.filter((r) => r.netEdge > 0);
       return {
         city,
         days: rs.length,
         realDepthDays: depthRows.length,
-        netPosDays: depthRows.filter((r) => r.netEdge > 0).length,
+        netPosDays: netPos.length, // QUOTED net-positive
+        execWinDays: netPos.filter((r) => r.executable).length, // real EXECUTABLE wins
+        maxExecSize: netPos.length ? Math.max(...netPos.map((r) => r.execSize).filter(Number.isFinite), 0) : NaN,
         meanDiffF: mean(rs.map((r) => r.meanDiffF).filter(Number.isFinite)),
         meanAbsGap: mean(rs.map((r) => r.maxAbsGap).filter(Number.isFinite)),
         // headline best edge over REAL-DEPTH rows only (a thin-book edge is not executable — phantom-Denver class)
@@ -109,18 +121,21 @@ export function buildReport(panel: PanelRow[], days: number): { lines: string[];
   P(`${panel.length} matched city-days (latest capture per city+date) · ${cities.length} cities`);
   P('');
   P('THE DESCRIPTIVE DIVERGENCE (analytics — always exists, even with no profit):');
-  P('  city           days  realDepth  netPos  meanDiff°F  meanKSgap   bestNetEdge');
+  P('  city           days  realDepth  netPos  execWin  maxExec  meanDiff°F  meanKSgap   bestNetEdge');
   for (const c of cities) {
     P(
       `  ${c.city.padEnd(14).slice(0, 14)} ${String(c.days).padStart(4)}  ${String(c.realDepthDays).padStart(9)}  ` +
-        `${String(c.netPosDays).padStart(6)}  ${(Number.isFinite(c.meanDiffF) ? c.meanDiffF.toFixed(2) : '—').padStart(10)}  ` +
+        `${String(c.netPosDays).padStart(6)}  ${String(c.execWinDays).padStart(7)}  ${(Number.isFinite(c.maxExecSize) ? c.maxExecSize.toFixed(0) : '—').padStart(7)}  ` +
+        `${(Number.isFinite(c.meanDiffF) ? c.meanDiffF.toFixed(2) : '—').padStart(10)}  ` +
         `${pct(c.meanAbsGap).padStart(9)}  ${usd(c.bestEdge).padStart(11)}`,
     );
   }
   P('');
   P('THE EXECUTABLE, BASIS-ADJUSTED EDGE (the gate input — real-depth city-days only):');
   P(`  real-depth city-days: ${verdict.nDepthDays}  ·  ${verdict.nCities} cities  ·  ${verdict.nDistinctDays} distinct dates`);
-  P(`  net-positive fraction:  ${pct(verdict.winFrac)}  (bar ≥ ${pct(MIN_WIN_FRAC)})`);
+  P(`  QUOTED net-positive:    ${cities.reduce((a, c) => a + c.netPosDays, 0)} city-days`);
+  P(`  EXECUTABLE wins:        ${cities.reduce((a, c) => a + c.execWinDays, 0)} city-days  (binding touch depth ≥ MIN_EXEC_SIZE on BOTH books)`);
+  P(`  win fraction (executable):  ${pct(verdict.winFrac)}  (bar ≥ ${pct(MIN_WIN_FRAC)})`);
   P(`  city-clustered mean edge: ${usd(verdict.meanNetEdge)}  95% CI [${usd(verdict.ciLow)}, ${usd(verdict.ciHigh)}]`);
   P('');
   P(`VERDICT (frozen gate: ≥${MIN_PANEL_DAYS} rows, ≥${MIN_CITIES} cities, ≥${MIN_DISTINCT_DAYS} dates):  ${verdict.label}`);

@@ -213,6 +213,9 @@ describe('migrations 0001–0010', () => {
       // 0063 = code-review fix (rank 8): scope dash_cross_venue bestEdgeSeen / per-city bestEdge to
       // real-depth rows (no table/cron change; CREATE OR REPLACE preserves grants).
       '0063_cross_venue_dash_realdepth.sql',
+      // 0064 = TRUE both-venue executable-depth gate: a net-positive row is a WIN only if it fills at real
+      // touch depth (exec_size ≥ MIN_EXEC_SIZE), not on the 24h-vol/OI proxy. The capacity-wall fix.
+      '0064_cross_venue_executable_depth.sql',
     ]);
   });
 });

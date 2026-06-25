@@ -30,7 +30,7 @@ rebate, across enormous breadth — and is **non-followable and non-replicable**
 | Forecast-free reward farming (two-sided MM) | No — measured fill cost ~−47%/day ≈ 8× the ~6%/day reward | REWARD-INVENTORY-BACKTEST §4 (REC-10) |
 | Complete-set structural arb (forecast-free) | No — fee-walled; raw book inconsistent ~16% of the time but the `takerOnly` fee > the residual mispricing (0.37%/0.06% of instants clear; live 0/107) | COMPLETE-SET-ARB.md (the 8th signal) |
 | Copy-trading the top **SPORTS** sharps (adjacent, off-weather) | No — volume machines' edge regresses to ≈0 (follower negative at every lag×spread); high-ROI specialists' "100% win / PASS" is survivorship + a non-executable book-sweep mark | SPORTS-TRADERS.md (the 9th signal) |
-| Cross-venue RV: same day on Kalshi (NWS-CLI) vs Polymarket (Wunderground) | **Measuring (2026-06-25→)** — forward gated paper panel, both venues reachable from Sweden; day-1 NYC agrees to ~1¢, strong prior it walls on the 1°F bin-offset + dual-source basis (like the 8th) | CROSS-VENUE-SPIKE.md (the 10th signal) |
+| Cross-venue RV: same day on Kalshi (NWS-CLI) vs Polymarket (Wunderground) | **No — CAPACITY-walled** — a real quoted cross-venue price gap exists (6/7 city-days net-positive), but TRUE both-book depth shows the cumulative synthetic fills at only **1–10 contracts** (thin tail legs); winFrac over *executable* wins = **0**. Quoted edge ≠ capturable money; same structural-wall class as the 8th | CROSS-VENUE-SPIKE.md (the 10th signal) |
 
 **On REC-1 (the one un-run maker lever, tested 2026-06-23).** After the maker-rebate reframe (net profit by
 *any* mechanism), the last distinct lever was: can WE *learn* which cheap buckets to rest on (vs. mirroring the
@@ -93,20 +93,27 @@ genuinely out-of-market information.
 > fee (mechanical trigger: `complete-set-arb-live.ts` shows a non-zero UNDER/OVER count) or a forward
 > depth-capture proves the thin-open window is executable at size. Rail stays DORMANT.
 >
-> **↳ NEW 2026-06-25 — the 10th signal, the first genuinely-EXECUTABLE orthogonal lever, now under live
-> measurement: CROSS-VENUE relative value (Kalshi ↔ Polymarket).** Every signal above died on either
-> "the market is efficient" or "the edge is unreachable from where we sit." This one is reachable —
-> **Kalshi went global (Sweden supported) and Polymarket is not geo-blocked in Sweden** — and forecast-
-> free: the *same US city's daily high* trades on both venues, so a cross-venue price gap is harvestable
-> with zero forecast skill. It is **not a clean arb**, for two structural reasons measured by the engine:
-> a **1°F bin offset** (Polymarket even-start vs Kalshi odd-start bins never share a clean threshold) and
-> a **dual resolution source** (Kalshi = NWS CLI, ≥ Polymarket's Wunderground). Both are the prime
-> suspects for a fee/offset/basis wall — the same shape as the 8th signal. A pre-registered, operator-
-> ratified **gated paper panel is LIVE** (migration 0062 + `cross-venue-capture` cron over 6 overlapping
-> cities; no capital, rail DORMANT); the day-1 NYC read shows the two venues **agree on the modal high to
-> ~1¢**, so the strong prior is **KILL**. Frozen gate: positive expectancy on ≥10% of real-depth city-
-> days with a pooled 95% CI excluding 0, else the 10th falsified signal. Verdict after ~1 week:
-> `dash_cross_venue(7)` / `scripts/research/cross-venue-arb-scan.ts`. Full record: **CROSS-VENUE-SPIKE.md**.
+> **↳ NEW 2026-06-25 — the 10th signal, the first genuinely-EXECUTABLE orthogonal lever: CROSS-VENUE
+> relative value (Kalshi ↔ Polymarket). VERDICT (2026-06-26): KILL — a CAPACITY WALL.** Every signal
+> above died on either "the market is efficient" or "the edge is unreachable from where we sit." This one
+> is reachable — **Kalshi went global (Sweden supported) and Polymarket is not geo-blocked in Sweden** —
+> and forecast-free: the *same US city's daily high* trades on both venues. The gated paper panel went
+> LIVE (migration 0062 + `cross-venue-capture` cron over 6 overlapping cities; no capital, rail DORMANT).
+>
+> The day-1 panel did **not** read as agreement — it showed **6 of 7 real-depth city-days net-positive**
+> (NYC +0.26, Miami +0.23 quoted), which on the original 24h-volume/OI depth **proxy** would have driven
+> winFrac to **0.857 — a FALSE PASS**. A live both-venue verification (`scripts/research/cross-venue-verify.ts`:
+> re-runs the engine against live books AND walks the TRUE order book on **both** venues) found the gap is
+> a **real quoted price difference but not capturable money**: constructing the cumulative YES≥k synthetic
+> requires the thin TAIL legs, which throttle the whole position to **1–10 contracts/shares** of executable
+> touch depth (vs a ~$25 tradable floor) — on **every** net-positive city-day, stable across samples. The
+> biggest raw edges are also same-day **running-max latency** (the WO-5 effect), not the forecast thesis.
+> The gate was hardened (migration **0064**): a WIN now requires `is_executable` (binding both-book touch
+> depth ≥ `MIN_EXEC_SIZE`), not the volume proxy → winFrac collapses to **0/7 → KILL**, the same
+> structural-wall destination as the 8th signal (there the wall was the fee; here it is touch depth).
+> *Premise corrected:* Kalshi's bin parity is **city-dependent** (NYC odd-start, Miami/LA/Denver
+> even-start = same grid as Polymarket — they DO share thresholds), not universally odd as first stated.
+> Full record: **CROSS-VENUE-SPIKE.md**; live verdict: `dash_cross_venue(7)` (winFrac over executable wins).
 
 ---
 

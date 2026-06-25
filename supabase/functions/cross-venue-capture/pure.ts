@@ -13,10 +13,11 @@ import {
   crossVenueDivergence,
   crossVenueEdge,
   impliedLadder,
+  type CrossVenueEdge,
   type VenueBucket,
   type VenueLadder,
 } from '../../../packages/core/src/sim/cross-venue-arb.ts';
-import { KALSHI_HIGH_SERIES, parseKalshiLadder } from '../../../packages/core/src/kalshi/markets.ts';
+import { KALSHI_HIGH_SERIES, parseKalshiLadder, type KalshiBin } from '../../../packages/core/src/kalshi/markets.ts';
 
 /** Lead (days until targetDate) at or below which to capture — match the open near-dated markets. */
 export const MAX_LEAD_DAYS = 2;
@@ -82,11 +83,20 @@ export interface CrossVenueCaptureRow {
   limitDepth: number | null;
   hasRealDepth: boolean;
   netPositive: boolean;
+  /**
+   * TRUE binding executable size of the best position, walked on BOTH order books (handler.ts) — null
+   * until walked. Only computed for net-positive rows (the false-PASS risk); efficient days stay null.
+   */
+  execSize: number | null;
+  /** execSize ≥ MIN_EXEC_SIZE — a net-positive row counts as a real WIN only if this is true. */
+  isExecutable: boolean;
 }
 
 /**
- * Run the cross-venue engine on a matched (Polymarket, Kalshi) ladder pair and assemble the capture
- * row. Returns null if either side has no usable quotes (no comparison possible this tick). Pure.
+ * Run the cross-venue engine on a matched (Polymarket, Kalshi) ladder pair and assemble the capture row,
+ * returning it alongside the engine `edge` (whose buyLegsLoF/sellLegsLoF the handler walks for TRUE
+ * executable depth). Returns null if either side has no usable quotes (no comparison possible this tick).
+ * Pure — the network depth-walk that finalizes execSize/isExecutable lives in handler.ts.
  */
 export function buildCaptureRow(
   city: string,
@@ -94,7 +104,7 @@ export function buildCaptureRow(
   poly: VenueLadder,
   kalshi: VenueLadder,
   capturedAt: string,
-): CrossVenueCaptureRow | null {
+): { row: CrossVenueCaptureRow; edge: CrossVenueEdge } | null {
   const polyImpl = impliedLadder(poly);
   const kalshiImpl = impliedLadder(kalshi);
   if (!polyImpl.ok || !kalshiImpl.ok) return null;
@@ -104,7 +114,7 @@ export function buildCaptureRow(
   // systematic buy-Kalshi edge even when the venues agree; the realized basis refines later). See NEUTRAL_BASIS.
   const edge = crossVenueEdge(polyImpl, kalshiImpl, NEUTRAL_BASIS);
 
-  return {
+  const row: CrossVenueCaptureRow = {
     capturedAt,
     city,
     targetDate,
@@ -122,9 +132,54 @@ export function buildCaptureRow(
     expPayoff: fin(edge.expPayoff),
     limitDepth: fin(edge.limitDepth),
     // Real depth = BOTH books liquid, per venue-appropriate units (Kalshi OI contracts, Poly 24h USD) —
-    // decoupled from edge sign so efficient (≤0-edge) liquid days count toward the KILL denominator.
+    // the DENOMINATOR filter (a liquid market exists). Decoupled from edge sign so efficient (≤0-edge)
+    // liquid days count. NOTE: this is the 24h-vol/OI PROXY; a net-positive row's real executability is
+    // the separate isExecutable below (walked on both order books — the capacity wall that decides WINS).
     hasRealDepth: edge.ok && edge.kalshiBookDepth >= MIN_KALSHI_OI && edge.polyBookDepth >= MIN_POLY_VOL_USD,
     netPositive: edge.ok && edge.bestNetEdge > 0,
+    execSize: null, // walked by the handler for net-positive rows only
+    isExecutable: false,
+  };
+  return { row, edge };
+}
+
+/**
+ * One leg of the best cross-venue position to walk for true depth: a concrete venue order book (Kalshi
+ * market ticker or Polymarket YES token) + the side to hit (buy legs hit the ASK, sell legs hit the BID).
+ * `id === ''` means the engine leg could not be mapped to a book ⇒ the handler must treat it as size 0
+ * (an unfillable leg, the safe direction for a kill gate — never silently dropped, which would overstate).
+ */
+export interface LegRef {
+  venue: 'polymarket' | 'kalshi';
+  id: string; // Kalshi ticker or Polymarket YES token id; '' if unmappable
+  side: 'ask' | 'bid';
+  loF: number;
+}
+export interface PositionLegs {
+  buyLegs: LegRef[];
+  sellLegs: LegRef[];
+}
+
+/**
+ * Map the engine edge's leg thresholds (buyLegsLoF on buyVenue, sellLegsLoF on sellVenue) to concrete
+ * order-book refs the handler can walk: Kalshi loF → market ticker, Polymarket loF → YES token id. Buy
+ * legs hit the ask, sell legs hit the bid. Every leg is preserved (unmappable → id ''), so the binding
+ * min sees a 0 rather than over-counting. Pure + total.
+ */
+export function executableLegSpecs(ev: ParsedEvent, bins: KalshiBin[], edge: CrossVenueEdge): PositionLegs {
+  const kByLoF = new Map<number, string>(); // Kalshi loF → ticker
+  for (const b of bins) if (b.loF != null) kByLoF.set(b.loF, b.ticker);
+  const pByLoF = new Map<number, string>(); // Polymarket loF → YES token id
+  for (const b of ev.buckets) if (b.def.low != null) pByLoF.set(b.def.low, b.tokenYes);
+  const ref = (venue: LegRef['venue'], loF: number, side: LegRef['side']): LegRef => ({
+    venue,
+    id: (venue === 'kalshi' ? kByLoF.get(loF) : pByLoF.get(loF)) ?? '',
+    side,
+    loF,
+  });
+  return {
+    buyLegs: edge.buyLegsLoF.map((loF) => ref(edge.buyVenue, loF, 'ask')),
+    sellLegs: edge.sellLegsLoF.map((loF) => ref(edge.sellVenue, loF, 'bid')),
   };
 }
 

@@ -6,13 +6,17 @@
  * scan via packages/io fetchJson; these helpers are pure + total (a malformed market → skipped, never
  * a throw) so they unit-test in Node and run unchanged in Deno.
  *
- * KALSHI TEMPERATURE LADDER (verified live 2026-06-25, KXHIGHNY): one daily-high event = a ladder of
- * 2°F "between" bins on an ODD-start grid (…79-80, 81-82, 83-84…) bracketed by a "less" floor bin and
- * a "greater" cap bin, resolving on the NWS Climatological Report (CLI). Strike → integer-°F span:
+ * KALSHI TEMPERATURE LADDER (verified live 2026-06-25): one daily-high event = a ladder of 2°F "between"
+ * bins bracketed by a "less" floor bin and a "greater" cap bin, resolving on the NWS Climatological Report
+ * (CLI). Strike → integer-°F span:
  *   strike_type 'between' (floor=83, cap=84, "83° to 84°")     → [83, 84]
  *   strike_type 'greater' (floor=86,        "87° or above")    → loF = floor + 1, hiF = null
  *   strike_type 'less'    (cap=79,          "78° or below")    → loF = null, hiF = cap − 1
- * The ODD-start grid vs Polymarket's EVEN-start grid is the 1°F bin offset the engine prices.
+ * BIN PARITY IS CITY-DEPENDENT (premise corrected 2026-06-26): KXHIGHNY is ODD-start (…79-80, 81-82,
+ * 83-84…) — a real 1°F offset vs Polymarket's EVEN-start grid — but KXHIGHMIA/LAX/DEN are EVEN-start
+ * (…90-91, 92-93… / 70-71, 72-73…) = the SAME grid as Polymarket, so they share clean thresholds (the
+ * engine reads `expPayoff = 0` there). The engine handles both: it prices the offset stub only where the
+ * grids actually interleave, and reads a direct same-threshold gap where they align.
  */
 import type { VenueBucket, VenueLadder } from '../sim/cross-venue-arb.ts';
 

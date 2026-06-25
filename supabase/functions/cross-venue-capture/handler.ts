@@ -16,23 +16,34 @@
  * outage on one city yields a smaller panel that tick, never a failed job.
  */
 import {
+  normalizeBook,
   parseGammaEvent,
   type ParsedEvent,
+  type RawClobBook,
   type RawGammaEvent,
 } from '../../../packages/core/src/index.ts';
 import {
+  MIN_EXEC_SIZE,
+  bindingExecutable,
+  type CrossVenueEdge,
+} from '../../../packages/core/src/sim/cross-venue-arb.ts';
+import { parseKalshiOrderbook, type KalshiBin } from '../../../packages/core/src/kalshi/markets.ts';
+import {
   KALSHI_HIGH_SERIES,
   buildCaptureRow,
+  executableLegSpecs,
   isOverlapEvent,
   parseKalshiLadder,
   polyLadderFromEvent,
   type CrossVenueCaptureRow,
+  type LegRef,
 } from './pure.ts';
 import type { FetchJsonLike } from '../_shared/polymarket-wallet.ts';
 import type { JobCtx, JobStats } from '../_shared/runJob.ts';
 
 const GAMMA = 'https://gamma-api.polymarket.com';
 const KALSHI = 'https://api.elections.kalshi.com/trade-api/v2';
+const CLOB = 'https://clob.polymarket.com';
 const TAG = 104596; // "Highest temperature" — the daily-Tmax ladders
 const HEADERS: Record<string, string> = {
   'User-Agent': 'weather-edge/0.1 (cross-venue-capture)',
@@ -88,6 +99,44 @@ async function fetchKalshiMarkets(fetchJson: FetchJsonLike, series: string, log:
   }
 }
 
+/**
+ * Walk the TRUE both-venue order books at the best position's legs and return the BINDING (min) executable
+ * size — the capacity-wall gate. The cumulative YES≥k synthetic must fill EVERY leg to be hedged: buy legs
+ * hit the ASK, sell legs hit the BID. Kalshi via /markets/{ticker}/orderbook, Polymarket via CLOB /book.
+ * A leg whose book we cannot map or fetch contributes size 0 ⇒ the position is not provably executable
+ * (the safe direction for a kill gate). Best-effort: a fetch failure on any leg → that leg counts as 0.
+ */
+async function walkExecutableDepth(
+  fetchJson: FetchJsonLike,
+  ev: ParsedEvent,
+  bins: KalshiBin[],
+  edge: CrossVenueEdge,
+): Promise<number> {
+  const { buyLegs, sellLegs } = executableLegSpecs(ev, bins, edge); // pure loF→ticker/token mapping (tested)
+
+  const sizeOf = async (l: LegRef): Promise<number> => {
+    if (!l.id) return 0; // unmappable leg ⇒ not provably executable
+    try {
+      if (l.venue === 'kalshi') {
+        const { yesBids, yesAsks } = parseKalshiOrderbook(
+          await fetchJson(`${KALSHI}/markets/${l.id}/orderbook`, { headers: HEADERS } as RequestInit, { timeoutMs: 6000, retries: 1 }),
+        );
+        return (l.side === 'ask' ? yesAsks[0]?.size : yesBids[0]?.size) ?? 0;
+      }
+      const book = normalizeBook(
+        (await fetchJson(`${CLOB}/book?token_id=${l.id}`, { headers: HEADERS } as RequestInit, { timeoutMs: 6000, retries: 1 })) as RawClobBook,
+      );
+      return (l.side === 'ask' ? book.asks[0]?.size : book.bids[0]?.size) ?? 0;
+    } catch {
+      return 0; // unfetchable leg ⇒ not provably executable
+    }
+  };
+
+  const buySizes = await Promise.all(buyLegs.map(sizeOf));
+  const sellSizes = await Promise.all(sellLegs.map(sizeOf));
+  return bindingExecutable(buySizes, sellSizes);
+}
+
 export async function crossVenueCapture(ctx: JobCtx, deps: CrossVenueCaptureDeps): Promise<JobStats> {
   const { db, log } = ctx;
   const { now, fetchJson } = deps;
@@ -109,16 +158,32 @@ export async function crossVenueCapture(ctx: JobCtx, deps: CrossVenueCaptureDeps
     }),
   );
 
-  // ── STEP 3: match each poly event to its Kalshi ladder for the same date → engine → row ────────
-  const rows: CrossVenueCaptureRow[] = [];
+  // ── STEP 3: match each poly event to its Kalshi ladder for the same date → engine → row + edge ──
+  const built: { row: CrossVenueCaptureRow; edge: CrossVenueEdge; ev: ParsedEvent; bins: KalshiBin[] }[] = [];
   for (const ev of overlap) {
     const markets = kalshiByCity.get(ev.citySlug);
     if (!markets || markets.length === 0) continue;
     const { ladder: kalshiLadder, bins } = parseKalshiLadder(markets, ev.citySlug, ev.targetDate);
     if (bins.length === 0) continue; // Kalshi has no market for this exact target date
-    const row = buildCaptureRow(ev.citySlug, ev.targetDate, polyLadderFromEvent(ev), kalshiLadder, capturedAt);
-    if (row) rows.push(row);
+    const out = buildCaptureRow(ev.citySlug, ev.targetDate, polyLadderFromEvent(ev), kalshiLadder, capturedAt);
+    if (out) built.push({ ...out, ev, bins });
   }
+
+  // ── STEP 3.5: TRUE executable-depth walk for NET-POSITIVE rows only (the capacity-wall gate) ────
+  // Quoted edges are common; a quoted edge is only a WIN if the cumulative synthetic fills at real touch
+  // depth on BOTH books (CROSS-VENUE-SPIKE.md found 1–10 units — an order of magnitude below tradable).
+  // Efficient (≤0-edge) rows skip the walk (not the false-PASS risk) and keep the cheap proxy denominator.
+  const netPos = built.filter((b) => b.row.netPositive && b.edge.ok);
+  await Promise.all(
+    netPos.map(async (b) => {
+      const exec = await walkExecutableDepth(fetchJson, b.ev, b.bins, b.edge);
+      b.row.execSize = Number.isFinite(exec) ? exec : 0;
+      b.row.isExecutable = b.row.execSize >= MIN_EXEC_SIZE;
+    }),
+  );
+  log('cross-venue depth walked', { netPositive: netPos.length, executable: netPos.filter((b) => b.row.isExecutable).length });
+
+  const rows = built.map((b) => b.row);
 
   // ── insert via service-role RPC ────────────────────────────────────────────────────────────────
   let inserted = 0;
@@ -141,6 +206,7 @@ export async function crossVenueCapture(ctx: JobCtx, deps: CrossVenueCaptureDeps
     inserted,
     netPositive: rows.filter((r) => r.netPositive).length,
     realDepth: rows.filter((r) => r.hasRealDepth).length,
+    executable: rows.filter((r) => r.isExecutable).length, // net-positive AND fills at real touch depth
   };
   log('cross-venue-capture complete', stats);
   return stats;
