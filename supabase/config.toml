@@ -77,3 +77,6 @@ verify_jwt = false
 
 [functions.arb-depth-capture]
 verify_jwt = false
+
+[functions.cross-venue-capture]
+verify_jwt = false
