@@ -192,3 +192,23 @@ leaderboard + style fingerprints. That insight is the shippable value, even thou
 - **Re-open trigger:** only a copy-trade probe that **PASSES the pre-registered criterion on a
   credibly-graded sharp** (CI lower bound > 0, on real win rates and executable prices — not a survivorship
   100% on a non-executable mark) would justify reconsidering execution. None does.
+
+---
+
+## 8. The `/sharps` dashboard — shipped (2026-06-25)
+
+The durable deliverable from §6 is now a **live operator page**, built to the established `/rewards` +
+`/whaletracker` idiom (`DASHBOARDS-HANDOFF.md`): cron-refreshed Supabase table → security-definer read RPC →
+Next.js server page. **Pure analytics; the copy-trade rail stays DORMANT** — the page surfaces *who the sharp
+sports traders are and how they bet*, with the §3–§4 verdict ("not copyable") stated on the page itself.
+
+| Piece | Path |
+|---|---|
+| Migration — `sports_sharps` snapshot table + `record_sports_sharps` (service-role insert) + `dash_sharps` (operator read, jsonb-OBJECT, `operator_guard`, 0044/0054-safe) + daily `sharps-snapshot` cron at 02:00 UTC | `supabase/migrations/0059_sharps_dashboard.sql` |
+| Edge ingest — daily tick: pull the SPORTS leaderboard across PNL/VOLUME × {DAY,WEEK,MONTH,ALL}, dedupe wallets, compute the **lightweight** fingerprint (entry-odds histogram, sweep/burst %, sub-sport mix, win-rate vs implied, own-EV) for the top wallets, bulk-upsert. Bounds the per-wallet fill crawl and **skips** the heavy per-fill `/prices-history` drift curve (that stays a research-scan artifact) to fit the edge wall-time budget. | `supabase/functions/sharps-snapshot/{index.ts,handler.ts}` |
+| Page — roster table (rank, trader→profile link, P&L, volume, ROI proxy, archetype chip) + headline tiles + per-trader fingerprint cards (BarChart histogram, sweep %, sub-sport mix, win-rate vs implied, own-EV) + the §3–§4 "not copyable" verdict banner | `apps/web/src/app/(dash)/sharps/page.tsx` |
+| Loader + nav | `apps/web/src/lib/loaders.ts` (`getSharps`) · `apps/web/src/app/(dash)/layout.tsx` (`/sharps` nav) |
+
+The engine math is the already-tested `core/sim/sports-copytrade.ts` (`traderFingerprint`, `sharpOwnEdge`,
+the reused `sim/copy-trade.ts` mirror) — the Edge tick only adds the bounded HTTP composition. Data accrues
+from the first cron fire; until then the page shows an empty state.

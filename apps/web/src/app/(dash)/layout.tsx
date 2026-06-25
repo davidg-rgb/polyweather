@@ -18,6 +18,7 @@ const NAV = [
   ['/replica', 'replica'], // the badatmath-replica paper-trial — three-curve maker/taker tax measurement
   ['/rewards', 'rewards'], // REC-8/9 funded-weather liquidity-reward pool vs competing-capital feed (analytics)
   ['/whaletracker', 'whales'], // ≥$100k Polymarket whale-trade tracker (analytics; whale-watch feed, 0055)
+  ['/sharps', 'sharps'], // SPORTS-sharps roster + fingerprints (analytics; 9th signal DORMANT)
   ['/events', 'events'], // open events + collection health (WEB-4 / ADR-21)
   ['/calibration', 'calibration'],
   ['/system', 'system'],

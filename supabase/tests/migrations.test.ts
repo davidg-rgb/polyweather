@@ -191,12 +191,16 @@ describe('migrations 0001–0010', () => {
       // dash_whale_watch re-signature, the 0054 overload trap). Both jsonb-OBJECT + operator_guard, added to
       // WEB_AUTHENTICATED below. No table/cron change (cron count stays 18). DASHBOARDS-HANDOFF.md.
       '0058_reward_and_whale_dashboards.sql',
+      // 0059 = /sharps analytics dashboard: sports_sharps roster+fingerprint snapshot table + record_sports_sharps
+      // (service-role insert) + dash_sharps (operator read, jsonb-OBJECT, added to WEB_AUTHENTICATED below) +
+      // daily sharps-snapshot cron at 02:00 UTC. Analytics-only; copy-trade rail DORMANT. SPORTS-TRADERS.md.
+      '0059_sharps_dashboard.sql',
       // 0060 = Move 1 forward depth-capture for the complete-set arbitrage (8th signal, COMPLETE-SET-ARB.md):
       // complete_set_depth_captures table (append-only, lead≤2d thin-book window) + record_complete_set_depth_captures
       // (service-role insert) + dash_complete_set_depth (operator read, added to WEB_AUTHENTICATED above) +
-      // arb-depth-capture cron every 30 min (count 18 → 19). Move 3 (fee-structure reopening monitor) is embedded
+      // arb-depth-capture cron every 30 min. Move 3 (fee-structure reopening monitor) is embedded
       // in the same Edge tick (daily at UTC 10h, Slack-alerts if ANY fee-clearing found). COMPLETE-SET-ARB-HANDOFF.md.
-      // NOTE: migration 0059 (sharps analytics page) lives in a sibling branch — the integrator bumps to 20 on merge.
+      // 0059 + 0060 each register one new cron → combined cron count 18 → 20.
       '0060_complete_set_depth_capture.sql',
     ]);
   });
@@ -656,6 +660,7 @@ describe('0034: internal-RPC lockdown — anon/authenticated revoked except the 
     'dash_station_observations', 'dash_station_predictions',
     'dash_whale_watch', 'dash_whale_tracker', 'dash_market_rewards',
     'dash_amsterdam_sim', 'dash_replica_sim',
+    'dash_sharps',  // 0059: /sharps roster + fingerprints operator read
     'dash_complete_set_depth',  // 0060: Move 1 forward depth-capture operator read
     'go_live_gate_inputs',
     'operator_halt', 'operator_resume', 'operator_update_config', 'operator_verify_station',
@@ -751,15 +756,14 @@ describe('0034: internal-RPC lockdown — anon/authenticated revoked except the 
 });
 
 describe('pg_cron registrations (§7.22, W11)', () => {
-  it('registers all 19 jobs with the §7.22 schedules', async () => {
-    // NOTE: a sibling migration (0059 sharps) in this batch also adds a cron;
-    // the integrator bumps this to 20 on merge.
+  it('registers all 20 jobs with the §7.22 schedules', async () => {
     const jobs = await rows<{ jobname: string; schedule: string }>(
       db,
       `select jobname, schedule from cron.job order by jobname`,
     );
     const expected: Record<string, string> = {
       'arb-depth-capture':   '*/30 * * * *',  // 0060: Move 1 depth-capture + Move 3 reopen monitor
+      'sharps-snapshot':     '0 2 * * *',     // 0059: daily SPORTS-sharps roster + fingerprints
       'discover-markets':    '10 2,4,5,11,17 * * *',
       'snapshot-forecasts':  '15 10,22 * * *',
       'snapshot-ensembles':  '35 10,22 * * *',
@@ -779,7 +783,7 @@ describe('pg_cron registrations (§7.22, W11)', () => {
       'replica-forward':     '0 5 * * *',
       'reward-snapshot':     '*/20 * * * *',
     };
-    expect(jobs.length).toBe(19);
+    expect(jobs.length).toBe(20);
     for (const j of jobs) {
       expect(j.schedule, `schedule for ${j.jobname}`).toBe(expected[j.jobname]);
     }

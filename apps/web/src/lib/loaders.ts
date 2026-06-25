@@ -1390,6 +1390,71 @@ export async function getMarketRewards(
   };
 }
 
+// --- /sharps — SPORTS-leaderboard roster + per-trader fingerprints (dash_sharps, 0059) ---------------------
+
+/** One odds-histogram bucket in a trader's fingerprint. */
+export interface OddsHistogramBin {
+  label: string;
+  lo: number;
+  hi: number;
+  count: number;
+  notionalUsd: number;
+}
+
+/** One SPORTS-sharp trader in the latest capture (rich row). */
+export interface SharpTraderRow {
+  rank: number | null;
+  wallet: string;
+  /** traderName when set, else wallet (already coalesced in the RPC). */
+  trader: string;
+  pnlAllUsd: unknown;
+  volAllUsd: unknown;
+  roiProxy: unknown;
+  archetype: string | null;
+  nFills: unknown;
+  sweepFraction: unknown;
+  midOddsFraction: unknown;
+  vwapEntry: unknown;
+  sportsMix: Record<string, number> | null;
+  oddsHistogram: OddsHistogramBin[] | null;
+}
+
+/** Latest-capture meta for the /sharps page. */
+export interface SportsSharpsLatest {
+  capturedAt: string | null;
+  nTraders: unknown;
+}
+
+export interface SportsSharpsView {
+  latest: SportsSharpsLatest | null;
+  roster: SharpTraderRow[];
+}
+
+interface SportsSharpsPayload {
+  latest: SportsSharpsLatest | null;
+  roster: SharpTraderRow[] | null;
+}
+
+/**
+ * The SPORTS-sharps roster + fingerprints (dash_sharps, 0059) for /sharps. Returns null (not a thrown 500)
+ * if the RPC errors — the page can deploy ahead of the 0059 RPC.
+ */
+export async function getSharps(
+  db: WebDb,
+  opts: { limit?: number } = {},
+): Promise<SportsSharpsView | null> {
+  try {
+    const v = await one<SportsSharpsPayload>(db, 'dash_sharps', { p_limit: opts.limit ?? 20 });
+    if (!v) return null;
+    return {
+      latest: v.latest ?? null,
+      roster: v.roster ?? [],
+    };
+  } catch {
+    return null;
+  }
+}
+
 // --- /whaletracker — past-N-days ≥$min Polymarket whale trades (dash_whale_tracker, 0058) ------------------
 
 /** One recorded ≥$min whale fill (rich row — profile link, bet link, what + value). */
