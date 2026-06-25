@@ -45,6 +45,18 @@ const HEADERS: Record<string, string> = {
 
 /** Lead (days until targetDate close) at which to capture. The thin-open-book window lives ≤ 2d. */
 const MAX_LEAD_DAYS = 2;
+/**
+ * Only deep-capture (full-CLOB) ladders whose Gamma top-of-book Σ best-ask is at or below this. A
+ * ladder can only be an underround dislocation if its Σask is thin; a richly-quoted ladder cannot
+ * clear regardless of depth. The lead≤2d set alone is ~every open ladder (the age<2h guard rarely
+ * applies — gameStartTime is usually absent), so deep-fetching all of them (~100 ladders × ~11
+ * buckets) blows the Edge wall-time. Pre-ranking on the FREE Gamma top-of-book targets the Move-1
+ * question (is the thin window executable at depth?) AND bounds the per-tick CLOB fetch count.
+ * 1.02 keeps real underrounds (<1) plus near-misses (the live probe saw chengdu 0.981, miami 1.011).
+ */
+const CAPTURE_SUM_ASK_MAX = 1.02;
+/** Hard cap on deep (full-CLOB) captures per tick — a safety bound on wall-time. */
+const MAX_DEEP_CAPTURES = 25;
 /** UTC hour at which the once-daily full-universe reopening check fires (Move 3). */
 const DAILY_ALERT_UTC_HOUR = 10;
 /** Slack alert kind for the reopening monitor. */
@@ -186,15 +198,34 @@ export async function arbDepthCapture(ctx: JobCtx, deps: ArbDepthCaptureDeps): P
 
   log('thin-open-book filter', { total: allEvents.length, qualifying: qualifying.length });
 
-  // ── STEPS 3 & 4: fetch CLOB books + compute depth ────────────────────────────────────────────
+  // ── Pre-rank on Gamma top-of-book (NO fetch): deep-capture only the thinnest candidates ──────
+  // Σask is computed from the bestAsk already on the Gamma payload, so this costs zero CLOB calls.
+  // Only ladders at/under CAPTURE_SUM_ASK_MAX can be (near-)dislocations and are worth full depth.
+  const ranked = qualifying
+    .map((ev) => ({
+      ev,
+      topSumAsk: completeSetEdge(
+        ev.parsed.buckets.map((b) => b.bestAsk),
+        ev.parsed.buckets.map((b) => b.bestBid),
+        FEE_RATE_WEATHER,
+      ).sumAsk,
+    }))
+    .filter((x) => x.topSumAsk !== null && x.topSumAsk <= CAPTURE_SUM_ASK_MAX)
+    .sort((a, b) => (a.topSumAsk ?? 9) - (b.topSumAsk ?? 9))
+    .slice(0, MAX_DEEP_CAPTURES);
+
+  log('thin-candidate pre-rank (deep-capture set)', {
+    qualifying: qualifying.length,
+    deepCandidates: ranked.length,
+    cap: MAX_DEEP_CAPTURES,
+  });
+
+  // ── STEPS 3 & 4: fetch CLOB books + compute depth (buckets concurrently per ladder) ──────────
   const captureRows: CaptureRow[] = [];
-  for (const { raw, parsed } of qualifying) {
+  for (const { ev: { raw, parsed } } of ranked) {
     let books: NormalizedBook[];
     try {
-      books = [];
-      for (const bucket of parsed.buckets) {
-        books.push(await fetchBook(fetchJson, bucket.tokenYes));
-      }
+      books = await Promise.all(parsed.buckets.map((bucket) => fetchBook(fetchJson, bucket.tokenYes)));
     } catch (e) {
       log('book fetch failed (non-fatal)', { error: msg(e), slug: parsed.slug });
       continue;
@@ -293,6 +324,7 @@ export async function arbDepthCapture(ctx: JobCtx, deps: ArbDepthCaptureDeps): P
     asOf: capturedAt,
     eventsTotal: allEvents.length,
     qualifying: qualifying.length,
+    deepCandidates: ranked.length,
     captured: captureRows.length,
     inserted,
     feeCleared: feeClearedCount,
