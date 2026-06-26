@@ -14,6 +14,7 @@ export const dynamic = 'force-dynamic';
 // is demoted to the end. Order = analytics → ops → dormant trading → admin.
 const NAV = [
   ['/', 'overview'], // analytics home — forecast skill vs. market + the measured-efficiency verdict
+  ['/efficiency', 'verdict'], // THE definitive proof: every falsified lever + live calibration grounding (FINDINGS.md)
   ['/amsterdam', 'amsterdam'], // the one-accurate-city paper-trade head-to-head (analytics deliverable)
   ['/replica', 'replica'], // the badatmath-replica paper-trial — three-curve maker/taker tax measurement
   ['/rewards', 'rewards'], // REC-8/9 funded-weather liquidity-reward pool vs competing-capital feed (analytics)
