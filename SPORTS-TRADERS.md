@@ -212,3 +212,32 @@ sports traders are and how they bet*, with the §3–§4 verdict ("not copyable"
 The engine math is the already-tested `core/sim/sports-copytrade.ts` (`traderFingerprint`, `sharpOwnEdge`,
 the reused `sim/copy-trade.ts` mirror) — the Edge tick only adds the bounded HTTP composition. Data accrues
 from the first cron fire; until then the page shows an empty state.
+
+## 9. Edge-hunt sweep close-out 2026-06-26 — fingerprint corrected; latency gate failed (C1 / C2)
+
+The "turn every stone" sweep re-interrogated the sports edge at executable depth (lanes C1 + C2). Both KILL;
+the live edge is real but unreachable from where we sit — and the prior "same-second sweep" figure was an
+artifact.
+
+**C1 — the specialist fingerprint is pre-kickoff ACCUMULATION, not same-second sweeping.** Re-measured at a
+0s same-market window: true same-exact-second multi-leg share is **2.0% / 14.6% / 13.1%** (mintblade /
+fishalive / frostrizz), **not 98.6%** — the prior figure (§1/§4) was a **120s-window artifact** (repeat adds
+to the SAME 3 positions; mintblade 99.0% @120s vs 2.0% @0s). The real pattern: 96–100% pre-kickoff
+accumulation at VWAP ~0.49, fills over 4–63min windows, 100% FIFA Club World Cup soccer. The only
+out-performance (win 100%/100%/98.1% vs implied 45.7%/35.3%/60.0%) is **pure survivorship** on a
+resolved-winners subset — no executable non-latency angle, **0 contracts of standing edge**. This re-confirms
+§3–§4 "not copyable" from the mechanism up. Artifact: `scripts/research/lane-c1-fingerprint.ts`
+(+ `out/lane-c1-fingerprint.{md,json}`); read-only, used the cached big-fill subset (zero new network).
+**Caveat for any re-run:** widen beyond the single-tournament cache (lower the cash floor, page deeper
+`/trades`) before treating "2% same-second" as the steady state.
+
+**C2 — the §7 latency-arb is out of reach by 300–1800×.** The staleness window closes **<1s** (same-second
+sweep) vs our reachable reaction latency **300s** (best 5-min poll) to **1800s** (current 30-min cron) — the
+gap is the OPPOSITE sign of the PASS requirement (window must be WIDER than latency), zero overlap. Residual
+at +300s = +0.1–0.5pp and non-executable (the sweeper consumed the liquidity, mark ≠ ask); the 60s public
+price-fidelity floor cannot even measure a sub-300s window. Binding executable at our reachable horizon ≈ 0
+contracts. The §7 "latency-arb build (own infra, own speed)" remains the ONLY conceivable path and stays
+explicitly out of scope — do not fund without a dedicated sub-second-infra spike (high engineering bar, low
+prior). No copy-trade probe passes the pre-registered re-open criterion; the rail stays DORMANT. (No new
+script — the load-bearing drift-curve number, flat first ~5 min + sweeper-consumed mark, is already in
+`scripts/research/sports-traders-scan.ts`; C2 is gap arithmetic against it.)
