@@ -193,11 +193,11 @@ export default async function DataPage(): Promise<ReactElement> {
       <h2>Accuracy by forecast horizon</h2>
       <p className="muted small">
         Pooled across every market, on the days both we and the market made a call. Exact-hit holds flat with
-        lead while the distribution widens (mean miss grows) — the real skill decay. The market matches or edges
-        us at every horizon, and its lead widens the further out you forecast. Day-of (lead 0) is the least clean
-        comparison: the market figure is the freshest same-day quote, so it can price a running max already
-        partly observed, while our distribution is fixed at the NWP cutoff — the head-to-head is strictest at
-        leads 1–2.
+        lead while the distribution widens (mean miss grows) — the real skill decay. Day-of the two are mixed —
+        we lead on within-1°, the market on exact and mean-miss — and it's the least clean comparison anyway (the
+        market figure is the freshest same-day quote, pricing a running max already partly observed while our
+        distribution is fixed at the NWP cutoff). From one day out the market is clearly sharper on every measure,
+        its lead widening the further out you forecast — so the head-to-head is strictest at leads 1–2.
       </p>
       <div className="panel">
         <table>
@@ -335,8 +335,9 @@ export default async function DataPage(): Promise<ReactElement> {
         <ul style={{ margin: 0, paddingLeft: '1.1rem', lineHeight: 1.7 }}>
           <li>
             <strong>We are a competent forecaster, not a market-beating one.</strong> Day-of we land within 1°
-            about {lead0 ? fmtPct(lead0.houseWithin1, 0) : '—'} of the time; the market matches or edges us at
-            every horizon, and its lead grows the further out you forecast.
+            about {lead0 ? fmtPct(lead0.houseWithin1, 0) : '—'} of the time — a hair ahead of the market on that
+            measure — but from one day out the market is the sharper forecaster on every measure, its lead
+            growing the further out you forecast.
           </li>
           <li>
             <strong>Accuracy is climate-driven.</strong> The sharpest markets ({bestNames}) are stable

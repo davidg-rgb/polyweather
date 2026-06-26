@@ -32,9 +32,9 @@ challenger), so its argmax accuracy is not what the product uses.
 
 1. **Accuracy by horizon** (`byLead`) — pooled over all markets, our model vs the market at leads 0/1/2.
    Exact-hit holds flat (~35–36%) while the distribution widens with lead (mean miss 0.78° → 0.94° → 1.06°) —
-   the real skill decay. **The market matches or edges us at every horizon and its lead widens the further out
-   you forecast** (within-1°: ~tied day-of — we even nose ahead there — but 70% vs 82% two-days-out). This is
-   the efficiency verdict in plain accuracy terms. Day-of (lead 0) is the least clean comparison: the market's
+   the real skill decay. **Day-of is mixed — we lead on within-1°, the market on exact and mean-miss — and from
+   one day out the market is clearly sharper on every measure, its lead widening the further out you forecast**
+   (within-1°: ~tied day-of, but 70% vs 82% two-days-out). This is the efficiency verdict in plain accuracy terms. Day-of (lead 0) is the least clean comparison: the market's
    day-of figure is its freshest same-day quote and can embed an already-observed running max, while our
    distribution is fixed at the NWP cutoff — so the head-to-head is strictest at leads 1–2.
 2. **Best & worst markets** (`byStation`, day-before / lead 1) — ranked by mean miss. **The ranking tracks
