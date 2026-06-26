@@ -1520,3 +1520,88 @@ export async function getWhaleTracker(
     meta: v.meta ?? { days, minUsd, count: 0, totalUsd: 0 },
   };
 }
+
+// --- /data — forecast accuracy by market (dash_data, 0065) -------------------------------------------------
+
+/** One forecast-horizon row of the headline table: our champion vs the market on the SAME matched events. */
+export interface DataLeadRow {
+  /** 0 = day-of, 1 = day-before, 2 = two-days-out. */
+  lead: number;
+  n: unknown;
+  stations: unknown;
+  /** Fractions (0..1) — page formats with fmtPct. */
+  houseExact: unknown;
+  houseWithin1: unknown;
+  /** Mean whole-degree miss (|argmax − winner|, native unit). */
+  houseMiss: unknown;
+  marketExact: unknown;
+  marketWithin1: unknown;
+  marketMiss: unknown;
+}
+
+/** One per-station (market) row at the day-before lead — our accuracy + the market's, same events. */
+export interface DataStationRow {
+  city: string;
+  region: string;
+  n: unknown;
+  exactPct: unknown;
+  within1Pct: unknown;
+  meanMiss: unknown;
+  marketWithin1Pct: unknown;
+  marketMeanMiss: unknown;
+}
+
+/** One day of the pooled forecast-vs-market Brier gap series (lead 1). */
+export interface DataBrierPoint {
+  date: string;
+  nHouse: unknown;
+  brierHouse: unknown;
+  nMarket: unknown;
+  brierMarket: unknown;
+}
+
+export interface DataAccuracyView {
+  meta: {
+    champion: string;
+    /** The lead the per-station table is scored at (1 = day-before). */
+    leadStation: unknown;
+    generatedAt: string | null;
+    /** Bucket-distribution window (first/last resolved target_date). */
+    firstDay: string | null;
+    lastDay: string | null;
+    nStations: unknown;
+  };
+  byLead: DataLeadRow[];
+  /** Ranked best→worst by mean miss (the RPC orders it; the page slices top/bottom). */
+  byStation: DataStationRow[];
+  brierSeries: DataBrierPoint[];
+}
+
+interface DataAccuracyPayload {
+  meta: DataAccuracyView['meta'] | null;
+  byLead: DataLeadRow[] | null;
+  byStation: DataStationRow[] | null;
+  brierSeries: DataBrierPoint[] | null;
+}
+
+/**
+ * Forecast accuracy by market (dash_data, 0065) for /data. The champion's most-likely whole-°C bucket vs the
+ * resolved high, scored at day-of / day-before / two-days-out, per station, against the market on the same
+ * events — plus the daily Brier gap. Degrades to null (not a thrown 500) if the RPC errors, so the page can
+ * deploy ahead of the 0065 RPC.
+ */
+export async function getDataAccuracy(db: WebDb): Promise<DataAccuracyView | null> {
+  let v: DataAccuracyPayload | null;
+  try {
+    v = await one<DataAccuracyPayload>(db, 'dash_data', {});
+  } catch {
+    return null;
+  }
+  if (!v || !v.meta) return null;
+  return {
+    meta: v.meta,
+    byLead: v.byLead ?? [],
+    byStation: v.byStation ?? [],
+    brierSeries: v.brierSeries ?? [],
+  };
+}

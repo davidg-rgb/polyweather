@@ -216,6 +216,10 @@ describe('migrations 0001–0010', () => {
       // 0064 = TRUE both-venue executable-depth gate: a net-positive row is a WIN only if it fills at real
       // touch depth (exec_size ≥ MIN_EXEC_SIZE), not on the 24h-vol/OI proxy. The capacity-wall fix.
       '0064_cross_venue_executable_depth.sql',
+      // 0065 = /data forecast-accuracy dashboard: dash_data (operator read, jsonb-OBJECT) — per-station
+      // exact/within-1/mean-miss vs the market at leads 0/1/2 + the daily Brier gap. Added to
+      // WEB_AUTHENTICATED below. No table/cron change (cron count stays 21). DATA.md.
+      '0065_data_accuracy_dashboard.sql',
     ]);
   });
 });
@@ -677,6 +681,7 @@ describe('0034: internal-RPC lockdown — anon/authenticated revoked except the 
     'dash_sharps',  // 0059: /sharps roster + fingerprints operator read
     'dash_complete_set_depth',  // 0060: Move 1 forward depth-capture operator read
     'dash_cross_venue',  // 0062: cross-venue (Kalshi↔Polymarket) RV panel operator read
+    'dash_data',  // 0065: /data forecast-accuracy-by-market operator read
     'go_live_gate_inputs',
     'operator_halt', 'operator_resume', 'operator_update_config', 'operator_verify_station',
     'operator_set_champion', 'operator_skip_bet', 'operator_manual_bet',

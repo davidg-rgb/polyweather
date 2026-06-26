@@ -5,6 +5,22 @@
 
 ## Active Phase
 
+**2026-06-26: NEW `/data` forecast-accuracy-by-market analytics page — built, tested, RPC LIVE on prod (web pending a `main` deploy).**
+Operator ask: across all stations, how accurate is our forecast at day-of / day-before / two-days-out, and which **markets**
+do we forecast best and worst? Shipped a self-contained analytics surface (`DATA.md`): the champion (`house_gaussian`)
+most-likely whole-°C bucket vs the resolved high, scored against the market on the same matched events. Migration
+**`0065_data_accuracy_dashboard.sql`** — `dash_data()` returns one jsonb OBJECT (`meta`/`byLead`/`byStation`/`brierSeries`);
+argmax in SQL via `unnest(probs) with ordinality`; `operator_guard` + 60s timeout; **applied to prod via MCP**, verified
+end-to-end (44 stations, best=Madrid 0.38° miss, worst=Jeddah 1.57° miss). Web: `(dash)/data/page.tsx` (Terminal-Glass
+bento — by-horizon table, best/worst market tables, a mean-miss skyline + the daily Brier-gap line chart, written analysis +
+a data-provenance panel), loader `getDataAccuracy`, NEW `components/LineChart.tsx`, nav `['/data', 'accuracy']`. Findings:
+**market sharper at every lead, gap widens with horizon; ranking tracks climate physics; Brier deficit stable/not-closing** —
+the efficiency verdict in plain accuracy terms. Provenance stated honestly: forecast↔outcome pairs are only a ~3-month book
+(since 2026-03-28), ~2 weeks of it live; the "28.8mo" is observation depth, not skill. **Verified:** typecheck 0, full suite
+**1495 green** (+ `data-page.render.test.ts`; `migrations.test.ts` file-list + `dash_data` ∈ WEB_AUTHENTICATED updated), web
+build OK. **Pending: a `main` → Vercel deploy to make the page live** (the 0065 RPC is already live, so the page works the
+instant it deploys). Full doc: `DATA.md`.
+
 **2026-06-26: EDGE-HUNT four-lane sweep — lanes B/C1/C2/D all KILL at executable depth (commit `be32c89`).**
 The latest forecast-free orthogonal probes all fail the same executable-depth test: a quoted edge that evaporates the
 instant you demand it fill at real both-book depth. `FINDINGS.md` / `COMPLETE-SET-ARB-HANDOFF.md` / `SPORTS-TRADERS.md`

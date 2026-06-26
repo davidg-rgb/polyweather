@@ -21,6 +21,8 @@ dashboard, TypeScript monorepo (`packages/core|io|trading`, `supabase/functions`
 - Hosted Supabase ref: `lenysiqxihsmxljvyybt` (eu-north-1) · Prod: `weather-edge-two.vercel.app`
 - Canonical docs: **`FINDINGS.md`** (the R&D verdict — start here: is there a tradable edge? no, and why),
   `BUILD-STATE.md` (status + Operator TODO), `RUNBOOK.md` (ops), `REQUIREMENTS.md`, `ARCHITECTURE.md`,
+  **`DATA.md`** (2026-06-26: the `/data` forecast-accuracy-by-market analytics page — per-station best/worst,
+  by-horizon ours-vs-market, the daily Brier gap; migration 0065 `dash_data`, LIVE-on-prod RPC),
   **`WHALE-WATCH.md`** (2026-06-24: Polymarket large-trade alarm — Slack-alerts any single bet ≥ $100k across
   ALL markets — + a global Slack-alert pause gate, LIVE on prod),
   **`CROSS-VENUE-SPIKE.md`** (the 10th signal — Kalshi↔Polymarket cross-venue relative value, the first
