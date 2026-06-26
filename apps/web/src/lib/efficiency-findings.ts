@@ -128,7 +128,7 @@ export const FINDINGS_ARCS: FindingsArc[] = [
   },
   {
     key: 'structural',
-    title: 'Arc 3 — forecast-free & structural',
+    title: 'Forecast-free & structural signals',
     blurb: 'Forget forecasting — is the market consistent with itself, or against another venue, beyond the cost to harvest it?',
     levers: [
       {

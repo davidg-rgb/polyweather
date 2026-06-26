@@ -36,10 +36,10 @@ describe('/efficiency page renders', () => {
     expect(html).toContain('signals falsified');
     expect(html).toContain('every lever, falsified');
 
-    // all three arcs
+    // all three sections (two named arcs + the structural front)
     expect(html).toContain('Arc 1');
     expect(html).toContain('Arc 2');
-    expect(html).toContain('Arc 3');
+    expect(html).toContain('Forecast-free'); // the structural-signals section heading
 
     // a representative lever from each arc (apostrophe-free substrings)
     expect(html).toContain('Multi-day NWP blend');

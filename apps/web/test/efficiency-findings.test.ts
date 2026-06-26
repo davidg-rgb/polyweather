@@ -53,6 +53,18 @@ describe('efficiency-findings record', () => {
     expect(EFFICIENCY_HEADLINE.forecastRmseLead1C).toBeGreaterThan(0);
   });
 
+  it('headline scalars match the canonical FINDINGS.md record (frozen golden values)', () => {
+    // A single edit to any of these without updating FINDINGS.md must fail the suite (a deliberate
+    // speed bump on the frozen mirror). These are the literal canonical values from FINDINGS.md.
+    expect(EFFICIENCY_HEADLINE.signalsFalsified).toBe(10);
+    expect(EFFICIENCY_HEADLINE.leversFalsified).toBe(12);
+    expect(EFFICIENCY_HEADLINE.measuredWays).toBe(11);
+    expect(EFFICIENCY_HEADLINE.forecastRmseLead1C).toBe(1.33);
+    expect(EFFICIENCY_HEADLINE.sharpRealizedUsd).toBe(25407);
+    expect(EFFICIENCY_HEADLINE.spreadTaxPp).toBe(15.4);
+    expect(EFFICIENCY_HEADLINE.adverseSelTaxPp).toBe(32.8);
+  });
+
   it('the hardening sweep names four KILLed lanes', () => {
     expect(HARDENING_SWEEP.lanes).toHaveLength(4);
     expect(HARDENING_SWEEP.lanes.map((l) => l.lane)).toEqual(['B', 'D', 'C1', 'C2']);
