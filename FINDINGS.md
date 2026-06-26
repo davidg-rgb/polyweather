@@ -114,6 +114,40 @@ genuinely out-of-market information.
 > *Premise corrected:* Kalshi's bin parity is **city-dependent** (NYC odd-start, Miami/LA/Denver
 > even-start = same grid as Polymarket — they DO share thresholds), not universally odd as first stated.
 > Full record: **CROSS-VENUE-SPIKE.md**; live verdict: `dash_cross_venue(7)` (winFrac over executable wins).
+>
+> **↳ NEW 2026-06-26 — the four-lane "turn every stone" sweep (B / C1 / C2 / D): ALL KILL, confirmed at
+> EXECUTABLE DEPTH. No new signal — these HARDEN signals 8 and 9.** A read-only multi-agent sweep, each lane
+> with a pre-registered kill-gate (WO-5 discipline, defined before measuring) and the quoted-vs-executable
+> depth lens applied to every candidate, re-interrogated the last open threads. Every lane bottomed out on
+> the same wall as the 8th/10th signals: a quoted edge that evaporates the instant you demand it fill at real
+> touch depth on every leg.
+> - **Lane B — negRisk MINT-AND-SELL (the maker-route dual of the 8th signal).** The textbook overround
+>   harvest: mint the complete YES set for exactly $1.00 via the NegRiskAdapter split (no protocol fee) and
+>   rest each leg into its bid (maker, $0 fee — both confirmed). Mechanics real; practice walled. 16 live
+>   ladders: raw overround on 4/16, max harvest **1.3¢/set**; binding bid depth median **14.84** / min 0.1
+>   shares (~half the ladders carry a zero-bid, *uncloseable* leg). Net-positive at executable depth (binding
+>   fill ≥ 25 shares) = **0/16, winFrac 0%, 95% CI [0, 0]** — KILL on the pre-registered 10% bar; even the
+>   zero-adverse-selection arm clears only 1/16 (6.25%). `scripts/research/lane-b-negrisk-scan.ts`.
+> - **Lane D — the 8th signal on the DEPTH axis.** Of the migration-0060 `complete_set_depth_captures` panel
+>   (independently re-queried against prod: 486 rows / 73 events / ~19h of `*/30` captures), **0 of the 5
+>   fee-cleared instants clear at binding depth ≥ 25** (exec_sets `8/6/5/5/3`; max net **$0.0474**). One thin
+>   tail leg caps every set even where modal-bin depth is 20k–75k shares — the identical throttle as the
+>   cross-venue capacity wall. The 8th-signal fee wall now holds on **both** the fee and depth axes.
+> - **Lane C1 — the SPORTS specialist fingerprint (the 9th signal's mechanism).** The prior "98.6%
+>   same-second sweep" was a **120s-window artifact** (repeat adds to the SAME 3 positions); true
+>   same-exact-second multi-leg is **2.0% / 14.6% / 13.1%** (mintblade / fishalive / frostrizz). The real
+>   pattern is pre-kickoff accumulation at ~0.50 (VWAP 0.49, 96–100% pre-kickoff, 100% FIFA Club World Cup
+>   soccer); the only out-performance (100/100/98.1% win vs 45.7/35.3/60.0% implied) is **pure survivorship**
+>   on resolved winners — 0 contracts of executable non-latency edge. `scripts/research/lane-c1-fingerprint.ts`.
+> - **Lane C2 — being the FAST ACTOR on in-play staleness.** The staleness window closes **<1s** while our
+>   reachable reaction latency is **300–1800s** — a 300–1800× gap the wrong way, zero overlap with the gate;
+>   the residual at +300s is +0.1–0.5pp and non-executable (the sweeper already ate the liquidity); the 60s
+>   public price-fidelity floor cannot even measure a sub-300s window. KILL — only a dedicated sub-second
+>   infra build could move it (out of scope, low prior).
+>
+> **Net: the market is now measured efficient ELEVEN ways** (10 signals + this hardening sweep). No
+> reopening; the live rail stays DORMANT. Full sweep close-outs: `COMPLETE-SET-ARB-HANDOFF.md` (B/D) and
+> `SPORTS-TRADERS.md` §9 (C1/C2).
 
 ---
 

@@ -84,4 +84,27 @@ argument is not airtight.
 - The fee model is the live one (`takerFeePerShare`, weather_fees 0.05, `takerOnly`) — don't re-derive.
 - The verdict criterion is frozen (`completeSetArbVerdict`, 2% standing bar) — don't move it to fit a result.
 
+## Sweep close-out 2026-06-26 — Move 5 (negRisk) MEASURED → KILL; depth axis CONFIRMED
+
+The "turn every stone" sweep (lanes B + D) closed both open complete-set threads with numbers.
+
+**Move 5 (negRisk mint-and-sell) — MEASURED → KILL.** The "the one place the maker route re-opens the
+dead wall is not airtight" thread (above) is now closed. Mint cost = exactly **$1.00** via the
+`NegRiskAdapter` split (no protocol fee) + ~$0.01/set Polygon gas; maker (resting) sells confirmed
+**$0 fee**. Over 16 live ladders: raw overround on 4/16, max harvest **1.3¢/set**; net-positive at
+executable depth (binding bid fill ≥ 25 shares) = **0/16, winFrac 0%, 95% CI [0, 0]**. The zero-haircut
+arm = 1/16 (6.25%) < the 10% bar, so the KILL does **not** depend on the 1.7pp/leg adverse-selection
+model — the depth wall and the 1.3¢ raw overround kill it before the haircut matters. Binding bid depth
+median 14.84 / min 0.1 shares; ~half the ladders have an uncloseable zero-bid leg. The "fully-hedged set
+has lower adverse selection" hypothesis is therefore moot. Artifact: `scripts/research/lane-b-negrisk-scan.ts`.
+Rail DORMANT.
+
+**Depth-axis confirmation of the 8th-signal KILL — DONE.** The migration-0060 `complete_set_depth_captures`
+panel (486 rows / 73 events / ~19h, re-queried against prod): 74 raw-underround, **5 fee-cleared**, and
+**0 of those 5 clear at binding depth ≥ 25** (exec_sets `8/6/5/5/3`; max realized net **$0.0474**). One
+thin tail leg caps every set (Warsaw 4.48, Busan 6.22, Atlanta 1.0 contracts) even with 20k–75k modal-bin
+depth — the same throttle as cross-venue. The live scan (99 open ladders) had 0/99 fee-cleared to even
+probe. The fee wall is now confirmed on the depth axis too. **Do NOT re-open Move 1** — the pre-registered
+depth gate ("reopen only if a fee-cleared instant ALSO clears at binding depth ≥ MIN_EXEC_SIZE") returned 0/5.
+
 _Analytics record. Rail DORMANT. Nothing here is trading advice._
