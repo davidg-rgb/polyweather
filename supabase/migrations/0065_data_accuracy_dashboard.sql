@@ -16,9 +16,11 @@
 --   • byLead      — the headline: our model vs the market at leads 0/1/2 (exact / within-1 / mean-miss).
 --   • byStation   — per-station at the day-before lead (1): n, exact%, within-1%, mean-miss, + the market's
 --                   within-1%/mean-miss on the same events. Ranked best→worst by mean-miss (the stable ranker).
---   • brierSeries — DAILY pooled multi-category Brier (house vs market) at lead 1 over the house-era window
---                   (since house bucket-distributions began scoring, ~2026-06-08) — the "is our deficit
---                   widening or closing" trace. Days where house has no scored Brier are omitted.
+--   • brierSeries — DAILY pooled multi-category Brier (house vs market) at the day-before lead, keyed on the
+--                   ADR-16 scored_for_leads array (like the rest of the calibration surface — 0017/0045), NOT
+--                   the snapshot's own lead_days. Over the house-era window (since house bucket-distributions
+--                   began scoring, ~2026-06-14) — the "is our deficit widening or closing" trace. Days with
+--                   fewer than 5 scored house events are omitted.
 --
 -- argmax is computed in SQL via `unnest(probs) with ordinality` (i-1 = 0-based bucket index, matching
 -- winning_bucket_idx); ties resolve to the lower index. The market_consensus dedup keeps the LATEST snapshot
@@ -92,7 +94,12 @@ begin
       avg(bp.brier) filter (where bp.source = 'market_consensus') bm
     from public.bucket_probabilities bp
     join public.market_events me on me.id = bp.event_id
-    where bp.brier is not null and bp.nowcast = false and bp.lead_days = 1
+    -- ADR-16: brier is set on the single freshest cutoff row per (event, source, lead) regardless of that row's
+    -- own lead_days, so the day-before series keys on the scored_for_leads array (the convention everywhere
+    -- else: calib_scored_rows 0017, the 0045 partial index), not bp.lead_days.
+    cross join lateral unnest(bp.scored_for_leads) as l(ld)
+    where bp.brier is not null and bp.nowcast = false and l.ld = 1
+      and bp.scored_for_leads <> '{}'::smallint[]   -- lets the 0045 partial index drive the scan
       and bp.source in ('house_gaussian', 'market_consensus')
       and me.winning_bucket_idx is not null
     group by me.target_date

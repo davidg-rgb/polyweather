@@ -75,6 +75,9 @@ describe('/data page renders', () => {
     // analysis + provenance
     expect(html).toContain('What the data says');
     expect(html).toContain('climate-driven');
+    // the "Day-of" bullet must render the lead-0 within-1 value (~89%), NOT the day-before lead-1 value (78%).
+    expect(html).toContain('about 89%');
+    expect(html).not.toContain('about 78%');
     expect(html).toContain('Forecast ↔ outcome pairs');
     expect(html).toContain('2026-03-28');
 
@@ -97,5 +100,38 @@ describe('/data page renders', () => {
     const html = renderToStaticMarkup(await DataPage());
     expect(html).toContain('Forecast accuracy by market');
     expect(html).toContain('No scored forecast data yet');
+  });
+
+  // The production empty path: the RPC always returns a NON-null meta (the win CTE yields one (null,null,0) row
+  // over zero data) with byStation coalesced to []. The page must still show the graceful message via the
+  // `byStation.length < 2` disjunct, not crash.
+  it('renders the graceful-empty state for a non-null but empty view (live empty-DB shape)', async () => {
+    vi.resetModules();
+    const EMPTY = {
+      meta: { champion: 'house_gaussian', leadStation: 1, generatedAt: null, firstDay: null, lastDay: null, nStations: 0 },
+      byLead: [], byStation: [], brierSeries: [],
+    };
+    vi.doMock('../src/lib/loaders.ts', () => ({ getDataAccuracy: async () => EMPTY }));
+    const { default: DataPage } = await import('../src/app/(dash)/data/page.tsx');
+    const html = renderToStaticMarkup(await DataPage());
+    expect(html).toContain('No scored forecast data yet');
+  });
+
+  // Single-station guard: at exactly one qualifying station there is no best-vs-worst story, and rendering the
+  // tables would hit the slice(-0)-returns-whole-array footgun (lone station mislabelled "worst", blank "best").
+  // The `< 2` guard must route it to the graceful message.
+  it('routes a single-station result to the graceful-empty state (no slice(-0) mislabel)', async () => {
+    vi.resetModules();
+    const ONE = {
+      meta: { champion: 'house_gaussian', leadStation: 1, generatedAt: '2026-06-26T13:00:00Z', firstDay: '2026-06-13', lastDay: '2026-06-26', nStations: 1 },
+      byLead: [{ lead: 1, n: 8, stations: 1, houseExact: 0.5, houseWithin1: 0.9, houseMiss: 0.5, marketExact: 0.5, marketWithin1: 0.9, marketMiss: 0.5 }],
+      byStation: [{ city: 'madrid', region: 'europe-west', n: 8, exactPct: 0.5, within1Pct: 0.9, meanMiss: 0.5, marketWithin1Pct: 0.9, marketMeanMiss: 0.5 }],
+      brierSeries: [],
+    };
+    vi.doMock('../src/lib/loaders.ts', () => ({ getDataAccuracy: async () => ONE }));
+    const { default: DataPage } = await import('../src/app/(dash)/data/page.tsx');
+    const html = renderToStaticMarkup(await DataPage());
+    expect(html).toContain('No scored forecast data yet');
+    expect(html).not.toContain('Hardest markets'); // the broken best/worst tables must NOT render
   });
 });

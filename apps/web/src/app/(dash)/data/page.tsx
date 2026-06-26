@@ -19,12 +19,13 @@ export const dynamic = 'force-dynamic';
 
 // ─── static provenance (the depth of forecast-vs-outcome data; see the project DATA.md) ──────────────────────
 // FACTS measured 2026-06-26 from the prod DB. The forecast-vs-outcome record is the binding constraint — the
-// outcome series alone reaches back far further, but has no matching forecast before late March 2026.
-const PROVENANCE: { label: string; since: string; span: string; note: string }[] = [
+// outcome series alone reaches back far further, but has no matching forecast before late March 2026. The
+// fourth row ("Bucket distributions") is derived LIVE from meta (the scored window) so it can never drift from
+// the window string rendered above it.
+const PROVENANCE_HISTORICAL: { label: string; since: string; span: string; note: string }[] = [
   { label: 'Observed highs (truth)', since: '2024-01-21', span: '~29 months', note: '45 stations — but no matching forecast before Mar 2026' },
   { label: 'Raw NWP forecasts captured', since: '2026-03-28', span: '~3 months', note: 'backfilled archive to late Mar; live twice-daily since Jun 13' },
   { label: 'Forecast ↔ outcome pairs', since: '2026-03-28', span: '~3 months', note: '~250k pairs, 45 stations — the real skill record' },
-  { label: 'Bucket distributions (this page)', since: '2026-05-15', span: '~6 weeks', note: 'the probability vectors these accuracy numbers score' },
 ];
 
 // ─── helpers ─────────────────────────────────────────────────────────────────────────────────────────────────
@@ -33,6 +34,16 @@ const PROVENANCE: { label: string; since: string; span: string; note: string }[]
 function deg(v: unknown): string {
   const n = num(v);
   return n === null ? '—' : `${n.toFixed(2)}°`;
+}
+
+/** Whole-week span between two 'YYYY-MM-DD' dates, '~N week(s)' or '—' when either is absent/invalid. */
+function spanWeeks(first: string | null, last: string | null): string {
+  if (!first || !last) return '—';
+  const f = Date.parse(first);
+  const l = Date.parse(last);
+  if (Number.isNaN(f) || Number.isNaN(l)) return '—';
+  const weeks = Math.max(1, Math.round((l - f) / (7 * 86_400_000)));
+  return `~${weeks} week${weeks === 1 ? '' : 's'}`;
 }
 
 /** Prettify a cluster region slug: 'europe-west' → 'europe west'. */
@@ -65,7 +76,9 @@ function StationRow({ s, tone }: { s: DataStationRow; tone: 'pos' | 'neg' }): Re
 export default async function DataPage(): Promise<ReactElement> {
   const view = await getDataAccuracy(await serverDb());
 
-  if (!view || view.byStation.length === 0) {
+  // < 2 (not === 0): at exactly one qualifying station there is no best-vs-worst story, and the negative-slice
+  // (slice(-0) returns the WHOLE array) would mislabel the lone station "worst" with a blank "best".
+  if (!view || view.byStation.length < 2) {
     return (
       <div className="ams-dash">
         <h1>Forecast accuracy by market</h1>
@@ -77,7 +90,8 @@ export default async function DataPage(): Promise<ReactElement> {
   }
 
   const { meta, byLead, byStation, brierSeries } = view;
-  const lead1 = byLead.find((r) => r.lead === 1) ?? null;
+  const lead0 = byLead.find((r) => r.lead === 0) ?? null; // day-of
+  const lead1 = byLead.find((r) => r.lead === 1) ?? null; // day-before
 
   // Best / worst are the head & tail of the RPC's mean-miss ordering.
   const N = Math.min(8, Math.floor(byStation.length / 2));
@@ -99,6 +113,18 @@ export default async function DataPage(): Promise<ReactElement> {
   const brierMkt = brierSeries.map((p) => num(p.brierMarket));
 
   const leadStation = num(meta.leadStation) ?? 1;
+
+  // The scored-distribution row is derived from the live window (meta.firstDay→lastDay) — the house probability
+  // vectors this page scores start mid-June (house dists are never seeded for past target_dates), NOT mid-May.
+  const provenance = [
+    ...PROVENANCE_HISTORICAL,
+    {
+      label: 'Bucket distributions (this page)',
+      since: meta.firstDay ? fmtDate(meta.firstDay) : '—',
+      span: spanWeeks(meta.firstDay, meta.lastDay),
+      note: 'the house probability vectors these accuracy numbers score',
+    },
+  ];
 
   return (
     <div className="ams-dash">
@@ -167,8 +193,11 @@ export default async function DataPage(): Promise<ReactElement> {
       <h2>Accuracy by forecast horizon</h2>
       <p className="muted small">
         Pooled across every market, on the days both we and the market made a call. Exact-hit holds flat with
-        lead while the distribution widens (mean miss grows) — the real skill decay. The market is sharper at
-        every horizon, and the gap widens the further out you forecast.
+        lead while the distribution widens (mean miss grows) — the real skill decay. The market matches or edges
+        us at every horizon, and its lead widens the further out you forecast. Day-of (lead 0) is the least clean
+        comparison: the market figure is the freshest same-day quote, so it can price a running max already
+        partly observed, while our distribution is fixed at the NWP cutoff — the head-to-head is strictest at
+        leads 1–2.
       </p>
       <div className="panel">
         <table>
@@ -306,7 +335,7 @@ export default async function DataPage(): Promise<ReactElement> {
         <ul style={{ margin: 0, paddingLeft: '1.1rem', lineHeight: 1.7 }}>
           <li>
             <strong>We are a competent forecaster, not a market-beating one.</strong> Day-of we land within 1°
-            about {lead1 ? fmtPct(lead1.houseWithin1, 0) : '—'} of the time; the market matches or edges us at
+            about {lead0 ? fmtPct(lead0.houseWithin1, 0) : '—'} of the time; the market matches or edges us at
             every horizon, and its lead grows the further out you forecast.
           </li>
           <li>
@@ -344,7 +373,7 @@ export default async function DataPage(): Promise<ReactElement> {
             </tr>
           </thead>
           <tbody>
-            {PROVENANCE.map((p) => (
+            {provenance.map((p) => (
               <tr key={p.label}>
                 <td>
                   <strong>{p.label}</strong>

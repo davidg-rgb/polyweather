@@ -14,8 +14,8 @@ argmax in SQL via `unnest(probs) with ordinality`; `operator_guard` + 60s timeou
 end-to-end (44 stations, best=Madrid 0.38° miss, worst=Jeddah 1.57° miss). Web: `(dash)/data/page.tsx` (Terminal-Glass
 bento — by-horizon table, best/worst market tables, a mean-miss skyline + the daily Brier-gap line chart, written analysis +
 a data-provenance panel), loader `getDataAccuracy`, NEW `components/LineChart.tsx`, nav `['/data', 'accuracy']`. Findings:
-**market sharper at every lead, gap widens with horizon; ranking tracks climate physics; Brier deficit stable/not-closing** —
-the efficiency verdict in plain accuracy terms. Provenance stated honestly: forecast↔outcome pairs are only a ~3-month book
+**market matches-or-edges us at every lead and its lead widens with horizon; ranking tracks climate physics; Brier deficit
+stable/not-closing** — the efficiency verdict in plain accuracy terms. Provenance stated honestly: forecast↔outcome pairs are only a ~3-month book
 (since 2026-03-28), ~2 weeks of it live; the "28.8mo" is observation depth, not skill. **Verified:** typecheck 0, full suite
 **1495 green** (+ `data-page.render.test.ts`; `migrations.test.ts` file-list + `dash_data` ∈ WEB_AUTHENTICATED updated), web
 build OK. **Pending: a `main` → Vercel deploy to make the page live** (the 0065 RPC is already live, so the page works the

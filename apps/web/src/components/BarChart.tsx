@@ -100,6 +100,10 @@ export function BarChart({
         const y = yAt(v);
         const h = Math.max(baseline - y, v > 0 ? 1.5 : 0);
         const showVal = i % labelEvery === 0 || i === maxIdx || i === n - 1;
+        // x-axis label + tag share the value-label cadence: at high bar counts (e.g. the 44-bar /data skyline)
+        // every-bar labels overrun their ~19px slot and collide into an unreadable smear. Sparse charts
+        // (n <= 12 → labelEvery 1) are unaffected — showX is always true there.
+        const showX = i % labelEvery === 0 || i === n - 1;
         return (
           <g key={`${d.label}-${i}`}>
             <rect x={x} y={y} width={barW} height={h} rx={3} fill={color} opacity={0.9}>
@@ -117,12 +121,14 @@ export function BarChart({
                 {valueFmt(v)}
               </text>
             ) : null}
-            {/* x label */}
-            <text x={xCenter(i)} y={baseline + 13} textAnchor="middle" fontSize={10} fill="var(--ams-muted, var(--muted))">
-              {d.label}
-            </text>
-            {/* tag (e.g. trade count) */}
-            {d.tag ? (
+            {/* x label (thinned at high density) */}
+            {showX ? (
+              <text x={xCenter(i)} y={baseline + 13} textAnchor="middle" fontSize={10} fill="var(--ams-muted, var(--muted))">
+                {d.label}
+              </text>
+            ) : null}
+            {/* tag (e.g. trade count) — thinned with the x label */}
+            {showX && d.tag ? (
               <text x={xCenter(i)} y={baseline + 25} textAnchor="middle" fontSize={9} fill="var(--ams-muted, var(--muted))">
                 {d.tag}
               </text>

@@ -32,9 +32,11 @@ challenger), so its argmax accuracy is not what the product uses.
 
 1. **Accuracy by horizon** (`byLead`) — pooled over all markets, our model vs the market at leads 0/1/2.
    Exact-hit holds flat (~35–36%) while the distribution widens with lead (mean miss 0.78° → 0.94° → 1.06°) —
-   the real skill decay. **The market is sharper at every horizon and the gap widens the further out you
-   forecast** (within-1°: ~tied day-of, but 70% vs 82% two-days-out). This is the efficiency verdict in plain
-   accuracy terms.
+   the real skill decay. **The market matches or edges us at every horizon and its lead widens the further out
+   you forecast** (within-1°: ~tied day-of — we even nose ahead there — but 70% vs 82% two-days-out). This is
+   the efficiency verdict in plain accuracy terms. Day-of (lead 0) is the least clean comparison: the market's
+   day-of figure is its freshest same-day quote and can embed an already-observed running max, while our
+   distribution is fixed at the NWP cutoff — so the head-to-head is strictest at leads 1–2.
 2. **Best & worst markets** (`byStation`, day-before / lead 1) — ranked by mean miss. **The ranking tracks
    meteorology, not noise**: the sharpest markets are stable maritime/temperate regimes (Madrid, Munich, London,
    Warsaw, Miami; low-variance equatorial like Singapore/Wellington hit ~100% within-1° but low exact because the
@@ -55,7 +57,7 @@ against — is a ~3-month book, only ~2 weeks of it from live capture (measured 
 | Observed highs (truth) | 2024-01-21 | ~29 mo | 45 stations — but no matching forecast before Mar 2026 |
 | Raw NWP forecasts captured | 2026-03-28 | ~3 mo | backfilled archive to late Mar; live twice-daily since Jun 13 |
 | Forecast ↔ outcome pairs | 2026-03-28 | ~3 mo | ~250k pairs, 45 stations — the real skill record |
-| Bucket distributions (this page) | 2026-05-15 | ~6 wk | the probability vectors these accuracy numbers score |
+| Bucket distributions (this page) | 2026-06-13 | ~2 wk | the house probability vectors these accuracy numbers score (rendered live from the scored window) |
 
 The docs' "28.8 months" figure is **observation** depth, not forecast skill. Calibration itself runs on a
 **30-day rolling window** (`model_stats.window_days = 30`), so the live model conditions on ~1 month of recent
