@@ -5,30 +5,45 @@
 
 ## Active Phase
 
-**2026-06-25: CROSS-VENUE SPIKE built + LIVE (the 10th signal) — branch `feat/cross-venue-spike`.**
+**2026-06-26: EDGE-HUNT four-lane sweep — lanes B/C1/C2/D all KILL at executable depth (commit `be32c89`).**
+The latest forecast-free orthogonal probes all fail the same executable-depth test: a quoted edge that evaporates the
+instant you demand it fill at real both-book depth. `FINDINGS.md` / `COMPLETE-SET-ARB-HANDOFF.md` / `SPORTS-TRADERS.md`
+updated. Plus the **cross-venue executable-depth kill gate** landed (migrations **0063** `cross_venue_dash_realdepth` +
+**0064** `cross_venue_executable_depth`, commit `37fbea4`, on `main`): the 24h-vol/OI proxy would have FALSE-PASSED
+(winFrac 0.857); the true both-venue depth gate drops winFrac to **0** → KILL.
+Plus the NEW **/efficiency "verdict" product page** (commits `60da362` + `7b2389c`) at
+`apps/web/src/app/(dash)/efficiency/page.tsx` + `lib/efficiency-findings.ts` + nav + home link — the headline
+market-efficiency analytics surface. **NOT yet on `main`: lives on branch `feat/edge-hunt-sweep` (commits
+`be32c89`/`60da362`/`7b2389c` unmerged) — pending a `main` deploy before it is LIVE on prod.**
+
+**2026-06-25: CROSS-VENUE SPIKE built (the 10th signal) — VERDICT 2026-06-26: KILL (a capacity wall); merged to `main`, rail DORMANT.**
 The first genuinely-EXECUTABLE, forecast-free, orthogonal lever: does the *same US city's daily high* price
 differently on **Kalshi (NWS-CLI)** vs **Polymarket (Wunderground)** beyond the cost to harvest it? Both venues are
 reachable from Sweden (verified). NOT a clean arb — a **1°F bin offset** (even- vs odd-start ladders) + a **dual
-resolution source** (CLI ≥ WU) are the prime suspects for a fee/offset/basis wall, same shape as the 8th signal. Built:
+resolution source** (CLI ≥ WU) were the suspects for a fee/offset/basis wall, same shape as the 8th signal. Built:
 pure engine `core/sim/cross-venue-arb.ts` (implied-PMF + neutral-consensus executable edge + frozen gate) + Kalshi
 parsers `core/kalshi/markets.ts` (6-city overlap: NYC/LA/Chicago/Miami/Austin/Denver) + migration **0062**
 (`cross_venue_captures` + `dash_cross_venue` + recorder + `*/30` cron, count 20→21) + Edge `cross-venue-capture` +
 scan `cross-venue-arb-scan.ts` + basis estimator `cross-venue-basis.ts`. +56 tests, full suite **1463 green**, typecheck
-clean. **Forward gated paper panel; no capital, rail DORMANT.** Day-1 NYC read: venues agree on the modal high to ~1¢ →
-strong prior **KILL**. Verdict after ~1 week: `dash_cross_venue(7)` / the scan. Operator-ratified frozen gate: net-
-positive on ≥10% of real-depth city-days with a pooled 95% CI excluding 0, else the 10th falsified signal. Full record:
+clean. **VERDICT (2026-06-26): KILL — a CAPACITY WALL.** A real quoted cross-venue gap exists (6/7 city-days
+net-positive) but TRUE both-book depth fills only **1–10 contracts** (thin tail legs); the 24h-vol/OI proxy would have
+FALSE-PASSED (winFrac 0.857), hardened by migration **0064** to gate WINS on true executable depth → winFrac **0** → KILL.
+**Rail DORMANT.** The full cross-venue series (`b8ee191` → `170ec54` → `7b3fcb8` → `37fbea4`) is **merged to `main`**
+(re-landed there; the original `feat/cross-venue-spike` branch itself was not git-merged). Full record:
 **`CROSS-VENUE-SPIKE.md`**.
 
 ### ▶ NEXT STEP — PIVOT TO ANALYTICS VALUE (operator chose 2026-06-15). Trading thesis CLOSED by WO-5 (iter-48, market efficient w.r.t. the hard running-max floor). The product is now forecast-skill + calibration + model-vs-market insight; trading machinery stays DORMANT. Analytics shipped: the **WALLET-RECON milestone** (sharp-wallet benchmark #1, wallet forensics #2, day-before efficiency study #3) ran end-to-end 2026-06-22 → **branch (b): the day-before market is EFFICIENT w.r.t. our forecast** (KILL-GATE 2 FAIL; the sharp's edge is real but not replicable as a follower). Live rail stays dormant. Build #1 FULLY LIVE (`sharp-wallet-track` deployed 2026-06-22, cron active). **WALLET-RECON now COMPLETE (2026-06-23): all FIVE replication angles falsified (added maker-spray #4, M1 diagnosis, Move-5 sharp-as-forecaster #5, + the forensic purchase map §15) and the whole milestone is MERGED to `main` (PR #1 `9b8cb37` + PR #2 `b41da4a`); the parallel multi-agent code-review fixes are reviewed, validated (1120 tests, CI green), and merged.** Operator follow-ups all ✅ DONE (merge, re-persist, nbm_conus A/B) — see the 2026-06-23 entry + WALLET-RECON-HANDOFF.md §10–§15. R&D round-2 reviewed (iter-47); RPC-lockdown DEPLOYED (iter-45)
 
 > **PIVOT DECISION (2026-06-15):** after WO-5 closed the trading thesis, the operator chose **lean into
 > analytics value** (over seek-out-of-market-info / shelve). Polyweather is now an analytics & forecasting
-> instrument, not a taker. Existing dashboard surface: `(dash)` home, `calibration`, `city/[slug]`,
-> `events`, `system` (analytics) + `bets` (trading — now dormant). Next: scope the first analytics-lean
+> instrument, not a taker. Dashboard surface as-built: `(dash)` home, `admin`, `amsterdam`, `calibration`,
+> `city/[slug]`, `efficiency` (the market-efficiency "verdict" page), `events`, `replica`, `rewards`, `sharps`,
+> `system`, `whaletracker` (analytics) + `bets` (trading — now dormant). Next: scope the first analytics-lean
 > deliverable (e.g. a polished forecast-skill + market-efficiency view as the product's headline). See the
 > updated project `CLAUDE.md` header and `FORECASTING-RD.md` WO-5 for the rationale. **The whole
 > investigation is now consolidated into one canonical R&D record — `FINDINGS.md` (2026-06-23):
-> the central question, the verdict, and the seven falsified signals with their numbers, linking
+> the central question, the verdict, and every falsified signal with its numbers (10 signals — the market
+> is measured efficient eleven ways once the hardening sweep is counted), linking
 > down to every deep doc. Read it first to understand what this project concluded.**
 
 **2026-06-24: WHALE-WATCH shipped (branch `feat/maker-rebate-economics`) — Polymarket large-trade alarm + a global Slack-alert pause.**

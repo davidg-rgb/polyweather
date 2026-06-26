@@ -176,7 +176,7 @@ Single operator (David). No multi-tenancy; Supabase Auth with one allow-listed e
 ## 3. Architecture Decision Records
 
 **ADR-01 — TypeScript monorepo (pnpm workspaces) with a pure domain core.**
-Decision: one repo: `packages/core` (pure TS, zero IO, zero runtime deps beyond zod), `packages/db` (generated types + query helpers), `apps/web` (Next.js), `supabase/functions` (Deno Edge Functions importing core via relative path), `scripts/` (Node CLIs).
+Decision: one repo: `packages/core` (pure TS, zero IO, zero runtime deps beyond zod), `packages/io` (http/slack/polymarket-wallet IO adapters), `packages/trading` (executor boundary), `apps/web` (Next.js), `supabase/functions` (Deno Edge Functions importing core via relative path), `scripts/` (Node CLIs). (AS-BUILT NOTE: the originally-planned `packages/db` generated-types-and-query-helpers package was never built — DB access consolidated into `packages/io`, `supabase/functions/_shared/db.ts`, and the per-app client `apps/web/src/lib/supabase.ts`, using manually-typed `supabase-js` clients rather than a generated `Database` type.)
 Alternatives: Python for the stats layer (rejected: EMOS v1 is closed-form algebra — normal CDF, decaying averages, weighted means — no scipy needed; one language halves the test/deploy surface); separate repos (rejected: shared types are the whole point).
 Consequence: `packages/core` must stay Deno-compatible — no Node built-ins, no `process.env` (config injected), file-extension imports.
 
@@ -232,7 +232,7 @@ Decision: email-OTP auth restricted to one allow-listed address; all tables RLS-
 Why: the dashboard will eventually display position data worth real money; public-by-accident is unacceptable.
 
 **ADR-14 — Raw SQL migrations + generated types; no ORM.**
-Decision: schema lives in `supabase/migrations/*.sql` (supabase CLI); `supabase gen types typescript` produces `packages/db/src/types.gen.ts`; data access via `supabase-js` v2 typed clients plus a thin query module per domain. Postgres does the heavy lifting (window functions for rolling stats, partial indexes, generated columns).
+Decision: schema lives in `supabase/migrations/*.sql` (supabase CLI). AS-BUILT: there is no generated-types package — the planned `packages/db/src/types.gen.ts` (`supabase gen types typescript`) was never produced. Data access is via `supabase-js` v2 clients (manually/loosely typed, no generated `Database` type) through `supabase/functions/_shared/db.ts`, `packages/io`, and `apps/web/src/lib/supabase.ts`. Postgres does the heavy lifting (window functions for rolling stats, partial indexes, generated columns).
 Alternatives: Drizzle/Prisma (rejected: pg_cron schedules, RLS policies, and partial indexes live in SQL anyway; one source of truth beats two). Secrets in SQL: pg_cron commands read `CRON_SECRET` from **Supabase Vault** (`vault.decrypted_secrets`) at fire time — the literal secret never appears in committed migrations or the `cron.job` table; the Vault entry is seeded manually per RUNBOOK.
 
 **ADR-15 — Nowcast as a constraint, not a model.**
@@ -347,12 +347,9 @@ weather-edge/
 │   │       ├── http.ts              # fetchJson — retry/backoff/timeout (§6.12)
 │   │       └── slack.ts             # slackPost — raw webhook post, no dedup (§6.12)
 │   │
-│   ├── db/                          # database access (Node + Deno)
-│   │   └── src/
-│   │       ├── types.gen.ts         # supabase gen types output (CI-checked fresh)
-│   │       └── queries/             # one file per domain: markets.ts, forecasts.ts,
-│   │                                #   observations.ts, distributions.ts, bets.ts,
-│   │                                #   calibration.ts, jobs.ts, config.ts
+│   │   (AS-BUILT: no `packages/db` — the planned generated-types + query-helpers
+│   │    package was never built. DB access lives in supabase/functions/_shared/db.ts,
+│   │    packages/io, and apps/web/src/lib/supabase.ts with manually-typed clients.)
 │   │
 │   └── trading/                     # executor boundary (§6.20)
 │       └── src/
@@ -997,7 +994,7 @@ runJob(name: string, periodKey: string, handler: (ctx: JobCtx) => Promise<JobSta
   Called by: every Edge Function index.ts (§6.13–6.19).
   Calls: requireCronAuth, getServiceDb, parseConfigRows, notifySlack.
 
-getServiceDb(): SupabaseClient<Database>   [db.ts]
+getServiceDb(): Promise<DbPort>   [supabase/functions/_shared/db.ts]   (AS-BUILT: returns a DbPort, not the originally-planned `SupabaseClient<Database>` — no generated `Database` type exists)
   Purpose: service-role client (env SUPABASE_URL + SERVICE_ROLE_KEY); singleton per isolate.
   Called by: runJob, gradeEvent, notifySlack (dedup), executeBet (§6.20a). Calls: none.
 
@@ -2102,18 +2099,18 @@ core/polymarket/gamma                             → core/buckets, core/time
 core/polymarket/clob                              → (leaf)
 core/weather/openmeteo|metar                      → core/time
 core/weather/wu|iem                               → (leaf)
-packages/db                                       → core (types only)
+(packages/db never built — AS-BUILT DB access: functions/_shared/db.ts + packages/io + apps/web/src/lib/supabase.ts)
 packages/trading                                  → core/edge, core/fees, core/risk, packages/io,
-                                                    packages/db, @polymarket/clob-client
+                                                    @polymarket/clob-client
 functions/_shared                                 → core/config, core/errors, core/buckets, core/fees,
                                                     core/calibration, core/risk, core/time (gradeEvent),
-                                                    packages/io, packages/db
-functions/* (11 scheduled jobs)                   → functions/_shared, core/*, packages/db
+                                                    packages/io, functions/_shared/db.ts
+functions/* (11 scheduled jobs)                   → functions/_shared, core/*
 functions/execute-bet                             → packages/trading, functions/_shared
-apps/web loaders/routes                           → packages/db, core (display math),
+apps/web loaders/routes                           → apps/web/src/lib/supabase.ts, core (display math),
                                                     packages/trading/gate.ts ONLY (goLiveGate readout —
                                                     execution always via the execute-bet HTTP proxy)
-scripts/*                                         → core/*, packages/io, packages/db
+scripts/*                                         → core/*, packages/io
 ```
 
 No cycles: core/io ← db ← {trading, functions, web, scripts}; trading never imports functions or web; clob-client reaches runtime only inside execute-bet (ADR-10/§8.3).
