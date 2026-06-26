@@ -100,8 +100,12 @@ export default async function OverviewPage(): Promise<ReactElement> {
         </ul>
         <p className="muted small">
           Conclusion: within free public weather data these markets are <strong>efficient</strong>. The value
-          here is the measurement instrument, not a trading edge — live trading is dormant by design. Live
-          evidence: <a href="/calibration">calibration &amp; reliability →</a> ·{' '}
+          here is the measurement instrument, not a trading edge — live trading is dormant by design. See the
+          full proof — every falsified lever, measured at executable depth — on{' '}
+          <strong>
+            <a href="/efficiency">the verdict page →</a>
+          </strong>
+          . Live evidence: <a href="/calibration">calibration &amp; reliability →</a> ·{' '}
           <a href="/events">open events &amp; collection health →</a>
         </p>
       </div>
