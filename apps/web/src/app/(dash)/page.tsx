@@ -4,6 +4,9 @@
  * market-efficiency verdict (composes the existing dash_calibration + dash_events_list RPCs — no new RPC).
  * The trading machinery is dormant, so the operational chrome (mode / halts / jobs from dash_today_overview)
  * is preserved but DEMOTED to a footer strip; the bet ledger lives behind /bets.
+ *
+ * Styled in the shared ".ams-dash" Terminal-Glass idiom (the same surface as /efficiency, /amsterdam,
+ * /sharps, …) so the product's front door matches the rest of the analytics suite.
  */
 import type { ReactElement } from 'react';
 import { JobHealthTable } from '../../components/JobHealthTable.tsx';
@@ -29,59 +32,57 @@ export default async function OverviewPage(): Promise<ReactElement> {
         : { chip: 'blue', text: 'market efficient — measured' };
 
   return (
-    <div>
+    <div className="ams-dash">
       <h1>
         Forecast skill vs. the market{' '}
         <span className="chip blue">champion: {cal.champion}</span>{' '}
         <span className={`chip ${verdict.chip}`}>{verdict.text}</span>
       </h1>
-      <p className="muted">
-        We price daily-max temperature markets for ~46 global airport stations against a calibrated
-        multi-model NWP ensemble, and score every forecast against the realized truth and the market.
+      <p className="muted small">
+        We price daily-max temperature markets for ~46 global airport stations against a calibrated multi-model
+        NWP ensemble, and score every forecast against the realized truth and the market. Brier is n-weighted
+        across scored stations (lower is better).
       </p>
 
-      <h2>Brier skill (lower is better, n-weighted across scored stations)</h2>
-      <div className="grid cols-3">
-        <div className="panel stat">
-          <span className="label">our forecast (Brier)</span>
-          <span className="value">{fmtProb(skill.meanBrier)}</span>
+      {/* ── headline skill strip ─────────────────────────────────────────────────────────────────────── */}
+      <div className="strip">
+        <div className="tile">
+          <div className="cap">Our forecast (Brier)</div>
+          <div className="big">{fmtProb(skill.meanBrier)}</div>
+          <div className="sub">lower is better</div>
         </div>
-        <div className="panel stat">
-          <span className="label">the market (Brier)</span>
-          <span className="value">{fmtProb(skill.meanBrierMarket)}</span>
+        <div className="tile">
+          <div className="cap">The market (Brier)</div>
+          <div className="big">{fmtProb(skill.meanBrierMarket)}</div>
+          <div className="sub">the bar to clear</div>
         </div>
-        <div className="panel stat">
-          <span className="label">skill vs. market</span>
-          <span className={`value ${beatsMarket ? 'pos' : 'neg'}`}>
+        <div className="tile">
+          <div className="cap">Skill vs. market</div>
+          <div className={`big ${beatsMarket ? 'pos' : 'neg'}`}>
             {skill.skillVsMarket === null ? '—' : `${beatsMarket ? '+' : ''}${fmtPct(skill.skillVsMarket, 1)}`}
-          </span>
+          </div>
+          <div className="sub">{skill.nCells} cells · {num(skill.totalN) ?? 0} obs</div>
         </div>
-      </div>
-      <div className="grid cols-3">
-        <div className="panel stat">
-          <span className="label">stations we beat the market</span>
-          <span className="value">{skill.beatRate === null ? '—' : `${fmtPct(skill.beatRate, 0)}`}</span>
+        <div className="tile">
+          <div className="cap">Stations we beat</div>
+          <div className="big sky">{skill.beatRate === null ? '—' : fmtPct(skill.beatRate, 0)}</div>
+          <div className="sub">share of scored stations</div>
         </div>
-        <div className="panel stat">
-          <span className="label">calibration error (ECE)</span>
-          <span className="value">{fmtProb(skill.meanEce)}</span>
-        </div>
-        <div className="panel stat">
-          <span className="label">scored station-cells</span>
-          <span className="value">
-            {skill.nCells} <span className="small muted">/ {num(skill.totalN)} obs</span>
-          </span>
+        <div className="tile">
+          <div className="cap">Calibration error (ECE)</div>
+          <div className="big">{fmtProb(skill.meanEce)}</div>
+          <div className="sub">predicted vs realized gap</div>
         </div>
       </div>
 
+      {/* ── the verdict ──────────────────────────────────────────────────────────────────────────────── */}
       <h2>Can you beat these markets?</h2>
+      <div className="info-banner">
+        <strong>Measured answer: no — and we can prove why.</strong> Across an exhaustive R&amp;D program we tried
+        every lever to systematically out-forecast the market and rejected each one with large-sample evidence.
+      </div>
       <div className="panel">
-        <p>
-          <strong>Measured answer: no — and we can prove why.</strong> Across an exhaustive R&amp;D program we
-          tried every lever to systematically out-forecast the market and rejected each one with large-sample
-          evidence:
-        </p>
-        <ul className="muted">
+        <ul className="muted" style={{ marginTop: 0 }}>
           <li>
             The multi-day NWP blend is at its <strong>point-skill ceiling</strong> — four independent levers
             failed (regression MOS, recency/concentration reweighting, regime-conditional weighting, and a
@@ -94,14 +95,14 @@ export default async function OverviewPage(): Promise<ReactElement> {
           </li>
           <li>
             The market even <strong>zeroes logically-impossible buckets faster than we can observe</strong>:
-            across 754 station-days, the price on temperature buckets below the day&apos;s already-printed
-            running max is effectively nil, with no exploitable latency window (WO-5).
+            across 754 station-days, the price on temperature buckets below the day&apos;s already-printed running
+            max is effectively nil, with no exploitable latency window (WO-5).
           </li>
         </ul>
-        <p className="muted small">
-          Conclusion: within free public weather data these markets are <strong>efficient</strong>. The value
-          here is the measurement instrument, not a trading edge — live trading is dormant by design. See the
-          full proof — every falsified lever, measured at executable depth — on{' '}
+        <p className="muted small" style={{ marginBottom: 0 }}>
+          Conclusion: within free public weather data these markets are <strong>efficient</strong>. The value here
+          is the measurement instrument, not a trading edge — live trading is dormant by design. See the full
+          proof — every falsified lever, measured at executable depth — on{' '}
           <strong>
             <a href="/efficiency">the verdict page →</a>
           </strong>
@@ -110,32 +111,36 @@ export default async function OverviewPage(): Promise<ReactElement> {
         </p>
       </div>
 
+      {/* ── champion reliability ─────────────────────────────────────────────────────────────────────── */}
       <h2>Champion reliability</h2>
       <div className="panel">
-        {championReliability.length === 0 ? (
-          <p className="muted">No reliability bins yet — run-calibration fills these nightly.</p>
-        ) : (
-          <ReliabilityDiagram title={cal.champion} points={championReliability} />
-        )}
+        <div style={{ display: 'flex', justifyContent: 'center' }}>
+          {championReliability.length === 0 ? (
+            <p className="muted">No reliability bins yet — run-calibration fills these nightly.</p>
+          ) : (
+            <ReliabilityDiagram title={cal.champion} points={championReliability} />
+          )}
+        </div>
       </div>
 
+      {/* ── coverage ─────────────────────────────────────────────────────────────────────────────────── */}
       <h2>Coverage</h2>
-      <div className="grid cols-3">
-        <div className="panel stat">
-          <span className="label">open events</span>
-          <span className="value">{num(events.counts.open) ?? 0}</span>
+      <div className="strip">
+        <div className="tile">
+          <div className="cap">Open events</div>
+          <div className="big sky">{num(events.counts.open) ?? 0}</div>
         </div>
-        <div className="panel stat">
-          <span className="label">with a house distribution</span>
-          <span className="value">{num(events.counts.withHouse) ?? 0}</span>
+        <div className="tile">
+          <div className="cap">With a house distribution</div>
+          <div className="big">{num(events.counts.withHouse) ?? 0}</div>
         </div>
-        <div className="panel stat">
-          <span className="label">with a fresh market snapshot</span>
-          <span className="value">{num(events.counts.withSnapshot) ?? 0}</span>
+        <div className="tile">
+          <div className="cap">With a fresh market snapshot</div>
+          <div className="big">{num(events.counts.withSnapshot) ?? 0}</div>
         </div>
       </div>
 
-      {/* --- operations (demoted: trading is dormant) --- */}
+      {/* ── operations (demoted: trading is dormant) ─────────────────────────────────────────────────── */}
       <h2 className="muted">Operations</h2>
       {ops.breakerStates.length > 0 ? (
         <div className="drift-banner">
@@ -151,7 +156,7 @@ export default async function OverviewPage(): Promise<ReactElement> {
         </div>
       ) : null}
       <div className="panel">
-        <p className="small muted">
+        <p className="small muted" style={{ marginTop: 0 }}>
           trading mode: <span className="mono">{ops.mode}</span> · the bet ledger (dormant) lives at{' '}
           <a href="/bets">/bets</a>
         </p>
