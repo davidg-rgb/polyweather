@@ -21,7 +21,7 @@ import {
   METHODOLOGY,
   type Verdict,
 } from '../../../lib/efficiency-findings.ts';
-import { fmtPct, fmtProb, num } from '../../../lib/format.ts';
+import { fmtPct, fmtProb } from '../../../lib/format.ts';
 import { getAmsterdamSim, getCalibrationView } from '../../../lib/loaders.ts';
 import { shapeReliability, summarizeForecastSkill } from '../../../lib/shapers.ts';
 import { serverDb } from '../../../lib/supabase.ts';
@@ -52,22 +52,20 @@ function VerdictChip({ v }: { v: Verdict }): ReactElement {
 function LeverRow({ lever }: { lever: FalsifiedLever }): ReactElement {
   return (
     <tr>
-      <td style={{ minWidth: 200 }}>
+      <td>
         <strong>{lever.lever}</strong>
         <div className="muted small" style={{ marginTop: 2 }}>
           {lever.question}
         </div>
       </td>
-      <td style={{ whiteSpace: 'nowrap' }}>
+      <td>
         <VerdictChip v={lever.verdict} />
       </td>
       <td className="small">{lever.evidence}</td>
-      <td style={{ whiteSpace: 'nowrap' }}>
+      <td>
         <span className="chip soft">{lever.wall}</span>
       </td>
-      <td className="mono small muted" style={{ whiteSpace: 'nowrap' }}>
-        {lever.doc}
-      </td>
+      <td className="mono small muted">{lever.doc}</td>
     </tr>
   );
 }
@@ -162,8 +160,9 @@ export default async function EfficiencyPage(): Promise<ReactElement> {
       {/* ── the proof: three arcs ─────────────────────────────────────────────────────────────────── */}
       <h2>The proof — every lever, falsified</h2>
       <p className="muted small">
-        The whole R&amp;D program is the systematic falsification of “we have an edge.” It ran in three arcs;
-        each row is a distinct lever, its verdict, the load-bearing number, and the wall it died on. Source:{' '}
+        The whole R&amp;D program is the systematic falsification of “we have an edge.” It ran in two arcs —
+        forecasting, then the sharp wallet — followed by a forecast-free, structural front; each row below is a
+        distinct lever, its verdict, the load-bearing number, and the wall it died on. Source:{' '}
         <span className="mono">FINDINGS.md</span>.
       </p>
       {FINDINGS_ARCS.map((arc) => (
@@ -205,11 +204,13 @@ export default async function EfficiencyPage(): Promise<ReactElement> {
           <div className="cap" style={{ marginBottom: '0.4rem' }}>
             Champion reliability — predicted probability vs realized frequency
           </div>
-          {championReliability.length === 0 ? (
-            <p className="muted">No reliability bins yet — run-calibration fills these nightly.</p>
-          ) : (
-            <ReliabilityDiagram title={cal.champion} points={championReliability} />
-          )}
+          <div style={{ display: 'flex', flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+            {championReliability.length === 0 ? (
+              <p className="muted">No reliability bins yet — run-calibration fills these nightly.</p>
+            ) : (
+              <ReliabilityDiagram title={cal.champion} points={championReliability} />
+            )}
+          </div>
           <p className="muted small" style={{ marginTop: '0.5rem' }}>
             Points on the diagonal = perfectly calibrated. The instrument’s honesty is what makes the
             efficiency verdict trustworthy.
