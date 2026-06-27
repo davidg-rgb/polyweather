@@ -63,6 +63,14 @@ export const MIN_SPIKE_EVENTS = 8;
 // by spike time low coverage is a real availability finding, not a transient bug — confirm the deadman first.)
 export const MIN_SEEDED_COVERAGE = 0.5;
 
+// The per-event row cap passed to bot_spike_series (migration 0068). The spike only ever inspects, per event,
+// captures up to the FIRST one carrying a usable house_gaussian — which must be within the ≤1h flat-open window
+// (≈30 ticks at */2) to be flat-open-relevant. Reading the full per-event series (hundreds of post-convergence
+// captures/event) would aggregate ~1.2 GB of jsonb at the 45-city scale (past Postgres's 1 GB field cap) → the
+// gate could not render. 40 covers the ≤1h window with margin; the converged tail is never scored. (The Phase-3
+// paper backtest, which DOES need the full per-tick series for exit replay, keeps reading bot_capture_series.)
+export const SPIKE_CAP_PER_EVENT = 40;
+
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 // formatting helpers
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
@@ -283,8 +291,14 @@ export interface SpikeResult {
   goCiHigh: number;
   /** max(capturedAt) − min(capturedAt) in days. */
   spanDays: number;
-  /** count of DISTINCT UTC capture-days — the ≥1-week sufficiency gate (TEST2-6). */
+  /** count of DISTINCT UTC capture-days (cron-uptime span) — reported diagnostic, NOT the sufficiency gate. */
   nCaptureDays: number;
+  /** count of DISTINCT target_date among SEEDED events — the INDEPENDENT-weather-day axis the goFraction is
+   *  estimated over. This is the real ≥1-week sufficiency gate: nCaptureDays only proves the every-2-min cron
+   *  stayed up, and at 45 cities one daily batch lists ~45 markets for a SINGLE target_date — so 8 seeded events
+   *  can all be one weather-day. Gating on distinct target_dates forces the verdict to span ≥1 week of
+   *  independent outcomes (§6.13c/§14 "≥1-week events"), not cron liveness. */
+  nDistinctTargetDates: number;
   events: EventSpikeResult[];
 }
 
@@ -308,12 +322,14 @@ export function runSpike(rows: RawCaptureRow[], cfg: BotConfig): SpikeResult {
   const captures = Array.isArray(rows) ? rows : [];
   const nCaptures = captures.length;
 
-  // capture span (days) + the count of DISTINCT UTC capture-days, in ONE pass. The sufficiency gate uses the
-  // distinct-day count (TEST2-6): spanDays = max−min would let a single stray old row + a one-day burst clear
-  // "≥1 week" while holding ~1 day of real data. NOTE: do NOT spread the timestamp array into Math.max(...)/
-  // Math.min(...) — V8 throws RangeError (call-stack) above ~10^5 elements, and this spike runs over a FULL
-  // multi-week panel (~10^4 rows/day), so the crash would suppress the verdict entirely (F1). The day key is
-  // forced to UTC via toISOString (offset-free — F2; a raw string slice follows the session tz at midnight).
+  // capture span (days) + the count of DISTINCT UTC capture-days, in ONE pass. nCaptureDays is now a reported
+  // diagnostic (cron-uptime span); the real sufficiency gate is nDistinctTargetDates (distinct target_date over
+  // SEEDED events — computed below), because nCaptureDays only proves the */2 cron stayed up: at 45 cities one
+  // daily batch lists ~45 markets for a SINGLE target_date, so ≥8 seeded events can be one weather-day while
+  // nCaptureDays trivially ≥7 (CAP-review A1). spanDays = max−min stays similarly informational. NOTE: do NOT
+  // spread the timestamp array into Math.max(...)/Math.min(...) — V8 throws RangeError (call-stack) above ~10^5
+  // elements, and this spike runs over a FULL multi-week panel, so the crash would suppress the verdict entirely
+  // (F1). The day key is forced to UTC via toISOString (offset-free — F2; a raw string slice follows session tz).
   let tMin = Number.POSITIVE_INFINITY;
   let tMax = Number.NEGATIVE_INFINITY;
   let nFiniteTimes = 0;
@@ -414,6 +430,9 @@ export function runSpike(rows: RawCaptureRow[], cfg: BotConfig): SpikeResult {
   const nEvents = byEvent.size;
   const seeded = events.filter((e) => e.reachedSeed);
   const nSeededEvents = seeded.length;
+  // the independent-weather-day count: distinct target_date among SEEDED events (the goFraction denominator's
+  // support). This is the sufficiency axis the verdict gates on — see SpikeResult.nDistinctTargetDates.
+  const nDistinctTargetDates = new Set(seeded.map((e) => e.targetDate).filter((d) => d)).size;
   const nPass = seeded.filter((e) => e.pass).length;
   const seededCoverage = nEvents > 0 ? nSeededEvents / nEvents : NaN;
   const goFraction = nSeededEvents > 0 ? nPass / nSeededEvents : NaN;
@@ -421,7 +440,7 @@ export function runSpike(rows: RawCaptureRow[], cfg: BotConfig): SpikeResult {
 
   return {
     nCaptures, nEvents, nSeededEvents, nDroppedNoEventId, seededCoverage, nPass, goFraction,
-    goCiLow, goCiHigh, spanDays, nCaptureDays, events,
+    goCiLow, goCiHigh, spanDays, nCaptureDays, nDistinctTargetDates, events,
   };
 }
 
@@ -443,15 +462,6 @@ export function spikeVerdict(res: SpikeResult, cfg: BotConfig): { label: SpikeLa
         'of Phase-0 capture; confirm the */2-min opening-capture cron + edge fn are live and accruing rows, then re-run.',
     };
   }
-  if (res.nCaptureDays < MIN_SPIKE_DAYS) {
-    return {
-      label: 'INSUFFICIENT_DATA',
-      reason:
-        `INSUFFICIENT_DATA — captures land on only ${res.nCaptureDays} distinct days (< ${MIN_SPIKE_DAYS}; span ` +
-        `${res.spanDays.toFixed(1)}d). The spike needs ≥1 week of real, day-spread captures (a stray old row + a one-day ` +
-        'burst would game a raw span), so keep the capture cron running and re-run later.',
-    };
-  }
   if (res.nSeededEvents < MIN_SPIKE_EVENTS) {
     return {
       label: 'INSUFFICIENT_DATA',
@@ -460,6 +470,17 @@ export function spikeVerdict(res: SpikeResult, cfg: BotConfig): { label: SpikeLa
         `${res.nEvents} distinct events seen, seeded coverage ${pct(res.seededCoverage)}. Too few to estimate a GO fraction — ` +
         'either the §9R universe is too quiet or the on-demand seed path is failing (check capture_deadman / seeded fraction). ' +
         'Let more captures accrue before judging the signal.',
+    };
+  }
+  if (res.nDistinctTargetDates < MIN_SPIKE_DAYS) {
+    return {
+      label: 'INSUFFICIENT_DATA',
+      reason:
+        `INSUFFICIENT_DATA — the ${res.nSeededEvents} seeded events span only ${res.nDistinctTargetDates} distinct target ` +
+        `dates (< ${MIN_SPIKE_DAYS}; cron capture-days ${res.nCaptureDays}, span ${res.spanDays.toFixed(1)}d). At 45 cities ` +
+        'one daily batch lists ~45 markets for a SINGLE weather-day, so the GO fraction must be estimated over ≥1 week of ' +
+        'INDEPENDENT target dates, not cron uptime (a high capture-day count only proves the cron stayed up). Keep the ' +
+        'capture cron running and re-run once the panel spans more weather-days.',
     };
   }
 
@@ -518,12 +539,14 @@ export function spikeVerdict(res: SpikeResult, cfg: BotConfig): { label: SpikeLa
 export function report(res: SpikeResult, cfg: BotConfig, log: (m: string) => void): void {
   log('=== opening-spike · Phase-0.5 signal-availability go/no-go (gates Phases 2–6) ===');
   log(
-    `captures ${res.nCaptures} · distinct events ${res.nEvents} · ${res.nCaptureDays} capture-days (span ${res.spanDays.toFixed(1)}d)` +
+    `captures ${res.nCaptures} (capped ≤${SPIKE_CAP_PER_EVENT}/event) · distinct events ${res.nEvents} · ` +
+      `${res.nDistinctTargetDates} target-dates [gate] · ${res.nCaptureDays} capture-days (span ${res.spanDays.toFixed(1)}d)` +
       (res.nDroppedNoEventId ? ` · ${res.nDroppedNoEventId} rows dropped (null eventId)` : ''),
   );
   log(
     `gate cfg: peakMidMax ${pct(cfg.peakMidMax)} · listingMaxHours ${cfg.listingMaxHours} · ` +
-      `centerHalfWidth ±${cfg.centerHalfWidth} · depthFloor $${cfg.depthFloorUsd} · spikeGoFrac ${pct(cfg.spikeGoFrac)}`,
+      `centerHalfWidth ±${cfg.centerHalfWidth} · depthFloor $${cfg.depthFloorUsd} · spikeGoFrac ${pct(cfg.spikeGoFrac)} · ` +
+      `cities ${cfg.cities.length} (live bot.cities check-universe; trade set stays the §9R 10)`,
   );
   log('');
   log('PER-EVENT — first capture with a usable house_gaussian (ctrDepth = deepest ENTERABLE center bucket $ [buy side];');
@@ -575,11 +598,16 @@ export async function loadCfg(db: Db): Promise<BotConfig> {
   return parseBotConfig(rows);
 }
 
-/** The full ordered capture series over the look-back window. bot_capture_series returns a jsonb OBJECT
- *  { rows: [...] } (never a top-level array — the 0044 port-misread trap); read .rows. Empty on no rows. */
+/** The per-event capture HEAD over the look-back window (the first SPIKE_CAP_PER_EVENT captures/event — enough to
+ *  cover the ≤1h flat-open window the spike scores; the converged tail is never read, and the full series would
+ *  aggregate >1 GB of jsonb at 45-city scale, past Postgres's field cap — migration 0068). bot_spike_series
+ *  returns a jsonb OBJECT { rows: [...] } (never a top-level array — the 0044 port-misread trap); read .rows.
+ *  Every event still appears (its earliest captures), so seededCoverage's denominator + every distinct
+ *  target_date are preserved. Empty on no rows. */
 export async function loadSeries(db: Db, days: number): Promise<RawCaptureRow[]> {
-  const out = await db.query<{ series: { rows: RawCaptureRow[] } | null }>('select public.bot_capture_series($1) as series', [
+  const out = await db.query<{ series: { rows: RawCaptureRow[] } | null }>('select public.bot_spike_series($1, $2) as series', [
     Math.max(1, Math.floor(days)),
+    SPIKE_CAP_PER_EVENT,
   ]);
   const series = out[0]?.series?.rows;
   return Array.isArray(series) ? series : [];
@@ -633,9 +661,9 @@ function sanity(): void {
   const A1 = cap({ eventId: 'A', capturedAt: '2026-07-01T00:00:00Z', buckets: flatMids, hoursSinceListing: 0.2 });
   const A2 = cap({ eventId: 'A', capturedAt: '2026-07-01T00:30:00Z', buckets: seededFlat, houseSeeded: true, hoursSinceListing: 0.8 });
   // Event B: seeded but already converged (a 0.40 mid > peakMidMax) → not flat → FAIL
-  const B = cap({ eventId: 'B', capturedAt: '2026-07-02T00:00:00Z', houseSeeded: true, hoursSinceListing: 0.5, buckets: [bucket(1, 0.4, 0.6, 100), bucket(2, 0.1, 0.2, 100)] });
+  const B = cap({ eventId: 'B', capturedAt: '2026-07-02T00:00:00Z', targetDate: '2026-07-02', houseSeeded: true, hoursSinceListing: 0.5, buckets: [bucket(1, 0.4, 0.6, 100), bucket(2, 0.1, 0.2, 100)] });
   // Event C: seeded, flat, but the center band depth is below floor (10 < 50) → FAIL
-  const C = cap({ eventId: 'C', capturedAt: '2026-07-03T00:00:00Z', houseSeeded: true, hoursSinceListing: 0.5, buckets: [bucket(1, 0.1, 0.5, 10), bucket(2, 0.1, 0.2, 10)] });
+  const C = cap({ eventId: 'C', capturedAt: '2026-07-03T00:00:00Z', targetDate: '2026-07-03', houseSeeded: true, hoursSinceListing: 0.5, buckets: [bucket(1, 0.1, 0.5, 10), bucket(2, 0.1, 0.2, 10)] });
   // Event D: never seeds (no flag, no houseProb) → reachedSeed=false (lowers coverage, not the GO denominator)
   const D = cap({ eventId: 'D', capturedAt: '2026-07-04T00:00:00Z', buckets: flatMids });
 
@@ -652,15 +680,17 @@ function sanity(): void {
   const evD = res.events.find((e) => e.eventId === 'D')!;
   if (evD.reachedSeed || evD.reasons[0] !== 'never_seeded') throw new Error('sanity: event D should be never-seeded');
 
+  if (res.nDistinctTargetDates !== 3) throw new Error(`sanity: nDistinctTargetDates ${res.nDistinctTargetDates} != 3`); // A/B/C seeded
   // verdict label transitions (build SpikeResult literals so we don't need a big panel)
-  const base: SpikeResult = { ...res, nSeededEvents: 10, spanDays: 8, nCaptureDays: 8 };
+  const base: SpikeResult = { ...res, nSeededEvents: 10, spanDays: 8, nCaptureDays: 8, nDistinctTargetDates: 8 };
   if (spikeVerdict({ ...base, nPass: 6, goFraction: 0.6 }, cfg).label !== 'GO') throw new Error('sanity: 0.6 should GO');
   if (spikeVerdict({ ...base, nPass: 4, goFraction: 0.4 }, cfg).label !== 'NO-GO') throw new Error('sanity: 0.4 should NO-GO');
   // low seed coverage (most listed events never produce a usable dist at all) → NO-GO even if the seeded subset passes
   if (spikeVerdict({ ...base, nEvents: 100, nSeededEvents: 10, seededCoverage: 0.1, nPass: 9, goFraction: 0.9 }, cfg).label !== 'NO-GO') {
     throw new Error('sanity: low coverage should NO-GO');
   }
-  if (spikeVerdict({ ...base, nCaptureDays: 3 }, cfg).label !== 'INSUFFICIENT_DATA') throw new Error('sanity: <1wk should be INSUFFICIENT');
+  // too few INDEPENDENT weather-days (target dates), even with cron uptime → INSUFFICIENT (the CAP-review A1 gate)
+  if (spikeVerdict({ ...base, nDistinctTargetDates: 3 }, cfg).label !== 'INSUFFICIENT_DATA') throw new Error('sanity: <1wk target-dates should be INSUFFICIENT');
   if (spikeVerdict({ ...res, nCaptures: 0 }, cfg).label !== 'INSUFFICIENT_DATA') throw new Error('sanity: empty should be INSUFFICIENT');
   if (spikeVerdict(res, cfg).label !== 'INSUFFICIENT_DATA') throw new Error('sanity: 3 seeded events should be INSUFFICIENT');
 }

@@ -8,9 +8,15 @@ This doc is self-contained — a fresh session can execute it with no prior cont
 ---
 
 ## TL;DR — the one main pending action
-**Expand the CAPTURE universe from 10 → ~45 cities** (see §2). We're only *measuring* right now, and the 10-city limit is a leftover from the *trading* universe (cities chosen for liquidity, which is irrelevant when checking). Broader = more independent weather-days = a far better-powered spike verdict, for ~zero capital risk. The only real cost is a one-time IANA-tz fix per added city.
+**✅ DONE (2026-06-28): the CAPTURE universe is EXPANDED 10 → 45 cities and LIVE on prod.** Migration
+**`0067_opening_capture_universe_tz.sql`** corrected the 35 remaining cities' `cities.tz` to real IANA (45/45 now
+real, 0 placeholder); prod `bot.cities` config widened to the 45-city set (read live each tick — no redeploy).
+Live-verified: the tick jumped 12 ev/10 cities → ~60 ev/45 cities, ~95–98% seeded, no time-budget saturation.
+A 4-lens code review followed and its validated fixes are applied (migration **`0068`** for the spike read-path +
+the distinct-target-date gate + handler robustness) — see **BUILD-STATE.md** for the full record. The standing
+hard gate (§4) is unchanged; it now correctly waits for ≥7 distinct *target dates*, not cron uptime.
 
-Everything else below is context, near-term verification, and the standing hard gate.
+Everything below is the original context, near-term verification, and the standing hard gate (still valid).
 
 ---
 
@@ -30,7 +36,18 @@ Suite **1617 green**, typecheck clean throughout. The spike artifact (`scripts/r
 
 ---
 
-## 2. PENDING ACTION — expand the capture universe to ~45 cities
+## 2. ✅ DONE (2026-06-28) — expand the capture universe to ~45 cities
+
+> **This section is now COMPLETE.** Step 2's tz fix shipped as the committed, idempotent migration
+> **`0067_opening_capture_universe_tz.sql`** (not ad-hoc SQL) — apply it (already applied to prod) rather than
+> re-typing the CASE block; it equals the Step-1 result set (35 slugs). Step 3's config widen is applied on prod.
+> Step 4's measurement passed (no sustained seed-drops; the spike read-path was additionally hardened against the
+> 45-city volume by migration `0068` — `bot_spike_series` caps rows/event so the gate can still render). The
+> original instructions are kept below for the record. Remaining: §3 (the fresh-open lands at the ~04:00 UTC batch)
+> and §4 (the standing hard gate after ≥1 week).
+
+### (original instructions — kept for the record)
+## 2-orig. PENDING ACTION — expand the capture universe to ~45 cities
 
 **Why:** pure checking/validation — broader is strictly better (more independent weather-days → a better-powered spike, and it attacks the degrees-of-freedom wall that overfit the REC-1 selector). Trading stays capped by the $100–200 bankroll/selection regardless (≈5 concurrent at $20), so this is **check-many-select-few** — exactly the thesis. Capture is keyless → ~zero capital risk.
 

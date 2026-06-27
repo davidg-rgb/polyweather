@@ -169,11 +169,25 @@ export async function openingCapture(ctx: JobCtx, deps: OpeningCaptureDeps): Pro
     cities: new Set(universe.map((r) => r.ev.citySlug)).size,
   });
 
-  // shared seed inputs (fetched ONCE per tick — F16 dedupe).
+  // shared seed inputs (fetched ONCE per tick — F16 dedupe). Best-effort like every other external call in this
+  // job (the file contract: a venue/seed outage shrinks the panel, NEVER fails the tick). An unguarded throw here
+  // would mark the tick FAILED → fire a CRITICAL Slack page AND drop that tick's depth capture (the experiment's
+  // core, which doesn't even need these two — they feed only the rare OM fallback). On error the seed degrades to
+  // the common path / no fallback and the depth walk still runs (CAP-review EDGE2).
   const omApiKey = getEnv('OPENMETEO_API_KEY');
   const omPrefix = omApiKey ? 'customer-' : '';
-  const models = (await db.rpc<{ slug: string }>('list_enabled_models', { p_is_ensemble: false })).map((m) => m.slug);
-  const stations = await db.rpc<SeedStation>('list_active_stations', {});
+  let models: string[] = [];
+  let stations: SeedStation[] = [];
+  try {
+    models = (await db.rpc<{ slug: string }>('list_enabled_models', { p_is_ensemble: false })).map((m) => m.slug);
+  } catch (e) {
+    log('list_enabled_models failed (non-fatal — seed degrades to no model list)', { error: msg(e) });
+  }
+  try {
+    stations = await db.rpc<SeedStation>('list_active_stations', {});
+  } catch (e) {
+    log('list_active_stations failed (non-fatal — OM fallback disabled this tick)', { error: msg(e) });
+  }
 
   // ── STEP 3: per event — resolve tz (fail-closed on Etc/*/non-IANA), seed + walk depth, build the row ────
   const rows: OpeningCaptureRow[] = [];

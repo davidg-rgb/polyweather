@@ -229,6 +229,16 @@ describe('migrations 0001–0010', () => {
       // mode-aware bot) + the bot.* config mirror + the bot CRITICAL Slack-allowlist append + 5 crons
       // (opening-capture every 2 min + 2 deadmen + 2 prunes → cron count 21 → 26). ARCHITECTURE-OPENING-CONVERGENCE.md.
       '0066_opening_convergence.sql',
+      // 0067 = Phase-0.5 CHECK-universe widen: corrects the remaining 35 calibration ∩ Polymarket-listable
+      // cities' cities.tz from no-DST Etc/GMT±N placeholders to real IANA names (same idempotent LIKE 'Etc/%'
+      // pattern as 0066 §4), so they pass the capture layer's isDstAwareIana fail-closed gate. Data-only — no
+      // table/RPC/cron/grant change; no-op on a fresh/test DB (cities are discovered, not seeded).
+      '0067_opening_capture_universe_tz.sql',
+      // 0068 = Phase-0.5 spike read-path scaling: a new service-role bot_spike_series(p_days, p_cap) returning the
+      // first p_cap captures PER EVENT (the full bot_capture_series series aggregates >1 GB of jsonb at the 45-city
+      // scale, past Postgres's field cap → the gate could not render) + oc_captured_at_idx for the deadman/prune
+      // scans. bot_capture_series is untouched (Phase-3 backtest contract). No table/cron change.
+      '0068_opening_spike_series.sql',
     ]);
   });
 });
@@ -301,6 +311,7 @@ describe('secondary indexes (§7.5 / §7.11)', () => {
     ['market_snapshots', 'market_snapshots_bucket_time_idx'],
     ['config_audit', 'config_audit_key_created_idx'], // 0032 FIX 9 — last-writer lookup
     ['bucket_probabilities', 'bucket_probabilities_scored_idx'], // 0045 — calib_scored_rows access path
+    ['opening_captures', 'oc_captured_at_idx'], // 0068 — capture_deadman/prune captured_at scans at 45-city scale
   ] as const;
 
   for (const [table, index] of expected) {

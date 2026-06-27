@@ -34,10 +34,11 @@ const cap = (over: Partial<RawCaptureRow> & { eventId: string; capturedAt: strin
 const flatMids = [bucket(0, 0.1, null, 0), bucket(1, 0.11, null, 0), bucket(2, 0.1, null, 0)];
 const seededFlat = [bucket(1, 0.1, 0.2, 60), bucket(2, 0.11, 0.5, 100), bucket(3, 0.1, 0.2, 70)];
 
-/** A panel literal with enough capture-days/events to clear the sufficiency gates, parameterized by the verdict inputs. */
+/** A panel literal with enough target-dates/events to clear the sufficiency gates, parameterized by the verdict inputs. */
 const base = (over: Partial<SpikeResult>): SpikeResult => ({
   nCaptures: 50, nEvents: 12, nSeededEvents: 10, nDroppedNoEventId: 0, seededCoverage: 10 / 12,
-  nPass: 6, goFraction: 0.6, goCiLow: 0.3, goCiHigh: 0.85, spanDays: 8, nCaptureDays: 8, events: [], ...over,
+  nPass: 6, goFraction: 0.6, goCiLow: 0.3, goCiHigh: 0.85, spanDays: 8, nCaptureDays: 8,
+  nDistinctTargetDates: 8, events: [], ...over,
 });
 
 describe('runSpike — first-house-dist read per event', () => {
@@ -46,11 +47,11 @@ describe('runSpike — first-house-dist read per event', () => {
     const A1 = cap({ eventId: 'A', capturedAt: '2026-07-01T00:00:00Z', buckets: flatMids, hoursSinceListing: 0.2 });
     const A2 = cap({ eventId: 'A', capturedAt: '2026-07-01T00:30:00Z', buckets: seededFlat, houseSeeded: true, hoursSinceListing: 0.8 });
     // B: seeded but already converged (a 0.40 mid > peakMidMax) → not flat → FAIL
-    const B = cap({ eventId: 'B', capturedAt: '2026-07-02T00:00:00Z', houseSeeded: true, buckets: [bucket(1, 0.4, 0.6, 100), bucket(2, 0.1, 0.2, 100)] });
+    const B = cap({ eventId: 'B', capturedAt: '2026-07-02T00:00:00Z', targetDate: '2026-07-02', houseSeeded: true, buckets: [bucket(1, 0.4, 0.6, 100), bucket(2, 0.1, 0.2, 100)] });
     // C: seeded, flat, but center depth below floor (10 < 50) → FAIL
-    const C = cap({ eventId: 'C', capturedAt: '2026-07-03T00:00:00Z', houseSeeded: true, buckets: [bucket(1, 0.1, 0.5, 10), bucket(2, 0.1, 0.2, 10)] });
+    const C = cap({ eventId: 'C', capturedAt: '2026-07-03T00:00:00Z', targetDate: '2026-07-03', houseSeeded: true, buckets: [bucket(1, 0.1, 0.5, 10), bucket(2, 0.1, 0.2, 10)] });
     // D: never seeds → reachedSeed=false (lowers coverage, excluded from the GO denominator)
-    const D = cap({ eventId: 'D', capturedAt: '2026-07-04T00:00:00Z', buckets: flatMids });
+    const D = cap({ eventId: 'D', capturedAt: '2026-07-04T00:00:00Z', targetDate: '2026-07-04', buckets: flatMids });
 
     const res = runSpike([A1, A2, B, C, D], cfg);
     expect(res.nEvents).toBe(4);
@@ -58,6 +59,8 @@ describe('runSpike — first-house-dist read per event', () => {
     expect(res.nPass).toBe(1); // only A
     expect(res.goFraction).toBeCloseTo(1 / 3, 9);
     expect(res.seededCoverage).toBeCloseTo(3 / 4, 9);
+    // distinct target_date among SEEDED events: A(07-01)/B(07-02)/C(07-03) → 3; D(07-04) never seeded → excluded
+    expect(res.nDistinctTargetDates).toBe(3);
 
     const evA = res.events.find((e) => e.eventId === 'A')!;
     expect(evA.pass).toBe(true);
@@ -122,10 +125,20 @@ describe('spikeVerdict — the frozen GO/NO-GO gate', () => {
     expect(spikeVerdict(base({ nPass: 4, goFraction: 0.4, seededCoverage: 0.8 }), cfg).label).toBe('NO-GO');
   });
 
-  it('INSUFFICIENT_DATA below ≥1 week of distinct capture-days or the minimum seeded-event count', () => {
-    expect(spikeVerdict(base({ nCaptureDays: 3 }), cfg).label).toBe('INSUFFICIENT_DATA');
+  it('INSUFFICIENT_DATA below ≥1 week of distinct TARGET dates or the minimum seeded-event count', () => {
+    expect(spikeVerdict(base({ nDistinctTargetDates: 3 }), cfg).label).toBe('INSUFFICIENT_DATA');
     expect(spikeVerdict(base({ nSeededEvents: 3 }), cfg).label).toBe('INSUFFICIENT_DATA');
     expect(spikeVerdict(base({ nCaptures: 0 }), cfg).label).toBe('INSUFFICIENT_DATA');
+  });
+
+  // CAP-review A1 (the 45-city expansion's binding gate fix): nCaptureDays measures only CRON UPTIME — at 45
+  // cities one daily batch lists ~45 markets for a SINGLE target_date, so ≥8 seeded events + ≥7 capture-days can
+  // still be ~1 independent weather-day. The verdict must gate on distinct TARGET dates, not capture-days.
+  it('does NOT proceed to a verdict on cron uptime alone — high capture-days but few target-dates is INSUFFICIENT', () => {
+    // plenty of capture-days + seeded events, but the seeded events span only 2 weather-days → INSUFFICIENT, not GO
+    const v = spikeVerdict(base({ nCaptureDays: 14, nDistinctTargetDates: 2, nSeededEvents: 45, nPass: 30, goFraction: 30 / 45, seededCoverage: 0.9 }), cfg);
+    expect(v.label).toBe('INSUFFICIENT_DATA');
+    expect(v.reason).toContain('target date');
   });
 
   // TEST2-4 — sufficiency is checked BEFORE the coverage floor: a thin EARLY universe that is also low-coverage

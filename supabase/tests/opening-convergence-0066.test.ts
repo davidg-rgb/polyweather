@@ -238,6 +238,50 @@ describe('0066 capture/seed RPCs (via pglitePort + FN_ARGS)', () => {
     }
   });
 
+  // 0068 — bot_spike_series caps rows PER EVENT (the full series aggregates >1 GB of jsonb at the 45-city scale,
+  // past Postgres's field cap → the Phase-0.5 gate could not render). Every event still appears (its EARLIEST
+  // captures, which contain the first-usable-house the spike scores) so seededCoverage + distinct target_dates
+  // are preserved. The spike reads this via raw service-role SQL (script-db), so test it that way.
+  it('bot_spike_series caps captures per event to p_cap (earliest first), keeping every event present', async () => {
+    const fresh = await freshDb();
+    try {
+      const e1 = await seedEvent(fresh, { slug: 'sc-ams', date: '2026-06-28', winner: 1 });
+      const e2 = await seedEvent(fresh, { slug: 'sc-par', date: '2026-06-29', winner: 1 });
+      const fport = pglitePort(fresh);
+      const cap = (eventId: string, city: string, td: string, agoSec: number) => ({
+        capturedAt: new Date(Date.now() - agoSec * 1000).toISOString(), eventId, city,
+        targetDate: td, tzName: 'Europe/Amsterdam', createdAtGamma: null, listingDetectedAt: null,
+        resolvesAt: null, hoursSinceListing: 0.5, peakMid: 0.1, isFlatOpen: true, houseSeeded: true,
+        buckets: [], evVol24h: 9000, negRisk: true,
+      });
+      // e1: 4 captures; e2: 1 capture. cap=2 must return the 2 EARLIEST of e1 + the 1 of e2 = 3 rows total.
+      await asRole(fresh, 'service_role', null, () =>
+        fport.rpc('record_opening_captures', {
+          p_rows: [
+            cap(e1, 'sc-ams', '2026-06-28', 400), cap(e1, 'sc-ams', '2026-06-28', 300),
+            cap(e1, 'sc-ams', '2026-06-28', 200), cap(e1, 'sc-ams', '2026-06-28', 100),
+            cap(e2, 'sc-par', '2026-06-29', 50),
+          ],
+        }),
+      );
+      const [row] = await rows<{ s: { rows: { eventId: string; capturedAt: string }[] } }>(
+        fresh, 'select public.bot_spike_series(7, 2) as s',
+      );
+      const series = row!.s.rows;
+      expect(Array.isArray(row!.s)).toBe(false); // { rows: [...] } object, not a bare array (the 0044 trap)
+      const e1rows = series.filter((r) => r.eventId === e1);
+      expect(e1rows.length).toBe(2); // capped to p_cap=2 (was 4)
+      expect(series.filter((r) => r.eventId === e2).length).toBe(1); // every event still present
+      // the 2 kept e1 rows are the EARLIEST (400s + 300s ago), not the latest two
+      const kept = e1rows.map((r) => Date.parse(r.capturedAt)).sort((a, b) => a - b);
+      const all = [400, 300, 200, 100].map((s) => Date.now() - s * 1000).sort((a, b) => a - b);
+      expect(kept[0]).toBeCloseTo(all[0]!, -3);
+      expect(kept[1]).toBeCloseTo(all[1]!, -3);
+    } finally {
+      await fresh.close();
+    }
+  });
+
   it('latest_house_dist joins the freshest non-nowcast house_gaussian to its labelled buckets; null for an unknown event', async () => {
     const evId = await seedEvent(db, { slug: 'ld-city', date: '2026-06-20', winner: 2, nBuckets: 3 });
     await insDist(db, evId, { source: 'house_gaussian', hash: 'h1', probs: '{0.1,0.2,0.7}' });
