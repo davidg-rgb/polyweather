@@ -125,8 +125,8 @@ describe('hoursSinceListing', () => {
 describe('buildOpeningCaptureRow', () => {
   const cfg = { ...BOT_DEFAULTS };
   const depth: Map<number, BucketDepth> = new Map([
-    [2, { execAsk: 0.13, depthUsd: 250, bestBid: 0.11, sellbackUsd: 40 }],
-    [3, { execAsk: 0.12, depthUsd: 180, bestBid: 0.1, sellbackUsd: 30 }],
+    [2, { execAsk: 0.13, depthUsd: 250, bestBid: 0.11, sellbackUsd: 40, execBid: 0.11, sellbackDepthUsd: 220 }],
+    [3, { execAsk: 0.12, depthUsd: 180, bestBid: 0.1, sellbackUsd: 30, execBid: 0.1, sellbackDepthUsd: 150 }],
   ]);
 
   it('flags a fresh, low-peak ladder as flat-open + carries per-bucket depth', () => {
@@ -151,9 +151,11 @@ describe('buildOpeningCaptureRow', () => {
     expect(row.negRisk).toBe(true);
     expect(row.resolvesAt).toBe('2026-06-28T22:00:00Z');
     expect(row.buckets).toHaveLength(5);
-    expect(row.buckets[2]).toMatchObject({ idx: 2, depthUsd: 250, execAsk: 0.13, tokenYes: 'yes-2', conditionId: 'cond-2' });
+    expect(row.buckets[2]).toMatchObject({ idx: 2, depthUsd: 250, execAsk: 0.13, execBid: 0.11, sellbackDepthUsd: 220, tokenYes: 'yes-2', conditionId: 'cond-2' });
     expect(row.buckets[0]!.depthUsd).toBe(0); // unwalked bucket ⇒ depth 0
     expect(row.buckets[0]!.execAsk).toBeNull();
+    expect(row.buckets[0]!.execBid).toBeNull(); // unwalked ⇒ no exit mark either
+    expect(row.buckets[0]!.sellbackDepthUsd).toBe(0);
   });
 
   it('aligns houseProb to each bucket BY LABEL IDENTITY (W6), null where unseeded', () => {

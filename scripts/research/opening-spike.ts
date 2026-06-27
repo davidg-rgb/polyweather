@@ -95,6 +95,8 @@ export interface RawBucket {
   depthUsd: number | null;
   bestBid: number | null;
   sellbackUsd: number | null;
+  execBid: number | null;
+  sellbackDepthUsd: number | null;
   houseProb: number | null;
   tokenYes: string | null;
   tokenNo: string | null;
@@ -135,6 +137,8 @@ function mapBucket(b: RawBucket): OpeningBucket {
     depthUsd: num0(b.depthUsd),
     bestBid: numOrNull(b.bestBid),
     sellbackUsd: num0(b.sellbackUsd),
+    execBid: numOrNull(b.execBid),
+    sellbackDepthUsd: num0(b.sellbackDepthUsd),
     houseProb: numOrNull(b.houseProb),
     tokenYes: String(b.tokenYes ?? ''),
     tokenNo: String(b.tokenNo ?? ''),
@@ -217,6 +221,24 @@ export function centerDepth(
   return { maxDepthUsd, modeLabel, priceBlocked };
 }
 
+/**
+ * The center band's EXIT liquidity at this capture — the deepest sellable $ (sellbackDepthUsd, the −10% bid band)
+ * among the mode ± centerHalfWidth buckets carrying a houseProb. The round-trip's OTHER half, logged so we can see
+ * whether the open already has bid-side depth to exit into. NOTE: the real exit is LATER, into the convergence —
+ * the paper backtest (Phase 3) replays the full per-tick sellback walk; this is the at-open snapshot, informational
+ * only (NOT a pass gate — gating entry on exit-depth-at-open would wrongly reject a thin-but-soon-liquid open).
+ */
+export function sellbackDepth(buckets: OpeningBucket[], modeIdx: number, cfg: BotConfig): number {
+  if (modeIdx < 0) return 0;
+  let maxSellbackUsd = 0;
+  for (const b of buckets) {
+    if (Math.abs(b.idx - modeIdx) > cfg.centerHalfWidth) continue;
+    if (!fin(b.houseProb)) continue;
+    if (b.sellbackDepthUsd > maxSellbackUsd) maxSellbackUsd = b.sellbackDepthUsd;
+  }
+  return maxSellbackUsd;
+}
+
 /** One event's spike read. `reachedSeed=false` means the dist NEVER materialized (a signal-availability miss). */
 export interface EventSpikeResult {
   eventId: string;
@@ -234,6 +256,8 @@ export interface EventSpikeResult {
   modeLabel: string | null;
   /** deepest enterable center bucket $ (see centerDepth). */
   centerDepthUsd: number | null;
+  /** center-band EXIT liquidity at the open (deepest sellbackDepthUsd) — the round-trip's other half, informational. */
+  exitDepthUsd: number | null;
   /** still-flat-open AND a center bucket clears the depth floor. */
   pass: boolean;
   /** isFlatOpen.reasons[] (or ['never_seeded']). */
@@ -354,6 +378,7 @@ export function runSpike(rows: RawCaptureRow[], cfg: BotConfig): SpikeResult {
         flat: null,
         modeLabel: null,
         centerDepthUsd: null,
+        exitDepthUsd: null,
         pass: false,
         reasons: ['never_seeded'],
       });
@@ -363,6 +388,7 @@ export function runSpike(rows: RawCaptureRow[], cfg: BotConfig): SpikeResult {
     const fo = isFlatOpen(firstSeeded, cfg);
     const modeIdx = modeIdxOf(firstSeeded.buckets);
     const { maxDepthUsd, modeLabel, priceBlocked } = centerDepth(firstSeeded.buckets, modeIdx, cfg);
+    const exitUsd = sellbackDepth(firstSeeded.buckets, modeIdx, cfg);
     const hasCheapDepth = maxDepthUsd >= cfg.depthFloorUsd;
     const reasons = [...fo.reasons];
     if (!hasCheapDepth) reasons.push(modeIdx < 0 ? 'no_house_prob' : priceBlocked ? 'center_ask_above_cap' : 'below_depth_floor');
@@ -377,6 +403,7 @@ export function runSpike(rows: RawCaptureRow[], cfg: BotConfig): SpikeResult {
       flat: fo.flat,
       modeLabel,
       centerDepthUsd: maxDepthUsd,
+      exitDepthUsd: exitUsd,
       pass: fo.flat && hasCheapDepth,
       reasons,
     });
@@ -499,16 +526,17 @@ export function report(res: SpikeResult, cfg: BotConfig, log: (m: string) => voi
       `centerHalfWidth ±${cfg.centerHalfWidth} · depthFloor $${cfg.depthFloorUsd} · spikeGoFrac ${pct(cfg.spikeGoFrac)}`,
   );
   log('');
-  log('PER-EVENT — first capture with a usable house_gaussian (ctrDepth = deepest enterable center bucket $; entry gates per-bucket):');
+  log('PER-EVENT — first capture with a usable house_gaussian (ctrDepth = deepest ENTERABLE center bucket $ [buy side];');
+  log('  exitDep = deepest center sellback $ [sell side, the round-trip\'s other half — informational, not a pass gate]):');
   log(
     `  ${'city'.padEnd(14)} ${'targetDate'.padEnd(10)}  ${'seedAgeH'.padStart(8)}  ${'peakMid'.padStart(7)}  ` +
-      `${'flat'.padStart(4)}  ${'mode'.padEnd(10)}  ${'ctrDepth'.padStart(9)}  result`,
+      `${'flat'.padStart(4)}  ${'mode'.padEnd(10)}  ${'ctrDepth'.padStart(9)}  ${'exitDep'.padStart(8)}  result`,
   );
   for (const e of res.events) {
     if (!e.reachedSeed) {
       log(
         `  ${e.city.padEnd(14)} ${e.targetDate.padEnd(10)}  ${'—'.padStart(8)}  ${'—'.padStart(7)}  ` +
-          `${'—'.padStart(4)}  ${'—'.padEnd(10)}  ${'—'.padStart(9)}  NEVER SEEDED`,
+          `${'—'.padStart(4)}  ${'—'.padEnd(10)}  ${'—'.padStart(9)}  ${'—'.padStart(8)}  NEVER SEEDED`,
       );
       continue;
     }
@@ -517,7 +545,7 @@ export function report(res: SpikeResult, cfg: BotConfig, log: (m: string) => voi
     log(
       `  ${e.city.padEnd(14)} ${e.targetDate.padEnd(10)}  ${ageH.padStart(8)}  ${pct(e.peakMidAtSeed ?? NaN).padStart(7)}  ` +
         `${(e.flat ? 'yes' : 'no').padStart(4)}  ${(e.modeLabel ?? '—').padEnd(10).slice(0, 10)}  ` +
-        `${usd(e.centerDepthUsd ?? NaN).padStart(9)}  ${result}`,
+        `${usd(e.centerDepthUsd ?? NaN).padStart(9)}  ${usd(e.exitDepthUsd ?? NaN).padStart(8)}  ${result}`,
     );
   }
   log('');
@@ -574,6 +602,8 @@ function sanity(): void {
     depthUsd,
     bestBid: mid,
     sellbackUsd: depthUsd,
+    execBid: mid,
+    sellbackDepthUsd: depthUsd,
     houseProb,
     tokenYes: `y${idx}`,
     tokenNo: `n${idx}`,

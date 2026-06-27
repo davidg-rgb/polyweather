@@ -16,6 +16,7 @@
  */
 import {
   executableAsk,
+  executableBid,
   isDstAwareIana,
   normalizeBook,
   parseGammaEvent,
@@ -89,7 +90,9 @@ async function fetchOpenEvents(fetchJson: FetchJsonLike, log: JobCtx['log']): Pr
   return out;
 }
 
-/** Walk the TRUE CLOB /book for one YES token → {execAsk, depthUsd(+10% band), bestBid, sellbackUsd}. null on failure. */
+/** Walk the TRUE CLOB /book for one YES token → BOTH sides of the round-trip: the BUY {execAsk, depthUsd(+10%
+ *  band)} and the SELL {execBid, sellbackDepthUsd(−10% band)} for the same position size, + top-of-book bestBid/
+ *  sellbackUsd. null on failure. The exit side is logged so "sell into the convergence" P&L is reconstructable. */
 async function walkBucketDepth(fetchJson: FetchJsonLike, token: string, perPositionUsd: number): Promise<BucketDepth | null> {
   try {
     const book = normalizeBook(
@@ -97,12 +100,25 @@ async function walkBucketDepth(fetchJson: FetchJsonLike, token: string, perPosit
     );
     const bestAsk = book.asks[0]?.price ?? null;
     const bestBid = book.bids[0]?.price ?? null;
+    // BUY side: executable avg ask for $perPositionUsd of shares + buyable $ within +10% of best ask.
     const band = bestAsk != null && bestAsk > 0 ? bestAsk * 1.1 : Number.POSITIVE_INFINITY;
     const depthUsd = book.asks.filter((l) => l.price <= band).reduce((s, l) => s + l.price * l.size, 0);
     const targetShares = bestAsk != null && bestAsk > 0 ? perPositionUsd / bestAsk : 0;
     const exec = targetShares > 0 ? executableAsk(book, targetShares).avgPrice : NaN;
+    // SELL side (the round-trip's other half — F1/ADR-OC-7: a long exits into the BID): the realizable avg sell
+    // of the SAME share count + the sellable $ within −10% of best bid (the symmetric mirror of the +10% ask band).
+    const execBidRes = targetShares > 0 ? executableBid(book, targetShares) : { avgPrice: NaN, fillableShares: 0 };
+    const bidBand = bestBid != null && bestBid > 0 ? bestBid * 0.9 : 0;
+    const sellbackDepthUsd = book.bids.filter((l) => l.price >= bidBand).reduce((s, l) => s + l.price * l.size, 0);
     const sellbackUsd = bestBid != null ? bestBid * (book.bids[0]?.size ?? 0) : 0;
-    return { execAsk: Number.isFinite(exec) ? exec : null, depthUsd, bestBid, sellbackUsd };
+    return {
+      execAsk: Number.isFinite(exec) ? exec : null,
+      depthUsd,
+      bestBid,
+      sellbackUsd,
+      execBid: Number.isFinite(execBidRes.avgPrice) ? execBidRes.avgPrice : null,
+      sellbackDepthUsd,
+    };
   } catch {
     return null; // unfetchable book ⇒ depth 0 / null (best-effort, the experiment continues)
   }

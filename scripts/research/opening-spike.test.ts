@@ -21,7 +21,8 @@ const cfg = parseBotConfig([]); // BOT_DEFAULTS: peakMidMax 0.18, listingMaxHour
 
 const bucket = (idx: number, mid: number, houseProb: number | null, depthUsd: number): RawBucket => ({
   idx, label: `b${idx}`, loF: idx, hiF: idx + 1, mid, bestAsk: mid, execAsk: mid, depthUsd,
-  bestBid: mid, sellbackUsd: depthUsd, houseProb, tokenYes: `y${idx}`, tokenNo: `n${idx}`, conditionId: `c${idx}`,
+  bestBid: mid, sellbackUsd: depthUsd, execBid: mid, sellbackDepthUsd: depthUsd,
+  houseProb, tokenYes: `y${idx}`, tokenNo: `n${idx}`, conditionId: `c${idx}`,
 });
 
 const cap = (over: Partial<RawCaptureRow> & { eventId: string; capturedAt: string }): RawCaptureRow => ({
@@ -70,7 +71,8 @@ describe('runSpike — first-house-dist read per event', () => {
   it('a flat-open, DEEP center bucket whose EXECUTABLE ask is above the entry cap is NOT a PASS (TEST2-1)', () => {
     const b = (idx: number, mid: number, execAsk: number, houseProb: number, depthUsd: number): RawBucket => ({
       idx, label: `b${idx}`, loF: idx, hiF: idx + 1, mid, bestAsk: mid, execAsk, depthUsd,
-      bestBid: mid, sellbackUsd: depthUsd, houseProb, tokenYes: `y${idx}`, tokenNo: `n${idx}`, conditionId: `c${idx}`,
+      bestBid: mid, sellbackUsd: depthUsd, execBid: mid, sellbackDepthUsd: depthUsd,
+      houseProb, tokenYes: `y${idx}`, tokenNo: `n${idx}`, conditionId: `c${idx}`,
     });
     // mode = idx 2 (houseProb 0.5); MID 0.12 ≤ peakMidMax 0.18 (flat) and depth 100 ≥ floor, but execAsk 0.30
     // walks above maxEntryPrice 0.20 → selectEntries would reject it → centerDepth (enterable-only) sees $0.

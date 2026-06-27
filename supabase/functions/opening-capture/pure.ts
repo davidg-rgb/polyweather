@@ -19,8 +19,12 @@ export interface BucketDepth {
   /** buyable $ within +10% of best ask (the true depth, not the vol proxy). */
   depthUsd: number;
   bestBid: number | null;
-  /** $ recoverable selling into the bid (the realizable exit side). */
+  /** $ recoverable selling top-of-book into the bid (best bid × its size). */
   sellbackUsd: number;
+  /** executable avg BID for the held size (walked) — the realizable SELL price (the exit mark). */
+  execBid: number | null;
+  /** sellable $ within −10% of best bid (the symmetric exit-side depth — the round-trip's other half). */
+  sellbackDepthUsd: number;
 }
 
 /** One assembled capture row (camelCase — consumed by record_opening_captures). */
@@ -132,6 +136,8 @@ export function buildOpeningCaptureRow(args: {
       depthUsd: d?.depthUsd ?? 0,
       bestBid: b.bestBid,
       sellbackUsd: d?.sellbackUsd ?? 0,
+      execBid: d?.execBid ?? null,
+      sellbackDepthUsd: d?.sellbackDepthUsd ?? 0,
       houseProb: args.probsByLabel.get(b.label) ?? null,
       tokenYes: b.tokenYes,
       tokenNo: b.tokenNo,

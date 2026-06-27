@@ -48,8 +48,13 @@ export interface OpeningBucket {
   /** buyable $ within the +10% band (the true CLOB depth-walk, not the vol proxy). */
   depthUsd: number;
   bestBid: number | null;
-  /** $ recoverable selling into the bid (the realizable exit side). */
+  /** $ recoverable selling top-of-book into the bid (best bid × its size). */
   sellbackUsd: number;
+  /** the executable (walked) BID for the held size — the price you can actually SELL at (the exit mark, F1/ADR-OC-7). */
+  execBid: number | null;
+  /** sellable $ within the −10% band (the symmetric exit-side depth-walk — the round-trip's other half, for the
+   *  "sell into the convergence" P&L; logged every tick so the exit liquidity over the curve is reconstructable). */
+  sellbackDepthUsd: number;
   /**
    * our house_gaussian prob for THIS bucket, aligned BY LABEL/RANGE IDENTITY at capture time (W6),
    * null if the dist was unseeded OR the seed-quality gate failed (F15 — existence ≠ enterable).
@@ -350,9 +355,12 @@ export function isFlatOpen(
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 
 export function selectEntries(cap: OpeningCapture, cfg: OpeningCfg, now: Date): EntryCandidate[] {
-  // universe + liquidity + flat-open gate (the §9R-B universe + I-13 vol floor)
+  // universe + flat-open gate (§9R-B). NO 24h-volume gate (CAP-2, 2026-06-27): the thesis ENTERS at the flat
+  // OPEN, where a freshly-listed market has ~$0 traded volume BY CONSTRUCTION — a vol floor would disqualify the
+  // exact window we want to buy. Liquidity is gated DIRECTLY and per-bucket below by the executable DEPTH floor
+  // (depthFloorUsd, walked from the live book) + the 20% price cap, which measure "can I actually fill" honestly,
+  // not via a lagging traded-volume proxy. (bot.minVol24hUsd stays only the CAPTURE liquid-trajectory bound.)
   if (!cfg.cities.includes(cap.city)) return [];
-  if (!fin(cap.evVol24h) || cap.evVol24h < cfg.minVol24hUsd) return [];
   if (!isFlatOpen(cap, cfg).flat) return [];
 
   // MINIMUM-RUNWAY guard (F7-r10): a freshly-listed lead-0 market in a far-east tz can be flat yet ALREADY

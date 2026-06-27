@@ -51,6 +51,8 @@ const mkBucket = (over: Partial<OpeningBucket> & { idx: number }): OpeningBucket
   depthUsd: 100,
   bestBid: 0.09,
   sellbackUsd: 100,
+  execBid: 0.09,
+  sellbackDepthUsd: 100,
   houseProb: null,
   tokenYes: `y${over.idx}`,
   tokenNo: `n${over.idx}`,
@@ -163,9 +165,11 @@ describe('selectEntries — pick the flat-open buckets to buy (§9R-B / W6b / F7
     expect(selectEntries({ ...centerCap, city: 'london' }, cfg, NOW)).toEqual([]);
   });
 
-  it('returns [] when event vol24h is below the liquidity floor', () => {
-    expect(selectEntries({ ...centerCap, evVol24h: 100 }, cfg, NOW)).toEqual([]);
-    expect(selectEntries({ ...centerCap, evVol24h: null }, cfg, NOW)).toEqual([]);
+  it('does NOT gate entry on 24h volume (CAP-2) — the flat OPEN is low-vol by construction; depth floor gates liquidity', () => {
+    // a near-zero-volume fresh market is STILL enterable when it is flat-open with cheap executable center
+    // depth — liquidity is the per-bucket depth floor (walked from the live book), not a traded-volume proxy.
+    expect(selectEntries({ ...centerCap, evVol24h: 100 }, cfg, NOW).length).toBeGreaterThan(0);
+    expect(selectEntries({ ...centerCap, evVol24h: null }, cfg, NOW).length).toBeGreaterThan(0);
   });
 
   it('returns [] when not flat-open (peak above max)', () => {

@@ -196,7 +196,7 @@ create table if not exists public.opening_captures (
   peak_mid            numeric(6,4),                             -- max bucket mid (flat-open input)
   is_flat_open        boolean not null default false,           -- peak ≤ 0.18 ∧ ≤~1h (§16-D)
   house_seeded        boolean not null default false,           -- was a fresh, quality-passing house_gaussian seeded (C1)
-  buckets             jsonb,                                    -- [{idx,label,loF,hiF,mid,bestAsk,execAsk,depthUsd,bestBid,sellbackUsd,houseProb,tokenYes,tokenNo,conditionId}]
+  buckets             jsonb,                                    -- [{idx,label,loF,hiF,mid,bestAsk,execAsk,depthUsd,bestBid,sellbackUsd,execBid,sellbackDepthUsd,houseProb,tokenYes,tokenNo,conditionId}]
   ev_vol24h           numeric(14,2),                            -- event 24h volume (the §9R $7k+ filter input)
   neg_risk            boolean not null default true             -- parseGammaEvent.negRiskMarketId != null (F2/F5)
 );
