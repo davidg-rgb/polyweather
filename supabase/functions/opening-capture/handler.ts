@@ -24,7 +24,7 @@ import {
   type RawGammaEvent,
 } from '../../../packages/core/src/index.ts';
 import { parseBotConfig, type BotConfig } from '../../../packages/core/src/sim/opening-convergence.ts';
-import { buildOpeningCaptureRow, type BucketDepth, type OpeningCaptureRow } from './pure.ts';
+import { buildOpeningCaptureRow, openingUniverseReason, type BucketDepth, type OpeningCaptureRow } from './pure.ts';
 import { seedHouseDist, type SeedDeps, type SeedStation } from './seed.ts';
 import { getEnv } from '../_shared/auth.ts';
 import type { FetchJsonLike } from '../_shared/polymarket-wallet.ts';
@@ -35,6 +35,10 @@ const CLOB = 'https://clob.polymarket.com';
 const TAG = 104596; // "Highest temperature" — the daily-Tmax ladders
 const HEADERS: Record<string, string> = { 'User-Agent': 'weather-edge/0.1 (opening-capture)', Accept: 'application/json' };
 const MAX_LEAD_DAYS = 2;
+// CAP-1/CAP-2: the FRESH-OPEN bypass window. §9R ladders list ~2.8 lead-days ahead with sub-floor volume, so the
+// lead≤2 + vol≥floor filter alone would only admit them long after the ≤~1h flat-open window the spike measures.
+// Any scoped event listed within this many hours is captured REGARDLESS of lead/vol so the OPEN is always sampled.
+const FRESH_LISTING_MAX_H = 3;
 const EVENT_CONCURRENCY = 4;   // F16 burst bound — cap in-flight events (each does a seed + a bucket-walk)
 const SEED_TIME_BUDGET_MS = 110_000; // once exceeded, remaining events record houseProb=null rather than time out the wall-clock
 
@@ -56,11 +60,6 @@ interface EventKeys {
   cityId: string;
   tz: string;
   icao: string | null;
-}
-
-/** Days until a target date (YYYY-MM-DD) from `now` (negative = past). */
-function leadDaysOf(targetDate: string, now: Date): number {
-  return (new Date(`${targetDate}T23:59:59Z`).getTime() - now.getTime()) / 86_400_000;
 }
 
 /** Page all active open temperature events from Gamma → parsed + the raw id/endDate (parse failures skipped). */
@@ -132,20 +131,25 @@ export async function openingCapture(ctx: JobCtx, deps: OpeningCaptureDeps): Pro
   const botCfg: BotConfig = parseBotConfig(await db.getConfigRows());
   const citySet = new Set(botCfg.cities);
 
-  // ── STEP 1–2: enumerate → scoped near-dated 'highest' universe with the vol floor ───────────────────────
+  // ── STEP 1–2: enumerate → the scoped universe (near-dated LIQUID trajectory ∪ the FRESH OPEN — CAP-1/CAP-2) ─
   const all = await fetchOpenEvents(fetchJson, log);
-  const universe = all.filter(
-    (r) =>
-      r.ev.kind === 'highest' &&
-      r.ev.acceptingOrders &&
-      citySet.has(r.ev.citySlug) &&
-      (r.ev.eventVolume24h ?? 0) >= botCfg.minVol24hUsd &&
-      leadDaysOf(r.ev.targetDate, now) >= -0.5 &&
-      leadDaysOf(r.ev.targetDate, now) <= MAX_LEAD_DAYS,
-  );
+  const uniOpts = {
+    cities: citySet,
+    minVol24hUsd: botCfg.minVol24hUsd,
+    now,
+    maxLeadDays: MAX_LEAD_DAYS,
+    freshListingMaxH: FRESH_LISTING_MAX_H,
+  };
+  let freshOpen = 0;
+  const universe = all.filter((r) => {
+    const reason = openingUniverseReason(r.ev, uniOpts);
+    if (reason === 'fresh') freshOpen++;
+    return reason != null;
+  });
   log('opening universe selected', {
     polyEvents: all.length,
     universe: universe.length,
+    freshOpen, // admitted via the fresh-listing bypass (the ≤1h flat-open window the spike measures)
     cities: new Set(universe.map((r) => r.ev.citySlug)).size,
   });
 
@@ -248,6 +252,7 @@ export async function openingCapture(ctx: JobCtx, deps: OpeningCaptureDeps): Pro
     asOf: capturedAt,
     polyEvents: all.length,
     universe: universe.length,
+    freshOpen,
     noTz,
     captured: rows.length,
     flatOpen,

@@ -194,20 +194,27 @@ export function centerDepth(
   buckets: OpeningBucket[],
   modeIdx: number,
   cfg: BotConfig,
-): { maxDepthUsd: number; modeLabel: string | null } {
-  if (modeIdx < 0) return { maxDepthUsd: 0, modeLabel: null };
+): { maxDepthUsd: number; modeLabel: string | null; priceBlocked: boolean } {
+  if (modeIdx < 0) return { maxDepthUsd: 0, modeLabel: null, priceBlocked: false };
   let maxDepthUsd = 0;
   let modeLabel: string | null = null;
+  // priceBlocked = an in-band bucket had ADEQUATE depth but its executable ask sat above the reservation (the
+  // open was too EXPENSIVE, not too thin). Lets the report distinguish `center_ask_above_cap` from a real
+  // `below_depth_floor` so the operator reads the right failure mode (F4) — diagnostic only; verdict unaffected.
+  let priceBlocked = false;
   for (const b of buckets) {
     if (b.idx === modeIdx) modeLabel = b.label;
     if (Math.abs(b.idx - modeIdx) > cfg.centerHalfWidth) continue;
     if (!fin(b.houseProb)) continue;
     if (!fin(b.execAsk) || b.execAsk <= 0) continue; // a positive executable ask (CORE2-1 parity)
     const reservation = Math.min(cfg.maxEntryPrice, b.houseProb - cfg.entryEdgeMargin);
-    if (!(b.execAsk <= reservation)) continue; // ask_above_reservation — selectEntries would reject it
+    if (!(b.execAsk <= reservation)) {
+      if (b.depthUsd >= cfg.depthFloorUsd) priceBlocked = true; // deep enough, but priced out of the cap
+      continue; // ask_above_reservation — selectEntries would reject it
+    }
     if (b.depthUsd > maxDepthUsd) maxDepthUsd = b.depthUsd;
   }
-  return { maxDepthUsd, modeLabel };
+  return { maxDepthUsd, modeLabel, priceBlocked };
 }
 
 /** One event's spike read. `reachedSeed=false` means the dist NEVER materialized (a signal-availability miss). */
@@ -277,14 +284,26 @@ export function runSpike(rows: RawCaptureRow[], cfg: BotConfig): SpikeResult {
   const captures = Array.isArray(rows) ? rows : [];
   const nCaptures = captures.length;
 
-  // capture span (days) over the whole window + the count of DISTINCT UTC capture-days. The sufficiency gate
-  // uses the distinct-day count (TEST2-6): spanDays = max−min would let a single stray old row + a one-day
-  // burst clear "≥1 week" while holding ~1 day of real data. The */2 cron makes them equal in practice.
-  const times = captures.map((c) => Date.parse(c.capturedAt)).filter((t) => Number.isFinite(t));
-  const spanDays = times.length >= 2 ? (Math.max(...times) - Math.min(...times)) / 86_400_000 : 0;
-  const nCaptureDays = new Set(
-    captures.map((c) => String(c.capturedAt ?? '').slice(0, 10)).filter((d) => d.length === 10),
-  ).size;
+  // capture span (days) + the count of DISTINCT UTC capture-days, in ONE pass. The sufficiency gate uses the
+  // distinct-day count (TEST2-6): spanDays = max−min would let a single stray old row + a one-day burst clear
+  // "≥1 week" while holding ~1 day of real data. NOTE: do NOT spread the timestamp array into Math.max(...)/
+  // Math.min(...) — V8 throws RangeError (call-stack) above ~10^5 elements, and this spike runs over a FULL
+  // multi-week panel (~10^4 rows/day), so the crash would suppress the verdict entirely (F1). The day key is
+  // forced to UTC via toISOString (offset-free — F2; a raw string slice follows the session tz at midnight).
+  let tMin = Number.POSITIVE_INFINITY;
+  let tMax = Number.NEGATIVE_INFINITY;
+  let nFiniteTimes = 0;
+  const dayKeys = new Set<string>();
+  for (const c of captures) {
+    const t = Date.parse(c.capturedAt);
+    if (!Number.isFinite(t)) continue;
+    nFiniteTimes++;
+    if (t < tMin) tMin = t;
+    if (t > tMax) tMax = t;
+    dayKeys.add(new Date(t).toISOString().slice(0, 10));
+  }
+  const spanDays = nFiniteTimes >= 2 ? (tMax - tMin) / 86_400_000 : 0;
+  const nCaptureDays = dayKeys.size;
 
   // group by eventId (rows with no eventId cannot form a coherent series — counted + skipped)
   const byEvent = new Map<string, RawCaptureRow[]>();
@@ -343,10 +362,10 @@ export function runSpike(rows: RawCaptureRow[], cfg: BotConfig): SpikeResult {
 
     const fo = isFlatOpen(firstSeeded, cfg);
     const modeIdx = modeIdxOf(firstSeeded.buckets);
-    const { maxDepthUsd, modeLabel } = centerDepth(firstSeeded.buckets, modeIdx, cfg);
+    const { maxDepthUsd, modeLabel, priceBlocked } = centerDepth(firstSeeded.buckets, modeIdx, cfg);
     const hasCheapDepth = maxDepthUsd >= cfg.depthFloorUsd;
     const reasons = [...fo.reasons];
-    if (!hasCheapDepth) reasons.push(modeIdx < 0 ? 'no_house_prob' : 'below_depth_floor');
+    if (!hasCheapDepth) reasons.push(modeIdx < 0 ? 'no_house_prob' : priceBlocked ? 'center_ask_above_cap' : 'below_depth_floor');
 
     events.push({
       eventId,

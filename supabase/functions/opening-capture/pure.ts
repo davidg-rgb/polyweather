@@ -57,6 +57,49 @@ export function hoursSinceListing(createdAtGamma: string | null, now: Date): num
   return (now.getTime() - t) / 3_600_000;
 }
 
+/** Days until a target date (YYYY-MM-DD) from `now` (negative = past). */
+export function leadDaysOf(targetDate: string, now: Date): number {
+  return (new Date(`${targetDate}T23:59:59Z`).getTime() - now.getTime()) / 86_400_000;
+}
+
+/** Inputs for the capture-universe predicate (pure — no I/O). */
+export interface UniverseOpts {
+  cities: ReadonlySet<string>;
+  minVol24hUsd: number;
+  now: Date;
+  /** the near-dated LIQUID-trajectory lead bound (handler MAX_LEAD_DAYS). */
+  maxLeadDays: number;
+  /** the FRESH-OPEN bypass window in hours (handler FRESH_LISTING_MAX_H). */
+  freshListingMaxH: number;
+}
+
+/**
+ * Why a parsed event is in the opening-capture universe, or null if excluded. TWO admit paths:
+ *
+ *  - `'fresh'` — the FLAT OPEN (CAP-1/CAP-2). The §9R daily-Tmax ladders list in a daily batch ~2.8 lead-days
+ *    ahead carrying sub-floor 24h volume (≈$1–4k), so a `lead ≤ maxLeadDays ∧ vol ≥ floor` filter ALONE would
+ *    only admit them ~12–35h after listing — long after the ≤~1h flat-open window the Phase-0.5 spike exists to
+ *    measure. So ANY just-listed scoped event (`createdAt ≤ freshListingMaxH`) is admitted REGARDLESS of lead/vol
+ *    (bounded to near-dated by a loose `maxLeadDays + 1.5` sanity cap so a freshly-listed far-future market is
+ *    still excluded). This is the only way the open is sampled at all — without it the spike NO-GOs structurally.
+ *  - `'liquid'` — the established near-dated LIQUID trajectory (`lead ≤ maxLeadDays ∧ vol ≥ floor`): the
+ *    convergence path the market walks AFTER the open, the input to the §9R-E gate's still-flat-vs-converged read.
+ *
+ * NOTE the vol floor is intentionally NOT applied on the fresh path: at the open no market is liquid yet, and the
+ * spike does not re-filter on vol — it measures depth/price enterability. (The $7k floor remains a Phase-2 ENTRY
+ * gate in `selectEntries`; reconciling it with entering the open is a separate capital decision — CAP-2.)
+ * Pure + total: a missing/invalid createdAt ⇒ `hoursSinceListing` null ⇒ not 'fresh' (fail-closed to the liquid test).
+ */
+export function openingUniverseReason(ev: ParsedEvent, opts: UniverseOpts): 'liquid' | 'fresh' | null {
+  if (ev.kind !== 'highest' || !ev.acceptingOrders || !opts.cities.has(ev.citySlug)) return null;
+  const lead = leadDaysOf(ev.targetDate, opts.now);
+  if (lead < -0.5) return null; // resolved/past — drop
+  const hrs = hoursSinceListing(ev.createdAt, opts.now);
+  if (hrs != null && hrs >= 0 && hrs <= opts.freshListingMaxH && lead <= opts.maxLeadDays + 1.5) return 'fresh';
+  if (lead <= opts.maxLeadDays && (ev.eventVolume24h ?? 0) >= opts.minVol24hUsd) return 'liquid';
+  return null;
+}
+
 /**
  * Assemble one opening_captures row from a parsed Gamma event + the walked depth + the (on-demand-seeded)
  * house dist. houseProb is aligned to each LIVE bucket BY LABEL IDENTITY (W6 — never positional). is_flat_open

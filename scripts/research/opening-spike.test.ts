@@ -146,3 +146,45 @@ describe('spikeVerdict — the frozen GO/NO-GO gate', () => {
     expect(atFloor.label).toBe('GO'); // ≥ floor passes
   });
 });
+
+describe('runSpike — robustness on real prod-scale data (F1/F2/F4)', () => {
+  it('does NOT RangeError on a large multi-week panel (F1 — no Math.max(...) array spread)', () => {
+    // the spike runs over a FULL multi-week panel (~10^4 rows/day); spreading the timestamp array into
+    // Math.max/min throws a call-stack RangeError above ~10^5 elements, suppressing the verdict entirely.
+    const N = 200_000;
+    const big: RawCaptureRow[] = Array.from({ length: N }, (_, i) =>
+      cap({ eventId: 'BIG', capturedAt: new Date(Date.UTC(2026, 6, 1) + i * 60_000).toISOString(), houseSeeded: true, buckets: seededFlat }),
+    );
+    let res: SpikeResult | undefined;
+    expect(() => { res = runSpike(big, cfg); }).not.toThrow();
+    expect(res!.nCaptures).toBe(N);
+    expect(res!.spanDays).toBeGreaterThan(100); // ~138d of minute-spaced rows — the span path ran
+  });
+
+  it('counts DISTINCT UTC capture-days, independent of the host timezone (F2)', () => {
+    // 1h apart but across UTC midnight → 2 distinct UTC days …
+    const two = runSpike([
+      cap({ eventId: 'U', capturedAt: '2026-07-01T23:30:00Z', houseSeeded: true, buckets: seededFlat }),
+      cap({ eventId: 'U', capturedAt: '2026-07-02T00:30:00Z', houseSeeded: true, buckets: seededFlat }),
+    ], cfg);
+    expect(two.nCaptureDays).toBe(2);
+    // … 23h apart but within ONE UTC day → 1 distinct day (a raw local-string slice could miscount either)
+    const one = runSpike([
+      cap({ eventId: 'V', capturedAt: '2026-07-01T00:30:00Z', houseSeeded: true, buckets: seededFlat }),
+      cap({ eventId: 'V', capturedAt: '2026-07-01T23:30:00Z', houseSeeded: true, buckets: seededFlat }),
+    ], cfg);
+    expect(one.nCaptureDays).toBe(1);
+  });
+
+  it('reports center_ask_above_cap (not below_depth_floor) when a DEEP center bucket is priced out (F4)', () => {
+    const b = (idx: number, mid: number, execAsk: number, houseProb: number, depthUsd: number): RawBucket => ({
+      ...bucket(idx, mid, houseProb, depthUsd), execAsk,
+    });
+    // mode idx 2, flat (mid 0.12), depth 100 ≥ floor, but execAsk 0.30 > cap 0.20 → priced out, NOT thin.
+    const buckets = [b(1, 0.12, 0.3, 0.2, 100), b(2, 0.12, 0.3, 0.5, 100), b(3, 0.12, 0.3, 0.2, 100)];
+    const ev = runSpike([cap({ eventId: 'P', capturedAt: '2026-07-01T00:00:00Z', houseSeeded: true, buckets })], cfg).events[0]!;
+    expect(ev.centerDepthUsd).toBe(0);
+    expect(ev.reasons).toContain('center_ask_above_cap');
+    expect(ev.reasons).not.toContain('below_depth_floor'); // the depth was fine — the price wasn't
+  });
+});

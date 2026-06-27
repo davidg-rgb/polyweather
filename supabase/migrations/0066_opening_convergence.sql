@@ -531,6 +531,11 @@ declare
   v_frac_min    numeric := coalesce((select value::numeric from config where key = 'bot.captureSeededFracMin'), 0.25);
   v_n           int;
   v_seeded_frac numeric;
+  -- (3) the flat-open-window-never-sampled guard (CAP-1/CAP-2). p_lead/vol filter could exclude the OPEN entirely.
+  v_warmup_days numeric := coalesce((select value::numeric from config where key = 'bot.captureFlatOpenWarmupDays'), 3);
+  v_span_days   numeric;
+  v_flat_recent int;
+  v_noflat      boolean := false;
   v_alarmed     boolean := false;
   v_bucket      int := floor(extract(epoch from now()) / 1800)::int;  -- 30-min dedupe
 begin
@@ -561,10 +566,34 @@ begin
         || 'seeded houseProb (< ' || round(v_frac_min * 100, 1) || '% floor). The on-demand seed path is failing '
         || '— captures accrue but are unusable, stalling the experiment. Check seedHouseDist / Open-Meteo / model_stats.');
     end if;
+
+    -- (3) the flat-open window is NEVER sampled (CAP-1/CAP-2). Capture is HEALTHY (newest row fresh — the
+    -- v_age_min<=v_stale_min guard) yet over a multi-day span ZERO captures were is_flat_open: the universe
+    -- filter is excluding the OPEN the Phase-0.5 spike must measure, so its verdict would be a FALSE NO-GO.
+    -- This is the exact silent corruption the seeded-fraction check above MISSES (its v_n>=v_window guard is
+    -- skipped when there are no flat-open rows at all). Warmup-gated by span so it can't fire on day one; a
+    -- stalled/empty table trips staleness, not this. Tune via config bot.captureFlatOpenWarmupDays (default 3).
+    if v_age_min <= v_stale_min then
+      select count(*) filter (where is_flat_open),
+             extract(epoch from (now() - min(captured_at))) / 86400
+        into v_flat_recent, v_span_days
+      from public.opening_captures;
+      if v_span_days >= v_warmup_days and coalesce(v_flat_recent, 0) = 0 then
+        v_noflat := true;
+        v_alarmed := true;
+        perform public.claim_alert('CAPTURE_DEADMAN', 'CRITICAL', 'capture-deadman:noflat:' || v_bucket,
+          'opening-capture NEVER samples the flat-open window',
+          'capture is healthy (newest row ' || round(v_age_min, 1) || ' min old) but over a ' || round(v_span_days, 1) ||
+          '-day span ZERO captures were is_flat_open (peak ≤ peakMidMax within listingMaxHours of listing). The capture '
+          || 'universe filter is excluding the flat OPEN the Phase-0.5 spike must measure — its verdict would be a false '
+          || 'NO-GO. Check the opening-capture universe (the lead/vol filter vs the fresh-listing bypass).');
+      end if;
+    end if;
   end if;
 
   return jsonb_build_object('checkedAt', now(), 'latestCaptureAt', v_latest, 'ageMin', v_age_min,
-                            'flatOpenWindow', v_n, 'seededFrac', v_seeded_frac, 'alarmed', v_alarmed);
+                            'flatOpenWindow', v_n, 'seededFrac', v_seeded_frac, 'noFlatOpen', v_noflat,
+                            'alarmed', v_alarmed);
 end;
 $$;
 

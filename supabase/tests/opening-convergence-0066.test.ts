@@ -418,3 +418,49 @@ describe('0066 deadmen — run no-alarm on an empty/default DB', () => {
     expect(out.mode).toBe('paper'); // mode-aware: reads tradingMode (seeded 'paper')
   });
 });
+
+// CAP-1/CAP-2 regression guard: capture flowing healthily but NEVER inside the flat-open window (the universe
+// filter excluding the OPEN) is the silent corruption that would make the Phase-0.5 spike a false NO-GO. The
+// seeded-fraction check above misses it (its v_n>=v_window guard never trips with 0 flat-open rows).
+describe('capture_deadman_check — the flat-open-never-sampled guard (CAP-1/CAP-2)', () => {
+  let db: PGlite;
+  let port: ReturnType<typeof pglitePort>;
+  beforeAll(async () => { db = await freshDb(); port = pglitePort(db); });
+  afterAll(async () => { await db?.close(); });
+
+  const check = async () =>
+    (await port.rpc<{ capture_deadman_check: { alarmed: boolean; noFlatOpen: boolean } }>('capture_deadman_check', {}))[0]!
+      .capture_deadman_check;
+  const insCap = (capturedAtSql: string, isFlatOpen: boolean) =>
+    db.query(
+      `insert into opening_captures (captured_at, city, target_date, tz_name, is_flat_open, house_seeded)
+       values (${capturedAtSql}, 'amsterdam', current_date, 'Europe/Amsterdam', ${isFlatOpen}, true)`,
+    );
+
+  it('ALARMS when capture is healthy (fresh latest) but ZERO captures are flat-open over the warmup span', async () => {
+    await db.query('delete from opening_captures');
+    await insCap("now() - interval '3 days 1 hour'", false); // span ≥ 3d warmup …
+    await insCap("now() - interval '1 day'", false);
+    await insCap("now() - interval '1 minute'", false); // … and the latest is FRESH (not stale)
+    const out = await check();
+    expect(out.noFlatOpen).toBe(true);
+    expect(out.alarmed).toBe(true); // the universe filter is excluding the open the spike must measure
+  });
+
+  it('does NOT alarm once even a single flat-open capture exists in the span', async () => {
+    await db.query('delete from opening_captures');
+    await insCap("now() - interval '3 days 1 hour'", false);
+    await insCap("now() - interval '1 minute'", true); // a flat-open capture lands → the open IS being sampled
+    const out = await check();
+    expect(out.noFlatOpen).toBe(false);
+    expect(out.alarmed).toBe(false);
+  });
+
+  it('does NOT alarm before the warmup span elapses (cannot false-fire on day one)', async () => {
+    await db.query('delete from opening_captures');
+    await insCap("now() - interval '12 hours'", false);
+    await insCap("now() - interval '1 minute'", false);
+    const out = await check();
+    expect(out.noFlatOpen).toBe(false); // span 0.5d < 3d warmup — not yet judgeable
+  });
+});

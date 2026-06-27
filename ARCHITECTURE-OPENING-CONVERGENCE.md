@@ -843,7 +843,7 @@ openingCapture(ctx: JobCtx, deps: { now, fetchJson }): Promise<JobStats>
   Purpose: forward capture of flat-open candidates + their depth + our (on-demand-seeded) distribution (F-OC-01).
   Steps:
     1. fetchOpenEvents (page Gamma tag 104596, parseGammaEvent, skip parse failures) — mirrors cross-venue-capture.
-    2. select near-dated (lead 0..2) 'highest' events accepting orders, RESTRICTED to the scoped city universe (cfg.bot.cities) with evVol24h ≥ cfg.bot.minVol24hUsd (I-13).
+    2. select the scoped (cfg.bot.cities) 'highest' events accepting orders via TWO union'd admit paths (`openingUniverseReason`, pure in pure.ts — CAP-1/CAP-2, 2026-06-27): **(a) LIQUID trajectory** — near-dated (lead 0..2) ∧ evVol24h ≥ cfg.bot.minVol24hUsd (I-13); **(b) the FRESH OPEN** — any event listed within `FRESH_LISTING_MAX_H`≈3h (createdAt), admitted REGARDLESS of lead/vol (bounded by a loose lead ≤ maxLeadDays+1.5 sanity cap). **(b) is LOAD-BEARING: the §9R ladders list in a daily batch ~2.8 lead-days ahead with sub-$7k 24h volume, so path (a) ALONE only admits them ~15–35h post-listing — long after the ≤1h flat-open window the Phase-0.5 spike measures, making its verdict a structural false NO-GO** (proven live 2026-06-27: 1454 rows, min hours_since_listing 35.7h, ZERO is_flat_open). The vol floor is intentionally NOT applied on (b) — at the open no market is liquid yet and the spike does not re-filter on vol. NOTE (CAP-2): the $7k floor REMAINS an `selectEntries` ENTRY gate, so entering the open at sub-$7k vol needs an explicit entry-floor relaxation — an open capital decision, NOT yet made.
     3. for each, walk the true CLOB /book of the core buckets → per-bucket {bestAsk, buyableWithinBandUsd, bestBid, sellbackUsd} (the executableAsk/bindingExecutable depth-walk pattern).
     4. SIGNAL SEED (C1/C1b/ADR-OC-14) — a TS helper seedHouseDist(ev) (§6.10c), NOT a plpgsql RPC (C1b: buildDistributionForEvent is TS and the OM snapshot is an outbound fetch — neither is possible in SQL). It mirrors the discover-markets TS seam: upsert/discover the event → if no FRESH dist (made_at within freshnessMin), snapshot THIS station's Open-Meteo forecast now (reuse snapshot-forecasts logic) via upsert_forecast_rows, then buildDistributionForEvent → upsert_distribution; finally read the latest house_gaussian back. Skips when the station is unmapped (houseProb null).
     5. align each bucket's houseProb to the LIVE bucket BY LABEL/RANGE IDENTITY (W6/W6b — the dist is a bare probs[] aligned to bucket_idx with NO labels (0005_analytics.sql); the seed read JOINS probs[idx]→market_buckets to attach each label/range, then matches to the live Gamma bucket label/range — NOT positional probs[i]); compute modeIdx = argmax over the LIVE-aligned houseProb (drop any dist-space modeIdx — W6b); resolve the IANA tz NAME from cities.tz, REJECTING Etc/* zones as no_tz (C2b).
@@ -1717,6 +1717,15 @@ do the real work; the time bound is nearly moot. *(Caveat:
 `/prices-history` is hourly, so it under-resolves the true sub-hour open — which makes the minute-cadence
 requirement STRONGER, and is precisely what the live capture layer + Phase-0.5 spike measure: first-seen →
 minute-by-minute peak decay + whether the <1h open carries fillable depth.)*
+
+> **CORRECTION (CAP-1/CAP-4, 2026-06-27 — proven against live prod + the Gamma feed):** the assumption in (2) that
+> "at a ~2–3 min first-seen poll, `created_at_gamma ≈ first-seen`" is **FALSE for the §9R universe as originally
+> filtered.** The daily-Tmax ladders LIST ~2.8 lead-days ahead (a daily batch ~04:00 UTC) carrying sub-`minVol24hUsd`
+> volume, so the `lead 0..2 ∧ vol ≥ floor` universe rule (step 2) did NOT admit a market until ~15–35h after its
+> `createdAt` — making first-seen ≫ listing and `is_flat_open` structurally never true (live: 1454 rows, ZERO flat-open,
+> min hours_since_listing 35.7h). The first-seen poll is necessary but NOT sufficient; the **universe filter** also has to
+> admit the market AT the open. Fixed by the §6.10-step-2 **fresh-listing bypass** (admit createdAt-recent events regardless
+> of lead/vol). The `created_at_gamma` anchor itself is correct and IS populated — only the admit gate was wrong.
 
 **§16-E — Entries are rarer → Phase-5 takes more calendar time.** At ~3/8 (~38%) of listings presenting a cheap
 open, the bot must scan **~100+ listings to accumulate the 40 paper entries** the §9R-E gate needs. A timeline

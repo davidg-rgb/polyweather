@@ -7,7 +7,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ParsedEvent } from '../../../packages/core/src/index.ts';
 import { BOT_DEFAULTS } from '../../../packages/core/src/sim/opening-convergence.ts';
-import { bucketMid, buildOpeningCaptureRow, hoursSinceListing, type BucketDepth } from './pure.ts';
+import { bucketMid, buildOpeningCaptureRow, hoursSinceListing, openingUniverseReason, type BucketDepth, type UniverseOpts } from './pure.ts';
 
 const NOW = new Date('2026-06-27T06:10:00Z');
 
@@ -52,6 +52,59 @@ const AMS = (): ParsedEvent =>
     [31, 31, 0.1, 0.12],
     [32, null, 0.09, 0.11],
   ]);
+
+describe('openingUniverseReason — the capture universe (CAP-1/CAP-2: the fresh OPEN must be admitted)', () => {
+  // §9R ladders list ~2.8 lead-days ahead with sub-floor 24h volume; NOW = 06:10Z, so a batch listed at ~05:40Z
+  // (0.5h ago) for a target 2 days out is the flat OPEN the spike must measure.
+  const opts: UniverseOpts = {
+    cities: new Set(['amsterdam', 'paris', 'beijing']),
+    minVol24hUsd: 7000,
+    now: NOW,
+    maxLeadDays: 2,
+    freshListingMaxH: 3,
+  };
+  // a scoped 'highest' event with explicit createdAt/lead/vol; target 2.7 days out (the daily-batch listing lead).
+  const ev = (over: { createdAt?: string | null; vol?: number; td?: string; city?: string; kind?: string; accepting?: boolean }) =>
+    ({
+      kind: over.kind ?? 'highest',
+      acceptingOrders: over.accepting ?? true,
+      citySlug: over.city ?? 'amsterdam',
+      targetDate: over.td ?? '2026-06-29', // ~2.74 lead-days from NOW
+      createdAt: over.createdAt === undefined ? '2026-06-27T05:40:00Z' : over.createdAt, // 0.5h ago
+      eventVolume24h: over.vol ?? 1800,
+    }) as unknown as ParsedEvent;
+
+  it("admits a FRESHLY-LISTED low-vol high-lead event as 'fresh' (the bug fix — was excluded, now the open is sampled)", () => {
+    // createdAt 0.5h ago, lead 2.74 (> maxLeadDays 2), vol 1800 (< floor 7000): the OLD lead≤2 ∧ vol≥7k filter
+    // would have dropped this, so the ≤1h flat open was never captured → a structural false NO-GO.
+    expect(openingUniverseReason(ev({}), opts)).toBe('fresh');
+  });
+
+  it("excludes the SAME event once it is past the fresh window AND still sub-floor/over-lead (no double-admit)", () => {
+    // createdAt 5h ago (> freshListingMaxH 3) and still lead 2.74 / vol 1800 → neither path admits it.
+    expect(openingUniverseReason(ev({ createdAt: '2026-06-27T01:10:00Z' }), opts)).toBeNull();
+  });
+
+  it("admits the near-dated LIQUID trajectory as 'liquid' (lead ≤ 2 ∧ vol ≥ floor), even when not fresh", () => {
+    expect(openingUniverseReason(ev({ td: '2026-06-28', vol: 9000, createdAt: '2026-06-25T00:00:00Z' }), opts)).toBe('liquid');
+  });
+
+  it('does NOT fresh-admit a freshly-listed FAR-FUTURE market (the loose lead sanity cap)', () => {
+    expect(openingUniverseReason(ev({ td: '2026-07-10' }), opts)).toBeNull(); // fresh but lead ≫ maxLeadDays+1.5
+  });
+
+  it('excludes out-of-universe events (non-scoped city, non-highest, not accepting, resolved)', () => {
+    expect(openingUniverseReason(ev({ city: 'tokyo' }), opts)).toBeNull();
+    expect(openingUniverseReason(ev({ kind: 'lowest' }), opts)).toBeNull();
+    expect(openingUniverseReason(ev({ accepting: false }), opts)).toBeNull();
+    expect(openingUniverseReason(ev({ td: '2026-06-25' }), opts)).toBeNull(); // lead < -0.5 (resolved)
+  });
+
+  it('a missing/invalid createdAt fails closed to the liquid test (no fresh-admit without a listing anchor)', () => {
+    expect(openingUniverseReason(ev({ createdAt: null, vol: 1800 }), opts)).toBeNull(); // no anchor, sub-floor → out
+    expect(openingUniverseReason(ev({ createdAt: null, td: '2026-06-28', vol: 9000 }), opts)).toBe('liquid'); // liquid still works
+  });
+});
 
 describe('bucketMid', () => {
   it('is the midpoint of a two-sided quote; null when a side is missing or degenerate', () => {
