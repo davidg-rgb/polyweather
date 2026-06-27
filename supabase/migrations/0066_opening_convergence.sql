@@ -196,7 +196,7 @@ create table if not exists public.opening_captures (
   peak_mid            numeric(6,4),                             -- max bucket mid (flat-open input)
   is_flat_open        boolean not null default false,           -- peak ≤ 0.18 ∧ ≤~1h (§16-D)
   house_seeded        boolean not null default false,           -- was a fresh, quality-passing house_gaussian seeded (C1)
-  buckets             jsonb,                                    -- [{idx,label,loF,hiF,mid,bestAsk,depthUsd,bestBid,sellbackUsd,houseProb,tokenYes,tokenNo,conditionId}]
+  buckets             jsonb,                                    -- [{idx,label,loF,hiF,mid,bestAsk,execAsk,depthUsd,bestBid,sellbackUsd,houseProb,tokenYes,tokenNo,conditionId}]
   ev_vol24h           numeric(14,2),                            -- event 24h volume (the §9R $7k+ filter input)
   neg_risk            boolean not null default true             -- parseGammaEvent.negRiskMarketId != null (F2/F5)
 );
@@ -433,12 +433,14 @@ as $$
     where captured_at >= now() - make_interval(mins => greatest(coalesce(p_max_age_min, 30), 1))
     order by event_id, city, target_date, captured_at desc
   )
-  select coalesce(jsonb_agg(jsonb_build_object(
+  -- wrap in a jsonb OBJECT { rows: [...] } — NEVER a top-level array (the 0044 trap: the service-role port
+  -- normalizes by SHAPE, reading a bare array as a RETURNS TABLE rowset, so result[0].fn would be undefined).
+  select jsonb_build_object('rows', coalesce(jsonb_agg(jsonb_build_object(
     'eventId', event_id, 'capturedAt', captured_at, 'city', city, 'targetDate', target_date,
     'tzName', tz_name, 'createdAtGamma', created_at_gamma, 'resolvesAt', resolves_at,
     'hoursSinceListing', hours_since_listing, 'peakMid', peak_mid, 'isFlatOpen', is_flat_open,
     'houseSeeded', house_seeded, 'buckets', buckets, 'evVol24h', ev_vol24h, 'negRisk', neg_risk
-  ) order by captured_at desc), '[]'::jsonb)
+  ) order by captured_at desc), '[]'::jsonb))
   from latest;
 $$;
 
@@ -450,12 +452,13 @@ language sql
 security definer
 set search_path = public
 as $$
-  select coalesce(jsonb_agg(jsonb_build_object(
+  -- jsonb OBJECT { rows: [...] }, never a top-level array (the 0044 port-misread trap — see bot_latest_captures).
+  select jsonb_build_object('rows', coalesce(jsonb_agg(jsonb_build_object(
     'eventId', event_id, 'capturedAt', captured_at, 'city', city, 'targetDate', target_date,
     'tzName', tz_name, 'createdAtGamma', created_at_gamma, 'resolvesAt', resolves_at,
     'hoursSinceListing', hours_since_listing, 'peakMid', peak_mid, 'isFlatOpen', is_flat_open,
     'houseSeeded', house_seeded, 'buckets', buckets, 'evVol24h', ev_vol24h, 'negRisk', neg_risk
-  ) order by event_id, captured_at), '[]'::jsonb)
+  ) order by event_id, captured_at), '[]'::jsonb))
   from public.opening_captures
   where captured_at >= now() - make_interval(days => greatest(coalesce(p_days, 14), 1));
 $$;
@@ -476,19 +479,31 @@ as $$
   from public.cities c where c.slug = p_slug;
 $$;
 
--- 6.6 bot_seed_quality — the F15 seed-QUALITY inputs: # contributing models for (icao, target_date) +
--- whether model_stats calibration coverage exists for the station. The seed AND's these with a dist-shape
+-- 6.6 bot_seed_quality — the F15 seed-QUALITY inputs: # contributing models for (icao, target_date, lead) +
+-- whether model_stats calibration coverage exists for THAT station+lead. The seed AND's these with a dist-shape
 -- check (mode-confidence + sigma sanity) before a houseProb is treated as enterable — existence ≠ usable.
-create or replace function public.bot_seed_quality(p_icao text, p_target_date date)
+-- Coverage is gated on the EVENT'S lead (not station-wide): model_stats is keyed by lead_days, so a station
+-- calibrated at some leads but not THIS lead is not usable here — gating station-wide would over-count the
+-- seeded fraction and bias the Phase-0.5 GO optimistic (F15 / §17). p_lead null ⇒ fall back to station-wide.
+-- drop the prior 2-arg overload so a re-apply on an env that already has it leaves ONLY the lead-aware form
+-- (else a 2-arg call would be ambiguous). No-op on a fresh DB (the 2-arg never existed).
+drop function if exists public.bot_seed_quality(text, date);
+create or replace function public.bot_seed_quality(p_icao text, p_target_date date, p_lead int default null)
 returns jsonb
 language sql
 security definer
 set search_path = public
 as $$
+  -- nModels is date-wide (NOT lead-keyed): get_build_inputs feeds the dist the LATEST row per model regardless of
+  -- the stored lead_days, and forecast_snapshots.lead_days is written with the STATION tz at SNAPSHOT time, which
+  -- can differ from the dist's lead (city tz, capture time) on a DST day / near a local-midnight rollover — a
+  -- lead filter there would spuriously under-count the contributing models (EDGE2-3). The lead-specificity that
+  -- matters is the CALIBRATION coverage: model_stats is keyed on lead_days, so hasStats gates on the event lead.
   select jsonb_build_object(
     'nModels', (select count(distinct model) from public.forecast_snapshots
                 where icao = p_icao and target_date = p_target_date),
-    'hasStats', exists(select 1 from public.model_stats where icao = p_icao)
+    'hasStats', exists(select 1 from public.model_stats
+                       where icao = p_icao and (p_lead is null or lead_days = p_lead))
   );
 $$;
 
@@ -566,6 +581,7 @@ declare
   v_mode        text    := coalesce((select value from config where key = 'tradingMode'), 'paper');
   v_tick_int    numeric := coalesce((select value::numeric from config where key = 'bot.tickIntervalSec'), 30);
   v_thresh_min  numeric := (v_tick_int * 3) / 60;  -- ~3× the tick interval
+  v_gate_stale_min numeric := coalesce((select value::numeric from config where key = 'bot.gateStaleMin'), 180);
   v_last_tick   timestamptz;
   v_tick_age    numeric;
   v_last_gate   timestamptz;
@@ -589,7 +605,7 @@ begin
     select max(computed_at) into v_last_gate from public.bot_gate_snapshot where mode = v_mode and source = 'forward';
     if v_last_gate is not null then
       v_gate_age := extract(epoch from (now() - v_last_gate)) / 60;
-      if v_gate_age > 180 then  -- the forward verdict should refresh well within 3h while the loop runs
+      if v_gate_age > v_gate_stale_min then  -- the forward verdict should refresh well within 3h while the loop runs
         v_alarmed := true;
         perform public.claim_alert('BOT_DEADMAN', 'CRITICAL', 'bot-deadman:gate:' || v_mode || ':' || v_bucket,
           'opening-bot forward gate (' || v_mode || ') is STALE',
@@ -649,6 +665,7 @@ insert into public.config (key, value) values
   ('bot.seedFreshnessMin',         '180'),
   ('bot.seedMinModels',            '3'),
   ('bot.captureStaleMin',          '9'),
+  ('bot.gateStaleMin',             '180'),
   ('bot.captureSeededFracMin',     '0.25'),
   ('bot.captureSeededFracWindow',  '50'),
   ('bot.minOrderSizeShares',       '5'),
@@ -659,7 +676,7 @@ insert into public.config (key, value) values
   ('bot.killLatchPersistTicks',    '3'),
   ('bot.spikeGoFrac',              '0.5'),
   ('bot.gate.minMarkets',          '40'),
-  ('bot.gate.minCities',           '4'),
+  ('bot.gate.minCities',           '6'),
   ('bot.gate.minDistinctDays',     '7'),
   ('bot.gate.minWinFrac',          '0.5')
 on conflict (key) do nothing;
@@ -672,7 +689,9 @@ declare
   v_kind  text;
 begin
   foreach v_kind in array array['BOT_DEADMAN','CAPTURE_DEADMAN','EXIT_FAILED','CIRCUIT_BREAK','POL_LOW','DAILY_KILL'] loop
-    if position(v_kind in v_kinds) = 0 then
+    -- token equality, NOT substring containment: a future kind that is a substring of an existing one (e.g.
+    -- KILL ⊂ DAILY_KILL) would be silently skipped by position() and never delivered. Idempotent on re-run.
+    if not (v_kind = any(string_to_array(v_kinds, ','))) then
       v_kinds := v_kinds || ',' || v_kind;
     end if;
   end loop;
@@ -694,8 +713,8 @@ revoke all on function public.bot_capture_series(int) from public, anon, authent
 grant  execute on function public.bot_capture_series(int) to service_role;
 revoke all on function public.bot_resolve_event_keys(text) from public, anon, authenticated;
 grant  execute on function public.bot_resolve_event_keys(text) to service_role;
-revoke all on function public.bot_seed_quality(text, date) from public, anon, authenticated;
-grant  execute on function public.bot_seed_quality(text, date) to service_role;
+revoke all on function public.bot_seed_quality(text, date, int) from public, anon, authenticated;
+grant  execute on function public.bot_seed_quality(text, date, int) to service_role;
 revoke all on function public.capture_deadman_check() from public, anon, authenticated;
 grant  execute on function public.capture_deadman_check() to service_role;
 revoke all on function public.bot_deadman_check() from public, anon, authenticated;

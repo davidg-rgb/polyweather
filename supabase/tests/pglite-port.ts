@@ -134,6 +134,7 @@ const FN_ARGS: Record<string, string[]> = {
   // 0066 opening-convergence Phase-0 capture/seed RPCs.
   record_opening_captures: ['p_rows'],
   latest_house_dist: ['p_event_id'],
+  bot_seed_quality: ['p_icao', 'p_target_date', 'p_lead'],
   bot_latest_captures: ['p_max_age_min'],
   bot_capture_series: ['p_days'],
   capture_deadman_check: [],

@@ -13,6 +13,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { PGlite } from '@electric-sql/pglite';
 import { asRole, freshDb, hasUniqueIndex, rows } from './harness.ts';
 import { pglitePort } from './pglite-port.ts';
+import { BOT_DEFAULTS, parseBotConfig } from '../../packages/core/src/sim/opening-convergence.ts';
 
 const OPERATOR = { email: 'david.geborek@gmail.com' };
 
@@ -94,6 +95,17 @@ describe('0066 schema — seeded columns, the 9 bot tables, the double-open belt
     }
   });
 
+  it('the APPLIED 0066 config mirror parses to BOT_DEFAULTS — pins the real migration SQL, not a hand-copied literal (TEST3-1)', async () => {
+    // The packages/core F10 test asserts parseBotConfig(a TEST LITERAL) === BOT_DEFAULTS, which cannot catch an
+    // edit to the migration's `insert into config` block (a drifted value would override the code default at
+    // runtime via opening-spike loadCfg → parseBotConfig). This reads the ACTUAL applied rows and pins them.
+    const cfgRows = await rows<{ key: string; value: string }>(
+      db,
+      `select key, value from config where key = 'bot_enabled' or key like 'bot.%' order by key`,
+    );
+    expect(parseBotConfig(cfgRows)).toEqual(BOT_DEFAULTS);
+  });
+
   it('bot_positions carries the partial-unique double-open belt bp_one_open_per_bucket on (event_id, bucket_idx)', async () => {
     expect(await hasUniqueIndex(db, 'bot_positions', ['event_id', 'bucket_idx'], { partial: true })).toBe(true);
     // and it is named as the migration declares
@@ -103,6 +115,26 @@ describe('0066 schema — seeded columns, the 9 bot tables, the double-open belt
          and indexname = 'bp_one_open_per_bucket'`,
     );
     expect(idx).toBeDefined();
+  });
+
+  it('bp_one_open_per_bucket REJECTS a second OPEN position on the same (event,bucket); allows reopen after close', async () => {
+    const fresh = await freshDb();
+    try {
+      const evId = await seedEvent(fresh, { slug: 'do-city', date: '2026-06-28', winner: 1 });
+      const insPos = (state: string): Promise<unknown> =>
+        fresh.query(
+          `insert into bot_positions (mode, event_id, city, target_date, tz_name, bucket_idx, bucket_label, token_yes, condition_id, state)
+           values ('paper', $1, 'do-city', '2026-06-28', 'Europe/Amsterdam', 0, '20°C', 'y0', 'c0', $2)`,
+          [evId, state],
+        );
+      await insPos('armed'); // first open position — ok
+      await expect(insPos('maker_resting')).rejects.toThrow(); // a 2nd OPEN on the same (event,bucket) → unique violation
+      // close the first; a new open on the same bucket is now allowed (the partial-unique only covers OPEN states).
+      await fresh.query(`update bot_positions set state = 'closed' where event_id = $1 and bucket_idx = 0`, [evId]);
+      await expect(insPos('armed')).resolves.toBeDefined();
+    } finally {
+      await fresh.close();
+    }
   });
 });
 
@@ -180,16 +212,27 @@ describe('0066 capture/seed RPCs (via pglitePort + FN_ARGS)', () => {
         }),
       );
 
-      const latest = (await fport.rpc<{ bot_latest_captures: { eventId: string; peakMid: number }[] }>(
+      // both RPCs return a jsonb OBJECT { rows: [...] }, NEVER a top-level array (the 0044 port-misread trap):
+      // a bare array would be read by the service-role port as a RETURNS TABLE rowset → result[0].fn undefined.
+      const latestObj = (await fport.rpc<{ bot_latest_captures: { rows: { eventId: string; peakMid: number }[] } }>(
         'bot_latest_captures', { p_max_age_min: 5 },
       ))[0]!.bot_latest_captures;
+      expect(Array.isArray(latestObj)).toBe(false);          // object, not a bare array
+      expect(Array.isArray(latestObj.rows)).toBe(true);
+      const latest = latestObj.rows;
       expect(latest.length).toBe(2); // one per event
       const ams = latest.find((c) => c.eventId === e1)!;
       expect(Number(ams.peakMid)).toBeCloseTo(0.1, 6); // the NEWER (30s-old) capture, not the 180s-old 0.15
 
-      const series = (await fport.rpc<{ bot_capture_series: unknown[] }>('bot_capture_series', { p_days: 7 }))[0]!
-        .bot_capture_series;
+      const seriesObj = (await fport.rpc<{ bot_capture_series: { rows: { eventId: string; capturedAt: string }[] } }>(
+        'bot_capture_series', { p_days: 7 },
+      ))[0]!.bot_capture_series;
+      expect(Array.isArray(seriesObj)).toBe(false);
+      const series = seriesObj.rows;
       expect(series.length).toBe(3); // the full series (2 for e1 + 1 for e2)
+      // ordered by (event_id, captured_at): captured_at is non-decreasing WITHIN each event (the spike's contract).
+      const e1times = series.filter((r) => r.eventId === e1).map((r) => Date.parse(r.capturedAt));
+      expect(e1times).toEqual([...e1times].sort((a, b) => a - b));
     } finally {
       await fresh.close();
     }
@@ -212,6 +255,42 @@ describe('0066 capture/seed RPCs (via pglitePort + FN_ARGS)', () => {
       'latest_house_dist', { p_event_id: '00000000-0000-0000-0000-000000000000' },
     ))[0]!.latest_house_dist;
     expect(none).toBeNull();
+  });
+
+  it('bot_seed_quality counts contributing models date-wide but gates calibration coverage on the EVENT lead (EDGE2-3/EDGE2-4)', async () => {
+    const fresh = await freshDb();
+    const fport = pglitePort(fresh);
+    try {
+      await fresh.query(
+        `insert into stations (icao, country_code, tz, lat, lon, source) values ('BSQ1', 'KR', 'Asia/Seoul', 37, 127, 'ourairports')`,
+      );
+      // two models forecast 2026-07-01 — one at lead 0, one at lead 1 → nModels (date-wide) = 2 regardless of lead.
+      await fresh.query(
+        `insert into forecast_snapshots (icao, model, target_date, lead_days, tmax_c, snapshot_slot, source, captured_at) values
+           ('BSQ1','ecmwf_ifs025','2026-07-01',0,25.0,'10Z','forecast_api','2026-07-01T10:00:00Z'),
+           ('BSQ1','gfs_seamless','2026-07-01',1,24.0,'10Z','forecast_api','2026-06-30T10:00:00Z')`,
+      );
+      // calibration coverage (model_stats) exists ONLY at lead 0.
+      await fresh.query(
+        `insert into model_stats (icao, model, lead_days, snapshot_slot, stats_version) values ('BSQ1','ecmwf_ifs025',0,'10Z',1)`,
+      );
+
+      const q = async (lead: number | null) =>
+        (await fport.rpc<{ bot_seed_quality: { nModels: number; hasStats: boolean } }>('bot_seed_quality', {
+          p_icao: 'BSQ1', p_target_date: '2026-07-01', p_lead: lead,
+        }))[0]!.bot_seed_quality;
+
+      const atLead0 = await q(0);
+      expect(Number(atLead0.nModels)).toBe(2); // date-wide count, NOT lead-keyed
+      expect(atLead0.hasStats).toBe(true); // model_stats covers lead 0
+      const atLead1 = await q(1);
+      expect(Number(atLead1.nModels)).toBe(2); // still date-wide (the fragile lead-keying was removed)
+      expect(atLead1.hasStats).toBe(false); // but NO calibration coverage at lead 1 → fail-closed
+      const stationWide = await q(null);
+      expect(stationWide.hasStats).toBe(true); // p_lead null → station-wide coverage fallback
+    } finally {
+      await fresh.close();
+    }
   });
 
   it('upsert_distribution writes seeded=true with p_seeded=true and seeded=false by default (10-arg form)', async () => {
@@ -280,6 +359,38 @@ describe('0066 §15 seed-isolation — a bot seed never becomes the scored champ
     } finally {
       await fresh.close();
     }
+  });
+
+  it('ALL FOUR consumer exclusions actually patched the live function bodies (the guarded string-replace did not no-op)', async () => {
+    // The exclusions are applied at migration time by pg_get_functiondef → replace(...) of an EXACT predicate
+    // literal. If a target body ever drifts from that literal the replace silently no-ops yet still logs
+    // "patched" — a bot seed would then leak into that consumer's champion/argmax. dash_data + calib are also
+    // covered behaviorally above; this pins the two that aren't (dash_amsterdam_sim, poll_known_events) and
+    // guards all four against future drift in one shot.
+    for (const fn of ['dash_data', 'calib_scored_rows', 'dash_amsterdam_sim', 'poll_known_events']) {
+      const [r] = await rows<{ def: string }>(
+        db,
+        `select pg_get_functiondef(p.oid) as def from pg_proc p
+           join pg_namespace n on n.oid = p.pronamespace
+         where n.nspname = 'public' and p.proname = $1 limit 1`,
+        [fn],
+      );
+      expect(r, `function ${fn} not found`).toBeDefined();
+      expect(r!.def.includes('coalesce(bp.seeded'), `${fn} missing the seeded-exclusion guard (string-replace no-op?)`).toBe(true);
+    }
+
+    // dash_data applies THREE distinct replaces (house_gaussian, market_consensus, the in(...) set); the loop
+    // above only proves ≥1 landed. Pin that the market_consensus exclusion SPECIFICALLY is present — if that one
+    // replace target ever drifts and silently no-ops, a bot seed would leak into the consensus read (TEST2-5).
+    const [dd] = await rows<{ def: string }>(
+      db,
+      `select pg_get_functiondef(p.oid) as def from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+       where n.nspname = 'public' and p.proname = 'dash_data' limit 1`,
+    );
+    expect(
+      /market_consensus'\s+and\s+bp\.nowcast\s*=\s*false\s+and\s+coalesce\(bp\.seeded/.test(dd!.def),
+      'dash_data market_consensus seeded-exclusion missing (the multi-replace partially no-opped?)',
+    ).toBe(true);
   });
 });
 

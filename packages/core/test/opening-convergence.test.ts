@@ -234,6 +234,24 @@ describe('selectEntries — pick the flat-open buckets to buy (§9R-B / W6b / F7
   });
 });
 
+// ── 2.5 · localHourInstant DST correctness (F11) ─────────────────────────────────────────────────────────
+// The time-stop is the bot's hard flatten. It MUST resolve station-local noon to the correct UTC instant
+// across DST. The bracketDecision time-stop test above runs on a June (non-transition) day, where the buggy
+// `startUtc + 12h` and the correct localHourInstant agree — so it does NOT actually guard F11. These cases
+// land ON / inside DST-shifted windows in both hemispheres, where a no-DST or fixed-offset impl diverges.
+describe('localHourInstant — DST-correct local-noon instant (F11 regression guard)', () => {
+  it('US spring-forward DAY: LA 2026-03-08 noon is PDT (UTC-7) → 19:00Z, not the 20:00Z a standard-offset gives', () => {
+    expect(localHourInstant('America/Los_Angeles', '2026-03-08', 12).toISOString()).toBe('2026-03-08T19:00:00.000Z');
+  });
+  it('US fall-back DAY: LA 2026-11-01 noon is back to PST (UTC-8) → 20:00Z', () => {
+    expect(localHourInstant('America/Los_Angeles', '2026-11-01', 12).toISOString()).toBe('2026-11-01T20:00:00.000Z');
+  });
+  it('Southern-hemisphere DST flips the OTHER way: Sydney summer (AEDT +11) → 01:00Z, winter (AEST +10) → 02:00Z', () => {
+    expect(localHourInstant('Australia/Sydney', '2026-01-15', 12).toISOString()).toBe('2026-01-15T01:00:00.000Z');
+    expect(localHourInstant('Australia/Sydney', '2026-07-15', 12).toISOString()).toBe('2026-07-15T02:00:00.000Z');
+  });
+});
+
 // ── 3 · bracketDecision ────────────────────────────────────────────────────────────────────────────────
 
 describe('bracketDecision — the pure exit decision (§9R-C / F1 / F11 / F13 / ADR-OC-7/12)', () => {
@@ -367,7 +385,7 @@ describe('paperFill — deterministic pessimistic fill (ADR-OC-6/9)', () => {
 describe('openingVerdict — the frozen §9R-E net-profit gate', () => {
   it('exposes the §9R-E sufficiency bars', () => {
     expect(GATE_MIN_MARKETS).toBe(40);
-    expect(GATE_MIN_CITIES).toBe(4);
+    expect(GATE_MIN_CITIES).toBe(6); // ≥6 so the sign-flip null floor 2^−C clears the 5% bar (CORE-1)
     expect(GATE_MIN_DISTINCT_DAYS).toBe(7);
     expect(GATE_MIN_WIN_FRAC).toBe(0.5);
     expect(ZERO_SKILL_MAX_PASS).toBe(0.05);
@@ -378,7 +396,7 @@ describe('openingVerdict — the frozen §9R-E net-profit gate', () => {
   });
 
   it('INSUFFICIENT_DATA with enough markets but too few cities', () => {
-    const v = openingVerdict(mkPanel(CITIES(3), DAYS(14), () => 0.02)); // 42 markets, 3 cities < 4
+    const v = openingVerdict(mkPanel(CITIES(3), DAYS(14), () => 0.02)); // 42 markets, 3 cities < 6
     expect(v.nMarkets).toBe(42);
     expect(v.nCities).toBe(3);
     expect(v.label).toBe('INSUFFICIENT_DATA');
@@ -410,6 +428,26 @@ describe('openingVerdict — the frozen §9R-E net-profit gate', () => {
     expect(v.label).toBe('PASS');
   });
 
+  // CORE-1 regression: the sign-flip null INCLUDES the no-flip vector, which reproduces the (passing) panel
+  // exactly and recurs at ~2^−C. So zsp has a hard floor ~2^−C: at 4 cities that floor is 0.0625 > the 0.05
+  // bar → a perfect-edge 4-city panel can ONLY KILL (the gate would be un-passable, false-killing a real edge);
+  // at the 6-city minimum the floor is 0.0156, so a real edge clears. These two lock GATE_MIN_CITIES ≥ 6.
+  it('CORE-1 — a clearly-positive panel of only 4 cities is structurally UN-PASSABLE (zsp floor > bar)', () => {
+    // trials high so the deterministic MC estimate sits tight on the 2^−4 = 0.0625 floor, well above the 0.05 bar.
+    const v = openingVerdict(mkPanel(CITIES(4), DAYS(14), () => 0.02), { minCities: 4, trials: 4000 });
+    expect(v.winFrac).toBe(1);
+    expect(v.ciLow).toBeGreaterThan(0);                       // clears the descriptive bars…
+    expect(v.zeroSkillPassRate).toBeGreaterThan(ZERO_SKILL_MAX_PASS); // …but the 2^−4 sign-flip floor blocks it
+    expect(v.label).toBe('KILL');
+  });
+
+  it('CORE-1 — the same clearly-positive edge across the 6-city minimum DOES clear the zero-skill floor → PASS', () => {
+    const v = openingVerdict(mkPanel(CITIES(6), DAYS(7), () => 0.02)); // 42 mkts, 6 cities = the gate minimum
+    expect(v.nCities).toBe(6);
+    expect(v.zeroSkillPassRate).toBeLessThan(ZERO_SKILL_MAX_PASS); // 2^−6 ≈ 0.0156 < 0.05 — passable at the floor
+    expect(v.label).toBe('PASS');
+  });
+
   it('KILL — a noisy zero-mean panel: winFrac ≈ 0.5 but the city-clustered CI straddles 0', () => {
     const v = openingVerdict(mkPanel(CITIES(8), DAYS(7), (ci) => (ci % 2 === 0 ? 0.05 : -0.05)));
     expect(v.winFrac).toBeCloseTo(0.5, 6);
@@ -432,11 +470,11 @@ describe('zeroSkillPassRate — the cluster-preserving sign-flip MC (F28)', () =
       DAYS(7).map((d) => ({ city: c, targetDate: d, netReturn: 0.02, netPnlUsd: 0.4, stakeUsd: 20, executed: true })),
     );
 
-  it('is deterministic — the same seedSalt yields the same rate across runs (no Math.random)', () => {
+  it('is deterministic per seedSalt (no Math.random) AND the salt is load-bearing — a different salt draws differently', () => {
     const p = equalPanel(CITIES(6));
-    expect(zeroSkillPassRate(p, 500, 1234)).toBe(zeroSkillPassRate(p, 500, 1234));
-    // and a DIFFERENT salt is a different (but still deterministic) draw
-    expect(zeroSkillPassRate(p, 500, 9)).toBe(zeroSkillPassRate(p, 500, 9));
+    expect(zeroSkillPassRate(p, 500, 1234)).toBe(zeroSkillPassRate(p, 500, 1234)); // same salt → identical (reproducible)
+    // a DIFFERENT salt yields a different (still deterministic) rate — would fail if drawUnit dropped the salt term (TEST3-3)
+    expect(zeroSkillPassRate(p, 500, 1234)).not.toBe(zeroSkillPassRate(p, 500, 9));
   });
 
   it('returns 1 (fail-closed) when there are fewer than 2 cities (no clustering possible)', () => {
@@ -488,6 +526,7 @@ const MIGRATION_0066_CONFIG_ROWS: { key: string; value: string }[] = [
   { key: 'bot.seedFreshnessMin', value: '180' },
   { key: 'bot.seedMinModels', value: '3' },
   { key: 'bot.captureStaleMin', value: '9' }, // consumed by capture_deadman_check (SQL), not parseBotConfig — must be ignored cleanly
+  { key: 'bot.gateStaleMin', value: '180' }, // consumed by bot_deadman_check (SQL), not parseBotConfig — must be ignored cleanly
   { key: 'bot.captureSeededFracMin', value: '0.25' },
   { key: 'bot.captureSeededFracWindow', value: '50' },
   { key: 'bot.minOrderSizeShares', value: '5' },
@@ -498,7 +537,7 @@ const MIGRATION_0066_CONFIG_ROWS: { key: string; value: string }[] = [
   { key: 'bot.killLatchPersistTicks', value: '3' },
   { key: 'bot.spikeGoFrac', value: '0.5' },
   { key: 'bot.gate.minMarkets', value: '40' },
-  { key: 'bot.gate.minCities', value: '4' },
+  { key: 'bot.gate.minCities', value: '6' },
   { key: 'bot.gate.minDistinctDays', value: '7' },
   { key: 'bot.gate.minWinFrac', value: '0.5' },
 ];
@@ -525,6 +564,53 @@ describe('parseBotConfig — config fallbacks + the F10-r8-FP migration-mirror p
     expect(cfg.killDayTz).toBe('Europe/Stockholm');
     expect(cfg.gate.minMarkets).toBe(99);
     expect(cfg.peakMidMax).toBe(BOT_DEFAULTS.peakMidMax); // junk numeric → default
+  });
+
+  it('the frozen §9R-E gate can only be TIGHTENED — a sub-floor config override is clamped UP (CORE2-3/CS3-1)', () => {
+    // The gate is pre-registered (ADR-OC-10): config must never WEAKEN it (the false-PASS → premature-capital
+    // direction). A stray `bot.gate.minMarkets=1` must not authorize a PASS on a 1-market panel; minCities < 6
+    // is also the un-passable MC-floor zone. Every bound is floored at its frozen constant — pin that here so a
+    // refactor dropping the Math.max/clamp-lo guards can't silently re-enable a weakening override.
+    const weakened = parseBotConfig([
+      { key: 'bot.gate.minMarkets', value: '1' },
+      { key: 'bot.gate.minCities', value: '2' },
+      { key: 'bot.gate.minDistinctDays', value: '1' },
+      { key: 'bot.gate.minWinFrac', value: '0.1' },
+    ]);
+    expect(weakened.gate).toEqual(BOT_DEFAULTS.gate); // 40 / 6 / 7 / 0.5 — clamped up, never the weaker value
+    // …but a STRICTER override is honored (only the weakening direction is blocked).
+    const stricter = parseBotConfig([{ key: 'bot.gate.minCities', value: '9' }]);
+    expect(stricter.gate.minCities).toBe(9);
+  });
+
+  it('out-of-domain money/safety overrides are CLAMPED into their valid range (CORE-2 — never accept nonsense)', () => {
+    const c = parseBotConfig([
+      { key: 'bot.slFrac', value: '1.5' }, // >1 would make the relative SL floor entry×(1−slFrac) ≤ 0 → stop never fires
+      { key: 'bot.maxEntryPrice', value: '2' }, // a price > 1 is not a valid probability
+      { key: 'bot.peakMidMax', value: '5' },
+      { key: 'bot.tpDeltaPp', value: '3' },
+      { key: 'bot.slDeltaPp', value: '-1' }, // negative
+      { key: 'bot.killLossPct', value: '9' },
+      { key: 'bot.spikeGoFrac', value: '2' },
+      { key: 'bot.entryEdgeMargin', value: '-0.5' },
+      { key: 'bot.paperSlippage', value: '4' },
+      { key: 'bot.takerFeeRate', value: '7' },
+      { key: 'bot.timeStopLocalHour', value: '30.7' }, // out of [0,23] AND non-integer (localHourInstant would throw)
+      { key: 'bot.perPositionUsd', value: '-5' },
+    ]);
+    expect(c.slFrac).toBe(0.999); // load-bearing: keeps (1−slFrac) > 0 so the cheap-band stop CAN fire
+    expect(c.maxEntryPrice).toBe(1);
+    expect(c.peakMidMax).toBe(1);
+    expect(c.tpDeltaPp).toBe(1);
+    expect(c.slDeltaPp).toBe(0);
+    expect(c.killLossPct).toBe(1);
+    expect(c.spikeGoFrac).toBe(1);
+    expect(c.entryEdgeMargin).toBe(0);
+    expect(c.paperSlippage).toBe(1);
+    expect(c.takerFeeRate).toBe(1);
+    expect(c.timeStopLocalHour).toBe(23); // clamped to 23 AND integer (Math.round → never throws)
+    expect(Number.isInteger(c.timeStopLocalHour)).toBe(true);
+    expect(c.perPositionUsd).toBe(0);
   });
 
   it('F10-r8-FP — parseBotConfig of the migration 0066 config mirror deep-equals BOT_DEFAULTS', () => {

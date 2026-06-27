@@ -71,6 +71,8 @@ export interface SeedResult {
 interface LatestHouseDist {
   probs: number[] | null;
   sigma: number | null;
+  /** ISO timestamp of the dist's made_at — drives the seedFreshnessMin reuse throttle (EDGE2-1). */
+  madeAt: string | null;
   buckets: { idx: number; label: string; prob: number | null }[] | null;
 }
 
@@ -86,6 +88,8 @@ function one<T>(rows: T[]): T | undefined {
 export interface SeedKeys {
   cityId: string;
   icao: string | null;
+  /** the DST-aware IANA tz (the handler already fail-closed on a missing/Etc tz) — for the lead computation. */
+  tz: string;
 }
 
 export async function seedHouseDist(
@@ -122,82 +126,98 @@ export async function seedHouseDist(
     const eventId = evRow?.event_id ?? null;
     if (!eventId) return { ...empty, reason: 'upsert_event_failed' };
 
-    // ── 3. upsert the walked ladder into market_buckets (F9 — else the dist build short-circuits) ─────────
-    // The 12-arg upsert_bucket (0012). The seed needs only idx/low/high in market_buckets for the dist build;
-    // the 6 fee/reward args (0054) are omitted — they default where present and prod carries the 12-arg sig,
-    // so 12 args resolves against BOTH signatures (PostgREST matches the provided named-arg set).
-    for (let i = 0; i < ev.buckets.length; i++) {
-      const b = ev.buckets[i]!;
-      await deps.db.rpc('upsert_bucket', {
-        p_event_id: eventId,
-        p_bucket_idx: i,
-        p_label: b.label,
-        p_low: b.def.low,
-        p_high: b.def.high,
-        p_poly_market_id: b.marketId,
-        p_condition_id: b.conditionId,
-        p_token_yes: b.tokenYes,
-        p_token_no: b.tokenNo,
-        p_tick: b.tickSize,
-        p_min_order: b.minOrderSize,
-        p_fee_rate: b.feeRate,
-      });
-    }
+    // helpers for the read-then-build flow below.
+    const readDist = async (): Promise<LatestHouseDist | null> => {
+      const r = one(await deps.db.rpc<{ latest_house_dist: LatestHouseDist | null }>('latest_house_dist', { p_event_id: eventId }));
+      return r?.latest_house_dist ?? null;
+    };
+    const usable = (d: LatestHouseDist | null): boolean =>
+      !!d && Array.isArray(d.buckets) && d.buckets.length > 0 && Array.isArray(d.probs) && d.probs.length > 0;
 
-    // ── 4. build the house_gaussian (seeded) from existing production forecasts; OM-resnapshot fallback ──
-    let built = await buildDistributionForEvent(deps.db, deps.cfg, eventId, {
-      notify: NO_NOTIFY,
-      now: deps.now,
-      seeded: true,
-    });
-    if (built.written === 0) {
-      // forecasts genuinely absent for this station+date — snapshot THIS one station now (the rare fallback).
-      const st = deps.stations.find((s) => s.icao === icao);
-      if (st && deps.models.length > 0) {
-        try {
-          const json = await deps.fetchJson(
-            forecastUrl(deps.omForecastBase, { lat: Number(st.lat), lon: Number(st.lon) }, deps.models, 16, deps.omApiKey),
-          );
-          const parsed = parseMultiModelDaily(json, deps.models);
-          const slot = deps.now.getUTCHours() < 16 ? '10Z' : '22Z'; // production slot → model_stats match
-          const rows = parsed
-            .filter((r) => r.targetDate === ev.targetDate)
-            .map((r) => ({
-              icao,
-              model: r.model,
-              target_date: r.targetDate,
-              lead_days: leadDays(deps.now, r.targetDate, st.tz),
-              tmax_c: r.tmaxC,
-              snapshot_slot: slot,
-              source: 'forecast_api',
-              captured_at: deps.now.toISOString(),
-              seeded: true,
-            }))
-            .filter((r) => r.lead_days >= 0 && r.lead_days <= 16);
-          if (rows.length > 0) {
-            await deps.db.rpc('upsert_forecast_rows', { p_rows: rows });
-            built = await buildDistributionForEvent(deps.db, deps.cfg, eventId, {
-              notify: NO_NOTIFY,
-              now: deps.now,
-              seeded: true,
-            });
+    // ── 3. seedFreshnessMin throttle — reuse a FRESH existing house_gaussian, skipping the rebuild + OM entirely.
+    // The OM re-snapshot must fire ONLY when the dist is genuinely ABSENT, not merely when buildDistributionForEvent
+    // wrote 0 rows: upsert_distribution is on-conflict-do-nothing, so an UNCHANGED dist (identical inputs_hash) also
+    // returns written=0 — the old `built.written === 0` trigger therefore re-ran the OM fetch on EVERY 2-min tick for
+    // every flat-open event (OM quota/rate-limit risk shared with production snapshot-forecasts) — EDGE2-1.
+    let dist = await readDist();
+    const freshMs = Math.max(0, deps.botCfg.seedFreshnessMin) * 60_000;
+    const madeMs = dist?.madeAt ? Date.parse(dist.madeAt) : NaN;
+    const isFresh = usable(dist) && Number.isFinite(madeMs) && deps.now.getTime() - madeMs < freshMs;
+
+    if (!isFresh) {
+      // upsert the walked ladder into market_buckets (F9 — build-distributions reads buckets ONLY from there).
+      // The 12-arg upsert_bucket (0012): the 6 fee/reward args (0054) are omitted — they default where present and
+      // prod carries the 12-arg sig, so 12 args resolves against BOTH signatures (PostgREST matches the named set).
+      for (let i = 0; i < ev.buckets.length; i++) {
+        const b = ev.buckets[i]!;
+        await deps.db.rpc('upsert_bucket', {
+          p_event_id: eventId,
+          p_bucket_idx: i,
+          p_label: b.label,
+          p_low: b.def.low,
+          p_high: b.def.high,
+          p_poly_market_id: b.marketId,
+          p_condition_id: b.conditionId,
+          p_token_yes: b.tokenYes,
+          p_token_no: b.tokenNo,
+          p_tick: b.tickSize,
+          p_min_order: b.minOrderSize,
+          p_fee_rate: b.feeRate,
+        });
+      }
+
+      // build the house_gaussian (seeded) from existing production forecasts.
+      await buildDistributionForEvent(deps.db, deps.cfg, eventId, { notify: NO_NOTIFY, now: deps.now, seeded: true });
+      dist = await readDist();
+
+      if (!usable(dist)) {
+        // genuinely no dist — forecasts absent for this station+date. Snapshot THIS one station now (rare fallback).
+        const st = deps.stations.find((s) => s.icao === icao);
+        if (st && deps.models.length > 0) {
+          try {
+            const json = await deps.fetchJson(
+              forecastUrl(deps.omForecastBase, { lat: Number(st.lat), lon: Number(st.lon) }, deps.models, 16, deps.omApiKey),
+            );
+            const parsed = parseMultiModelDaily(json, deps.models);
+            const slot = deps.now.getUTCHours() < 16 ? '10Z' : '22Z'; // production slot → model_stats match
+            const rows = parsed
+              .filter((r) => r.targetDate === ev.targetDate)
+              .map((r) => ({
+                icao,
+                model: r.model,
+                target_date: r.targetDate,
+                lead_days: leadDays(deps.now, r.targetDate, st.tz),
+                tmax_c: r.tmaxC,
+                snapshot_slot: slot,
+                source: 'forecast_api',
+                captured_at: deps.now.toISOString(),
+                seeded: true,
+              }))
+              .filter((r) => r.lead_days >= 0 && r.lead_days <= 16);
+            if (rows.length > 0) {
+              await deps.db.rpc('upsert_forecast_rows', { p_rows: rows });
+              await buildDistributionForEvent(deps.db, deps.cfg, eventId, { notify: NO_NOTIFY, now: deps.now, seeded: true });
+              dist = await readDist();
+            }
+          } catch (e) {
+            deps.log('seed OM snapshot fallback failed (non-fatal)', { icao, error: msg(e) });
           }
-        } catch (e) {
-          deps.log('seed OM snapshot fallback failed (non-fatal)', { icao, error: msg(e) });
         }
       }
     }
 
-    // ── 5. read the latest house_gaussian back + the F15 quality gate ────────────────────────────────────
-    const distRow = one(await deps.db.rpc<{ latest_house_dist: LatestHouseDist | null }>('latest_house_dist', { p_event_id: eventId }));
-    const dist = distRow?.latest_house_dist ?? null;
+    // ── 4. the F15 quality gate ──────────────────────────────────────────────────────────────────────────
     if (!dist || !Array.isArray(dist.buckets) || dist.buckets.length === 0) {
       return { ...empty, eventId, reason: 'no_dist' };
     }
 
+    // gate calibration coverage on the EVENT'S lead (model_stats is keyed by lead_days) — a station calibrated
+    // at other leads but not this one is not usable signal here (F15 / §17; station-wide would over-count).
+    const lead = leadDays(deps.now, ev.targetDate, keys.tz);
     const qRow = one(await deps.db.rpc<{ bot_seed_quality: { nModels: number; hasStats: boolean } }>('bot_seed_quality', {
       p_icao: icao,
       p_target_date: ev.targetDate,
+      p_lead: Number.isFinite(lead) ? lead : null,
     }));
     const q = qRow?.bot_seed_quality ?? { nModels: 0, hasStats: false };
     const probs = (dist.probs ?? []).filter((p) => Number.isFinite(p));

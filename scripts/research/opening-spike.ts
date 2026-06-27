@@ -52,6 +52,16 @@ export const SCRIPT = 'opening-spike';
 // ≥1 week of real capture span and a handful of seeded events to estimate over.
 export const MIN_SPIKE_DAYS = 7;
 export const MIN_SPIKE_EVENTS = 8;
+// The minimum fraction of distinct listed events that must EVER reach a usable house_gaussian AT ALL.
+// seededCoverage = nSeededEvents/nEvents where "seeded" means a usable dist materialized at SOME capture (not
+// necessarily while flat — that flat-vs-converged distinction lives in goFraction, via the first-seeded
+// capture's flat-open test). The GO fraction excludes never-seeded events, so a high goFraction over a thin
+// seeded minority would FALSE-GO. The two NO-GO modes are therefore distinct: low COVERAGE = the forecast
+// never materialized at all for most markets (the dist pipeline doesn't reach them); a usable-but-LATE
+// (after-convergence) dist instead lowers the goFRACTION. A GO requires BOTH a high pass fraction AND broad
+// coverage. (A *seed-pipeline* collapse would have already tripped capture_deadman before the spike runs, so
+// by spike time low coverage is a real availability finding, not a transient bug — confirm the deadman first.)
+export const MIN_SEEDED_COVERAGE = 0.5;
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 // formatting helpers
@@ -172,23 +182,30 @@ export function modeIdxOf(buckets: OpeningBucket[]): number {
 }
 
 /**
- * The deepest enterable forecast-center bucket. Mirrors `selectEntries` (§6.2): a candidate bucket is within
- * mode ± centerHalfWidth AND carries a houseProb; the per-bucket depth floor is what gates entry, so the
- * signal-availability question is whether ANY such center bucket clears the floor → report the MAX depth.
+ * The deepest ENTERABLE forecast-center bucket. Mirrors `selectEntries` (§6.2) EXACTLY — within mode ±
+ * centerHalfWidth, a finite houseProb, a positive executable ask AT or below the reservation
+ * `min(maxEntryPrice, houseProb − entryEdgeMargin)` (the 20% cheap cap + the edge margin), AND depth ≥ floor.
+ * Depth alone is NOT enough (TEST2-1): flat-open is measured on the bucket MID (≤0.18), but a thin uninformed
+ * book can have mid ≤ 0.18 while the executable ASK walks to 0.25–0.34 — deep but ABOVE the cap, so the bot's
+ * selectEntries would reject it. Counting depth-only would let the spike say GO on markets that are not
+ * actually enterable; this gates the spike on the same reservation the executor uses.
  */
 export function centerDepth(
   buckets: OpeningBucket[],
   modeIdx: number,
-  centerHalfWidth: number,
+  cfg: BotConfig,
 ): { maxDepthUsd: number; modeLabel: string | null } {
   if (modeIdx < 0) return { maxDepthUsd: 0, modeLabel: null };
   let maxDepthUsd = 0;
   let modeLabel: string | null = null;
   for (const b of buckets) {
     if (b.idx === modeIdx) modeLabel = b.label;
-    if (Math.abs(b.idx - modeIdx) <= centerHalfWidth && fin(b.houseProb)) {
-      if (b.depthUsd > maxDepthUsd) maxDepthUsd = b.depthUsd;
-    }
+    if (Math.abs(b.idx - modeIdx) > cfg.centerHalfWidth) continue;
+    if (!fin(b.houseProb)) continue;
+    if (!fin(b.execAsk) || b.execAsk <= 0) continue; // a positive executable ask (CORE2-1 parity)
+    const reservation = Math.min(cfg.maxEntryPrice, b.houseProb - cfg.entryEdgeMargin);
+    if (!(b.execAsk <= reservation)) continue; // ask_above_reservation — selectEntries would reject it
+    if (b.depthUsd > maxDepthUsd) maxDepthUsd = b.depthUsd;
   }
   return { maxDepthUsd, modeLabel };
 }
@@ -230,9 +247,26 @@ export interface SpikeResult {
   nPass: number;
   /** nPass / nSeededEvents. */
   goFraction: number;
+  /** Wilson 95% score-interval bounds on goFraction (transparency at low N — TEST2-2). */
+  goCiLow: number;
+  goCiHigh: number;
   /** max(capturedAt) − min(capturedAt) in days. */
   spanDays: number;
+  /** count of DISTINCT UTC capture-days — the ≥1-week sufficiency gate (TEST2-6). */
+  nCaptureDays: number;
   events: EventSpikeResult[];
+}
+
+/** Wilson score interval (95%, z=1.96) for a binomial proportion — robust at small n, unlike normal approx. */
+export function wilson95(successes: number, n: number): { low: number; high: number } {
+  if (!(n > 0)) return { low: NaN, high: NaN };
+  const z = 1.96;
+  const p = successes / n;
+  const z2 = z * z;
+  const denom = 1 + z2 / n;
+  const center = (p + z2 / (2 * n)) / denom;
+  const margin = (z * Math.sqrt((p * (1 - p)) / n + z2 / (4 * n * n))) / denom;
+  return { low: Math.max(0, center - margin), high: Math.min(1, center + margin) };
 }
 
 /**
@@ -243,9 +277,14 @@ export function runSpike(rows: RawCaptureRow[], cfg: BotConfig): SpikeResult {
   const captures = Array.isArray(rows) ? rows : [];
   const nCaptures = captures.length;
 
-  // capture span (days) over the whole window — the ≥1-week sufficiency input
+  // capture span (days) over the whole window + the count of DISTINCT UTC capture-days. The sufficiency gate
+  // uses the distinct-day count (TEST2-6): spanDays = max−min would let a single stray old row + a one-day
+  // burst clear "≥1 week" while holding ~1 day of real data. The */2 cron makes them equal in practice.
   const times = captures.map((c) => Date.parse(c.capturedAt)).filter((t) => Number.isFinite(t));
   const spanDays = times.length >= 2 ? (Math.max(...times) - Math.min(...times)) / 86_400_000 : 0;
+  const nCaptureDays = new Set(
+    captures.map((c) => String(c.capturedAt ?? '').slice(0, 10)).filter((d) => d.length === 10),
+  ).size;
 
   // group by eventId (rows with no eventId cannot form a coherent series — counted + skipped)
   const byEvent = new Map<string, RawCaptureRow[]>();
@@ -266,15 +305,23 @@ export function runSpike(rows: RawCaptureRow[], cfg: BotConfig): SpikeResult {
     const caps = [...capsRaw].sort((a, b) => Date.parse(a.capturedAt) - Date.parse(b.capturedAt));
     const meta = caps[0]!; // earliest capture — fallback identity for a never-seeded event
 
-    // the FIRST capture (earliest captured_at) at which a usable house_gaussian exists
+    // the FIRST capture (earliest captured_at) at which a usable house_gaussian exists, PREFERRING one whose
+    // houseProb actually aligned to a bucket (modeIdxOf ≥ 0). A capture can be houseSeeded=true yet carry no
+    // aligned per-bucket houseProb (a W6 label mismatch) → modeIdx −1 → it would score FAIL even if a slightly
+    // later capture aligns and PASSes. Preferring an aligned capture removes that conservative false-NO-GO
+    // (TEST2-7); we fall back to a seed-flag-only capture so a never-aligned event is still scored (not dropped).
     let firstSeeded: OpeningCapture | null = null;
+    let firstFlagOnly: OpeningCapture | null = null;
     for (const raw of caps) {
       const cap = mapCapture(raw);
-      if (hasUsableHouse(cap)) {
+      if (!hasUsableHouse(cap)) continue;
+      if (modeIdxOf(cap.buckets) >= 0) {
         firstSeeded = cap;
         break;
       }
+      if (!firstFlagOnly) firstFlagOnly = cap;
     }
+    firstSeeded = firstSeeded ?? firstFlagOnly;
 
     if (!firstSeeded) {
       // the dist NEVER materialized for this event — itself a signal-availability failure.
@@ -296,7 +343,7 @@ export function runSpike(rows: RawCaptureRow[], cfg: BotConfig): SpikeResult {
 
     const fo = isFlatOpen(firstSeeded, cfg);
     const modeIdx = modeIdxOf(firstSeeded.buckets);
-    const { maxDepthUsd, modeLabel } = centerDepth(firstSeeded.buckets, modeIdx, cfg.centerHalfWidth);
+    const { maxDepthUsd, modeLabel } = centerDepth(firstSeeded.buckets, modeIdx, cfg);
     const hasCheapDepth = maxDepthUsd >= cfg.depthFloorUsd;
     const reasons = [...fo.reasons];
     if (!hasCheapDepth) reasons.push(modeIdx < 0 ? 'no_house_prob' : 'below_depth_floor');
@@ -324,8 +371,12 @@ export function runSpike(rows: RawCaptureRow[], cfg: BotConfig): SpikeResult {
   const nPass = seeded.filter((e) => e.pass).length;
   const seededCoverage = nEvents > 0 ? nSeededEvents / nEvents : NaN;
   const goFraction = nSeededEvents > 0 ? nPass / nSeededEvents : NaN;
+  const { low: goCiLow, high: goCiHigh } = nSeededEvents > 0 ? wilson95(nPass, nSeededEvents) : { low: NaN, high: NaN };
 
-  return { nCaptures, nEvents, nSeededEvents, nDroppedNoEventId, seededCoverage, nPass, goFraction, spanDays, events };
+  return {
+    nCaptures, nEvents, nSeededEvents, nDroppedNoEventId, seededCoverage, nPass, goFraction,
+    goCiLow, goCiHigh, spanDays, nCaptureDays, events,
+  };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
@@ -346,12 +397,13 @@ export function spikeVerdict(res: SpikeResult, cfg: BotConfig): { label: SpikeLa
         'of Phase-0 capture; confirm the */2-min opening-capture cron + edge fn are live and accruing rows, then re-run.',
     };
   }
-  if (res.spanDays < MIN_SPIKE_DAYS) {
+  if (res.nCaptureDays < MIN_SPIKE_DAYS) {
     return {
       label: 'INSUFFICIENT_DATA',
       reason:
-        `INSUFFICIENT_DATA — only ${res.spanDays.toFixed(1)} days of capture span (< ${MIN_SPIKE_DAYS}). The spike needs ` +
-        '≥1 week of real captures; keep the capture cron running and re-run later (raise --days if older rows exist).',
+        `INSUFFICIENT_DATA — captures land on only ${res.nCaptureDays} distinct days (< ${MIN_SPIKE_DAYS}; span ` +
+        `${res.spanDays.toFixed(1)}d). The spike needs ≥1 week of real, day-spread captures (a stray old row + a one-day ` +
+        'burst would game a raw span), so keep the capture cron running and re-run later.',
     };
   }
   if (res.nSeededEvents < MIN_SPIKE_EVENTS) {
@@ -365,25 +417,51 @@ export function spikeVerdict(res: SpikeResult, cfg: BotConfig): { label: SpikeLa
     };
   }
 
+  // Low COVERAGE = a usable house_gaussian never materialized AT ALL for most listed markets (the dist pipeline
+  // doesn't reach them) — distinct from the after-convergence case, which keeps coverage high but lowers the GO
+  // fraction (handled below). The GO fraction excludes never-seeded events, so a high fraction over a thin seeded
+  // minority would FALSE-GO; broad coverage is therefore required for a GO.
+  if (res.seededCoverage < MIN_SEEDED_COVERAGE) {
+    return {
+      label: 'NO-GO',
+      reason:
+        `NO-GO — KILL the lever. Only ${res.nSeededEvents}/${res.nEvents} (${pct(res.seededCoverage)}) of distinct listed ` +
+        `events EVER produced a usable house_gaussian — below the ${pct(MIN_SEEDED_COVERAGE)} coverage floor (the ` +
+        `${pct(res.goFraction)} goFraction is over that unrepresentative seeded minority). For most listed markets the forecast ` +
+        'dist never materialized at all, so there is nothing to enter — the opening signal is not broadly available. Before ' +
+        'accepting this KILL, confirm capture_deadman did NOT fire on a seeded-fraction collapse (which would mean a ' +
+        'seed-pipeline bug, not signal absence). Otherwise KILL opening-convergence cheaply HERE; update FINDINGS.md. The other ' +
+        'eleven signals stay dead — this makes twelve.',
+    };
+  }
+
+  // The GO/NO-GO bar is a point estimate; surface the Wilson 95% interval so the low-N fragility is visible at the
+  // decision point (TEST2-2). NOTE: this gate authorizes BUILDING Phases 2–6, not capital — the §9R-E openingVerdict
+  // net-profit gate (≥40 markets, clustered CI + zero-skill MC) is the money gate — so a point bar here is acceptable,
+  // and a false-GO costs build effort, not capital. The CI is informational, not a second hard gate.
+  const ci = `Wilson 95% CI [${pct(res.goCiLow)}, ${pct(res.goCiHigh)}]`;
   if (res.goFraction >= bar) {
     return {
       label: 'GO',
       reason:
-        `GO — ${res.nPass}/${res.nSeededEvents} (${pct(res.goFraction)}) of seeded events were STILL flat-open ` +
-        `(peak ≤ ${pct(cfg.peakMidMax)}, ≤ ${cfg.listingMaxHours}h since listing) AND carried a cheap center bucket ` +
-        `with depth ≥ $${cfg.depthFloorUsd} at first house_gaussian — at/above the ${pct(bar)} go bar. The opening ` +
-        'signal IS available at executable depth while the book is still flat-open (R-13 cleared). Phases 2–6 are ' +
-        'authorized — build the paper executor next. Capital is still gated separately by the §9R-E openingVerdict net-profit gate.',
+        `GO — ${res.nPass}/${res.nSeededEvents} (${pct(res.goFraction)}, ${ci}) of seeded events were STILL flat-open ` +
+        `(peak ≤ ${pct(cfg.peakMidMax)}, ≤ ${cfg.listingMaxHours}h since listing) AND carried a cheap, EXECUTABLE center ` +
+        `bucket (ask ≤ the entry reservation) with depth ≥ $${cfg.depthFloorUsd} at first house_gaussian — at/above the ` +
+        `${pct(bar)} go bar, with ${pct(res.seededCoverage)} seed coverage (≥ ${pct(MIN_SEEDED_COVERAGE)} floor). The opening ` +
+        'signal IS available at executable depth while the book is still flat-open (R-13 cleared). Phases 2–6 are authorized — ' +
+        `build the paper executor next${res.goCiLow < bar ? ' (note the CI lower bound is below the bar — N is still thin; the §9R-E net-profit gate remains the capital backstop)' : ''}. ` +
+        'Capital is still gated separately by the §9R-E openingVerdict net-profit gate.',
     };
   }
   return {
     label: 'NO-GO',
     reason:
-      `NO-GO — KILL the lever. Only ${res.nPass}/${res.nSeededEvents} (${pct(res.goFraction)}) of seeded events were ` +
-      `still flat-open with cheap center depth at first house_gaussian — below the ${pct(bar)} go bar. The forecast ` +
-      'signal is NOT reliably available while the book is still flat-open (R-13 confirmed): by the time a usable dist ' +
-      'exists, the book has already converged, so there is nothing to buy cheap. KILL opening-convergence cheaply HERE, ' +
-      'before building the execution stack; update FINDINGS.md. The other eleven signals stay dead — this makes twelve.',
+      `NO-GO — KILL the lever. Only ${res.nPass}/${res.nSeededEvents} (${pct(res.goFraction)}, ${ci}) of seeded events were ` +
+      `still flat-open with cheap, executable center depth at first house_gaussian — below the ${pct(bar)} go bar (seed coverage ` +
+      `${pct(res.seededCoverage)}). The forecast signal is NOT reliably available while the book is still flat-open (R-13 ` +
+      'confirmed): by the time a usable dist exists, the book has already converged, so there is nothing to buy cheap. KILL ' +
+      'opening-convergence cheaply HERE, before building the execution stack; update FINDINGS.md. The other eleven signals ' +
+      'stay dead — this makes twelve.',
   };
 }
 
@@ -394,7 +472,7 @@ export function spikeVerdict(res: SpikeResult, cfg: BotConfig): { label: SpikeLa
 export function report(res: SpikeResult, cfg: BotConfig, log: (m: string) => void): void {
   log('=== opening-spike · Phase-0.5 signal-availability go/no-go (gates Phases 2–6) ===');
   log(
-    `captures ${res.nCaptures} · distinct events ${res.nEvents} · capture span ${res.spanDays.toFixed(1)}d` +
+    `captures ${res.nCaptures} · distinct events ${res.nEvents} · ${res.nCaptureDays} capture-days (span ${res.spanDays.toFixed(1)}d)` +
       (res.nDroppedNoEventId ? ` · ${res.nDroppedNoEventId} rows dropped (null eventId)` : ''),
   );
   log(
@@ -428,10 +506,11 @@ export function report(res: SpikeResult, cfg: BotConfig, log: (m: string) => voi
   log(
     `  seeded coverage: ${res.nSeededEvents}/${res.nEvents} distinct events ever reached a usable house_gaussian (${pct(res.seededCoverage)})`,
   );
-  log('    └─ an event that NEVER seeds is itself a signal miss — the dist must exist WHILE the book is still flat-open.');
+  log('    └─ an event that never produced a usable dist AT ALL is a signal miss (low coverage → NO-GO); a usable-but-LATE');
+  log('       dist instead lowers the GO fraction below — the two failure modes are distinct.');
   log(
-    `  GO fraction: ${res.nPass}/${res.nSeededEvents} seeded events still-flat-open WITH cheap center depth = ` +
-      `${pct(res.goFraction)}   (go bar = spikeGoFrac ${pct(cfg.spikeGoFrac)})`,
+    `  GO fraction: ${res.nPass}/${res.nSeededEvents} seeded events still-flat-open WITH cheap, executable center depth = ` +
+      `${pct(res.goFraction)}  (Wilson 95% CI [${pct(res.goCiLow)}, ${pct(res.goCiHigh)}]; go bar = spikeGoFrac ${pct(cfg.spikeGoFrac)})`,
   );
   log('');
   const v = spikeVerdict(res, cfg);
@@ -449,12 +528,13 @@ export async function loadCfg(db: Db): Promise<BotConfig> {
   return parseBotConfig(rows);
 }
 
-/** The full ordered capture series over the look-back window (jsonb array → typed rows). Empty on no rows. */
+/** The full ordered capture series over the look-back window. bot_capture_series returns a jsonb OBJECT
+ *  { rows: [...] } (never a top-level array — the 0044 port-misread trap); read .rows. Empty on no rows. */
 export async function loadSeries(db: Db, days: number): Promise<RawCaptureRow[]> {
-  const rows = await db.query<{ series: RawCaptureRow[] | null }>('select public.bot_capture_series($1) as series', [
+  const out = await db.query<{ series: { rows: RawCaptureRow[] } | null }>('select public.bot_capture_series($1) as series', [
     Math.max(1, Math.floor(days)),
   ]);
-  const series = rows[0]?.series;
+  const series = out[0]?.series?.rows;
   return Array.isArray(series) ? series : [];
 }
 
@@ -524,10 +604,14 @@ function sanity(): void {
   if (evD.reachedSeed || evD.reasons[0] !== 'never_seeded') throw new Error('sanity: event D should be never-seeded');
 
   // verdict label transitions (build SpikeResult literals so we don't need a big panel)
-  const base: SpikeResult = { ...res, nSeededEvents: 10, spanDays: 8 };
+  const base: SpikeResult = { ...res, nSeededEvents: 10, spanDays: 8, nCaptureDays: 8 };
   if (spikeVerdict({ ...base, nPass: 6, goFraction: 0.6 }, cfg).label !== 'GO') throw new Error('sanity: 0.6 should GO');
   if (spikeVerdict({ ...base, nPass: 4, goFraction: 0.4 }, cfg).label !== 'NO-GO') throw new Error('sanity: 0.4 should NO-GO');
-  if (spikeVerdict({ ...base, spanDays: 3 }, cfg).label !== 'INSUFFICIENT_DATA') throw new Error('sanity: <1wk should be INSUFFICIENT');
+  // low seed coverage (most listed events never produce a usable dist at all) → NO-GO even if the seeded subset passes
+  if (spikeVerdict({ ...base, nEvents: 100, nSeededEvents: 10, seededCoverage: 0.1, nPass: 9, goFraction: 0.9 }, cfg).label !== 'NO-GO') {
+    throw new Error('sanity: low coverage should NO-GO');
+  }
+  if (spikeVerdict({ ...base, nCaptureDays: 3 }, cfg).label !== 'INSUFFICIENT_DATA') throw new Error('sanity: <1wk should be INSUFFICIENT');
   if (spikeVerdict({ ...res, nCaptures: 0 }, cfg).label !== 'INSUFFICIENT_DATA') throw new Error('sanity: empty should be INSUFFICIENT');
   if (spikeVerdict(res, cfg).label !== 'INSUFFICIENT_DATA') throw new Error('sanity: 3 seeded events should be INSUFFICIENT');
 }

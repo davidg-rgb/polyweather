@@ -241,7 +241,14 @@ export const OPENING_DEFAULTS: OpeningCfg = {
 
 /** the §9R-E gate sufficiency bars. */
 export const GATE_MIN_MARKETS = 40;
-export const GATE_MIN_CITIES = 4;
+// ≥6 cities is LOAD-BEARING, not arbitrary: the cluster-preserving sign-flip null (zeroSkillPassRate, F28)
+// includes the no-flip (all-+1) sign vector, which reproduces the real panel exactly and therefore ALWAYS
+// counts toward the pass-rate when the panel passes the bar. That vector recurs at ~2^(−nCities), so the
+// achievable floor on zsp is ~2^(−C): at C=4 the floor is 0.0625 > ZERO_SKILL_MAX_PASS (0.05) → a genuinely
+// skillful 4-city panel could ONLY ever KILL (un-passable gate, false-KILL of a real edge). C=5 floors at
+// 0.03125 (marginal). C≥6 floors at ≤0.0156, clearing 0.05 with headroom — and matches F28's "effective
+// df = #cities (≈6–10)". Do NOT lower below 6 without also raising ZERO_SKILL_MAX_PASS.
+export const GATE_MIN_CITIES = 6;
 export const GATE_MIN_DISTINCT_DAYS = 7;
 export const GATE_MIN_WIN_FRAC = 0.5;
 export const ZERO_SKILL_MAX_PASS = 0.05;
@@ -376,7 +383,7 @@ export function selectEntries(cap: OpeningCapture, cfg: OpeningCfg, now: Date): 
   for (const b of cap.buckets) {
     if (Math.abs(b.idx - modeIdx) > cfg.centerHalfWidth) continue; // mode ± centerHalfWidth
     if (!fin(b.houseProb)) continue; // no_house_prob for this bucket
-    if (!fin(b.execAsk)) continue; // no executable ask
+    if (!fin(b.execAsk) || b.execAsk <= 0) continue; // no executable ask (a 0/neg ask → Infinity/neg shares — CORE2-1)
     if (!(b.depthUsd >= cfg.depthFloorUsd)) continue; // below_depth_floor
 
     const reservation = Math.min(cfg.maxEntryPrice, b.houseProb - cfg.entryEdgeMargin);
@@ -688,6 +695,14 @@ export function parseBotConfig(rows: { key: string; value: string | null }[]): B
     const n = Number(v);
     return Number.isFinite(n) ? n : dflt;
   };
+  // Like num(), but a FINITE override is clamped into a sane domain (a non-finite/empty one falls to dflt).
+  // Money/safety keys must fail safe against a typo: e.g. slFrac=1.5 would make the relative SL floor negative
+  // (mark ≤ slStop never true ⇒ the stop silently never fires) — the [0,0.999] clamp keeps (1−slFrac) > 0. The
+  // clamp enforces each key's valid DOMAIN (prices/probabilities ∈ [0,1], stakes ≥ 0); it is not the thesis
+  // envelope (e.g. the cheap-entry cap is the operator-tunable maxEntryPrice DEFAULT 0.20, not the [0,1] bound).
+  const clamp = (key: string, dflt: number, lo: number, hi: number): number => {
+    return Math.min(hi, Math.max(lo, num(key, dflt)));
+  };
   const bool = (key: string, dflt: boolean): boolean => {
     const v = map.get(key);
     if (v == null || v === '') return dflt;
@@ -705,30 +720,32 @@ export function parseBotConfig(rows: { key: string; value: string | null }[]): B
   const D = BOT_DEFAULTS;
   return {
     cities: csv('bot.cities', D.cities),
-    minVol24hUsd: num('bot.minVol24hUsd', D.minVol24hUsd),
-    peakMidMax: num('bot.peakMidMax', D.peakMidMax),
-    listingMaxHours: num('bot.listingMaxHours', D.listingMaxHours),
-    centerHalfWidth: num('bot.centerHalfWidth', D.centerHalfWidth),
-    entryEdgeMargin: num('bot.entryEdgeMargin', D.entryEdgeMargin),
-    maxEntryPrice: num('bot.maxEntryPrice', D.maxEntryPrice),
-    depthFloorUsd: num('bot.depthFloorUsd', D.depthFloorUsd),
-    perPositionUsd: num('bot.perPositionUsd', D.perPositionUsd),
-    tpDeltaPp: num('bot.tpDeltaPp', D.tpDeltaPp),
+    minVol24hUsd: clamp('bot.minVol24hUsd', D.minVol24hUsd, 0, 1e12),
+    peakMidMax: clamp('bot.peakMidMax', D.peakMidMax, 0, 1),
+    listingMaxHours: clamp('bot.listingMaxHours', D.listingMaxHours, 0, 1e6),
+    centerHalfWidth: clamp('bot.centerHalfWidth', D.centerHalfWidth, 0, 50),
+    entryEdgeMargin: clamp('bot.entryEdgeMargin', D.entryEdgeMargin, 0, 1),
+    maxEntryPrice: clamp('bot.maxEntryPrice', D.maxEntryPrice, 0, 1),
+    depthFloorUsd: clamp('bot.depthFloorUsd', D.depthFloorUsd, 0, 1e9),
+    perPositionUsd: clamp('bot.perPositionUsd', D.perPositionUsd, 0, 1e7),
+    tpDeltaPp: clamp('bot.tpDeltaPp', D.tpDeltaPp, 0, 1),
     tpAtModelProb: bool('bot.tpAtModelProb', D.tpAtModelProb),
-    slDeltaPp: num('bot.slDeltaPp', D.slDeltaPp),
-    slFrac: num('bot.slFrac', D.slFrac),
-    timeStopLocalHour: num('bot.timeStopLocalHour', D.timeStopLocalHour),
-    makerFillWindowMin: num('bot.makerFillWindowMin', D.makerFillWindowMin),
-    minHoldRunwayMin: num('bot.minHoldRunwayMin', D.minHoldRunwayMin),
-    paperSlippage: num('bot.paperSlippage', D.paperSlippage),
-    takerFeeRate: num('bot.takerFeeRate', D.takerFeeRate),
+    slDeltaPp: clamp('bot.slDeltaPp', D.slDeltaPp, 0, 1),
+    slFrac: clamp('bot.slFrac', D.slFrac, 0, 0.999),
+    // round to an integer hour: localHourInstant throws on a non-integer, which would fail-closed but silently
+    // disable the bot (selectEntries → [] and bracketDecision → conservative flatten on every call) — CORE2-2.
+    timeStopLocalHour: Math.round(clamp('bot.timeStopLocalHour', D.timeStopLocalHour, 0, 23)),
+    makerFillWindowMin: clamp('bot.makerFillWindowMin', D.makerFillWindowMin, 0, 1e6),
+    minHoldRunwayMin: clamp('bot.minHoldRunwayMin', D.minHoldRunwayMin, 0, 1e6),
+    paperSlippage: clamp('bot.paperSlippage', D.paperSlippage, 0, 1),
+    takerFeeRate: clamp('bot.takerFeeRate', D.takerFeeRate, 0, 1),
     enabled: bool('bot_enabled', D.enabled),
-    perMarketUsd: num('bot.perMarketUsd', D.perMarketUsd),
-    totalConcurrentUsd: num('bot.totalConcurrentUsd', D.totalConcurrentUsd),
-    paperBankrollUsd: num('bot.paperBankrollUsd', D.paperBankrollUsd),
-    bankrollBaseUsd: num('bot.bankrollBaseUsd', D.bankrollBaseUsd),
-    killLossUsd: num('bot.killLossUsd', D.killLossUsd),
-    killLossPct: num('bot.killLossPct', D.killLossPct),
+    perMarketUsd: clamp('bot.perMarketUsd', D.perMarketUsd, 0, 1e7),
+    totalConcurrentUsd: clamp('bot.totalConcurrentUsd', D.totalConcurrentUsd, 0, 1e7),
+    paperBankrollUsd: clamp('bot.paperBankrollUsd', D.paperBankrollUsd, 0, 1e9),
+    bankrollBaseUsd: clamp('bot.bankrollBaseUsd', D.bankrollBaseUsd, 0, 1e9),
+    killLossUsd: clamp('bot.killLossUsd', D.killLossUsd, 0, 1e7),
+    killLossPct: clamp('bot.killLossPct', D.killLossPct, 0, 1),
     firstNApprove: num('bot.firstNApprove', D.firstNApprove),
     realTradesApproved: num('bot.realTradesApproved', D.realTradesApproved),
     tickIntervalSec: num('bot.tickIntervalSec', D.tickIntervalSec),
@@ -751,12 +768,17 @@ export function parseBotConfig(rows: { key: string; value: string | null }[]): B
     minPolGas: num('bot.minPolGas', D.minPolGas),
     killDayTz: str('bot.killDayTz', D.killDayTz),
     killLatchPersistTicks: num('bot.killLatchPersistTicks', D.killLatchPersistTicks),
-    spikeGoFrac: num('bot.spikeGoFrac', D.spikeGoFrac),
+    spikeGoFrac: clamp('bot.spikeGoFrac', D.spikeGoFrac, 0, 1),
     gate: {
-      minMarkets: num('bot.gate.minMarkets', D.gate.minMarkets),
-      minCities: num('bot.gate.minCities', D.gate.minCities),
-      minDistinctDays: num('bot.gate.minDistinctDays', D.gate.minDistinctDays),
-      minWinFrac: num('bot.gate.minWinFrac', D.gate.minWinFrac),
+      // The §9R-E net-profit gate is FROZEN / pre-registered (ADR-OC-10): config may only TIGHTEN it, never
+      // weaken it (a stray `bot.gate.minMarkets=1` must not authorize a PASS on a 1-market panel — the
+      // false-PASS → premature-capital direction). So floor EVERY bound at its frozen constant, not just
+      // minCities (CORE2-3/CS3-1). minCities ≥ GATE_MIN_CITIES is doubly load-bearing — the 2^−C sign-flip-null
+      // floor exceeds the 0.05 bar below 6, making the gate un-passable (false-KILL). Override → stricter only.
+      minMarkets: Math.max(GATE_MIN_MARKETS, num('bot.gate.minMarkets', D.gate.minMarkets)),
+      minCities: Math.max(GATE_MIN_CITIES, num('bot.gate.minCities', D.gate.minCities)),
+      minDistinctDays: Math.max(GATE_MIN_DISTINCT_DAYS, num('bot.gate.minDistinctDays', D.gate.minDistinctDays)),
+      minWinFrac: clamp('bot.gate.minWinFrac', D.gate.minWinFrac, GATE_MIN_WIN_FRAC, 1),
     },
   };
 }

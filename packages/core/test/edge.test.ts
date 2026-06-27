@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { applyLiquidityFilters, computeBucketEdges, executableAsk } from '../src/edge.ts';
+import { applyLiquidityFilters, computeBucketEdges, executableAsk, executableBid } from '../src/edge.ts';
 import { minEdgeRequired, takerFeePerShare } from '../src/fees.ts';
 import type { BucketDef, EdgeConfig, NormalizedBook } from '../src/types.ts';
 
@@ -76,6 +76,45 @@ describe('executableAsk (§6.7)', () => {
 
   it('empty asks → 0 fillable with NaN price', () => {
     const { avgPrice, fillableShares } = executableAsk(syntheticBook([]), 10);
+    expect(fillableShares).toBe(0);
+    expect(Number.isNaN(avgPrice)).toBe(true);
+  });
+});
+
+// the F1 bid-side realizable EXIT mark — a long-YES position exits into the BID. Using the ask here would
+// over-state exit value (TP fires unrealizably, SL fires late, MTM under-counts loss). normalizeBook puts bids
+// highest-first, so executableBid walks in place. Tested in symmetry with executableAsk (ADR-OC-7 / F1 / F2).
+function syntheticBidBook(bids: [number, number][]): NormalizedBook {
+  return {
+    market: 'm', assetId: 'a', timestamp: 0, hash: 'h',
+    bids: bids.map(([price, size]) => ({ price, size })), asks: [],
+    minOrderSize: 5, tickSize: 0.01, negRisk: true, lastTradePrice: null,
+  };
+}
+
+describe('executableBid (§6.7 / ADR-OC-7 — the realizable exit mark)', () => {
+  const book = syntheticBidBook([[0.40, 10], [0.39, 8], [0.38, 5]]); // best (highest) first
+
+  it('sells within the top level at the best bid', () => {
+    const { avgPrice, fillableShares } = executableBid(book, 5);
+    expect(avgPrice).toBeCloseTo(0.40, 12);
+    expect(fillableShares).toBe(5);
+  });
+
+  it('walks DOWN the bids (highest-first) for a larger sell: 10@0.40 + 5@0.39', () => {
+    const { avgPrice, fillableShares } = executableBid(book, 15);
+    expect(fillableShares).toBe(15);
+    expect(avgPrice).toBeCloseTo((10 * 0.40 + 5 * 0.39) / 15, 12);
+  });
+
+  it('signals a depth shortfall: fillableShares < requested when the book cannot absorb the size (F2)', () => {
+    const { avgPrice, fillableShares } = executableBid(book, 1000);
+    expect(fillableShares).toBe(23); // 10 + 8 + 5
+    expect(avgPrice).toBeCloseTo((10 * 0.40 + 8 * 0.39 + 5 * 0.38) / 23, 12);
+  });
+
+  it('empty bids → 0 fillable with NaN price (nothing realizable)', () => {
+    const { avgPrice, fillableShares } = executableBid(syntheticBidBook([]), 10);
     expect(fillableShares).toBe(0);
     expect(Number.isNaN(avgPrice)).toBe(true);
   });

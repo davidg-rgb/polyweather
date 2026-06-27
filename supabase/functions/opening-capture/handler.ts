@@ -183,7 +183,9 @@ export async function openingCapture(ctx: JobCtx, deps: OpeningCaptureDeps): Pro
     // depth with houseProb=null rather than risk timing out the edge wall-clock.
     const withinBudget = Date.now() - startMs < SEED_TIME_BUDGET_MS;
     const seedRes = withinBudget
-      ? await seedHouseDist(ev, polyEventId, { cityId: keys.cityId, icao: ev.station?.icao ?? keys.icao }, {
+      // prefer the canonical city_stations icao (keys.icao — what snapshot-forecasts/get_build_inputs key on)
+      // over the market-declared ev.station.icao; only fall back to the latter when the city is unmapped (EDGE-5).
+      ? await seedHouseDist(ev, polyEventId, { cityId: keys.cityId, icao: keys.icao ?? ev.station?.icao ?? null, tz: keys.tz }, {
           db,
           cfg: config,
           botCfg,
