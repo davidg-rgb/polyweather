@@ -5,7 +5,89 @@
 
 ## Active Phase
 
-**2026-06-26: NEW `/data` forecast-accuracy-by-market analytics page — built, tested, RPC LIVE on prod (web pending a `main` deploy).**
+**▶ OPENING-CONVERGENCE bot — Phase 0 (keyless capture) + Phase 1 (pure core) are BUILT, TESTED, DEPLOYED to prod (2026-06-27). NEXT = the HARD GATE: Phase-0.5 spike after ≥1 week of capture. Do NOT build Phase 2+ before it.**
+
+> **PHASE 0 + PHASE 1 — DONE & LIVE (2026-06-27).** Built per `ARCHITECTURE-OPENING-CONVERGENCE.md` / `PHASE-0-BUILD-HANDOFF.md` (multi-agent: 4 mapping agents → spine built by hand → 2 agents for tests+spike). Full suite **1575 green**, typecheck clean. SHIPPED:
+> - **Migration `0066_opening_convergence.sql`** — APPLIED to prod (MCP). 9 bot tables (opening_captures + 8 lifecycle/risk, built-now/exercised-later), `seeded` cols + the 4 consumer exclusions (dash_data/calib_scored_rows/dash_amsterdam_sim/poll_known_events), `upsert_distribution`+p_seeded, the §9R-10 cities' `cities.tz`→real IANA, capture/seed RPCs, both deadmen, bot.* config mirror, Slack-allowlist append, 5 crons. PGlite twin green. **(Phase-2 lifecycle/caps RPCs DEFERRED to a post-gate migration.)**
+> - **`supabase/functions/opening-capture/`** — DEPLOYED (keyless). The on-demand `seedHouseDist` + F15 quality gate. **LIVE: cron `*/2`, ~18 scoped near-dated events/tick, `seeded` 17/18 (94%), noTz=0.** `flatOpen=0` now (EXPECTED — no fresh ≤1h listings; the window is rare per §16-D; the cron runs 24/7 to catch them).
+> - **`packages/core/src/sim/opening-convergence.ts`** (Phase 1, pure) + helpers (`executableBid`/`isDstAwareIana`/`localHourInstant`, gamma `createdAt`, distributions `seeded`). 42 unit tests.
+> - **`scripts/research/opening-spike.ts`** — the Phase-0.5 GO/NO-GO artifact (built, typecheck-green; RUN after ≥1wk).
+> - **Bugs caught by the test/verify loop + FIXED:** (1) `zeroSkillPassRate` MC flipped all cities together → gate un-passable → fixed (independent splitmix per-city signs); (2) the seed called `upsert_bucket` with 18 args but **PROD is the 12-arg (0012) signature — local 0054's 18-arg recreation was never applied to prod (a real local↔prod migration DRIFT, operator note)** → trimmed to 12.
+> - Branch: **`feat/opening-convergence-phase0`**. Boundary unchanged (Claude builds; operator funds wallet + holds key; Claude never trades). Phase 0 is fully KEYLESS.
+>
+> **NEXT (the hard gate):** after ≥1 week of capture, `pnpm tsx scripts/research/opening-spike.ts --days 8` → GO iff ≥`spikeGoFrac` of ≥1wk events still-flat-open w/ cheap center depth at first house_gaussian; else KILL + update FINDINGS.md. GO → build Phase 2 (paper executor + loop) in a NEW post-gate migration per §6/§14.
+
+---
+
+### (superseded) prior next-session pointer
+**▶ (2026-06-27, now DONE): BUILD the OPENING-CONVERGENCE bot — Phase 0. REVIEW LOOP CLOSED → STOP & BUILD. → READ `PHASE-0-BUILD-HANDOFF.md` (the cold-start build guide).**
+
+> **REVIEW CAMPAIGN DONE + CLOSED (2026-06-27).** `ARCHITECTURE-OPENING-CONVERGENCE.md` went through Phase-9
+> (3 passes) **+ 10 adversarial agent-team rounds → ~160 validated findings resolved** (now 9 tables, ~13 modules,
+> 20+ RPCs; §17 carries all 10 passes; campaign log in `REVIEW-opening-convergence.md`). The loop is **ASYMPTOTIC** —
+> REAL findings/round went 28→21→18→19→9→14→16→13→10→14 and do NOT reach zero (a ~2,500-line money-safety spec under
+> a 4-lens adversarial team keeps surfacing real-but-build-surfaceable edge cases; each fix adds surface). **Operator
+> decision (2026-06-27): STOP the review loop and BUILD** — the residual is the class a compiler + tests catch
+> cheaply (the unwired exit-row writer a builder hits in minute one; the on-chain proxy/redeem legs already gated
+> "verify vs live SDK before building"; the gate-panel RPC a Phase-3 deliverable), and the build is paper-first with
+> hard downstream gates. **Build Phase 0 per `PHASE-0-BUILD-HANDOFF.md`. Do NOT re-run the review workflow.**
+The first signal in twelve that did **not** die at its cheap gate. Thesis: freshly-listed daily-weather markets open
+flat (~10–12%/bucket) and converge to a peaked distribution; buy our-forecast-center cheap at the flat open, sell into
+the convergence on **brackets** (no need to hit the exact temp). **DONE THIS SESSION:** §9 alignment locked (8 answers →
+§9R: $100–200 wallet, **VPS day-one**, ≥2wk/≥40-mkt CI-excl-0 gate, dedicated funded wallet, peak≤18%/≤6h/mode±1 entry,
+maker+taker-fallback, **TP +25pp / SL −12pp** brackets, flatten-by-noon taker exit); then the **`architect` skill**
+produced **`ARCHITECTURE-OPENING-CONVERGENCE.md`** (now 8 tables after review hardening, ~13 modules, 20+ RPCs; bracket lifecycle, idempotency, caps,
+daily-loss kill, paper-first) — **Phase-9 Full self-review CONVERGED in 3 passes (3→1→0 CRITICAL)**, trail in
+**`REVIEW-opening-convergence.md`**. The adversarial passes (reading real source) caught three would-have-built-it-wrong
+issues, all designed-around inline: the forecast signal is **not** available in the flat-open window on the stock cadence
+(→ capture seeds `house_gaussian` on-demand + a **Phase-0.5 go/no-go spike**), `cities.tz` is often no-DST `Etc/GMT±N`
+not real-IANA (→ reject + correct), and the Polymarket CLOB has **no client-order-id** (→ heuristic reconcile).
+**THE BUILD (per §14 roadmap):** Phase 0 (capture + seed + migration `0066`, keyless) → **Phase 0.5 HARD GO/NO-GO: does a
+usable `house_gaussian` coincide with a still-flat book? if mostly not, KILL the lever cheaply here** → Phase 1 (pure
+core) → Phase 2 (paper executor + loop) → Phase 3 (paper backtest + gate) → Phase 4 (`/bot` dashboard) → Phase 5
+(≥2wk/≥40-mkt forward paper run) → **Phase 6 live, GATED on Phase-5 PASS** → Phase 7 scale-or-kill. Boundary
+(NON-NEGOTIABLE): Claude builds; the operator connects/funds a **dedicated** wallet + holds the key (`.env.local`, never
+in chat); Claude never places a trade or touches credentials. Full spec: **`OPENING-CONVERGENCE-HANDOFF.md`** (§9R locked)
++ **`ARCHITECTURE-OPENING-CONVERGENCE.md`** (blueprint) + **`REVIEW-opening-convergence.md`** (the review). Scoped
+exception to the "rail DORMANT / efficient eleven ways" verdict — `CLAUDE.md` header + `FINDINGS.md` updated this session.
+> **BLUEPRINT HARDENING (2026-06-27, post-architecture):** ran a multi-agent review TEAM (4 lenses → consolidate
+> → adversarially validate vs real source → fix → reiterate) on `ARCHITECTURE-OPENING-CONVERGENCE.md`. **51
+> validated findings fixed across 3 rounds** (28 → 21 → 18 REAL, severity trending down). Caught + fixed real
+> CRITICAL logic bugs the Phase-9 passes missed: exit-mark on the buy-side not the bid (need `executableBid`);
+> caps dropping already-held shares (under-flatten → R-4); exit can't resume without reboot; backtest exit-fill
+> unspecified (gate false-PASS); crash-mid-fill not adopted on reconcile. Doc grew 1,466 → 1,724 lines (+§17).
+> **ROUND-3 NOW FULLY APPLIED (2026-06-27):** all 16 remaining round-3 findings applied at their function homes +
+> a new §17 third-pass section (F32–F39, F14c, F17c): **latched daily-loss kill** + `bot_daily_kill` table (8th
+> table) + floor-each-unrealized-at-0; **on-chain approval bootstrap** (corrects §16-A "never raw approve()");
+> **exit dust-floor** → resolveHeldPosition; **producer-side `capture_deadman_check`**; **void/refund settlement
+> branch**; **MTM scoped to share-holding positions**; **free-cash spend ceiling** + `ERR_INSUFFICIENT_BALANCE`
+> skip; **funds lifecycle**; **negRisk redeem via NegRiskAdapter**; **GTD entry time-stop out of scope**. Hygiene:
+> §17-F9→F9b / §17-F17→F17b rename, §15 wiring, §16-F "RESOLVED→source-unverified (F2 OPEN)", ADR-OC-8
+> capture-emission reword, `bot.bankrollBaseUsd` key, §6.3 getCollateralBalance attribution. **NEW FILE
+> `GO-LIVE-CHECKLIST-OPENING.md`** (root) — the paper→real→scale runbook, resolves the F39/F33/F30/F21/F22 dangling
+> refs. **Round 4 DONE — all 19 applied** (rebuilt workflow `…/arch-review-validate-wf_99e2d4a3-543.js`; 27→21→17
+> REAL + 2 recovered/1 UNCERTAIN/1 FALSE-POS). One new CRITICAL was PRE-EXISTING (F1: SL must be the ternary, not
+> max() — the prior passes missed it); the rest are edge cases the round-3 fixes introduced. Added: latch
+> anti-self-wedge guards (F32b), persisted neg_risk + fail-closed redeem (F2/F14c), loser/void detection (F36b),
+> resolution-first manageBrackets (F6b), ambiguous-throw adopt (F40), honest surfacing-throttle (F41), persisted
+> `bot_circuit_state` breaker counter (F42), POL-gas surface (F10), dual dust floor (F7), `resumeExit` defined
+> (F14). Tables 8→9. **Round 5 DONE — all 15 applied** (25→19→9 REAL / 6 UNCERTAIN / 4 FALSE-POS — **ZERO
+> CRITICAL**; convergence bending down hard, REAL 28→21→18→19→9). Round-5 fixes: breaker operator-reset (F43b) +
+> brownout dimension + periodic reconcile (F44), resolution detection re-sourced + persisted resolves_at (F6),
+> kill cancels resting entries (F45), redeem idempotency (F46), dust parked mid-life (F34b), killLossPct pinned to
+> day-start base (F17), Signer port method declarations (F4), ENTRY-ADOPT order-row write (F5). Tables 9 (added
+> consecutive_ambiguous col, resolves_at col, bot_set_enabled RPC). **Round 6 DONE — all 16 applied → LOOP
+> CLOSED.** 28→20→14 REAL / 2 UNCERTAIN / 4 FALSE-POS — REAL bounced UP 9→14 with **2 CRITICAL** (both closed:
+> F1/§17-F44 the round-5 breaker was spec'd-but-UNWIRED — added `bot_record_ambiguous` + fixed reset/tripped_at;
+> F2/§17-F47 `bot_close_position` made symmetric to F10's SUM-derive — the caller-accumulate could double-count →
+> premature 'closed' → R-16 stranding). + F8 NegRiskAdapter approval, F9 flatten key-boundary, F13 paper-deadman,
+> F4 exit-double-FAK guard, F3/F6/F7/F11 + INFOs. New cols `exit_in_flight_until`/`over_cap`, RPC
+> `bot_record_ambiguous`. **REAL across 6 rounds: 28→21→18→19→9→14 (NOT monotone — the asymptote). ~105 findings
+> resolved. DECISION: review loop CLOSED — the doc is BUILD-READY; next action is Phase 0 (BUILD), not round 7**
+> (per anti-cathedral guidance — residual tail is spec-wiring the build surfaces testably). Trail:
+> `REVIEW-opening-convergence.md`.
+
+**2026-06-26: NEW `/data` forecast-accuracy-by-market analytics page — built, tested, LIVE on prod + verified logged-in.**
 Operator ask: across all stations, how accurate is our forecast at day-of / day-before / two-days-out, and which **markets**
 do we forecast best and worst? Shipped a self-contained analytics surface (`DATA.md`): the champion (`house_gaussian`)
 most-likely whole-°C bucket vs the resolved high, scored against the market on the same matched events. Migration
@@ -19,8 +101,10 @@ widening with horizon; ranking tracks climate physics; Brier deficit stable/not-
 plain accuracy terms. Provenance stated honestly: forecast↔outcome pairs are only a ~3-month book
 (since 2026-03-28), ~2 weeks of it live; the "28.8mo" is observation depth, not skill. **Verified:** typecheck 0, full suite
 **1495 green** (+ `data-page.render.test.ts`; `migrations.test.ts` file-list + `dash_data` ∈ WEB_AUTHENTICATED updated), web
-build OK. **Pending: a `main` → Vercel deploy to make the page live** (the 0065 RPC is already live, so the page works the
-instant it deploys). Full doc: `DATA.md`.
+build OK. **LIVE on prod** — commits `ab0c49c` (build) + `efc9228` (review) + `942e35c` (pass-3) on `main`; Vercel
+deploy of `942e35c` is `READY`/production and the page is **verified rendering logged-in** (44 stations, by-horizon
+table, best/worst, the mean-miss skyline + the daily Brier-gap LineChart with `ours`/`market` legend, written analysis,
+provenance panel — no horizontal overflow, content internally consistent). Full doc: `DATA.md`.
 
 **2026-06-26: EDGE-HUNT four-lane sweep — lanes B/C1/C2/D all KILL at executable depth (commit `be32c89`).**
 The latest forecast-free orthogonal probes all fail the same executable-depth test: a quoted edge that evaporates the
@@ -30,8 +114,9 @@ updated. Plus the **cross-venue executable-depth kill gate** landed (migrations 
 (winFrac 0.857); the true both-venue depth gate drops winFrac to **0** → KILL.
 Plus the NEW **/efficiency "verdict" product page** (commits `60da362` + `7b2389c`) at
 `apps/web/src/app/(dash)/efficiency/page.tsx` + `lib/efficiency-findings.ts` + nav + home link — the headline
-market-efficiency analytics surface. **NOT yet on `main`: lives on branch `feat/edge-hunt-sweep` (commits
-`be32c89`/`60da362`/`7b2389c` unmerged) — pending a `main` deploy before it is LIVE on prod.**
+market-efficiency analytics surface. **LIVE on prod** — merged to `main` via PR #8 (rebased → `980c5d2`/`6a9eec4`/`1d16559`);
+**verified rendering logged-in** with all live tiles populated (signals-falsified 10/10, forecast-skill 1.33°C, model-vs-market
+−5.4% live/266 cells, the-one-real-edge $25.4k, live-paper-trade 59% n=56) and the Arc-1/Arc-2 falsified-lever tables.
 
 **2026-06-25: CROSS-VENUE SPIKE built (the 10th signal) — VERDICT 2026-06-26: KILL (a capacity wall); merged to `main`, rail DORMANT.**
 The first genuinely-EXECUTABLE, forecast-free, orthogonal lever: does the *same US city's daily high* price

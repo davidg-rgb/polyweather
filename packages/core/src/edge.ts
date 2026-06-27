@@ -27,6 +27,36 @@ export function executableAsk(
 }
 
 /**
+ * Walk BID levels (best/highest-first) accumulating size — the realizable average SELL price for
+ * exiting `sizeShares` of a long-YES position. The exit symmetric twin of `executableAsk`: a long
+ * position EXITS into the BID, so its realizable mark is the bid side, NEVER the ask (using the ask
+ * over-states exit value → take-profit fires at an unrealizable price, stop-loss fires late, MTM
+ * under-counts loss — all UNSAFE; opening-convergence ADR-OC-7 / F1). `fillableShares` < `sizeShares`
+ * signals a depth shortfall on the thin flat-open book the bot deliberately enters (F2): a bracket
+ * must require `fillableShares ≥ heldShares` before honoring a TP/SL mark, and the daily-loss MTM
+ * values the unfillable remainder conservatively. `avgPrice` is NaN when nothing is fillable.
+ *
+ * `book.bids` is best (highest) first per `normalizeBook` (it reverses the raw arrays), so this walks
+ * in place. Pure + total.
+ */
+export function executableBid(
+  book: NormalizedBook,
+  sizeShares: number,
+): { avgPrice: number; fillableShares: number } {
+  let remaining = sizeShares;
+  let proceeds = 0;
+  let filled = 0;
+  for (const level of book.bids) {
+    if (remaining <= 0) break;
+    const take = Math.min(level.size, remaining);
+    proceeds += take * level.price;
+    filled += take;
+    remaining -= take;
+  }
+  return { avgPrice: filled > 0 ? proceeds / filled : NaN, fillableShares: filled };
+}
+
+/**
  * Per bucket: q from dist; execAsk via executableAsk at cfg.probeStakeUsd;
  * edge = q − execAsk; fee via takerFeePerShare(execAsk, market feeRate);
  * spread carried onto the row; pass = edge ≥ minEdgeRequired; reasons[]

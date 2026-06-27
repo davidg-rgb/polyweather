@@ -51,7 +51,7 @@ const FN_ARGS: Record<string, string[]> = {
   get_build_inputs: ['p_event_id', 'p_allow_backfill'],
   upsert_distribution: [
     'p_event_id', 'p_source', 'p_lead', 'p_nowcast', 'p_inputs_hash',
-    'p_probs', 'p_mu', 'p_sigma', 'p_stats_version',
+    'p_probs', 'p_mu', 'p_sigma', 'p_stats_version', 'p_seeded',
   ],
   claim_poll_lease: ['p_holder', 'p_wall_sec'],
   release_poll_lease: ['p_holder'],
@@ -131,6 +131,13 @@ const FN_ARGS: Record<string, string[]> = {
   replica_record_positions: ['p_source', 'p_replace', 'p_rows'],
   replica_record_run: ['p_payload'],
   replica_forward_inputs: ['p_now', 'p_place_from', 'p_place_to'],
+  // 0066 opening-convergence Phase-0 capture/seed RPCs.
+  record_opening_captures: ['p_rows'],
+  latest_house_dist: ['p_event_id'],
+  bot_latest_captures: ['p_max_age_min'],
+  bot_capture_series: ['p_days'],
+  capture_deadman_check: [],
+  bot_deadman_check: [],
 };
 
 export function pglitePort(db: PGlite): DbPort {

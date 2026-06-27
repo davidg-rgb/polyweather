@@ -51,6 +51,8 @@ export interface RawGammaEvent {
   liquidity?: number;
   resolutionSource?: string;
   gameStartTime?: string | null;
+  /** the event's TRUE listing time — the opening-convergence flat-open anchor (§16-D / listing-anchor fix). */
+  createdAt?: string;
   markets: RawGammaMarket[];
 }
 
@@ -91,6 +93,8 @@ export interface ParsedEvent {
   unit: Unit;
   station: { icao: string; countryCode: string } | null;
   negRiskMarketId: string | null;
+  /** the event's TRUE Gamma listing time (raw `createdAt`); the flat-open window anchor (§16-D). */
+  createdAt: string | null;
   kind: 'highest' | 'lowest';
   buckets: ParsedBucket[];
   eventVolume24h: number | null;
@@ -283,6 +287,7 @@ export function parseGammaEvent(ev: RawGammaEvent, knownTz?: string): ParsedEven
     unit,
     station,
     negRiskMarketId: ev.negRiskMarketID ?? null,
+    createdAt: ev.createdAt ?? null,
     kind,
     buckets,
     eventVolume24h: ev.volume24hr ?? null,
@@ -358,6 +363,7 @@ const RawGammaEventSchema = z
     liquidity: z.number().optional(),
     resolutionSource: z.string().optional(),
     gameStartTime: z.string().nullable().optional(),
+    createdAt: z.string().optional(),
     markets: z.array(RawGammaMarketSchema),
   })
   .passthrough();

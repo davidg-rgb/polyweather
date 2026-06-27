@@ -220,6 +220,15 @@ describe('migrations 0001–0010', () => {
       // exact/within-1/mean-miss vs the market at leads 0/1/2 + the daily Brier gap. Added to
       // WEB_AUTHENTICATED below. No table/cron change (cron count stays 21). DATA.md.
       '0065_data_accuracy_dashboard.sql',
+      // 0066 = opening-convergence bot Phase 0 (the scoped trading-rail reactivation): the 9 bot tables
+      // (opening_captures + 8 lifecycle/risk tables, built now, exercised later) + the capture/seed read+write
+      // RPCs (record_opening_captures, latest_house_dist, bot_latest_captures, bot_capture_series) + the
+      // seed-isolation `seeded` columns on bucket_probabilities/forecast_snapshots (with the dash_data /
+      // calib_scored_rows / dash_amsterdam_sim / poll_known_events exclusions + upsert_distribution/upsert_forecast_rows
+      // carrying seeded) + the §9R liquid cities' cities.tz IANA correction + BOTH deadmen (capture +
+      // mode-aware bot) + the bot.* config mirror + the bot CRITICAL Slack-allowlist append + 5 crons
+      // (opening-capture every 2 min + 2 deadmen + 2 prunes → cron count 21 → 26). ARCHITECTURE-OPENING-CONVERGENCE.md.
+      '0066_opening_convergence.sql',
     ]);
   });
 });
@@ -776,7 +785,7 @@ describe('0034: internal-RPC lockdown — anon/authenticated revoked except the 
 });
 
 describe('pg_cron registrations (§7.22, W11)', () => {
-  it('registers all 21 jobs with the §7.22 schedules', async () => {
+  it('registers all 26 jobs with the §7.22 schedules', async () => {
     const jobs = await rows<{ jobname: string; schedule: string }>(
       db,
       `select jobname, schedule from cron.job order by jobname`,
@@ -803,17 +812,28 @@ describe('pg_cron registrations (§7.22, W11)', () => {
       'whale-watch':         '* * * * *',
       'replica-forward':     '0 5 * * *',
       'reward-snapshot':     '*/20 * * * *',
+      // 0066: opening-convergence Phase-0. The capture cron is an http_post edge-fn job; the two deadmen +
+      // the two retention prunes are pure-SQL crons (like snapshot-downsample — excluded from W11 below).
+      'opening-capture':          '*/2 * * * *',
+      'opening-capture-deadman':  '*/10 * * * *',
+      'opening-bot-deadman':      '*/10 * * * *',
+      'opening-captures-prune':   '30 3 * * *',
+      'bot-tick-log-prune':       '35 3 * * *',
     };
-    expect(jobs.length).toBe(21);
+    expect(jobs.length).toBe(26);
     for (const j of jobs) {
       expect(j.schedule, `schedule for ${j.jobname}`).toBe(expected[j.jobname]);
     }
   });
 
   it('W11: commands read secrets from Vault — no literal secret in cron.job', async () => {
+    // The SQL crons (downsample + the 0066 deadmen/prunes) run plpgsql directly via pg_cron — no edge-fn
+    // round-trip, so they neither read a Vault secret nor hit /functions/v1. Only http_post edge-fn crons
+    // are subject to the W11 vault-read contract.
     const jobs = await rows<{ jobname: string; command: string }>(
       db,
-      `select jobname, command from cron.job where jobname <> 'snapshot-downsample'`,
+      `select jobname, command from cron.job where jobname not in
+        ('snapshot-downsample','opening-capture-deadman','opening-bot-deadman','opening-captures-prune','bot-tick-log-prune')`,
     );
     for (const j of jobs) {
       expect(j.command).toContain(`vault.decrypted_secrets where name = 'cron_secret'`);

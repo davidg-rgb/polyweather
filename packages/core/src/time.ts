@@ -86,3 +86,47 @@ export function localHour(tz: string, instant: Date): number {
   assertTimezone(tz);
   return new TZDate(instant.getTime(), tz).getHours();
 }
+
+/**
+ * Is `tz` a real, DST-aware IANA zone name (NOT a fixed-offset `Etc/GMT±N` zone, NOT junk)?
+ *
+ * The discovery seam stores auto-found cities as `etcZoneForOffset(offset)` = a no-DST `Etc/GMT±N`
+ * (risk.ts) — which `assertTimezone` ACCEPTS (Intl-valid) but which DST-skews a local-wall-clock
+ * instant by ≤1h on the two transition days/yr (the 2026-06-22 trap; ADR-OC-12 / C2b). The
+ * opening-convergence bot's time-stop must be DST-correct, so its tz read fail-closes on anything
+ * that is not a real IANA name: a capture whose `cities.tz` is absent or `Etc/*` stores `no_tz` and
+ * is never entered. Pure + total — never throws (the no-throw twin of `localHourInstant`'s guard).
+ */
+export function isDstAwareIana(tz: string | null | undefined): boolean {
+  if (!tz || tz.startsWith('Etc/')) return false;
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: tz });
+  } catch {
+    return false;
+  }
+  return true;
+}
+
+/**
+ * The UTC instant of local wall-clock `hour:00:00` on the station-local calendar day `dateISO`,
+ * in the real IANA zone `tz` — DST-correct by the same `TZDate(y, m−1, d, hour, …, tz)` mechanism
+ * `localDayWindow`'s `startUtc` uses (time.ts:48), NOT `localDayWindow(...).startUtc + hour×3600s`
+ * (adding a fixed offset to local MIDNIGHT is DST-wrong by ±1h on the two transition days/yr — F11).
+ *
+ * This is the opening-convergence bracket time-stop's "flatten by local noon" instant. It REJECTS
+ * fixed-offset `Etc/*` zones AND non-IANA strings (throws `InvalidTimezoneError`) so the bot never
+ * computes a DST-skewed flatten time — bracketDecision catches the throw and fails toward a
+ * conservative time_stop (ADR-OC-12 fail-closed), though such positions are never entered because
+ * the capture-side `isDstAwareIana` gate already excludes them.
+ */
+export function localHourInstant(tz: string, dateISO: string, hour: number): Date {
+  if (tz.startsWith('Etc/')) {
+    throw new InvalidTimezoneError(`fixed-offset zone not allowed for DST-sensitive math: '${tz}'`, { tz });
+  }
+  assertTimezone(tz);
+  if (hour < 0 || hour > 23 || !Number.isInteger(hour)) {
+    throw new ValidationError(`hour must be an integer 0–23, got '${hour}'`, { hour });
+  }
+  const { y, m, d } = parseDateISO(dateISO);
+  return new Date(new TZDate(y, m - 1, d, hour, 0, 0, 0, tz).getTime());
+}

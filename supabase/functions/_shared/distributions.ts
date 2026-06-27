@@ -32,6 +32,14 @@ import type { Alert } from './slack.ts';
 export interface BuildDeps {
   notify: (alert: Alert) => Promise<boolean>;
   now: Date;
+  /**
+   * Tag the written distribution + forecast rows as bot-SEEDED (opening-convergence on-demand seed —
+   * F16-r9/F11-r10). Defaults to false → byte-identical behavior for build-distributions /
+   * discover-markets / metar-nowcast (no ripple). When true, the seeded `house_gaussian` is EXCLUDED
+   * from dash_data (0065) / run-calibration / /amsterdam / the bets reader so a scoped-city bot snapshot
+   * never becomes the scored champion there.
+   */
+  seeded?: boolean;
 }
 
 interface BuildInputs {
@@ -125,6 +133,7 @@ export async function buildDistributionForEvent(
       p_mu: mu,
       p_sigma: sigma,
       p_stats_version: statsVersion,
+      p_seeded: deps.seeded ?? false,
     });
     if (r?.upsert_distribution) out.written++;
     else out.skipped++;

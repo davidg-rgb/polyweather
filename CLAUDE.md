@@ -17,6 +17,20 @@ dashboard, TypeScript monorepo (`packages/core|io|trading`, `supabase/functions`
 > (`packages/trading`, the `bets` surface) stays built but DORMANT — do not invest in
 > taker-edge work without new out-of-market information. **The complete verdict — all seven
 > falsified signals, with the numbers — is the canonical record `FINDINGS.md`.**
+>
+> **SCOPED EXCEPTION (2026-06-27): the trading rail is REACTIVATED for ONE tested lever — OPENING
+> CONVERGENCE — and nothing else.** The 12th signal is the first that did **not** die at its cheap gate:
+> freshly-listed daily-weather markets open flat (~10–12%/bucket) and converge; buy the forecast-center cheap
+> at the flat open, sell into the convergence on **brackets**. Operator greenlit an **autonomous paper-first
+> buy/sell bot** (dedicated funded wallet, start small, aim net-profit). Blueprint **`ARCHITECTURE-OPENING-CONVERGENCE.md`**
+> is BUILD-READY (Phase-9 Full review converged 3→1→0 CRITICAL; `REVIEW-opening-convergence.md`); spec
+> `OPENING-CONVERGENCE-HANDOFF.md` (§9R locked params). The load-bearing unknown — is the signal even available
+> while the book is still flat-open, and is there net edge at executable depth — is **measured forward** by the
+> bot's keyless capture layer (Phase 0) and a hard **Phase-0.5 go/no-go spike** before any execution; **no
+> capital until a frozen net-profit gate PASSes** (≥40 paper markets, CI excl 0). This is NOT a reversal of the
+> efficiency findings — it is the single exception that earned a real test. The other eleven signals stay dead.
+> **Boundary (NON-NEGOTIABLE): Claude builds the software; the operator funds a dedicated wallet + holds the
+> signing key (`.env.local`, never in chat); Claude never places a trade or touches credentials.**
 
 - Hosted Supabase ref: `lenysiqxihsmxljvyybt` (eu-north-1) · Prod: `weather-edge-two.vercel.app`
 - Canonical docs: **`FINDINGS.md`** (the R&D verdict — start here: is there a tradable edge? no, and why),

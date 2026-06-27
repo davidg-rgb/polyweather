@@ -17,6 +17,14 @@ interval excluding a tradable margin. The one edge that demonstrably exists in t
 external sharp's, +$25.4k) is **pure microstructure** — resting cheap maker bids, collecting the
 rebate, across enormous breadth — and is **non-followable and non-replicable** from where we sit.
 
+> **One live exception, opened 2026-06-27 (does NOT reverse the above).** Every signal *that died at its gate*
+> is dead. But the 12th lever — **opening convergence** — survived its cheap gate and is now **under forward
+> test** (the last row below): the edge would live specifically in the *uninformed flat-open window*, the one
+> place this system never measured because it's narrow and time-critical. It is being measured forward by an
+> autonomous paper-first bot; **no capital until a frozen net-profit gate PASSes**, and a hard go/no-go spike
+> can still kill it cheaply. The efficiency verdict stands for everything tested; this is the single thing not
+> yet tested.
+
 | Signal tested | Can we beat the market with it? | Verdict |
 |---|---|---|
 | Multi-day NWP blend (4 levers) | No — at its point-skill ceiling | FORECASTING-RD §1, WO-3, L3-b |
@@ -31,6 +39,7 @@ rebate, across enormous breadth — and is **non-followable and non-replicable**
 | Complete-set structural arb (forecast-free) | No — fee-walled; raw book inconsistent ~16% of the time but the `takerOnly` fee > the residual mispricing (0.37%/0.06% of instants clear; live 0/107) | COMPLETE-SET-ARB.md (the 8th signal) |
 | Copy-trading the top **SPORTS** sharps (adjacent, off-weather) | No — volume machines' edge regresses to ≈0 (follower negative at every lag×spread); high-ROI specialists' "100% win / PASS" is survivorship + a non-executable book-sweep mark | SPORTS-TRADERS.md (the 9th signal) |
 | Cross-venue RV: same day on Kalshi (NWS-CLI) vs Polymarket (Wunderground) | **No — CAPACITY-walled** — a real quoted cross-venue price gap exists (6/7 city-days net-positive), but TRUE both-book depth shows the cumulative synthetic fills at only **1–10 contracts** (thin tail legs); winFrac over *executable* wins = **0**. Quoted edge ≠ capturable money; same structural-wall class as the 8th | CROSS-VENUE-SPIKE.md (the 10th signal) |
+| **Opening convergence: buy the forecast-center cheap at the FLAT OPEN, sell into the convergence on brackets** | **⏳ UNDER FORWARD TEST (the 1st LIVE-CANDIDATE)** — the only signal that did NOT die at its cheap gate: data accuracy confirmed, convergence real (winners 18–25%→100%, marks sell-back median **79pp**), and **Wall-1 capacity did NOT kill** ($100–320 buyable at lead 1–2). The edge lives specifically in the *uninformed flat-open window* (where KILL-GATE 2's efficiency hasn't set in yet). The load-bearing numbers — flat-open depth + net edge at executable depth, AND whether our forecast even exists in that window — are **unmeasured; being measured forward** by an autonomous paper-first bracket bot. **No capital until a frozen net-profit gate PASSes** (≥40 paper markets, CI excl 0); a hard Phase-0.5 spike can still KILL it cheaply | OPENING-CONVERGENCE-HANDOFF.md + ARCHITECTURE-OPENING-CONVERGENCE.md (the 12th signal) |
 
 **On REC-1 (the one un-run maker lever, tested 2026-06-23).** After the maker-rebate reframe (net profit by
 *any* mechanism), the last distinct lever was: can WE *learn* which cheap buckets to rest on (vs. mirroring the
