@@ -190,7 +190,7 @@ function CityPanel({ city }: { city: CitySimCity }): ReactElement {
 }
 
 export default async function PaperTradePage(): Promise<ReactElement> {
-  const view: CitySimView | null = await getCitySim(serverDb());
+  const view: CitySimView | null = await getCitySim(await serverDb());
 
   if (!view) {
     return (
