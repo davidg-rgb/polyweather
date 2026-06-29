@@ -241,3 +241,77 @@ explicitly out of scope — do not fund without a dedicated sub-second-infra spi
 prior). No copy-trade probe passes the pre-registered re-open criterion; the rail stays DORMANT. (No new
 script — the load-bearing drift-curve number, flat first ~5 min + sweeper-consumed mark, is already in
 `scripts/research/sports-traders-scan.ts`; C2 is gap arithmetic against it.)
+
+## 10. fishalive RE-TEST 2026-06-29 — the $9M is REAL cash, but it is ONE bet on ONE game (n=1 KILL)
+
+**Operator challenge (2026-06-28):** fishalive is a NEW account this month, ~$9M profit at ~69% margin, with the
+activity page showing heavy repetition on the same ~47¢ bucket. *"$9M on a new account ≠ survivorship — re-test it."*
+He was **right to force the re-test**: the prior §4/§9 dismissal ("survivorship + a non-executable in-play book-sweep
+mark") was **mechanically wrong** for fishalive. The corrected mechanism lands on an even more decisive KILL.
+
+**Step 1 — realized-PnL reconciliation (the cash-flow identity, `scripts/wallet-forensics.ts`).** The displayed $9M is
+**real, withdrawable cash, not a mark-to-market artifact**:
+
+| | |
+|---|---:|
+| Σ BUY cost | **$4,284,848** |
+| Σ SELL proceeds | **$0** (he never sells) |
+| Σ REDEEM proceeds | **$13,281,460** (winning shares paid at $1) |
+| Reconstructed realized | **$8,996,612** |
+| Polymarket user-pnl curve (ground truth) | $9,063,378 |
+| **Reconciliation** | **0.74% abs** ✓ |
+
+Crawl complete (mode=full, not capped, `incomplete:false`); the user-pnl curve confirms the account's **first fill is
+2026-06-15**, so this reconciles a true lifetime. Survivorship-of-a-win-*rate* is therefore the wrong frame — you cannot
+mint $13.28M of actual redemptions by conditioning on resolved winners. **The cash is real.**
+
+**Step 2 — soccer-aware forensics (`scripts/research/fishalive-forensics.ts`, authoritative CLOB resolution).** The
+entire wallet is **ONE day, ONE game, TWO correlated legs** — `fifwc-esp-cvi-2026-06-15` = **Spain vs Cape Verde, FIFA
+World Cup, kickoff 16:00 UTC**:
+
+| Market (CLOB question) | His leg | VWAP | Cost | Redeem | Realized | Resolved |
+|---|---|--:|--:|--:|--:|:--|
+| *Will Spain win on 2026-06-15?* | **No** | **0.092** | $437k | $4,738,875 | **+$4.30M** | No ✓ (Spain did not win) |
+| *Spread: Spain (−2.5)* | **Cabo Verde** | **0.451** | $3,847,446 | $8,539,052 | **+$4.69M** | Cabo Verde ✓ (Spain did not win by 3+) |
+
+Both legs are the **same directional thesis — *Spain fails to beat Cape Verde*** — staked **$4.28M PRE-MATCH**. The
+operator's "~47¢ bucket repeated on the same game" is exactly the 45¢ spread leg: ~802 fills accumulating 8.54M shares of
+one outcome (median fill **$9**, max $427k). The cheap 9¢ "No" leg is the high-conviction longshot (the *outright*
+favorite fade); the 45¢ spread is the bulk near-even-money expression of the same view. Spain (a top side) was priced a
+~91% favorite (No at ~9¢) — and **the upset hit**.
+
+**Microstructure (all confirm the corrected mechanism):**
+- **100% PRE-KICKOFF** — median first-fill latency **−3,417s (~57 min before kickoff)**, 0% in-play. → The §7/§9
+  "in-play latency arb" mechanism is **FALSIFIED for fishalive**: he is a pre-match conviction buyer, not an in-game
+  sweeper.
+- **59.6%** of fills share their exact second+market — he **swept the book** pre-match, paying *up* (the "No" leg walks
+  from <10¢ into the 10–25¢ band as he accumulates): urgent aggressive accumulation, not patient resting.
+- **0 markets held both Yes+No**, 0 sells, all real redemptions → **clean directional; NOT wash / self-cross / farming.**
+
+**Ranked mechanism hypotheses (evidence-weighted):**
+1. **Informed pre-match edge (team news / motivation) — most consistent with the structure, unprovable at n=1.** A $4.3M
+   pre-match stake on a 9–45¢ favorite-fade in a real World Cup fixture is the signature of someone acting on a specific
+   read — most mundanely, **Spain resting its first XI** (a final group game where Spain had already advanced is the
+   textbook "favorite won't try" setup), or a lineup/injury leak. Reachable only with a soccer team-news pipeline we
+   don't have; and n=1 cannot separate "informed" from "lucky."
+2. **Structural favorite over-pricing (anti-favorite-longshot).** Extreme mismatch favorites may be systematically
+   overpriced (public money on the big name); fading them could be +EV. This is the **only testable** hypothesis — but it
+   needs *many* fixtures, not this one, and is a soccer-modeling project orthogonal to weather (low prior, no infra).
+3. **Contrarian whale who got paid — the null we cannot reject.** At n=1, "$9M of skill" is statistically
+   indistinguishable from "a rich contrarian put $4.28M on an upset and it landed." The leaderboard rank is a *single
+   binary resolution*, not a track record.
+4. **Wash / volume / reward farming — REJECTED** by the data (clean directional, no both-sides, no sells).
+5. **In-play latency / information repricing — REJECTED** (100% pre-kickoff).
+6. **PnL/leaderboard artifact — REJECTED for the cash (0.74% reconcile); CONFIRMED for the "elite trader" framing** (one
+   correlated bet, not a repeatable edge).
+
+**Reachability verdict — KILL-confirmed, corrected reason.** The prior KILL's *mechanism* was wrong (pre-match, not
+in-play), but the lever is *more* dead than before: **the entire track record is a single pre-match event (n=1).** There
+is no samplable, repeatable, copyable edge — you cannot build a system on one coin landing heads, and if it was
+information it is event-specific and not piped to us (Sweden, keyless). **"What does he know?"** — on *this* game he had
+extreme conviction (very plausibly an information or lineup read) that Spain would fail to win, and he was right; the data
+cannot prove it was skill rather than luck, and either way it does not generalize. The 9th-signal rail stays **DORMANT**.
+Artifacts: `scripts/research/fishalive-forensics.ts` + `out/fishalive-forensics.{md,json}` (+ resolution cache);
+realized-PnL via `scripts/wallet-forensics.ts`. Read-only, keyless, no orders. Re-open only if a *fresh, multi-event*
+fishalive track record (post-2026-06-15 activity across many independent fixtures) shows a credibly-graded, executable
+edge — none exists today; the wallet is dormant after this one game.
