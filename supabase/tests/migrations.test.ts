@@ -240,6 +240,11 @@ describe('migrations 0001–0010', () => {
       // scans. bot_capture_series is untouched (Phase-3 backtest contract). No table/cron change.
       '0068_opening_spike_series.sql',
       '0069_convergence_dashboard.sql',
+      // 0070 = the GENERALIZED multi-city paper-trade (the Amsterdam sim, N cities by config row): city_sim_config
+      // (seed Singapore/Karachi) + city_paper_bets + 4 service-role place/grade RPCs (city_sim_active_configs/
+      // place_inputs/record/grade_inputs/settle) + dash_city_sim (operator read, added to WEB_AUTHENTICATED below)
+      // + the daily city-paper-trade cron at 10:00 UTC (count 27 → 28). NOT trading — analytics. CITY-SIM.md.
+      '0070_city_paper_sim.sql',
     ]);
   });
 });
@@ -704,6 +709,7 @@ describe('0034: internal-RPC lockdown — anon/authenticated revoked except the 
     'dash_cross_venue',  // 0062: cross-venue (Kalshi↔Polymarket) RV panel operator read
     'dash_data',  // 0065: /data forecast-accuracy-by-market operator read
     'dash_convergence',  // 0069: /convergence opening-convergence forward-paper overview operator read
+    'dash_city_sim',  // 0070: /paper-trade multi-city paper-trade head-to-head operator read
     'go_live_gate_inputs',
     'operator_halt', 'operator_resume', 'operator_update_config', 'operator_verify_station',
     'operator_set_champion', 'operator_skip_bet', 'operator_manual_bet',
@@ -798,7 +804,7 @@ describe('0034: internal-RPC lockdown — anon/authenticated revoked except the 
 });
 
 describe('pg_cron registrations (§7.22, W11)', () => {
-  it('registers all 26 jobs with the §7.22 schedules', async () => {
+  it('registers all 28 jobs with the §7.22 schedules', async () => {
     const jobs = await rows<{ jobname: string; schedule: string }>(
       db,
       `select jobname, schedule from cron.job order by jobname`,
@@ -834,8 +840,10 @@ describe('pg_cron registrations (§7.22, W11)', () => {
       'bot-tick-log-prune':       '35 3 * * *',
       // 0069: opening-convergence forward-paper view snapshot (http_post edge-fn job; W11-checked).
       'convergence-panel':        '*/15 * * * *',
+      // 0070: multi-city paper-trade daily place + grade (http_post edge-fn job; W11-checked).
+      'city-paper-trade':         '0 10 * * *',
     };
-    expect(jobs.length).toBe(27);
+    expect(jobs.length).toBe(28);
     for (const j of jobs) {
       expect(j.schedule, `schedule for ${j.jobname}`).toBe(expected[j.jobname]);
     }

@@ -43,7 +43,12 @@ dashboard, TypeScript monorepo (`packages/core|io|trading`, `supabase/functions`
   genuinely-EXECUTABLE orthogonal lever. **VERDICT 2026-06-26: KILL — a capacity wall.** Real quoted gap (6/7
   city-days net-positive) but the cumulative synthetic fills at only 1–10 contracts of TRUE both-book depth; the
   24h-vol/OI proxy would have FALSE-PASSED (winFrac 0.857), hardened by migration 0064 to gate WINS on true
-  executable depth → winFrac 0 → KILL. Rail DORMANT). Tests: `pnpm test`, `pnpm typecheck`.
+  executable depth → winFrac 0 → KILL. Rail DORMANT),
+  **`CITY-SIM.md`** (2026-06-29: the **multi-city paper-trade** — the Amsterdam sim generalized to N cities by a
+  `city_sim_config` row. Seeds **Singapore (WSSS)** + **Karachi (OPKC)** — the most forecast-accurate °C markets
+  with a liquid Polymarket book — racing arms 11/12/13/14 (tropical ~12:30 peak); migration `0070`, Edge fn
+  `city-paper-trade`, `/paper-trade` page, seed `scripts/city-sim.ts`. NOT trading — measures net-profit-vs-market.
+  **BUILT + fully tested (1700+ green); go-live operator-gated** — apply 0070 + deploy edge fn + seed). Tests: `pnpm test`, `pnpm typecheck`.
 - Build is COMPLETE (P0–P8). Remaining work is operator/deploy-gated — see BUILD-STATE.
 - **Headline analytics deliverable (2026-06-16): the Amsterdam paper-trade head-to-head** —
   `$10/day` on our predicted bucket at 13/14/15/16 local, racing to find the best time to bet,

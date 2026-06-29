@@ -122,9 +122,13 @@ export function predictedNativeC(runningMaxC: number): number {
  * the trailing OBSERVED lead-1 bias — the bias correction the system measures in dash_station_predictions);
  * pass null to disable the lift (no forecast / insufficient history) → the original pure-floor call.
  */
-export function nowcastBasisC(runMaxC: number, hour: number, forecastC?: number | null): number {
-  const useForecast =
-    forecastC != null && Number.isFinite(forecastC) && hour <= AMSTERDAM_SIM_FORECAST_MAX_HOUR;
+export function nowcastBasisC(
+  runMaxC: number,
+  hour: number,
+  forecastC?: number | null,
+  forecastMaxHour: number = AMSTERDAM_SIM_FORECAST_MAX_HOUR,
+): number {
+  const useForecast = forecastC != null && Number.isFinite(forecastC) && hour <= forecastMaxHour;
   return useForecast ? Math.max(runMaxC, forecastC) : runMaxC;
 }
 
@@ -222,6 +226,13 @@ export interface PlaceInputs {
    * at early arms via nowcastBasisC; null reproduces the original pure-floor behaviour.
    */
   forecastC?: number | null;
+  /**
+   * The latest lock hour at which the forecast lift still helps (city-specific peak timing). Defaults to
+   * AMSTERDAM_SIM_FORECAST_MAX_HOUR (14, Amsterdam) when absent — so the Amsterdam sim is unchanged, while
+   * the generalized multi-city paper-trade (sim/city, migration 0070) passes the city's own value (e.g. 12
+   * for early-peaking tropical stations like WSSS/OPKC, which top out by ~12:30 local).
+   */
+  forecastMaxHour?: number;
   arms: PlaceArmInput[];
 }
 
@@ -255,7 +266,7 @@ export function planPlacements(input: PlaceInputs, opts: { stakeUsd?: number } =
     // The forecast-aware basis: the running-max floor, lifted to the bias-corrected NWP forecast at early
     // arms (nowcastBasisC). predictedBucketIdx/placeSimBet both wuRound this basis, so the recorded
     // ask is the quote on the bucket we actually predict — exactly what a live order would have hit.
-    const basisC = nowcastBasisC(arm.runMaxC, arm.hour, input.forecastC);
+    const basisC = nowcastBasisC(arm.runMaxC, arm.hour, input.forecastC, input.forecastMaxHour);
     const idx = predictedBucketIdx(input.ladder, basisC);
     const ask = arm.asks.find((a) => a.bucketIdx === idx)?.ask;
     const place = placeSimBet(input.ladder, basisC, ask, {

@@ -86,6 +86,16 @@ describe('nowcastBasisC — running-max floor lifted by the de-biased forecast a
     expect(AMSTERDAM_SIM_FORECAST_MAX_HOUR).toBe(14); // pin the empirically-tuned gate
   });
 
+  it('honours a per-city forecastMaxHour override (the 0070 multi-city seam; default stays 14)', () => {
+    // A tropical city (WSSS/OPKC) peaks ~12:30 → forecastMaxHour 12. At hour 13 the lift must be OFF
+    // (floor only) even though the default-14 Amsterdam gate would still apply it.
+    expect(nowcastBasisC(30.4, 13, 32.0, 12)).toBe(30.4); // hour 13 > 12 → floor, forecast ignored
+    expect(nowcastBasisC(30.4, 12, 32.0, 12)).toBe(32.0); // hour 12 <= 12 → forecast lifts
+    expect(nowcastBasisC(30.4, 11, 32.0, 12)).toBe(32.0); // hour 11 <= 12 → forecast lifts
+    // omitting the arg reproduces the Amsterdam default (14): hour 13 still lifts.
+    expect(nowcastBasisC(30.4, 13, 32.0)).toBe(32.0);
+  });
+
   it('a sub-degree lift flips the rounded bucket, and negative temps lift correctly (A-11 path)', () => {
     // floor 21.4 → wuRound 21, but the forecast 21.6 lifts the basis → wuRound 22 (the whole point).
     expect(predictedNativeC(nowcastBasisC(21.4, 13, 21.6))).toBe(22);

@@ -16,6 +16,7 @@ export const dynamic = 'force-dynamic';
 const NAV = [
   ['/convergence', 'convergence'], // the 12th signal — opening-convergence forward-paper overview (dash_convergence, 0069)
   ['/amsterdam', 'amsterdam'], // the one-accurate-city paper-trade head-to-head (analytics deliverable)
+  ['/paper-trade', 'paper-trade'], // the multi-city generalization — Singapore + Karachi (dash_city_sim, 0070)
   ['/whaletracker', 'whales'], // ≥$100k Polymarket whale-trade tracker (analytics; whale-watch feed, 0055)
   ['/data', 'accuracy'], // forecast accuracy by market — best/worst stations + the Brier gap (dash_data, 0065)
   ['/sharps', 'sharps'], // SPORTS-sharps roster + fingerprints (analytics; 9th signal DORMANT)

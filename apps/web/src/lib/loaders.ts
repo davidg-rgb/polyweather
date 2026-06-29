@@ -939,6 +939,173 @@ export async function getAmsterdamSim(db: WebDb, opts: { now?: Date } = {}): Pro
   };
 }
 
+// --- /paper-trade (multi-city paper-trade, dash_city_sim 0070) ------------------------
+
+export interface CitySimArm {
+  hour: number;
+  nBets: unknown;
+  nGraded: unknown;
+  nPending: unknown;
+  nWon: unknown;
+  staked: unknown;
+  pnl: unknown;
+  roi: unknown;
+  hitRate: unknown;
+  avgAsk: unknown;
+  isLeader: boolean;
+  /** Per-arm CIs from the graded (won, ask) rows via core/sim/stats armEdgeStats (same idiom as /amsterdam). */
+  hitCiLo: number;
+  hitCiHi: number;
+  edge: number;
+  edgeCiLo: number;
+  edgeCiHi: number;
+  ev: number;
+  evCiLo: number;
+  evCiHi: number;
+}
+
+export interface CitySimBetRow {
+  date: string;
+  hour: number;
+  predictedC: unknown;
+  label: string | null;
+  ask: unknown;
+  runMaxC: unknown;
+  forecastC: unknown;
+  status: string;
+  won: boolean | null;
+  pnl: unknown;
+  actualC: unknown;
+}
+
+export interface CitySimCity {
+  slug: string;
+  displayName: string;
+  icao: string;
+  unit: string;
+  tz: string;
+  armHours: number[];
+  stakeUsd: unknown;
+  coverage: { firstDate: string | null; lastDate: string | null; nDays: unknown; nGradedDays: unknown; nPending: unknown };
+  arms: CitySimArm[];
+  leaderHour: number | null;
+  totals: { pnl: unknown; nGraded: unknown; nWon: unknown; staked: unknown };
+  chart: { dates: string[]; byHour: Record<number, (number | null)[]> };
+  betLog: CitySimBetRow[];
+  latest: { date: string | null; byHour: Record<number, { predictedC: unknown; label: string | null; ask: unknown; status: string; won: boolean | null; pnl: unknown; actualC: unknown; runMaxC: unknown }> };
+}
+
+export interface CitySimView {
+  generatedAt: string;
+  cities: CitySimCity[];
+  overall: { pnl: unknown; nGraded: unknown; nWon: unknown };
+}
+
+interface CitySimCityPayload {
+  slug: string;
+  displayName: string;
+  icao: string;
+  unit: string;
+  tz: string;
+  armHours: number[];
+  stakeUsd: unknown;
+  coverage: CitySimCity['coverage'];
+  arms: Omit<CitySimArm, 'isLeader' | 'hitCiLo' | 'hitCiHi' | 'edge' | 'edgeCiLo' | 'edgeCiHi' | 'ev' | 'evCiLo' | 'evCiHi'>[];
+  leader: { hour: number } | null;
+  totals: CitySimCity['totals'];
+  equityByArm: Record<string, { date: string; cum: unknown; status: string }[]>;
+  betsByArm: Record<string, { won: boolean; ask: unknown }[]>;
+  betLog: CitySimBetRow[];
+  latest: CitySimCity['latest'];
+}
+interface CitySimPayload {
+  generatedAt: string;
+  cities: CitySimCityPayload[];
+  overall: CitySimView['overall'];
+}
+
+/**
+ * The multi-city paper-trade head-to-head (dash_city_sim, 0070) for /paper-trade — the Amsterdam sim
+ * generalized to N operator-chosen cities (Singapore + Karachi). Per city: aligns each arm's cumulative
+ * equity onto the union date axis (carry-forward) so the lines share an x-scale, and computes the per-arm
+ * hit/edge/EV CIs (armEdgeStats) from the graded (won, ask) rows. Degrades to null (not a 500) if the RPC
+ * errors — the page can deploy ahead of the RPC.
+ */
+export async function getCitySim(db: WebDb): Promise<CitySimView | null> {
+  let v: CitySimPayload | null;
+  try {
+    v = await one<CitySimPayload>(db, 'dash_city_sim', {});
+  } catch {
+    return null;
+  }
+  if (!v) return null;
+
+  const cities: CitySimCity[] = (v.cities ?? []).map((c) => {
+    const leaderHour = c.leader?.hour ?? null;
+    const betsByArm = c.betsByArm ?? {};
+    const arms: CitySimArm[] = (c.arms ?? [])
+      .map((a) => {
+        const graded = (betsByArm[String(a.hour)] ?? [])
+          .map((r) => ({ won: r.won === true, ask: toNum(r.ask) }))
+          .filter((r): r is { won: boolean; ask: number } => r.ask != null);
+        const s = armEdgeStats(graded);
+        return {
+          ...a,
+          isLeader: a.hour === leaderHour,
+          hitCiLo: s.hitCiLo,
+          hitCiHi: s.hitCiHi,
+          edge: s.edge,
+          edgeCiLo: s.edgeCiLo,
+          edgeCiHi: s.edgeCiHi,
+          ev: s.ev,
+          evCiLo: s.evCiLo,
+          evCiHi: s.evCiHi,
+        };
+      })
+      .sort((a, b) => a.hour - b.hour);
+
+    // Shared sorted union of every arm's bet dates → carry the last-known cum forward per arm.
+    const dateSet = new Set<string>();
+    for (const pts of Object.values(c.equityByArm ?? {})) for (const p of pts) dateSet.add(String(p.date).slice(0, 10));
+    const dates = [...dateSet].sort();
+    const byHour: Record<number, (number | null)[]> = {};
+    for (const [hourStr, pts] of Object.entries(c.equityByArm ?? {})) {
+      const sorted = [...pts].sort((a, b) => String(a.date).localeCompare(String(b.date)));
+      let i = 0;
+      let last: number | null = null;
+      byHour[Number(hourStr)] = dates.map((d) => {
+        while (i < sorted.length && String(sorted[i]!.date).slice(0, 10) <= d) {
+          last = toNum(sorted[i]!.cum);
+          i++;
+        }
+        return last;
+      });
+    }
+
+    const latestByHour: Record<number, CitySimCity['latest']['byHour'][number]> = {};
+    for (const [h, row] of Object.entries(c.latest?.byHour ?? {})) latestByHour[Number(h)] = row;
+
+    return {
+      slug: c.slug,
+      displayName: c.displayName,
+      icao: c.icao,
+      unit: c.unit,
+      tz: c.tz,
+      armHours: c.armHours ?? [],
+      stakeUsd: c.stakeUsd,
+      coverage: c.coverage,
+      arms,
+      leaderHour,
+      totals: c.totals,
+      chart: { dates, byHour },
+      betLog: c.betLog ?? [],
+      latest: { date: c.latest?.date ?? null, byHour: latestByHour },
+    };
+  });
+
+  return { generatedAt: v.generatedAt, cities, overall: v.overall };
+}
+
 // --- /calibration --------------------------------------------------------------------
 
 export interface CalibrationScoreRow {
