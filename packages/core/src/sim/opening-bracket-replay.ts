@@ -103,6 +103,12 @@ export interface BracketTrade {
   executed: boolean;
   /** the MAX execBid reached after entry (the look-ahead ceiling) — REPORT-ONLY, NEVER used in the decision. */
   bestReachableBid: number;
+  /** POST-REALIZATION counterfactual (bracket exits only — NaN for resolution-settle / mtm / non-fills): the
+   *  BEST realizable value the market reached AFTER our exit tick — max(later execBids, the resolution payout if
+   *  it settled). "Did holding past our exit do better?" REPORT-ONLY, never a decision. */
+  postExitBestBid: number;
+  /** the WORST realizable value after our exit tick — min(later execBids, the resolution payout). REPORT-ONLY. */
+  postExitWorstBid: number;
 }
 
 /** One take-profit's panel summary (the verdict numbers + the ceiling-vs-capture gap). */
@@ -110,11 +116,12 @@ export interface TpSweepRow {
   tpDeltaPp: number;
   /** all input markets considered (excludes grading_mismatch). */
   nEvents: number;
-  /** markets that produced a fill AND fed the verdict. */
+  /** markets that produced a fill (ENTERED) — incl. still-in-flight marked-open positions; the entry-rate numerator. */
   nExecuted: number;
   /** nExecuted / nEvents — the share of considered markets the bracket rule actually entered. */
   executedFrac: number;
-  // ── the openingVerdict numbers (executed markets only) ──
+  // ── the openingVerdict numbers: REALIZED markets only (bracket-exited or resolution-settled; in-flight
+  //    mtm_unresolved marks are EXCLUDED so the §9R-E gate certifies CLOSED net profit, not unrealized marks) ──
   nMarkets: number;
   nCities: number;
   nDistinctDays: number;
@@ -178,6 +185,8 @@ const NOT_EXECUTED = (reason: string): BracketTrade => ({
   netReturn: NaN,
   executed: false,
   bestReachableBid: NaN,
+  postExitBestBid: NaN,
+  postExitWorstBid: NaN,
 });
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
@@ -272,6 +281,7 @@ export function replayEvent(input: EventReplayInput, cfg: OpeningCfg, tpDeltaPp:
     state: 'armed', // filled — no longer maker_resting
   };
   let exited = false;
+  let exitIdx = -1; // the tick we flattened on (for the post-realization curve walk below)
   let exitPrice = NaN;
   let exitReason = '';
   let netPnlUsd = 0;
@@ -292,6 +302,7 @@ export function replayEvent(input: EventReplayInput, cfg: OpeningCfg, tpDeltaPp:
         netPnlUsd = shares * px - exitFee - stakeUsd - entryFee;
         exitReason = `${action.kind}:${action.reason}`;
         exited = true;
+        exitIdx = j;
       } else {
         // the bracket fired but there is NO bid to flatten into (only a clock-only time_stop reaches here, since
         // bracketDecision returns `hold` on a null mark). It settles below; remember the fired kind so the
@@ -320,6 +331,30 @@ export function replayEvent(input: EventReplayInput, cfg: OpeningCfg, tpDeltaPp:
     }
   }
 
+  // ── post-realization curve: only for a genuine bracket exit (we actually flattened a sell before the end).
+  //    Walk EVERY tick AFTER the exit and fold in the resolution payout as the terminal "if held" point, so we
+  //    can later see whether holding past our exit would have done better/worse. REPORT-ONLY (never a decision). ──
+  let postExitBestBid = NaN;
+  let postExitWorstBid = NaN;
+  if (exited && exitIdx >= 0) {
+    let hi = Number.NEGATIVE_INFINITY;
+    let lo = Number.POSITIVE_INFINITY;
+    for (let j = exitIdx + 1; j < ticks.length; j++) {
+      const m = bucketOf(ticks[j]!, chosen.bucketIdx)?.execBid ?? null;
+      if (fin(m)) {
+        if (m > hi) hi = m;
+        if (m < lo) lo = m;
+      }
+    }
+    if (!input.resolution.gradingMismatch && input.resolution.winnerIdx != null) {
+      const payout = input.resolution.winnerIdx === chosen.bucketIdx ? 1 : 0; // the terminal "held to settle" value
+      if (payout > hi) hi = payout;
+      if (payout < lo) lo = payout;
+    }
+    postExitBestBid = Number.isFinite(hi) ? hi : NaN;
+    postExitWorstBid = Number.isFinite(lo) ? lo : NaN;
+  }
+
   return {
     entryAgeH,
     entryPrice: fill.price,
@@ -332,6 +367,8 @@ export function replayEvent(input: EventReplayInput, cfg: OpeningCfg, tpDeltaPp:
     netReturn: stakeUsd > 0 ? netPnlUsd / stakeUsd : NaN,
     executed: true,
     bestReachableBid,
+    postExitBestBid,
+    postExitWorstBid,
   };
 }
 
@@ -352,29 +389,37 @@ export function replayPanel(events: EventReplayInput[], cfg: OpeningCfg, tpValue
   const considered = evs.filter((e) => !e.resolution?.gradingMismatch);
 
   const perTp = tps.map((tp): TpSweepRow => {
-    const scored: BracketTrade[] = [];
+    const scored: BracketTrade[] = []; // EVERY executed (entered) trade — the entry-rate basis (incl. in-flight)
+    const realized: BracketTrade[] = []; // bracket-exited or resolution-settled only — the §9R-E gate basis
     const panel: OpeningMarketResult[] = [];
     for (const e of considered) {
       const t = replayEvent(e, cfg, tp);
       if (t.executed && Number.isFinite(t.netReturn) && Number.isFinite(t.netPnlUsd)) {
         scored.push(t);
-        panel.push({
-          city: e.city,
-          targetDate: e.targetDate,
-          netPnlUsd: t.netPnlUsd,
-          stakeUsd: t.stakeUsd,
-          netReturn: t.netReturn,
-          executed: true,
-        });
+        // REALIZED-ONLY gate: exclude still-in-flight, conservatively mark-to-bid positions (mtm_unresolved /
+        // a fired-but-unfillable time_stop→mtm). The gate certifies CLOSED net profit; it can never PASS on an
+        // unrealized mark (the one path to a false-GO), and the in-flight tail self-realizes within ~24h (noon
+        // time-stop), so the ≥40-market floor is reached on closed markets anyway. (grading_mismatch already out.)
+        if (!t.exitReason.includes('mtm_')) {
+          realized.push(t);
+          panel.push({
+            city: e.city,
+            targetDate: e.targetDate,
+            netPnlUsd: t.netPnlUsd,
+            stakeUsd: t.stakeUsd,
+            netReturn: t.netReturn,
+            executed: true,
+          });
+        }
       }
     }
     const v = openingVerdict(panel);
     return {
       tpDeltaPp: tp,
       nEvents: considered.length,
-      nExecuted: scored.length,
+      nExecuted: scored.length, // ENTERED (incl. in-flight) — the entry-rate numerator
       executedFrac: considered.length > 0 ? scored.length / considered.length : 0,
-      nMarkets: v.nMarkets,
+      nMarkets: v.nMarkets, // REALIZED/closed only — the gate count
       nCities: v.nCities,
       nDistinctDays: v.nDistinctDays,
       winFrac: v.winFrac,
@@ -382,9 +427,9 @@ export function replayPanel(events: EventReplayInput[], cfg: OpeningCfg, tpValue
       ciLow: v.ciLow,
       ciHigh: v.ciHigh,
       zeroSkillPassRate: v.zeroSkillPassRate,
-      ruleCaptureRoi: mean(scored.map((t) => t.netReturn)),
+      ruleCaptureRoi: mean(realized.map((t) => t.netReturn)), // what the rule actually CAUGHT (closed trades)
       avgBestReachableRoundtrip: mean(
-        scored.map((t) => t.bestReachableBid - t.entryPrice).filter((x) => Number.isFinite(x)),
+        realized.map((t) => t.bestReachableBid - t.entryPrice).filter((x) => Number.isFinite(x)),
       ),
       label: v.label,
       reason: v.reason,

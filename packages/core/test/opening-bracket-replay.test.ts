@@ -359,3 +359,58 @@ describe('replayEvent — unfillable time_stop attribution', () => {
     expect(trade.exitPrice).toBe(1); // couldn't flatten on-book → redeemed at resolution
   });
 });
+
+// ── 11 · post-realization curve (did we exit at the right point?) ────────────────────────────────────────
+
+describe('replayEvent — post-realization curve', () => {
+  it('records the best/worst AFTER a take-profit exit, folding in the resolution payout as the terminal', () => {
+    // TP fires at 0.45 (T2); after that the bid dips to 0.30 (T3); the market resolves YES → terminal $1.
+    const trade = replayEvent(
+      ev({
+        ticks: [entry(), makerFill(), tk(T2, 0.35, { execBid: 0.45 }), tk(T3, 0.4, { execBid: 0.3 })],
+        resolution: { winnerIdx: 2, gradingMismatch: false },
+      }),
+      cfg,
+      0.25,
+    );
+    expect(trade.exitReason.startsWith('take_profit')).toBe(true);
+    expect(trade.exitPrice).toBeCloseTo(0.45, 9);
+    expect(trade.postExitWorstBid).toBeCloseTo(0.3, 9); // the post-exit dip
+    expect(trade.postExitBestBid).toBe(1); // the resolution terminal beats every post-exit bid
+  });
+
+  it('a stop-loss that recovers + resolves YES shows the foregone upside (the stop cut a winner)', () => {
+    const trade = replayEvent(
+      ev({
+        ticks: [entry(), makerFill(), tk(T2, 0.35, { execBid: 0.05 }), tk(T3, 0.4, { execBid: 0.5 })],
+        resolution: { winnerIdx: 2, gradingMismatch: false },
+      }),
+      cfg,
+      0.25,
+    );
+    expect(trade.exitReason.startsWith('stop_loss')).toBe(true);
+    expect(trade.postExitBestBid).toBe(1); // recovered to 0.50 then settled $1 — we got stopped out of a winner
+  });
+
+  it('a position HELD to resolution has no post-realization curve (NaN — nothing was closed early)', () => {
+    const held = [entry(), makerFill(), tk(T2, 0.35, { execBid: 0.1 })];
+    const trade = replayEvent(ev({ ticks: held, resolution: { winnerIdx: 2, gradingMismatch: false } }), cfg, 0.25);
+    expect(trade.exitReason).toBe('resolution_settle:win');
+    expect(Number.isNaN(trade.postExitBestBid)).toBe(true);
+    expect(Number.isNaN(trade.postExitWorstBid)).toBe(true);
+  });
+});
+
+// ── 12 · realized-only §9R-E gate (in-flight marks are entered but NOT scored) ───────────────────────────
+
+describe('replayPanel — the gate scores REALIZED markets only', () => {
+  it('an in-flight mtm position counts toward nExecuted/executedFrac but NOT nMarkets', () => {
+    const tpEv = ev({ eventId: 'tp', ticks: [entry(), makerFill(), tk(T2, 0.35, { execBid: 0.45 })] }); // take_profit (realized)
+    const openEv = ev({ eventId: 'open', ticks: [entry(), makerFill(), tk(T2, 0.35, { execBid: 0.1 })] }); // holds, unresolved → mtm
+    expect(replayEvent(openEv, cfg, 0.25).exitReason).toBe('mtm_unresolved');
+    const h = replayPanel([tpEv, openEv], cfg, [0.25]).perTp[0]!;
+    expect(h.nExecuted).toBe(2); // both ENTERED (filled)
+    expect(h.executedFrac).toBeCloseTo(1, 9);
+    expect(h.nMarkets).toBe(1); // only the realized take-profit feeds the verdict — the mtm mark is excluded
+  });
+});

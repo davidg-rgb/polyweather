@@ -59,6 +59,16 @@ export interface ConvergenceEntry {
   bestReachableBid: number;
   /** realized = a fired bracket or a settled resolution; open = still marked-to-bid (unresolved). */
   status: 'realized' | 'open';
+  // ── POST-REALIZATION curve (bracket exits only; null for resolution-settle / open-marked): how the position
+  //    moved AFTER we closed it — the "did we exit at the right moment?" layer. ─────────────────────────────────
+  /** best value the market reached after our exit (later bids + the resolution terminal). */
+  postExitBest: number | null;
+  /** worst value after our exit. */
+  postExitWorst: number | null;
+  /** USD on this position we LEFT on the table by closing (max(0, postExitBest − exit) × shares) — >0 = too early. */
+  foregoneUpsideUsd: number | null;
+  /** USD on this position we DODGED by closing (max(0, exit − postExitWorst) × shares) — >0 = a good exit. */
+  avoidedDownsideUsd: number | null;
 }
 
 /** One station-local target day: how many markets we considered vs entered, and that day's paper P&L. */
@@ -107,6 +117,24 @@ export interface ConvergenceMoney {
   equity: { date: string; dayUsd: number; cumUsd: number }[];
 }
 
+/** Exit-timing quality for ONE exit kind — was holding past our exit, on average, worth it? */
+export interface ConvergenceExitTimingKind {
+  kind: ConvergenceExitKind;
+  n: number;
+  /** mean USD we left on the table by closing (foregone upside). */
+  meanForegoneUsd: number;
+  /** mean USD we dodged by closing (avoided downside). */
+  meanAvoidedUsd: number;
+  /** net = meanForegone − meanAvoided; >0 ⇒ on average holding past our exit would have HELPED (we close early). */
+  netUsd: number;
+}
+
+/** Exit-timing decision layer: across realized bracket exits, did we close at the right point? */
+export interface ConvergenceExitTiming {
+  byKind: ConvergenceExitTimingKind[];
+  overall: { n: number; meanForegoneUsd: number; meanAvoidedUsd: number; netUsd: number };
+}
+
 /** The §9R-E gate progress toward a verdict (the headline TP row). */
 export interface ConvergenceGate {
   label: OpeningLabel;
@@ -131,6 +159,8 @@ export interface ConvergenceView {
   /** the best in-sample rule-capture TP (EXPLORATORY — winner's curse; not a GO). null if no executed trades. */
   recommendedTp: { tpDeltaPp: number; ruleCaptureRoi: number } | null;
   money: ConvergenceMoney;
+  /** exit-timing decision layer: across realized bracket exits, did we close at the right point? */
+  exitTiming: ConvergenceExitTiming;
   gate: ConvergenceGate;
   /** per-city input-fetch errors on the Edge tick that produced this view (0 here; the convergence-panel
    *  handler overrides it). >0 means some allowlist cities were dropped this tick → the gate may undercount. */
@@ -209,6 +239,9 @@ export function buildConvergenceView(
     const t = replayEvent(e, cfg, cfg.tpDeltaPp);
     if (!t.executed || !Number.isFinite(t.netPnlUsd) || !Number.isFinite(t.netReturn)) continue;
     const kind = exitKindOf(t.exitReason);
+    const shares = t.entryPrice > 0 ? t.stakeUsd / t.entryPrice : 0;
+    const hasPostExit =
+      Number.isFinite(t.postExitBestBid) && Number.isFinite(t.postExitWorstBid) && Number.isFinite(t.exitPrice);
     entries.push({
       eventId: e.eventId,
       city: e.city,
@@ -225,6 +258,10 @@ export function buildConvergenceView(
       netReturn: t.netReturn,
       bestReachableBid: t.bestReachableBid,
       status: kind === 'open_marked' ? 'open' : 'realized',
+      postExitBest: hasPostExit ? t.postExitBestBid : null,
+      postExitWorst: hasPostExit ? t.postExitWorstBid : null,
+      foregoneUpsideUsd: hasPostExit ? Math.max(0, t.postExitBestBid - t.exitPrice) * shares : null,
+      avoidedDownsideUsd: hasPostExit ? Math.max(0, t.exitPrice - t.postExitWorstBid) * shares : null,
     });
   }
   entries.sort((a, b) => (a.targetDate < b.targetDate ? -1 : a.targetDate > b.targetDate ? 1 : a.city.localeCompare(b.city)));
@@ -283,6 +320,27 @@ export function buildConvergenceView(
     equity,
   };
 
+  // ── exit-timing decision layer: across realized bracket exits (those with a post-exit curve), was holding
+  //    past our exit, on average, worth it? Per exit kind → the fine-tuning signal (raise TP / loosen stop). ────
+  const withPostExit = entries.filter((e) => e.foregoneUpsideUsd != null && e.avoidedDownsideUsd != null);
+  const meanOf = (rows: ConvergenceEntry[], pick: (e: ConvergenceEntry) => number): number =>
+    rows.length ? rows.reduce((a, e) => a + pick(e), 0) / rows.length : 0;
+  const timingFor = (rows: ConvergenceEntry[]): { meanForegoneUsd: number; meanAvoidedUsd: number; netUsd: number } => {
+    const f = meanOf(rows, (e) => e.foregoneUpsideUsd ?? 0);
+    const av = meanOf(rows, (e) => e.avoidedDownsideUsd ?? 0);
+    return { meanForegoneUsd: f, meanAvoidedUsd: av, netUsd: f - av };
+  };
+  const byKind: ConvergenceExitTimingKind[] = (['take_profit', 'stop_loss', 'time_stop'] as const)
+    .map((kind) => {
+      const rows = withPostExit.filter((e) => e.exitKind === kind);
+      return { kind, n: rows.length, ...timingFor(rows) };
+    })
+    .filter((k) => k.n > 0);
+  const exitTiming: ConvergenceExitTiming = {
+    byKind,
+    overall: { n: withPostExit.length, ...timingFor(withPostExit) },
+  };
+
   // ── gate progress: ALL three §9R-E counts + the label/reason come from the ONE headline verdict row (the
   //    gm-excluded openingVerdict population) — never recomputed from `entries`, so the bars can never disagree
   //    with the label or with the authoritative opening-bracket-score scorer. ─────────────────────────────────
@@ -307,6 +365,7 @@ export function buildConvergenceView(
     tuning,
     recommendedTp,
     money,
+    exitTiming,
     gate,
     cityErrors: 0, // pure default; the convergence-panel Edge handler overrides with the tick's real count
   };

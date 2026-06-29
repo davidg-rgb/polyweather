@@ -58,6 +58,7 @@ describe('buildConvergenceView — the /convergence page view-model', () => {
     expect(op.exitKind).toBe('open_marked');
     expect(op.status).toBe('open');
     expect(op.netPnlUsd).toBeLessThan(0); // bought 0.12, marked 0.10
+    expect(op.postExitBest).toBeNull(); // open-marked has no post-realization curve (nothing was closed)
   });
 
   it('builds the fictive money tracker at the recommended per-entry stake', () => {
@@ -83,13 +84,15 @@ describe('buildConvergenceView — the /convergence page view-model', () => {
     expect(view.perDay[0]!.firePct).toBeCloseTo(1, 9);
   });
 
-  it('exposes the TP sweep + a recommended (exploratory) TP and the §9R-E gate counts', () => {
+  it('exposes the TP sweep + a recommended (exploratory) TP and the REALIZED-only §9R-E gate counts', () => {
     expect(view.tuning.length).toBeGreaterThan(0);
     expect(view.tuning.some((r) => r.isHeadline && r.tpDeltaPp === cfg.tpDeltaPp)).toBe(true);
     expect(view.recommendedTp).not.toBeNull();
-    expect(view.gate.nMarkets).toBe(2);
+    // both markets ENTERED (executedFrac 1) but only the realized TP feeds the gate; the OPEN (mtm) is excluded.
+    expect(view.tuning.find((r) => r.isHeadline)!.executedFrac).toBeCloseTo(1, 9);
+    expect(view.gate.nMarkets).toBe(1);
     expect(view.gate.minMarkets).toBe(40);
-    expect(view.gate.label).toBe('INSUFFICIENT_DATA'); // 2 < 40 markets
+    expect(view.gate.label).toBe('INSUFFICIENT_DATA'); // 1 < 40 markets
   });
 
   it('is total on empty input', () => {
@@ -172,5 +175,31 @@ describe('buildConvergenceView — trim + downsample fidelity', () => {
     expect(down.gate.nDistinctDays).toBe(full.gate.nDistinctDays);
     expect(down.gate.label).toBe(full.gate.label);
     expect(down.nFreshEvents).toBe(full.nFreshEvents);
+  });
+});
+
+// ── post-realization curve + the exit-timing decision layer ─────────────────────────────────────────────
+describe('buildConvergenceView — post-exit curve + exit timing', () => {
+  it('logs the post-exit best/worst + foregone upside per realized entry, and aggregates exit timing by kind', () => {
+    // TP fires at 0.45, then the bid keeps climbing to 0.70, and the market resolves YES ($1) → we left upside.
+    const tpThenUp: RawCaptureRow[] = [
+      row('TPU', '2026-06-28T08:00:00.000Z', 0.2, { execAsk: 0.18, bestAsk: 0.12, execBid: 0.1 }),
+      row('TPU', '2026-06-28T08:00:30.000Z', 0.3, { execAsk: 0.11, execBid: 0.1 }),
+      row('TPU', '2026-06-28T08:01:00.000Z', 0.35, { execBid: 0.45 }), // take-profit here
+      row('TPU', '2026-06-28T08:01:30.000Z', 0.4, { execBid: 0.7 }), // post-exit: kept climbing
+    ];
+    const v = buildConvergenceView(tpThenUp, [{ id: 'TPU', winnerIdx: 2, gradingMismatch: false }], cfg);
+    const e = v.entries.find((x) => x.eventId === 'TPU')!;
+    expect(e.exitKind).toBe('take_profit');
+    expect(e.postExitBest).toBe(1); // the resolution terminal
+    expect(e.postExitWorst).toBeCloseTo(0.7, 9);
+    expect(e.foregoneUpsideUsd!).toBeGreaterThan(0); // it ran to $1 after we sold at 0.45 — upside left on the table
+    expect(e.avoidedDownsideUsd!).toBeCloseTo(0, 6); // it never dropped below our exit → nothing dodged
+    // the aggregate decision layer
+    expect(v.exitTiming.overall.n).toBe(1);
+    const tp = v.exitTiming.byKind.find((k) => k.kind === 'take_profit')!;
+    expect(tp.n).toBe(1);
+    expect(tp.meanForegoneUsd).toBeGreaterThan(0);
+    expect(v.exitTiming.overall.netUsd).toBeGreaterThan(0); // holding past our exit would have helped here
   });
 });

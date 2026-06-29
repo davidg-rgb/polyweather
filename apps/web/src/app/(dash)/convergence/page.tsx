@@ -11,6 +11,7 @@
 import type { ReactElement } from 'react';
 import type {
   ConvergenceEntry,
+  ConvergenceExitTiming,
   ConvergencePerDay,
   ConvergenceTuningRow,
   ConvergenceView,
@@ -234,6 +235,7 @@ function EntriesTable({ rows }: { rows: ConvergenceEntry[] }): ReactElement {
             <th className="num">exit px</th>
             <th className="num">net P&amp;L</th>
             <th className="num">return</th>
+            <th>post-exit (vs our exit)</th>
             <th>status</th>
           </tr>
         </thead>
@@ -253,6 +255,7 @@ function EntriesTable({ rows }: { rows: ConvergenceEntry[] }): ReactElement {
                 <td className="num">{fmtProb(e.exitPrice)}</td>
                 <td className="num" style={{ color: pnlColor(e.netPnlUsd) }}>{signedUsd(e.netPnlUsd)}</td>
                 <td className="num" style={{ color: pnlColor(e.netReturn) }}>{signedPct(e.netReturn)}</td>
+                <td><PostExitCell e={e} /></td>
                 <td className="small">
                   <span className="chip small" style={{ color: e.status === 'open' ? SKY : undefined }}>{e.status}</span>
                 </td>
@@ -262,6 +265,64 @@ function EntriesTable({ rows }: { rows: ConvergenceEntry[] }): ReactElement {
         </tbody>
       </table>
     </div>
+  );
+}
+
+/**
+ * The post-realization curve made legible: a tiny range bar [worst · OUR EXIT · best] of how the position moved
+ * AFTER we closed it (later bids + the resolution terminal), with the upside we left (↑, amber if any) and the
+ * downside we dodged (↓). Exit near the right edge = we captured most of the move; near the left = we closed early.
+ */
+function PostExitCell({ e }: { e: ConvergenceEntry }): ReactElement {
+  if (e.postExitBest == null || e.postExitWorst == null) return <span className="muted small">—</span>;
+  const lo = Math.min(e.exitPrice, e.postExitWorst);
+  const hi = Math.max(e.exitPrice, e.postExitBest);
+  const span = hi - lo || 1;
+  const pct = (v: number): string => `${(((v - lo) / span) * 100).toFixed(1)}%`;
+  const foregone = e.foregoneUpsideUsd ?? 0;
+  const avoided = e.avoidedDownsideUsd ?? 0;
+  return (
+    <div style={{ minWidth: 120 }}>
+      <div style={{ position: 'relative', height: 6, borderRadius: 3, background: 'rgba(255,255,255,0.08)' }}>
+        <div style={{ position: 'absolute', top: 0, bottom: 0, left: pct(e.postExitWorst), width: `${(((e.postExitBest - e.postExitWorst) / span) * 100).toFixed(1)}%`, background: 'rgba(120,170,255,0.25)', borderRadius: 3 }} />
+        <span style={{ position: 'absolute', top: -1, left: pct(e.postExitBest), width: 2, height: 8, background: GREEN }} />
+        <span style={{ position: 'absolute', top: -1, left: pct(e.postExitWorst), width: 2, height: 8, background: RED }} />
+        <span style={{ position: 'absolute', top: -2, left: pct(e.exitPrice), width: 2, height: 10, background: '#fff' }} title="our exit" />
+      </div>
+      <div className="small" style={{ marginTop: 3 }}>
+        <span style={{ color: foregone > 0.005 ? AMBER : 'var(--muted, #888)' }} title="upside left on the table by closing">↑{fmtUsd(foregone)}</span>{' '}
+        <span className="muted" title="downside dodged by closing">↓{fmtUsd(avoided)}</span>
+      </div>
+    </div>
+  );
+}
+
+/** Exit-timing decision layer: per exit kind, was holding past our exit worth it? The fine-tuning signal. */
+function ExitTimingPanel({ timing }: { timing: ConvergenceExitTiming }): ReactElement {
+  const o = timing.overall;
+  if (o.n === 0) return <p className="muted">No realized bracket exits with a post-exit curve yet.</p>;
+  const verdict =
+    o.netUsd > 0.01
+      ? `On average, holding past our exit would have ADDED ${fmtUsd(o.netUsd)}/position — we may be closing too early (consider a higher take-profit / a looser stop).`
+      : o.netUsd < -0.01
+        ? `On average, our exits captured the move — holding longer would have GIVEN BACK ${fmtUsd(-o.netUsd)}/position.`
+        : 'On average, our exits look well-timed (upside left ≈ downside dodged).';
+  return (
+    <>
+      <div className="strip">
+        {timing.byKind.map((k) => (
+          <div className="tile" key={k.kind}>
+            <div className="cap">{(EXIT_META[k.kind]?.label ?? k.kind)} · {k.n}</div>
+            <div className="big" style={{ color: k.netUsd > 0 ? AMBER : GREEN }}>{signedUsd(k.netUsd)}</div>
+            <div className="sub">↑{fmtUsd(k.meanForegoneUsd)} left · ↓{fmtUsd(k.meanAvoidedUsd)} dodged</div>
+          </div>
+        ))}
+      </div>
+      <p className="muted small" style={{ marginTop: '0.5rem' }}>
+        {verdict} <strong>Net</strong> = mean upside left on the table − mean downside dodged, per closed position
+        (post-exit best/worst incl. the resolution terminal). EXPLORATORY — a tuning signal, not a GO.
+      </p>
+    </>
   );
 }
 
@@ -336,6 +397,17 @@ export default async function ConvergencePage(): Promise<ReactElement> {
       <h2>Tuning recommendations — the take-profit sweep</h2>
       <div className="panel">
         <TuningTable rows={view.tuning} headlineTp={view.headlineTpDeltaPp} recommended={view.recommendedTp} />
+      </div>
+
+      <h2>Exit timing — did we close at the right point?</h2>
+      <div className="panel">
+        <p className="muted small" style={{ marginTop: 0 }}>
+          For every realized bracket exit we keep tracking the price <strong>after</strong> we closed and record the
+          best &amp; worst it reached (incl. the resolution payout). This shows whether we exited too early (upside
+          left on the table) or well (downside dodged) — a layer to fine-tune the take-profit / stop. Per-row detail
+          is the <span className="mono">post-exit</span> bar in the entries table below.
+        </p>
+        <ExitTimingPanel timing={view.exitTiming} />
       </div>
 
       <h2>Logged potential entries &amp; exits</h2>

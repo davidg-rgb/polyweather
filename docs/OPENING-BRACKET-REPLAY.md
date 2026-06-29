@@ -154,9 +154,9 @@ Read-only, keyless — places NOTHING, writes NOTHING, never imports `packages/t
 | Column | Meaning |
 |---|---|
 | `TP` | the swept take-profit delta (pp) |
-| `nMkts` / `cities` / `dates` | the executed-market panel size + its independence spread |
-| `exec%` | share of considered markets the bracket rule actually entered (fill happened) |
-| `winFrac` | fraction of executed markets with net P&L > 0 (bar 0.50) |
+| `nMkts` / `cities` / `dates` | the **REALIZED**-market panel size + its independence spread (in-flight marks excluded) |
+| `exec%` | share of considered markets the bracket rule actually **entered** (fill happened — incl. still-in-flight) |
+| `winFrac` | fraction of realized markets with net P&L > 0 (bar 0.50) |
 | `meanNetRet` + `CI95` | city-clustered mean net return + its 95% CI (the gate looks at `ciLow > 0`) |
 | `zsMC` | the cluster-preserving sign-flip zero-skill MC pass-rate (bar < 5%) |
 | `ruleRoi` | what the FIXED rule caught (`ruleCaptureRoi`) |
@@ -164,8 +164,8 @@ Read-only, keyless — places NOTHING, writes NOTHING, never imports `packages/t
 | `verdict` | the §9R-E `openingVerdict` label at that TP (PASS / KILL / INSUFFICIENT_DATA) |
 
 **The headline verdict** is the row at the **pre-registered bot-default TP (+25%)**, under the
-`openingVerdict` floors: ≥40 executed markets, ≥6 cities, ≥7 distinct days. Below any floor it reads
-**INSUFFICIENT_DATA by design** — that is expected until enough markets are both *executed* and *resolved*.
+`openingVerdict` floors: ≥40 **realized** markets, ≥6 cities, ≥7 distinct days. Below any floor it reads
+**INSUFFICIENT_DATA by design** — that is expected until enough markets are both *entered* and *closed*.
 
 **Limits — read these before drawing any conclusion:**
 - The **TP sweep is EXPLORATORY.** Picking the best TP in-sample is the winner's-curse; a low-TP "PASS"
@@ -174,6 +174,16 @@ Read-only, keyless — places NOTHING, writes NOTHING, never imports `packages/t
   `openingVerdict` cluster gate + the operator** for any capital decision. This script decides **nothing**
   about capital.
 - `grading_mismatch` events (ambiguous payout) are **excluded** from scoring entirely.
+- **REALIZED-ONLY gate (2026-06-29).** The §9R-E verdict scores only **closed** markets — bracket-exited
+  (TP/SL/time-stop) or resolution-settled. Still-in-flight positions conservatively marked-to-bid
+  (`mtm_unresolved`) are **entered** (they count toward `exec%`) but **excluded** from `nMkts`/`winFrac`/the
+  CI/the label. Rationale: the gate certifies *closed* net profit and can never PASS on an unrealized mark (the
+  one path to a false-GO); the in-flight tail self-realizes within ~24h (the noon time-stop), so the ≥40 floor is
+  reached on closed markets regardless.
+- **Post-realization curve (2026-06-29).** Each realized bracket exit also records `postExitBestBid` /
+  `postExitWorstBid` — the best & worst value the market reached *after* we closed (later bids + the resolution
+  terminal). REPORT-ONLY (never a decision); it powers the `/convergence` "Exit timing" panel (did we close too
+  early?) and the per-row post-exit bar.
 - The `ceiling` column is a *diagnostic*, not a strategy — it is what a perfect (impossible) exit would have
   realised. The gap to `ruleRoi` is the unharvested headroom, nothing more.
 - The **maker entry fill is modeled at top-of-book** (`makerLimit = min(reservation, bestAsk)`, full size, $0
