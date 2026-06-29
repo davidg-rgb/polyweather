@@ -315,3 +315,47 @@ describe('replayEvent / replayPanel — grading_mismatch + totality', () => {
     expect(() => replayPanel([junk, null as unknown as EventReplayInput], cfg, [0.25])).not.toThrow();
   });
 });
+
+// ── 9 · taker fallback requires a LIVE ask (vanished-book guard) ────────────────────────────────────────
+
+describe('replayEvent — taker fallback needs a live ask (vanished-book guard)', () => {
+  it('never_filled when the center bucket has no live ask at the maker-window-elapsed tick', () => {
+    // at T20 the maker window (15m) has elapsed but the center bucket has NO live ask (book vanished) → the
+    // take cannot fire on a stale stored ask; with only these two ticks the order rests unfilled to series end.
+    const vanished = tk(T20, 0.5, { execAsk: null, bestAsk: null, execBid: 0.3 });
+    const trade = replayEvent(ev({ ticks: [entry(), vanished] }), cfg, 0.25);
+    expect(trade.executed).toBe(false);
+    expect(trade.exitReason).toBe('never_filled');
+  });
+
+  it('retries past a vanished-book tick and takes once a live ask reappears', () => {
+    const T21 = '2026-06-28T08:21:00.000Z';
+    const vanished = tk(T20, 0.5, { execAsk: null, bestAsk: null, execBid: 0.3 });
+    const revived = tk(T21, 0.6, { execAsk: 0.15, execBid: 0.3 }); // live ask back → taker max(0.18,0.15)+0.01
+    const trade = replayEvent(ev({ ticks: [entry(), vanished, revived, tk(TNOON, 2, { execBid: 0.3 })] }), cfg, 0.25);
+    expect(trade.executed).toBe(true);
+    expect(trade.isMaker).toBe(false);
+    expect(trade.entryPrice).toBeCloseTo(0.19, 9);
+  });
+});
+
+// ── 10 · a fired-but-unfillable time_stop keeps its exit-kind attribution ───────────────────────────────
+
+describe('replayEvent — unfillable time_stop attribution', () => {
+  it('prefixes the settle reason so exitKindOf still reads time_stop when no bid ever exists', () => {
+    // taker-fallback fill at T20 (execAsk 0.11 live), but the center bucket NEVER shows an execBid → at noon the
+    // time-stop fires with nothing to flatten into → settles at resolution, tagged time_stop→resolution_settle.
+    const trade = replayEvent(
+      ev({
+        ticks: [entry(), tk(T20, 0.5, { execAsk: 0.11, execBid: null }), tk(TNOON, 2, { execBid: null })],
+        resolution: { winnerIdx: 2, gradingMismatch: false },
+      }),
+      cfg,
+      0.25,
+    );
+    expect(trade.executed).toBe(true);
+    expect(trade.exitReason.startsWith('time_stop')).toBe(true); // attribution survives the settlement fall-through
+    expect(trade.exitReason).toContain('resolution_settle:win');
+    expect(trade.exitPrice).toBe(1); // couldn't flatten on-book → redeemed at resolution
+  });
+});

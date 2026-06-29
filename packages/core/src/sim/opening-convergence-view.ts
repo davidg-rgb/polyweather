@@ -19,6 +19,7 @@
  * §9R-E gate (≥40 markets / ≥6 cities / ≥7 days) still governs any GO; below it the verdict is INSUFFICIENT.
  * Pure + total: junk → empty sections, never throws. Imports only the engine + the raw mappers; no I/O.
  */
+import { GATE_MIN_MARKETS, GATE_MIN_CITIES, GATE_MIN_DISTINCT_DAYS } from './opening-convergence.ts';
 import type { OpeningCfg, OpeningLabel } from './opening-convergence.ts';
 import { replayEvent, replayPanel } from './opening-bracket-replay.ts';
 import { buildEvents, type RawCaptureRow, type Resolution } from './opening-bracket-ingest.ts';
@@ -129,10 +130,14 @@ export interface ConvergenceView {
   recommendedTp: { tpDeltaPp: number; ruleCaptureRoi: number } | null;
   money: ConvergenceMoney;
   gate: ConvergenceGate;
+  /** per-city input-fetch errors on the Edge tick that produced this view (0 here; the convergence-panel
+   *  handler overrides it). >0 means some allowlist cities were dropped this tick → the gate may undercount. */
+  cityErrors: number;
 }
 
-/** the §9R-E sufficiency bars (mirrored for the gate read-out; the engine enforces the same constants). */
-const GATE = { minMarkets: 40, minCities: 6, minDistinctDays: 7 };
+/** the §9R-E sufficiency bars — imported from the engine (single source of truth; openingVerdict enforces the
+ *  same floors via GATE_MIN_*), so the displayed denominators can never drift from the bar the verdict applies. */
+const GATE = { minMarkets: GATE_MIN_MARKETS, minCities: GATE_MIN_CITIES, minDistinctDays: GATE_MIN_DISTINCT_DAYS };
 
 /** the take-profit sweep for the tuning panel (the headline cfg.tpDeltaPp is always added by replayPanel). */
 export const CONVERGENCE_TP_SWEEP = [0.06, 0.08, 0.1, 0.12, 0.15, 0.2, 0.25];
@@ -164,8 +169,13 @@ export function buildConvergenceView(
     ]),
   );
   const events = buildEvents(Array.isArray(captures) ? captures : [], resMap);
+  // grading_mismatch markets (ambiguous payout) are EXCLUDED from scoring — replayPanel filters them out of the
+  // verdict, so the entries / per-day / money tracker / gate counts must derive from the SAME excluded population
+  // or the gate's three bars would be drawn from two different sets (and the fictive P&L would book ambiguous
+  // markets the methodology drops). One source of truth, identical to replayPanel's internal `considered`.
+  const considered = events.filter((e) => !e.resolution.gradingMismatch);
 
-  // ── tuning panel: the full TP sweep + the frozen §9R-E verdict per TP ──────────────────────────────
+  // ── tuning panel: the full TP sweep + the frozen §9R-E verdict per TP (replayPanel does its OWN gm filter) ──
   const panel = replayPanel(events, cfg, tps);
   const tuning: ConvergenceTuningRow[] = panel.perTp.map((r) => ({
     tpDeltaPp: r.tpDeltaPp,
@@ -181,7 +191,9 @@ export function buildConvergenceView(
     label: r.label,
     isHeadline: r.tpDeltaPp === panel.headlineTp,
   }));
-  const headline = tuning.find((r) => r.isHeadline) ?? null;
+  // the ONE headline verdict row (the pre-registered TP), straight from the engine panel — carries the
+  // openingVerdict counts (nMarkets/nCities/nDistinctDays/label/reason) over the gm-excluded scored population.
+  const headlineRow = panel.perTp.find((r) => r.tpDeltaPp === panel.headlineTp) ?? null;
   const recommendedTp = tuning
     .filter((r) => Number.isFinite(r.ruleCaptureRoi))
     .reduce<{ tpDeltaPp: number; ruleCaptureRoi: number } | null>(
@@ -189,9 +201,9 @@ export function buildConvergenceView(
       null,
     );
 
-  // ── per-event entries at the HEADLINE TP (the bot-default rule) ────────────────────────────────────
+  // ── per-event entries at the HEADLINE TP (the bot-default rule), gm-excluded population ──────────────
   const entries: ConvergenceEntry[] = [];
-  for (const e of events) {
+  for (const e of considered) {
     const t = replayEvent(e, cfg, cfg.tpDeltaPp);
     if (!t.executed || !Number.isFinite(t.netPnlUsd) || !Number.isFinite(t.netReturn)) continue;
     const kind = exitKindOf(t.exitReason);
@@ -216,7 +228,7 @@ export function buildConvergenceView(
 
   // ── per-day chances: considered (fresh events) vs entered, per target day ──────────────────────────
   const consideredByDay = new Map<string, number>();
-  for (const e of events) consideredByDay.set(e.targetDate, (consideredByDay.get(e.targetDate) ?? 0) + 1);
+  for (const e of considered) consideredByDay.set(e.targetDate, (consideredByDay.get(e.targetDate) ?? 0) + 1);
   const dayAgg = new Map<string, { entered: number; stake: number; net: number }>();
   for (const en of entries) {
     const d = dayAgg.get(en.targetDate) ?? { entered: 0, stake: 0, net: 0 };
@@ -268,15 +280,17 @@ export function buildConvergenceView(
     equity,
   };
 
-  // ── gate progress (the headline TP row's §9R-E counts) ─────────────────────────────────────────────
+  // ── gate progress: ALL three §9R-E counts + the label/reason come from the ONE headline verdict row (the
+  //    gm-excluded openingVerdict population) — never recomputed from `entries`, so the bars can never disagree
+  //    with the label or with the authoritative opening-bracket-score scorer. ─────────────────────────────────
   const gate: ConvergenceGate = {
-    label: headline?.label ?? 'INSUFFICIENT_DATA',
-    reason: panel.perTp.find((r) => r.tpDeltaPp === panel.headlineTp)?.reason ?? 'no panel',
-    nMarkets: headline?.nMarkets ?? 0,
+    label: headlineRow?.label ?? 'INSUFFICIENT_DATA',
+    reason: headlineRow?.reason ?? 'no panel',
+    nMarkets: headlineRow?.nMarkets ?? 0,
     minMarkets: GATE.minMarkets,
-    nCities: new Set(realized.concat(open).map((e) => e.city)).size,
+    nCities: headlineRow?.nCities ?? 0,
     minCities: GATE.minCities,
-    nDistinctDays: new Set(entries.map((e) => e.targetDate)).size,
+    nDistinctDays: headlineRow?.nDistinctDays ?? 0,
     minDistinctDays: GATE.minDistinctDays,
   };
 
@@ -284,12 +298,13 @@ export function buildConvergenceView(
     days: 0, // set by the caller (the RPC window) — kept here for shape completeness
     cities: cfg.cities,
     headlineTpDeltaPp: cfg.tpDeltaPp,
-    nFreshEvents: events.length,
+    nFreshEvents: considered.length, // gm-excluded, matching replayPanel's executedFrac denominator (nEvents)
     entries,
     perDay,
     tuning,
     recommendedTp,
     money,
     gate,
+    cityErrors: 0, // pure default; the convergence-panel Edge handler overrides with the tick's real count
   };
 }

@@ -6,10 +6,13 @@
  * the SAME engine the bracket-score scorer uses: replayPanel/replayEvent over the §9R-locked config), and
  * store the small computed view via record_convergence_panel. The page reads only that snapshot.
  *
- * Config-aware: reads bot.* from the config table (parseBotConfig) so the city allowlist, the per-position
- * stake, the take-profit and the fee/depth match the LIVE bot config (falls back to BOT_DEFAULTS). NOT
- * trading — read-only analytics; the bot rail stays paper/DORMANT (FINDINGS.md, the 12th signal). A capture
- * gap just yields a smaller/empty view, never a failed job.
+ * Pinned to BOT_DEFAULTS (the §9R-locked 10-city TRADABLE allowlist + per-position stake + take-profit +
+ * fee/depth) — intentionally NOT config-driven: it does NOT read the live bot.* config (in particular it
+ * ignores bot.cities, the ~45-city CAPTURE universe) so the page's entries/gate/money match the authoritative
+ * opening-bracket-score scorer's scope, not the broader capture set. To re-scope the dashboard, change
+ * BOT_DEFAULTS, not the config table. NOT trading — read-only analytics; the bot rail stays paper/DORMANT
+ * (FINDINGS.md, the 12th signal). A capture gap just yields a smaller/empty view, never a failed job — and
+ * the per-city fetch-error count is surfaced into the stored view so the page can flag a silent undercount.
  */
 import type { JobCtx, JobStats } from '../_shared/runJob.ts';
 import {
@@ -61,8 +64,9 @@ export async function convergencePanel(ctx: JobCtx, deps: ConvergencePanelDeps):
     }
   }
 
-  // 2) the pure view (entries / exits / per-day / tuning / fictive money tracker / §9R-E gate).
-  const view = { ...buildConvergenceView(captures, resolutions, cfg), days: PANEL_DAYS };
+  // 2) the pure view (entries / exits / per-day / tuning / fictive money tracker / §9R-E gate). cityErrors is
+  //    threaded in so the page can flag when allowlist cities were dropped this tick (a silent gate undercount).
+  const view = { ...buildConvergenceView(captures, resolutions, cfg), days: PANEL_DAYS, cityErrors };
 
   // 3) store the small snapshot.
   const w = await db.rpc<{ record_convergence_panel: number }>('record_convergence_panel', { p_view: view });

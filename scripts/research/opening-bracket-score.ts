@@ -34,8 +34,9 @@
  * Run:  pnpm tsx scripts/research/opening-bracket-score.ts --days 3 --fee-rate 0.05
  *   --fee-rate is a FRACTION (e.g. 0.05 = the real weather taker rate) feeding takerFeePerShare = rate·p·(1−p);
  *   the bracket pays it on its TAKER legs (a taker-fallback entry + every bracket-exit sell). Maker fills pay $0.
- *   NOTE: bot_capture_series aggregates a large jsonb at multi-day × 45-city scale (migration 0068) — keep --days
- *   small for now (default 3; the live panel is ~26h today).
+ *   NOTE: loadEvents queries opening_captures DIRECTLY (migration 0066), server-side filtered to cfg.cities +
+ *   the ≤1h fresh window — NOT the 45-city bot_capture_series RPC. The per-event tick series still carries a
+ *   per-tick jsonb buckets column, so it grows with --days × cities — keep --days small (default 3; ~26h today).
  */
 import { parseArgs } from 'node:util';
 import { pathToFileURL } from 'node:url';
@@ -67,7 +68,7 @@ export const DEFAULT_FEE_RATE = 0.05;
 export const DEFAULT_MIN_DEPTH_USD = 50;
 // the take-profit sweep (the headline bot-default 0.25 is always added by replayPanel even if omitted here).
 export const DEFAULT_TPS = [0.06, 0.08, 0.1, 0.12, 0.15, 0.2, 0.25];
-// the live panel is ~26h today; bot_capture_series aggregates a large jsonb at multi-day × 45-city scale.
+// the live panel is ~26h today; the direct opening_captures query carries a per-tick jsonb buckets column.
 export const DEFAULT_DAYS = 3;
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
@@ -249,7 +250,7 @@ export function sanity(): void {
   // resolution settle WIN
   const held: ReplayTick[] = [entry, maker, tick('2026-06-28T08:01:00.000Z', 0.35, { execBid: 0.1 })];
   const winTrade = replayEvent({ eventId: 'W', city: 'amsterdam', targetDate: DATE, tz: TZ, ticks: held, resolution: { winnerIdx: 2, gradingMismatch: false } }, cfg, 0.25);
-  if (winTrade.exitReason !== 'resolution_settle:win' || !(winTrade.netReturn > 0)) throw new Error('sanity: settle-win');
+  if (winTrade.exitReason !== 'resolution_settle:win' || winTrade.exitPrice !== 1 || !(winTrade.netReturn > 0)) throw new Error('sanity: settle-win');
 
   // NO LOOK-AHEAD: a stop-loss is not rescued by a later up-tick
   const nla = replayEvent(
@@ -313,7 +314,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const db = makeScriptDb();
   try {
     process.stderr.write(
-      `${SCRIPT} · ${new Date().toISOString()} · reading bot_capture_series(${days}) ⋈ market_events — read-only; places NOTHING\n`,
+      `${SCRIPT} · ${new Date().toISOString()} · reading opening_captures(${days}) fresh+city-filtered ⋈ market_events — read-only; places NOTHING\n`,
     );
     const events = await loadEvents(db, days, cfg.cities);
     process.stderr.write(`  ${events.length} fresh events (min hours_since_listing < 1) · ${events.reduce((a, e) => a + e.ticks.length, 0)} ticks\n`);

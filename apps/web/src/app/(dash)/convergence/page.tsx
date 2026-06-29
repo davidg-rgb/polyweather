@@ -59,11 +59,23 @@ function GateBanner({ view }: { view: ConvergenceView }): ReactElement {
     );
   };
   const labelColor = g.label === 'PASS' ? GREEN : g.label === 'KILL' ? RED : AMBER;
+  const cityErrors = view.cityErrors ?? 0;
   return (
     <div className="info-banner">
-      <strong style={{ color: labelColor }}>§9R-E GATE — {g.label}.</strong>{' '}
-      Frozen net-profit bar: ≥40 paper markets · ≥6 cities · ≥7 distinct days, city-clustered CI &gt; 0, zero-skill
-      MC &lt; 5%. No capital until it PASSes (bot rail paper/DORMANT). {g.reason}
+      <strong style={{ color: labelColor }}>§9R-E GATE (indicative) — {g.label}.</strong>{' '}
+      Frozen net-profit bar: ≥{g.minMarkets} paper markets · ≥{g.minCities} cities · ≥{g.minDistinctDays} distinct
+      days, city-clustered CI &gt; 0, zero-skill MC &lt; 5%. No capital until it PASSes (bot rail paper/DORMANT). {g.reason}
+      <div className="sub" style={{ marginTop: '0.4rem' }}>
+        <strong>Indicative</strong> — computed on the ~6-min downsampled snapshot; the <em>binding</em> §9R-E verdict
+        is the full-fidelity <span className="mono">opening-bracket-score</span> scorer. Treat a PASS here as a hint,
+        not the GO.
+        {cityErrors > 0 ? (
+          <>
+            {' '}
+            <span className="chip" style={{ color: AMBER }}>⚠ {cityErrors} city fetch error(s) this tick — counts may undercount</span>
+          </>
+        ) : null}
+      </div>
       <div className="strip" style={{ marginTop: '0.6rem' }}>
         {bar(g.nMarkets, g.minMarkets, 'markets')}
         {bar(g.nCities, g.minCities, 'cities')}
@@ -165,8 +177,8 @@ function TuningTable({ rows, headlineTp, recommended }: {
               <th className="num">markets</th>
               <th className="num">exec %</th>
               <th className="num">win frac</th>
-              <th className="num">rule ROI</th>
-              <th className="num">ceiling</th>
+              <th className="num">rule ROI (net)</th>
+              <th className="num">ceiling (gross pp)</th>
               <th>verdict</th>
             </tr>
           </thead>
@@ -294,8 +306,8 @@ export default async function ConvergencePage(): Promise<ReactElement> {
         {feed?.generatedAt ? (
           <>
             {' '}Snapshot <span className="mono">{fmtAgo(feed.generatedAt)}</span> (
-            <span className="mono">{fmtDateTime(feed.generatedAt)}Z</span>) · window {view.days}d ·{' '}
-            {view.cities.length} cities.
+            <span className="mono">{fmtDateTime(feed.generatedAt)}</span>) · window {view.days}d ·{' '}
+            {view.gate.nCities}/{view.cities.length} cities (with data / allowlist).
           </>
         ) : null}
       </p>
@@ -336,9 +348,11 @@ export default async function ConvergencePage(): Promise<ReactElement> {
 
       <p className="muted small" style={{ marginTop: '1rem' }}>
         Read-only analytics over the <span className="mono">convergence_panel</span> snapshot (convergence-panel Edge
-        tick, every 15 min). Engine: <span className="mono">core/sim/opening-convergence-view</span> (the same
-        bracket-replay the <span className="mono">opening-bracket-score</span> scorer uses). Bot rail paper/DORMANT;
-        no capital until the §9R-E gate PASSes. Source: <span className="mono">FINDINGS.md</span> (the 12th signal) ·{' '}
+        tick, every 15 min). Engine: <span className="mono">core/sim/opening-convergence-view</span> — the same
+        bracket-replay <em>engine</em> the <span className="mono">opening-bracket-score</span> scorer uses, but run on
+        a ~6-min downsampled snapshot, so the gate above is <strong>indicative</strong>; the binding §9R-E verdict is
+        the scorer on the full per-tick series. Bot rail paper/DORMANT; no capital until the §9R-E gate PASSes.
+        Source: <span className="mono">FINDINGS.md</span> (the 12th signal) ·{' '}
         <span className="mono">OPENING-CONVERGENCE-HANDOFF.md</span>.
       </p>
     </div>

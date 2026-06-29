@@ -185,6 +185,25 @@ Read-only, keyless — places NOTHING, writes NOTHING, never imports `packages/t
 
 ---
 
+## The `/convergence` dashboard is INDICATIVE, not the authoritative gate
+
+The `/convergence` page (migration 0069 + the `convergence-panel` Edge tick) runs the **same engine**
+(`buildConvergenceView` → `replayPanel`/`replayEvent`) but on **downsampled** inputs — `convergence_capture_inputs`
+keeps ~every-3rd tick (`rn % 3 = 1 OR rn = cnt`, ~6-min resolution) so the isolate stays light. That downsample
+is the one divergence vector from this full-fidelity scorer, and it is **two-sided**:
+
+- **maker → taker**: the resting maker gets fewer through-the-limit chances before the 15-min window forces a
+  taker fallback, so the dashboard over-converts to taker fills (extra slippage + fee → P&L biased **down**).
+- **missed intra-window breach**: a stop-loss dip (or take-profit spike) that occurs and recovers **between** two
+  6-min snapshots is missed, so the panel can read **more optimistically** than this scorer (the false-PASS
+  direction for the `ciLow > 0` test).
+
+The §9R-E **count** gate (≥40 markets / ≥6 cities / ≥7 days) is robust — the stride always retains each event's
+first (`rn=1`, the freshest tick) and last tick, so the counts cannot flip from downsampling; only the PASS/KILL
+discrimination at n ≥ 40 can drift. The page therefore labels its gate **indicative** and names this scorer as the
+**binding** verdict. `grading_mismatch` markets are excluded identically in both (the dashboard view derives
+entries / money / per-day / gate from the same gm-excluded population the verdict uses).
+
 ## Relationship to `opening-resolution-score.ts`
 
 | | `opening-bracket-score.ts` (this) | `opening-resolution-score.ts` |

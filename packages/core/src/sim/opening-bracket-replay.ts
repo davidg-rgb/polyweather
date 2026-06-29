@@ -224,7 +224,12 @@ export function replayEvent(input: EventReplayInput, cfg: OpeningCfg, tpDeltaPp:
     const liveAsk = bucketOf(t, chosen.bucketIdx)?.execAsk ?? null;
     const restMin = (new Date(t.capturedAt).getTime() - entryTime) / 60_000;
     if (Number.isFinite(restMin) && restMin >= cfg.makerFillWindowMin) {
-      // maker window elapsed (bracketDecision cancel_maker_take) → taker fallback at THIS tick.
+      // maker window elapsed (bracketDecision cancel_maker_take) → taker fallback at THIS tick. A vanished
+      // center bucket (no live ask) cannot be taken: without this guard paperFill's worse-of would fall back
+      // to the now-stale entry-tick ask and record a fill against a book that is no longer there. `continue`
+      // (not break) keeps the window elapsed so the take retries when the bucket reappears, else the event
+      // ends `never_filled` — matching the bot's real cancel-maker-then-take-the-current-book semantics.
+      if (!fin(liveAsk)) continue;
       fill = paperFill(chosen, chosen.execAsk, liveAsk, cfg, false);
       isMaker = false;
       fillIdx = j;
@@ -268,6 +273,7 @@ export function replayEvent(input: EventReplayInput, cfg: OpeningCfg, tpDeltaPp:
   let exitReason = '';
   let netPnlUsd = 0;
   let lastBid: number | null = null;
+  let firedUnfillable: string | null = null; // a bracket that FIRED but had no bid to flatten into (time_stop only)
   for (let j = fillIdx; j < ticks.length; j++) {
     const t = ticks[j]!;
     const mark = bucketOf(t, chosen.bucketIdx)?.execBid ?? null;
@@ -283,25 +289,31 @@ export function replayEvent(input: EventReplayInput, cfg: OpeningCfg, tpDeltaPp:
         netPnlUsd = shares * px - exitFee - stakeUsd - entryFee;
         exitReason = `${action.kind}:${action.reason}`;
         exited = true;
+      } else {
+        // the bracket fired but there is NO bid to flatten into (only a clock-only time_stop reaches here, since
+        // bracketDecision returns `hold` on a null mark). It settles below; remember the fired kind so the
+        // exit-kind attribution (exitKindOf) survives the fall-through instead of mis-reading as resolution/mtm.
+        firedUnfillable = action.kind;
       }
       break; // a fired bracket flattens the position — never reconsider later ticks (NO LOOK-AHEAD)
     }
   }
 
-  // ── (4) settle a position still open at series end (or an un-fillable time-stop) ──────────────────────
+  // ── (4) settle a position still open at series end (or an un-fillable fired bracket) ──────────────────
   if (!exited) {
+    const prefix = firedUnfillable ? `${firedUnfillable}→` : ''; // preserves the fired kind for exitKindOf
     if (!input.resolution.gradingMismatch && input.resolution.winnerIdx != null) {
       const won = input.resolution.winnerIdx === chosen.bucketIdx;
       exitPrice = won ? 1 : 0;
       netPnlUsd = shares * (won ? 1 : 0) - stakeUsd - entryFee; // redeem at resolution — no taker fee
-      exitReason = `resolution_settle:${won ? 'win' : 'lose'}`;
+      exitReason = `${prefix}resolution_settle:${won ? 'win' : 'lose'}`;
     } else {
       // unresolved OR ambiguous (grading_mismatch) → mark to the last realizable execBid (conservative; a MARK,
       // not a trade, so no fee). grading_mismatch markets are additionally dropped from the verdict in replayPanel.
       const mtm = fin(lastBid) ? lastBid : 0;
       exitPrice = mtm;
       netPnlUsd = shares * mtm - stakeUsd - entryFee;
-      exitReason = input.resolution.gradingMismatch ? 'mtm_grading_mismatch' : 'mtm_unresolved';
+      exitReason = `${prefix}${input.resolution.gradingMismatch ? 'mtm_grading_mismatch' : 'mtm_unresolved'}`;
     }
   }
 

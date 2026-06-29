@@ -102,7 +102,12 @@ export function buildEvents(rows: RawCaptureRow[], resMap: Map<string, Resolutio
   const out: EventReplayInput[] = [];
   for (const [eventId, rs] of byEvent) {
     const ages = rs.map((x) => x.hoursSinceListing).filter((v): v is number => v != null && Number.isFinite(v));
-    if (!(ages.length > 0 && Math.min(...ages) < 1)) continue; // FRESH universe only (min hours_since_listing < 1)
+    // FRESH universe only (min hours_since_listing < 1). Safe under the dashboard RPC's downsample:
+    // hours_since_listing is monotone in captured_at (stable createdAtGamma), so the series min sits at the
+    // earliest tick (rn=1), which the 0069 `rn % 3 = 1` stride always retains — this re-check sees the same min
+    // the SQL `having min(...) < 1` did, so it can only DROP a SQL-fresh event (never false-include). The
+    // authoritative scorer's loader does NOT downsample, so there the SQL/TS universes are byte-identical.
+    if (!(ages.length > 0 && Math.min(...ages) < 1)) continue;
     const sorted = [...rs].sort((a, b) => tms(a.capturedAt) - tms(b.capturedAt));
     const meta = sorted[0]!;
     const ticks: ReplayTick[] = sorted.map((r) => ({
