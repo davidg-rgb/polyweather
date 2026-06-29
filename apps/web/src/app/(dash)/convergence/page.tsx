@@ -226,6 +226,7 @@ function EntriesTable({ rows }: { rows: ConvergenceEntry[] }): ReactElement {
           <tr>
             <th>city</th>
             <th>target day</th>
+            <th>predicted</th>
             <th className="num">entry age</th>
             <th className="num">entry</th>
             <th>fill</th>
@@ -244,6 +245,7 @@ function EntriesTable({ rows }: { rows: ConvergenceEntry[] }): ReactElement {
               <tr key={`${e.eventId}-${e.city}`}>
                 <td className="small">{e.city}</td>
                 <td className="mono small">{fmtDate(e.targetDate)}</td>
+                <td className="mono small">{e.entryLabel || '—'}</td>
                 <td className="num">{age !== null ? `${age.toFixed(1)}h` : '—'}</td>
                 <td className="num">{fmtProb(e.entryPrice)}</td>
                 <td className="small">{e.isMaker ? 'maker' : 'taker'}</td>
@@ -340,8 +342,9 @@ export default async function ConvergencePage(): Promise<ReactElement> {
       <div className="panel">
         <p className="muted small" style={{ marginTop: 0 }}>
           {view.entries.length} entries the bracket rule fired in the window (headline TP +{fmtPct(view.headlineTpDeltaPp, 0)}).
-          Each shows the maker/taker fill, the entry age since listing, the realized (or marked-open) exit, and the
-          net paper P&amp;L at the {fmtUsd(m.perEntryStakeUsd, 0)} stake.
+          Each shows the <strong>predicted</strong> bucket (the forecast-center temperature the bet opened on), the
+          maker/taker fill, the entry age since listing, the realized (or marked-open) exit, and the net paper P&amp;L
+          at the {fmtUsd(m.perEntryStakeUsd, 0)} stake.
         </p>
         <EntriesTable rows={view.entries} />
       </div>

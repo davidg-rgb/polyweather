@@ -51,6 +51,7 @@ describe('buildConvergenceView — the /convergence page view-model', () => {
     const op = view.entries.find((e) => e.eventId === 'OPEN')!;
     expect(tp.exitKind).toBe('take_profit');
     expect(tp.status).toBe('realized');
+    expect(tp.entryLabel).toBe('b2'); // the forecast-center bucket (idx2, houseProb 0.35) we opened the bet on
     expect(tp.isMaker).toBe(true);
     expect(tp.entryPrice).toBeCloseTo(0.12, 9);
     expect(tp.netPnlUsd).toBeGreaterThan(0);

@@ -91,6 +91,8 @@ export interface BracketTrade {
   /** the realized BUY price (makerLimit on a maker fill, worse-of+slippage on a taker fallback). */
   entryPrice: number;
   isMaker: boolean;
+  /** the forecast-center bucket label we BOUGHT — the predicted-Tmax bucket / the temperature the bet opened on. */
+  entryLabel: string;
   /** the exit kind + reason (take_profit / stop_loss / time_stop / resolution_settle / mtm_*). */
   exitReason: string;
   /** the realized SELL/settle price (execBid on a bracket exit, $1/$0 on resolution, last bid on a mark). */
@@ -168,6 +170,7 @@ const NOT_EXECUTED = (reason: string): BracketTrade => ({
   entryAgeH: null,
   entryPrice: NaN,
   isMaker: false,
+  entryLabel: '',
   exitReason: reason,
   exitPrice: NaN,
   netPnlUsd: 0,
@@ -321,6 +324,7 @@ export function replayEvent(input: EventReplayInput, cfg: OpeningCfg, tpDeltaPp:
     entryAgeH,
     entryPrice: fill.price,
     isMaker,
+    entryLabel: chosen.label,
     exitReason,
     exitPrice,
     netPnlUsd,

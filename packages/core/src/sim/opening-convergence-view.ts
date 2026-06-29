@@ -44,6 +44,8 @@ export interface ConvergenceEntry {
   eventId: string;
   city: string;
   targetDate: string;
+  /** the forecast-center bucket label we bought — our predicted-Tmax bucket / the temperature the bet opened on. */
+  entryLabel: string;
   entryAgeH: number | null;
   entryPrice: number;
   isMaker: boolean;
@@ -211,6 +213,7 @@ export function buildConvergenceView(
       eventId: e.eventId,
       city: e.city,
       targetDate: e.targetDate,
+      entryLabel: t.entryLabel,
       entryAgeH: t.entryAgeH,
       entryPrice: t.entryPrice,
       isMaker: t.isMaker,
