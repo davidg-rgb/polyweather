@@ -59,6 +59,31 @@ export function fmtDateTime(v: unknown): string {
   return `${iso.slice(5, 10)} ${iso.slice(11, 16)}Z`;
 }
 
+/**
+ * ISO → Stockholm wall-clock 'MM-DD HH:mm CEST' (Europe/Stockholm). DST-correct:
+ * the offset is resolved per-instant by the IANA zone (CEST/UTC+2 in summer,
+ * CET/UTC+1 in winter) — never hardcoded — and the abbreviation makes the actual
+ * offset self-evident. Deterministic regardless of the server's local timezone.
+ */
+export function fmtStockholm(v: unknown): string {
+  if (!v) return '—';
+  const d = v instanceof Date ? v : new Date(String(v));
+  if (Number.isNaN(d.getTime())) return '—';
+  const p: Record<string, string> = {};
+  for (const part of new Intl.DateTimeFormat('sv-SE', {
+    timeZone: 'Europe/Stockholm',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+    timeZoneName: 'short',
+  }).formatToParts(d)) {
+    p[part.type] = part.value;
+  }
+  return `${p.month}-${p.day} ${p.hour}:${p.minute} ${p.timeZoneName}`;
+}
+
 /** Relative age: fmtAgo(iso, now) = '4h 12m ago' | '3d ago' | 'just now'. */
 export function fmtAgo(v: unknown, now: Date = new Date()): string {
   if (!v) return '—';

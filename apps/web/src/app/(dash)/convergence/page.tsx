@@ -17,7 +17,7 @@ import type {
   ConvergenceView,
 } from '@weather-edge/core';
 import { EquityChart } from '../../../components/EquityChart.tsx';
-import { fmtAgo, fmtDate, fmtDateTime, fmtPct, fmtProb, fmtUsd, num } from '../../../lib/format.ts';
+import { fmtAgo, fmtDate, fmtDateTime, fmtPct, fmtProb, fmtStockholm, fmtUsd, num } from '../../../lib/format.ts';
 import { getConvergence } from '../../../lib/loaders.ts';
 import { serverDb } from '../../../lib/supabase.ts';
 
@@ -418,6 +418,12 @@ export default async function ConvergencePage(): Promise<ReactElement> {
           maker/taker fill, the entry age since listing, the realized (or marked-open) exit, and the net paper P&amp;L
           at the {fmtUsd(m.perEntryStakeUsd, 0)} stake.
         </p>
+        {feed?.generatedAt ? (
+          <p className="muted small" style={{ marginTop: '-0.25rem' }}>
+            Latest data refreshed <strong>{fmtStockholm(feed.generatedAt)}</strong> (Stockholm) ·{' '}
+            {fmtAgo(feed.generatedAt)}. Recomputes every 15 min on the <span className="mono">convergence-panel</span> Edge tick.
+          </p>
+        ) : null}
         <EntriesTable rows={view.entries} />
       </div>
 

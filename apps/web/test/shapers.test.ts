@@ -6,7 +6,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { latestEdgeEvalRows, type StoredEdgeEval } from '../src/lib/edge-display.ts';
-import { fmtAgo, fmtDate, fmtDateTime, fmtPct, fmtProb, fmtUsd, num } from '../src/lib/format.ts';
+import { fmtAgo, fmtDate, fmtDateTime, fmtPct, fmtProb, fmtStockholm, fmtUsd, num } from '../src/lib/format.ts';
 import { heatmapKey, shapeHeatmap, shapeReliability, summarizeForecastSkill } from '../src/lib/shapers.ts';
 
 describe('shapeReliability (§6.6 reliability payloads)', () => {
@@ -109,6 +109,18 @@ describe('format helpers', () => {
     expect(fmtAgo('2026-06-11T07:48:00Z', now)).toBe('4h 12m ago');
     expect(fmtAgo('2026-06-08T12:00:00Z', now)).toBe('3d ago');
     expect(fmtAgo(null, now)).toBe('—');
+  });
+
+  it('fmtStockholm renders DST-correct Europe/Stockholm wall-clock', () => {
+    // summer → CEST (UTC+2): 12:00Z is 14:00 in Stockholm
+    expect(fmtStockholm('2026-06-29T12:00:00Z')).toBe('06-29 14:00 CEST');
+    // winter → CET (UTC+1): 12:00Z is 13:00 in Stockholm — offset resolved per-instant, never hardcoded
+    expect(fmtStockholm('2026-01-15T12:00:00Z')).toBe('01-15 13:00 CET');
+    // midnight rolls the date and renders 00:00 (not 24:00)
+    expect(fmtStockholm('2026-06-29T22:00:00Z')).toBe('06-30 00:00 CEST');
+    // junk / absent → em-dash, same contract as the other formatters
+    expect(fmtStockholm(null)).toBe('—');
+    expect(fmtStockholm('not-a-date')).toBe('—');
   });
 });
 
