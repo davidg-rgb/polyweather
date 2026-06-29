@@ -354,14 +354,25 @@ export function isFlatOpen(
 // 2 · selectEntries — pick the buckets to buy at the flat open (F-OC-03 / §9R-B)
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 
-export function selectEntries(cap: OpeningCapture, cfg: OpeningCfg, now: Date): EntryCandidate[] {
+export function selectEntries(
+  cap: OpeningCapture,
+  cfg: OpeningCfg,
+  now: Date,
+  opts?: { requireFlatOpen?: boolean },
+): EntryCandidate[] {
   // universe + flat-open gate (§9R-B). NO 24h-volume gate (CAP-2, 2026-06-27): the thesis ENTERS at the flat
   // OPEN, where a freshly-listed market has ~$0 traded volume BY CONSTRUCTION — a vol floor would disqualify the
   // exact window we want to buy. Liquidity is gated DIRECTLY and per-bucket below by the executable DEPTH floor
   // (depthFloorUsd, walked from the live book) + the 20% price cap, which measure "can I actually fill" honestly,
   // not via a lagging traded-volume proxy. (bot.minVol24hUsd stays only the CAPTURE liquid-trajectory bound.)
+  //
+  // requireFlatOpen (default TRUE) keeps EVERY existing caller byte-identical: the live/paper bot ALWAYS demands
+  // the uninformed flat-open window. Setting it false skips ONLY this one flat-open gate — used by the
+  // opening-bracket-replay measurement (sim/opening-bracket-replay.ts), which scores the bracket-EXIT mechanism
+  // (sell into the convergence before resolution) on the FULL capture series after the flat-open premise was
+  // falsified 2026-06-28: every other gate (universe, runway, mode, edge, depth, the 20% price cap) is preserved.
   if (!cfg.cities.includes(cap.city)) return [];
-  if (!isFlatOpen(cap, cfg).flat) return [];
+  if ((opts?.requireFlatOpen ?? true) && !isFlatOpen(cap, cfg).flat) return [];
 
   // MINIMUM-RUNWAY guard (F7-r10): a freshly-listed lead-0 market in a far-east tz can be flat yet ALREADY
   // past local noon → entered then immediately time-stop-flattened at a deterministic spread+fee loss for

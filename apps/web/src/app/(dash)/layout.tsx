@@ -10,22 +10,15 @@ import { requireOperator } from '../../lib/supabase.ts';
 
 export const dynamic = 'force-dynamic';
 
-// Analytics-first nav (2026-06-15 pivot): the overview is the default landing; the (dormant) bet ledger
-// is demoted to the end. Order = analytics → ops → dormant trading → admin.
+// Nav trimmed to the active surfaces (2026-06-29): the opening-convergence paper play + the four kept analytics
+// pages. The rest (overview, verdict, replica, rewards, events, calibration, system, bets, admin) are HIDDEN from
+// nav but their routes are intentionally kept reachable by direct URL (non-destructive — operator's call).
 const NAV = [
-  ['/', 'overview'], // analytics home — forecast skill vs. market + the measured-efficiency verdict
-  ['/efficiency', 'verdict'], // THE definitive proof: every falsified lever + live calibration grounding (FINDINGS.md)
-  ['/data', 'accuracy'], // forecast accuracy by market — best/worst stations + the Brier gap (dash_data, 0065)
+  ['/convergence', 'convergence'], // the 12th signal — opening-convergence forward-paper overview (dash_convergence, 0069)
   ['/amsterdam', 'amsterdam'], // the one-accurate-city paper-trade head-to-head (analytics deliverable)
-  ['/replica', 'replica'], // the badatmath-replica paper-trial — three-curve maker/taker tax measurement
-  ['/rewards', 'rewards'], // REC-8/9 funded-weather liquidity-reward pool vs competing-capital feed (analytics)
   ['/whaletracker', 'whales'], // ≥$100k Polymarket whale-trade tracker (analytics; whale-watch feed, 0055)
+  ['/data', 'accuracy'], // forecast accuracy by market — best/worst stations + the Brier gap (dash_data, 0065)
   ['/sharps', 'sharps'], // SPORTS-sharps roster + fingerprints (analytics; 9th signal DORMANT)
-  ['/events', 'events'], // open events + collection health (WEB-4 / ADR-21)
-  ['/calibration', 'calibration'],
-  ['/system', 'system'],
-  ['/bets', 'bets'], // dormant — trading thesis closed; kept for the historical ledger
-  ['/admin', 'admin'],
 ] as const;
 
 export default async function DashLayout({ children }: { children: ReactNode }): Promise<ReactElement> {

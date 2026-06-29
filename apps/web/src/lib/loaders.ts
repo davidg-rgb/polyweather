@@ -23,6 +23,7 @@ import type {
   AppConfig,
   BestTimeView,
   CityRoi,
+  ConvergenceView,
   DailyRow,
   EdgeRow,
   LockedBuy,
@@ -1604,4 +1605,36 @@ export async function getDataAccuracy(db: WebDb): Promise<DataAccuracyView | nul
     byStation: v.byStation ?? [],
     brierSeries: v.brierSeries ?? [],
   };
+}
+
+// --- /convergence — opening-convergence forward-paper overview (dash_convergence, 0069) ---------------------
+
+/** The /convergence snapshot feed: the latest computed view + when the Edge tick produced it. */
+export interface ConvergenceFeed {
+  /** when the convergence-panel Edge tick produced the snapshot (null if none captured yet). */
+  generatedAt: string | null;
+  /** the computed view (entries / per-day / tuning / money tracker / gate); null until the first tick runs. */
+  view: ConvergenceView | null;
+}
+
+interface ConvergencePayload {
+  generatedAt: string | null;
+  view: ConvergenceView | null;
+}
+
+/**
+ * The opening-convergence forward-paper overview (dash_convergence, 0069) for /convergence. The page reads the
+ * latest snapshot the convergence-panel Edge tick computed (the bracket-replay view: logged entries, exits,
+ * per-day chances, the TP tuning sweep, the §9R-E gate, and the FICTIVE money tracker). Degrades to null (not a
+ * thrown 500) if the RPC errors so the page can deploy ahead of the 0069 RPC.
+ */
+export async function getConvergence(db: WebDb): Promise<ConvergenceFeed | null> {
+  let v: ConvergencePayload | null;
+  try {
+    v = await one<ConvergencePayload>(db, 'dash_convergence', {});
+  } catch {
+    return null;
+  }
+  if (!v) return null;
+  return { generatedAt: v.generatedAt ?? null, view: v.view ?? null };
 }

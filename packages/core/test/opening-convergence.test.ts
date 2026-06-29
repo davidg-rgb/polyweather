@@ -236,6 +236,21 @@ describe('selectEntries — pick the flat-open buckets to buy (§9R-B / W6b / F7
     expect(selectEntries({ ...centerCap, tz: 'Etc/GMT-8' }, cfg, NOW)).toEqual([]);
     expect(selectEntries({ ...centerCap, tz: 'Mars/Olympus' }, cfg, NOW)).toEqual([]);
   });
+
+  it('requireFlatOpen:false skips ONLY the flat-open gate (the bracket-replay path) — every other gate is kept', () => {
+    // a NON-flat ladder (idx0 mid 0.5 ⇒ peak_above_max) that is otherwise identical to centerCap.
+    const notFlat = { ...centerCap, buckets: centerCap.buckets.map((b, i) => (i === 0 ? { ...b, mid: 0.5 } : b)) };
+    expect(selectEntries(notFlat, cfg, NOW)).toEqual([]); // DEFAULT requireFlatOpen TRUE — the flat-open gate blocks it
+    expect(selectEntries(notFlat, cfg, NOW, { requireFlatOpen: true })).toEqual([]); // explicit TRUE is identical
+    // with the flag off the SAME non-flat book selects the mode ± centerHalfWidth — proving only the flat-open
+    // line was skipped, the W6b mode + edge + depth + 20%-cap gates still ran.
+    expect(selectEntries(notFlat, cfg, NOW, { requireFlatOpen: false }).map((c) => c.bucketIdx).sort((a, b) => a - b)).toEqual([1, 2, 3]);
+    // the universe gate is STILL enforced with the flag off (it is not a bypass of everything)…
+    expect(selectEntries({ ...notFlat, city: 'london' }, cfg, NOW, { requireFlatOpen: false })).toEqual([]);
+    // …and so is the minimum-runway guard (a market already past local noon still returns []).
+    const nearNoon = new Date(NOON.getTime() - 10 * 60_000);
+    expect(selectEntries(notFlat, cfg, nearNoon, { requireFlatOpen: false })).toEqual([]);
+  });
 });
 
 // ── 2.5 · localHourInstant DST correctness (F11) ─────────────────────────────────────────────────────────

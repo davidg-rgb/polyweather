@@ -22,8 +22,12 @@ rebate, across enormous breadth — and is **non-followable and non-replicable**
 > test** (the last row below): the edge would live specifically in the *uninformed flat-open window*, the one
 > place this system never measured because it's narrow and time-critical. It is being measured forward by an
 > autonomous paper-first bot; **no capital until a frozen net-profit gate PASSes**, and a hard go/no-go spike
-> can still kill it cheaply. The efficiency verdict stands for everything tested; this is the single thing not
-> yet tested.
+> can still kill it cheaply. **Update 2026-06-28: the flat-open *premise* is now FALSIFIED** — the first
+> full-universe capture (51,880 snapshots / 147 markets / 45 cities / 26h) shows weather markets list
+> pre-informed (**0 of 147** flat at first sight), so the lever has pivoted OFF the dead flat-open buy and ONTO
+> a hold-to-resolution / bracket variant — whose entry rule reduces to the forecast-vs-market bet already
+> falsified 7× (negative prior; verdict from `opening-resolution-score.ts` ~2026-07-06). The efficiency verdict
+> stands for everything tested; this is the single remaining thing not yet resolved.
 
 | Signal tested | Can we beat the market with it? | Verdict |
 |---|---|---|
@@ -39,7 +43,7 @@ rebate, across enormous breadth — and is **non-followable and non-replicable**
 | Complete-set structural arb (forecast-free) | No — fee-walled; raw book inconsistent ~16% of the time but the `takerOnly` fee > the residual mispricing (0.37%/0.06% of instants clear; live 0/107) | COMPLETE-SET-ARB.md (the 8th signal) |
 | Copy-trading the top **SPORTS** sharps (adjacent, off-weather) | No — volume machines' edge regresses to ≈0 (follower negative at every lag×spread); high-ROI specialists' "100% win / PASS" is survivorship + a non-executable book-sweep mark. **fishalive re-test 2026-06-29 (operator-flagged $9M/new account): the $9M is REAL realized cash (Σredeem $13.28M − Σbuy $4.28M, reconciles to the user-pnl curve at 0.74%) — but it is 100% ONE pre-match bet on ONE game (Spain fails to beat Cape Verde, 2026-06-15; 9¢ "No" + 45¢ −2.5 spread, $4.28M staked, 100% pre-kickoff, 0 wash). The in-play-sweep mechanism was wrong; the lever is MORE dead — n=1, no samplable/copyable edge, wallet dormant since.** | SPORTS-TRADERS.md §9–§10 (the 9th signal) |
 | Cross-venue RV: same day on Kalshi (NWS-CLI) vs Polymarket (Wunderground) | **No — CAPACITY-walled** — a real quoted cross-venue price gap exists (6/7 city-days net-positive), but TRUE both-book depth shows the cumulative synthetic fills at only **1–10 contracts** (thin tail legs); winFrac over *executable* wins = **0**. Quoted edge ≠ capturable money; same structural-wall class as the 8th | CROSS-VENUE-SPIKE.md (the 10th signal) |
-| **Opening convergence: buy the forecast-center cheap at the FLAT OPEN, sell into the convergence on brackets** | **⏳ UNDER FORWARD TEST (the 1st LIVE-CANDIDATE)** — the only signal that did NOT die at its cheap gate: data accuracy confirmed, convergence real (winners 18–25%→100%, marks sell-back median **79pp**), and **Wall-1 capacity did NOT kill** ($100–320 buyable at lead 1–2). The edge lives specifically in the *uninformed flat-open window* (where KILL-GATE 2's efficiency hasn't set in yet). The load-bearing numbers — flat-open depth + net edge at executable depth, AND whether our forecast even exists in that window — are **unmeasured; being measured forward** by an autonomous paper-first bracket bot. **No capital until a frozen net-profit gate PASSes** (≥40 paper markets, CI excl 0); a hard Phase-0.5 spike can still KILL it cheaply | OPENING-CONVERGENCE-HANDOFF.md + ARCHITECTURE-OPENING-CONVERGENCE.md (the 12th signal) |
+| **Opening convergence: buy the forecast-center cheap, sell into the convergence on brackets** | **⚠ FLAT-OPEN PREMISE FALSIFIED 2026-06-28 → pivoted to hold-to-resolution, under forward test** — first full-universe capture (51,880 snapshots / 147 markets / 45 cities / 26h): markets do **not** open flat — **0/147** flat at first sight, **3/51,880** captures ever; even caught ≤1h from the true Gamma listing (45 markets, min age ~0.6 min) the peak bucket is median **27%** / min **19.5%**, never the ~9–12% the thesis needs (the 11-bucket book lists pre-informed). The forecast IS available (**97%** seeded → R-13 was never the blocker) and convergence IS real + directional (peak **+16pp** first→last, **117/147** up), so the lever pivots onto the **hold-to-resolution / bracket** variant — but that entry rule reduces to the forecast-vs-market bet falsified 7× (at the center, market ask **0.40 ≈** our prob **0.39**, −1.7pp, a coin flip), so the prior is negative. Measured forward by `opening-resolution-score.ts`; verdict pending resolved markets (~2026-07-06). No capital until the frozen §9R-E net-profit gate PASSes | OPENING-CONVERGENCE-HANDOFF.md + the 2026-06-28 memory (the 12th signal) |
 
 **On REC-1 (the one un-run maker lever, tested 2026-06-23).** After the maker-rebate reframe (net profit by
 *any* mechanism), the last distinct lever was: can WE *learn* which cheap buckets to rest on (vs. mirroring the
@@ -157,6 +161,45 @@ genuinely out-of-market information.
 > **Net: the market is now measured efficient ELEVEN ways** (10 signals + this hardening sweep). No
 > reopening; the live rail stays DORMANT. Full sweep close-outs: `COMPLETE-SET-ARB-HANDOFF.md` (B/D) and
 > `SPORTS-TRADERS.md` §9 (C1/C2).
+>
+> **↳ NEW 2026-06-28 — the 12th signal's FLAT-OPEN premise is FALSIFIED by the first full-universe capture; the
+> lever pivots to hold-to-resolution (a NEGATIVE-prior re-test, not a found edge).** Phase 0's keyless capture ran
+> the §9R universe forward at 45 cities for ~26h (**51,880** snapshots / **147** markets). The load-bearing premise
+> — *freshly-listed daily-Tmax markets open flat (~10–12%/bucket) and converge* — does not hold: **0 of 147**
+> markets were flat-open at first sight and only **3 of 51,880** captures ever cleared the peak ≤ 0.18 gate.
+> Catching the market within ≤1h of its TRUE Gamma listing (45 markets, min age ~0.6 min) does not help — the peak
+> bucket is already median **27%** / min **19.5%**, never the ~9–12% a flat book implies; the 11-bucket book lists
+> **pre-informed**. Two things the capture confirms are NOT the blocker: the house forecast IS available (**97%** of
+> captures seeded — R-13 cleared), and convergence IS real and directional (peak **+16pp** first→last, **117 of 147**
+> markets converge up, 58 reach ≥95%). So the signal pivots OFF the dead flat-open buy and ONTO a
+> **hold-to-resolution / bracket** variant — watch every market, buy the forecast-center bucket whenever its ask
+> dips below the reservation, hold to TP/SL or resolution. That is implementable (**74 of 145** markets presented ≥1
+> enterable center dip) — but its entry rule *is* the forecast-vs-market bet this document falsified seven times: at
+> the forecast center the market ask (**0.40**) ≈ our own prob (**0.39**), a −1.7pp coin flip, so the dips that fire
+> are forecast disagreement, where the market has repeatedly been the sharper forecaster (KILL-GATE 2; §12 adverse
+> selection; the 32.8pp replica adverse-sel tax). The only mechanism that could win WITHOUT forecast superiority is
+> the bracket exit selling into the convergence re-rating — distinguishable only by the realized held outcome. It is
+> now measured forward by `scripts/research/opening-resolution-score.ts` (buy-center-hold, entry-age-swept, net of
+> the canonical fee curve, Šidák-penalized); **0 markets are resolved yet** (the panel settles 06-29/30), so the
+> verdict lands ~**2026-07-06**. **No capital until the frozen §9R-E net-profit gate PASSes; the rail stays
+> DORMANT.** Detail: the 2026-06-28 memory + OPENING-CONVERGENCE-HANDOFF.md.
+>
+> **↳ NEW 2026-06-28 — the bracket-EXIT screen is BUILT (the 12th signal's SECOND forward test — the variant with a
+> NON-forecast win mechanism).** Alongside the hold-to-resolution scorer, a read-only keyless paper *replay* (pure
+> engine `packages/core/src/sim/opening-bracket-replay.ts` + harness `scripts/research/opening-bracket-score.ts`,
+> doc `docs/OPENING-BRACKET-REPLAY.md`) measures the BRACKET EXIT — buy the forecast-center cheap, then SELL INTO
+> THE CONVERGENCE *before* resolution on a fixed take-profit / stop-loss / station-local-noon time-stop, walking the
+> captured per-tick book tick by tick (**NO LOOK-AHEAD** — the exit at tick t reads only tick t; a later up-tick
+> cannot rescue a stopped-out trade; independently re-audited). This is the ONE variant whose edge does NOT require
+> the forecast to be right at settlement — it trades the re-rating, not the outcome. It reuses the live bot's own
+> pure fns (selectEntries with a new backward-compatible `requireFlatOpen:false`, bracketDecision, paperFill,
+> openingVerdict) and sweeps the take-profit, the pre-registered +25pp as the gate. Full suite **1671 green**.
+> FIRST LIVE READ (~26h panel): of 10 fresh §9R events only **2** cleared all gates AND filled → nMarkets 2 / 1
+> date → **INSUFFICIENT_DATA by design** (needs ≥40 markets / ≥6 cities / ≥7 days). The 2 we have are
+> early-**NEGATIVE** (the fixed rule netted **−23.3%**; even the look-ahead best-sell-back *ceiling* was **−2.5%** —
+> the bid never recovered above entry on those two) — directionally consistent with the efficiency prior, but
+> n=2/1-day is noise and the §9R-E gate refuses a verdict. Verdict accrues with capture (~**2026-07-06**, the hold
+> scorer's horizon). Rail DORMANT; no capital until the frozen §9R-E net-profit gate PASSes.
 
 ---
 

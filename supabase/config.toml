@@ -83,3 +83,6 @@ verify_jwt = false
 
 [functions.opening-capture]
 verify_jwt = false
+
+[functions.convergence-panel]
+verify_jwt = false

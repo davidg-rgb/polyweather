@@ -239,6 +239,7 @@ describe('migrations 0001–0010', () => {
       // scale, past Postgres's field cap → the gate could not render) + oc_captured_at_idx for the deadman/prune
       // scans. bot_capture_series is untouched (Phase-3 backtest contract). No table/cron change.
       '0068_opening_spike_series.sql',
+      '0069_convergence_dashboard.sql',
     ]);
   });
 });
@@ -702,6 +703,7 @@ describe('0034: internal-RPC lockdown — anon/authenticated revoked except the 
     'dash_complete_set_depth',  // 0060: Move 1 forward depth-capture operator read
     'dash_cross_venue',  // 0062: cross-venue (Kalshi↔Polymarket) RV panel operator read
     'dash_data',  // 0065: /data forecast-accuracy-by-market operator read
+    'dash_convergence',  // 0069: /convergence opening-convergence forward-paper overview operator read
     'go_live_gate_inputs',
     'operator_halt', 'operator_resume', 'operator_update_config', 'operator_verify_station',
     'operator_set_champion', 'operator_skip_bet', 'operator_manual_bet',
@@ -830,8 +832,10 @@ describe('pg_cron registrations (§7.22, W11)', () => {
       'opening-bot-deadman':      '*/10 * * * *',
       'opening-captures-prune':   '30 3 * * *',
       'bot-tick-log-prune':       '35 3 * * *',
+      // 0069: opening-convergence forward-paper view snapshot (http_post edge-fn job; W11-checked).
+      'convergence-panel':        '*/15 * * * *',
     };
-    expect(jobs.length).toBe(26);
+    expect(jobs.length).toBe(27);
     for (const j of jobs) {
       expect(j.schedule, `schedule for ${j.jobname}`).toBe(expected[j.jobname]);
     }
