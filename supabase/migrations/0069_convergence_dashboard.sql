@@ -8,7 +8,7 @@
 -- page load. A 15-min Edge tick (`convergence-panel`) pulls the raw inputs PER CITY (the whole-allowlist build
 -- exceeds the 8s PostgREST cap), runs `buildConvergenceView` (core/sim/opening-convergence-view — the SAME engine
 -- the bracket-score scorer uses, on the §9R-locked BOT_DEFAULTS / 10-city tradable allowlist), and stores the
--- small (~8 KB) view jsonb. The page reads only the snapshot. NOT trading — read-only; rail paper/DORMANT.
+-- small (tens-of-KB) view jsonb. The page reads only the snapshot. NOT trading — read-only; rail paper/DORMANT.
 --
 -- The inputs RPC DOWNSAMPLES to ~every 3rd capture (~6-min resolution) so the Edge isolate can pull + replay
 -- comfortably; the full-fidelity number stays the `opening-bracket-score` scorer (the dashboard is the legible
@@ -62,9 +62,13 @@ grant  execute on function public.record_convergence_panel(jsonb) to service_rol
 
 -- === 3. convergence_capture_inputs — the RAW fresh-allowlist inputs the Edge engine consumes (service) ==
 -- Mirrors the harness loadEvents shape (camelCase, core's RawCaptureRow) + the resolution map (RawResolution).
--- Buckets are TRIMMED to the 7 fields the replay reads; ticks are DOWNSAMPLED to ~every 3rd (+ the last) so the
--- per-city build stays well under the 8s API cap. `set statement_timeout` is a FUNCTION attribute (a SET LOCAL in
--- the body does NOT override a PostgREST-set per-request timeout).
+-- The row-level scalars (createdAtGamma/resolvesAt/peakMid/isFlatOpen/houseSeeded/evVol24h/negRisk) are emitted
+-- for RawCaptureRow shape-parity even though buildEvents/captureOf discard them — intentional, keeps the RPC
+-- payload == the harness query shape. Buckets are TRIMMED to the 7 fields the replay reads; ticks are DOWNSAMPLED
+-- to ~every 3rd (+ the last) so the per-city build stays well under the 8s API cap. `set statement_timeout` is a
+-- FUNCTION attribute — applied at a new GUC nest level and auto-restored on function exit, unlike a body SET LOCAL
+-- which would persist to end-of-transaction (the 40s here is the Postgres-level backstop; the gateway cap is
+-- handled by the Edge handler paging per-city).
 create or replace function public.convergence_capture_inputs(
   p_days   int    default 21,
   p_cities text[] default null
@@ -113,13 +117,22 @@ begin
       s.house_seeded                   as "houseSeeded",
       s.ev_vol24h::float8              as "evVol24h",
       s.neg_risk                       as "negRisk",
+      -- DECISION-read fields (a future trim edit MUST keep all of these): idx, houseProb, execAsk, depthUsd,
+      -- bestAsk, execBid (label is display-only). These are every bucket field selectEntries/replayEvent read on
+      -- the requireFlatOpen:false route (isFlatOpen — the only `mid` reader — is skipped); dropping any one would
+      -- silently diverge the dashboard from the full-fidelity scorer.
       (select jsonb_agg(jsonb_build_object(
          'idx', b->'idx', 'label', b->'label', 'bestAsk', b->'bestAsk', 'execAsk', b->'execAsk',
          'execBid', b->'execBid', 'depthUsd', b->'depthUsd', 'houseProb', b->'houseProb')
        order by (b->>'idx')::int)
        from jsonb_array_elements(s.buckets) b)   as "buckets"
     from ranked s
+    -- rn=1 (the earliest tick = min hours_since_listing, since it is monotone in captured_at) MUST stay retained
+    -- so buildEvents' TS FRESH re-filter (min<1) still matches the `fresh` CTE's having-min<1; `rn % 3 = 1`
+    -- always keeps it, and `rn = s.cnt` always keeps the last tick (needed so the time-stop/settle can fire).
     where s.rn % 3 = 1 or s.rn = s.cnt
+    -- NB this ORDER BY does NOT propagate into the outer jsonb_agg (no in-aggregate ORDER BY there); array order
+    -- is intentionally unspecified — both consumers (buildEvents, the resolution Map) re-group/re-sort by key.
     order by s.event_id, s.captured_at
   ),
   res as (

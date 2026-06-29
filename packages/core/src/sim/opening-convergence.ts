@@ -532,7 +532,10 @@ export function openingVerdict(panel: OpeningMarketResult[], opts: VerdictOpts =
   const minDistinctDays = opts.minDistinctDays ?? GATE_MIN_DISTINCT_DAYS;
   const minWinFrac = opts.minWinFrac ?? GATE_MIN_WIN_FRAC;
 
-  // EXECUTED markets only — an executed-but-void market is not a skill outcome (excluded upstream too).
+  // EXECUTED markets only — an executed-but-void market is not a skill outcome (excluded upstream too). Note
+  // "scored" (not "closed"): a caller MAY include a still-in-flight position conservatively marked to its last
+  // bid (the bracket replay's mtm_unresolved) — counted here, which biases winFrac/CI DOWNWARD (toward
+  // KILL/INSUFFICIENT), never toward a false PASS. The verdict prose says "scored paper markets" accordingly.
   const rows = (Array.isArray(panel) ? panel : []).filter(
     (r) => r && r.executed === true && Number.isFinite(r.netReturn) && Number.isFinite(r.netPnlUsd),
   );
@@ -547,7 +550,7 @@ export function openingVerdict(panel: OpeningMarketResult[], opts: VerdictOpts =
       label: 'INSUFFICIENT_DATA', nMarkets, nCities, nDistinctDays,
       winFrac: NaN, meanNetReturn: NaN, ciLow: NaN, ciHigh: NaN, zeroSkillPassRate: NaN,
       reason:
-        `INSUFFICIENT_DATA — ${nMarkets} closed paper markets across ${nCities} cities / ${nDistinctDays} dates ` +
+        `INSUFFICIENT_DATA — ${nMarkets} scored paper markets across ${nCities} cities / ${nDistinctDays} dates ` +
         `(need ≥ ${minMarkets} markets, ≥ ${minCities} cities, ≥ ${minDistinctDays} dates). Keep the forward paper run going.`,
     };
   }
@@ -565,7 +568,7 @@ export function openingVerdict(panel: OpeningMarketResult[], opts: VerdictOpts =
     return {
       label: 'PASS', nMarkets, nCities, nDistinctDays, winFrac, meanNetReturn: mean, ciLow, ciHigh, zeroSkillPassRate: zsp,
       reason:
-        `PASS — ${nMarkets} closed paper markets: ${stat}. A standing, executable opening-convergence edge net ` +
+        `PASS — ${nMarkets} scored paper markets: ${stat}. A standing, executable opening-convergence edge net ` +
         `of fees + measured slippage. The §9R-E gate clears — eligible for the small-real step (operator funds the ` +
         `dedicated wallet; the first ~10 live fills are post-fill reviewed). The maker rebate stays a MEASURED input, never assumed.`,
     };
@@ -573,7 +576,7 @@ export function openingVerdict(panel: OpeningMarketResult[], opts: VerdictOpts =
   return {
     label: 'KILL', nMarkets, nCities, nDistinctDays, winFrac, meanNetReturn: mean, ciLow, ciHigh, zeroSkillPassRate: zsp,
     reason:
-      `KILL — ${nMarkets} closed paper markets: ${stat}. The opening-convergence edge does NOT clear the frozen ` +
+      `KILL — ${nMarkets} scored paper markets: ${stat}. The opening-convergence edge does NOT clear the frozen ` +
       `net-profit bar at executable depth net of costs (the same discipline that closed the other eleven signals). ` +
       `Rail returns DORMANT; update FINDINGS.md.`,
   };
