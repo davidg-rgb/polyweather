@@ -93,6 +93,17 @@ Decomposed from `OPENING-CONVERGENCE-HANDOFF.md` §5 (functional scope) + §9R (
   **ensures the event is discovered and seeds a current `house_gaussian` on-demand** (snapshot the station's
   forecast now → `buildDistributionForEvent`) before reading it onto the row. A capture whose signal cannot be
   seeded stores `houseProb=null` (logged, not entered). *(Handoff §5-A; ADR-OC-14)*
+  - **The convergence/accuracy split (2026-06-29).** The seed builds this `house_gaussian` from the **RAW
+    cross-model consensus** — `buildDistributionForEvent({ biasCorrect: false })`, which drops the per-model
+    `model_stats` bias term while keeping weights + sigma. The convergence play sells into **what the crowd
+    believes**, so its center must be the consensus the marginal trader's weather app shows, NOT our
+    accuracy-tuned (bias-corrected) forecast: a −1°C "truth" correction that wins the held-to-resolution
+    paper-trade would move us *off* the crowd's Schelling point and lose the convergence. Governed by
+    `BotConfig.consensusSource` (`ensemble_raw` default; `calibrated` = the old center; `wunderground` =
+    reserved resolution-source anchor, falls back to the raw proxy until wired). The seed-quality gate still
+    requires `model_stats` coverage (sigma/weights are unaffected — only the systematic offset is dropped), and
+    a `'raw'` hash tag keeps the raw seed from colliding with a production-scored calibrated dist for the same
+    event. `seed.ts` → `seedBiasCorrect(consensusSource)`. *(CITY-SIM.md §7)*
 - **F-OC-02 · Flat-open detection.** Flag a capture as a flat-open candidate when `peak bucket mid ≤ 18%`
   AND it is `within ~1h of listing` (§16-D — the real flat-open window is ≤~1h, superseding §9R-B's ~6h). *(§9R-B / §16-D)*
 - **F-OC-03 · Entry selection.** For a flat-open market, select `house_gaussian` **mode ± 1** (3 buckets)

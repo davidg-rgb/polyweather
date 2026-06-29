@@ -30,6 +30,7 @@ import {
   forecastUrl,
   parseMultiModelDaily,
   leadDays,
+  seedBiasCorrect,
   type AppConfig,
   type ParsedEvent,
 } from '../../../packages/core/src/index.ts';
@@ -58,6 +59,8 @@ export interface SeedDeps {
   /** list_active_stations (fetched once per tick) — for the rare OM re-snapshot fallback's lat/lon. */
   stations: SeedStation[];
   log: JobCtx['log'];
+  /** Injectable for tests; defaults to the real shared builder. */
+  buildDist?: typeof buildDistributionForEvent;
 }
 
 export interface SeedResult {
@@ -126,6 +129,14 @@ export async function seedHouseDist(
     const eventId = evRow?.event_id ?? null;
     if (!eventId) return { ...empty, reason: 'upsert_event_failed' };
 
+    // THE CONVERGENCE/ACCURACY SPLIT (2026-06-29): the convergence seed centers on the RAW cross-model
+    // consensus (the crowd's Schelling point), NOT our bias-corrected accuracy forecast — see ConsensusSource.
+    const buildDist = deps.buildDist ?? buildDistributionForEvent;
+    const biasCorrect = seedBiasCorrect(deps.botCfg.consensusSource);
+    if (deps.botCfg.consensusSource === 'wunderground') {
+      deps.log('consensusSource=wunderground not yet wired — using the ensemble_raw consensus proxy', { city: ev.citySlug });
+    }
+
     // helpers for the read-then-build flow below.
     const readDist = async (): Promise<LatestHouseDist | null> => {
       const r = one(await deps.db.rpc<{ latest_house_dist: LatestHouseDist | null }>('latest_house_dist', { p_event_id: eventId }));
@@ -167,7 +178,7 @@ export async function seedHouseDist(
       }
 
       // build the house_gaussian (seeded) from existing production forecasts.
-      await buildDistributionForEvent(deps.db, deps.cfg, eventId, { notify: NO_NOTIFY, now: deps.now, seeded: true });
+      await buildDist(deps.db, deps.cfg, eventId, { notify: NO_NOTIFY, now: deps.now, seeded: true, biasCorrect });
       dist = await readDist();
 
       if (!usable(dist)) {
@@ -196,7 +207,7 @@ export async function seedHouseDist(
               .filter((r) => r.lead_days >= 0 && r.lead_days <= 16);
             if (rows.length > 0) {
               await deps.db.rpc('upsert_forecast_rows', { p_rows: rows });
-              await buildDistributionForEvent(deps.db, deps.cfg, eventId, { notify: NO_NOTIFY, now: deps.now, seeded: true });
+              await buildDist(deps.db, deps.cfg, eventId, { notify: NO_NOTIFY, now: deps.now, seeded: true, biasCorrect });
               dist = await readDist();
             }
           } catch (e) {

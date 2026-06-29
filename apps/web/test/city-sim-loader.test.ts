@@ -88,6 +88,26 @@ describe('getCitySim — per-arm CIs, carry-forward equity, leader', () => {
     expect(v.overall.nGraded).toBe(24);
   });
 
+  it('attaches the entry-time watcher recommendation (edgeCiLo rank — distinct from the P&L leader)', async () => {
+    const v = (await getCitySim(stubDb(payload)))!;
+    const sg = v.cities[0]!;
+    // arm 11 edge = 0 (3W@0.25/9L), arm 12 edge = −0.2 (6W@0.7/6L): both eligible (n=12 ≥ 10). The watcher
+    // ranks by edgeCiLo, so the LEAST-negative arm 11 wins — and recommends ≠ isLeader (12 has the better P&L).
+    expect(sg.entryWatch.recommendedHour).toBe(11);
+    expect(sg.entryWatch.confidence).toBe('provisional'); // best available but not credibly > 0
+    const a11 = sg.arms.find((a) => a.hour === 11)!;
+    const a12 = sg.arms.find((a) => a.hour === 12)!;
+    expect(a11.recommended).toBe(true);
+    expect(a11.watchRank).toBe(1);
+    expect(a12.recommended).toBe(false);
+    expect(a12.watchRank).toBe(2);
+    expect(a12.isLeader).toBe(true); // the P&L leader is a DIFFERENT arm than the watcher's pick
+
+    // empty Karachi → insufficient, null recommendation, no throw
+    expect(v.cities[1]!.entryWatch.confidence).toBe('insufficient');
+    expect(v.cities[1]!.entryWatch.recommendedHour).toBeNull();
+  });
+
   it('returns null when the RPC is absent', async () => {
     expect(await getCitySim(stubDb(null, { throws: true }))).toBeNull();
   });

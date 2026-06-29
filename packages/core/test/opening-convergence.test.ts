@@ -32,6 +32,7 @@ import {
   openingVerdict,
   paperFill,
   parseBotConfig,
+  seedBiasCorrect,
   selectEntries,
   zeroSkillPassRate,
 } from '../src/sim/opening-convergence.ts';
@@ -583,6 +584,18 @@ describe('parseBotConfig — config fallbacks + the F10-r8-FP migration-mirror p
     expect(cfg.killDayTz).toBe('Europe/Stockholm');
     expect(cfg.gate.minMarkets).toBe(99);
     expect(cfg.peakMidMax).toBe(BOT_DEFAULTS.peakMidMax); // junk numeric → default
+  });
+
+  it('consensusSource (the convergence/accuracy split) parses from the allow-set; default ensemble_raw; junk → default', () => {
+    expect(parseBotConfig([]).consensusSource).toBe('ensemble_raw'); // default = raw consensus center
+    expect(parseBotConfig([{ key: 'bot.consensusSource', value: 'calibrated' }]).consensusSource).toBe('calibrated');
+    expect(parseBotConfig([{ key: 'bot.consensusSource', value: 'wunderground' }]).consensusSource).toBe('wunderground');
+    // a typo / unbuilt value must NOT silently take effect — falls back to the default, never disables the split.
+    expect(parseBotConfig([{ key: 'bot.consensusSource', value: 'gfs_only' }]).consensusSource).toBe('ensemble_raw');
+    // seedBiasCorrect is the load-bearing mapping: ONLY 'calibrated' keeps the per-model bias correction.
+    expect(seedBiasCorrect('calibrated')).toBe(true);
+    expect(seedBiasCorrect('ensemble_raw')).toBe(false);
+    expect(seedBiasCorrect('wunderground')).toBe(false);
   });
 
   it('the frozen §9R-E gate can only be TIGHTENED — a sub-floor config override is clamped UP (CORE2-3/CS3-1)', () => {

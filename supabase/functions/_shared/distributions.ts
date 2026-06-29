@@ -40,6 +40,19 @@ export interface BuildDeps {
    * never becomes the scored champion there.
    */
   seeded?: boolean;
+  /**
+   * THE CONVERGENCE/ACCURACY SPLIT (2026-06-29). Defaults to TRUE → the per-model model_stats bias
+   * correction (correctPoint) is applied — the calibrated, accuracy-maximizing center every existing
+   * caller wants (build-distributions / discover-markets / metar-nowcast / the paper-trade). When FALSE,
+   * the per-model bias term is dropped (correctPoint(…, 0)) so the dist centers on the RAW cross-model
+   * consensus — the number the crowd's weather apps show, which is what a freshly-listed market CONVERGES
+   * to. The opening-convergence seed passes false (consensusSource='ensemble_raw'): the convergence play
+   * sells into the crowd's belief, so a −1°C "truth" correction that helps the paper-trade actively HURTS
+   * here (it moves us off the Schelling point). Spread (blendSigmaC) + model weights are unchanged — only
+   * the systematic offset is dropped; model_stats is still required (sigma/weights), so the F15 seed-quality
+   * gate is unaffected.
+   */
+  biasCorrect?: boolean;
 }
 
 interface BuildInputs {
@@ -103,6 +116,15 @@ export async function buildDistributionForEvent(
   const statFor = (model: string, slot: string) =>
     inp.stats.find((s) => s.model === model && s.lead === lead && s.slot === slot);
   const statsVersion = Math.max(0, ...inp.stats.map((s) => s.version ?? 0));
+  // The convergence/accuracy split (BuildDeps.biasCorrect): drop the systematic per-model bias for the
+  // raw-consensus center, keeping weights + sigma. Default (undefined) ⇒ calibrated (unchanged).
+  const biasOf = (st: { bias: number | null } | undefined): number =>
+    deps.biasCorrect === false ? 0 : Number(st?.bias ?? 0);
+  // The raw and calibrated dists for the SAME event share the same forecast ids → without this tag they
+  // would hash-collide on (event_id, source, inputs_hash) and the 2nd write would be silently DROPPED
+  // (a §9R bot city can be both a production-scored station AND a convergence-seed event). Default = no tag,
+  // so every existing caller's hash is byte-identical; the raw seed gets a distinct 'raw' hash that coexists.
+  const biasTag: string[] = deps.biasCorrect === false ? ['raw'] : [];
 
   const warnSkip = async (source: string, reason: string) => {
     await deps.notify({
@@ -169,7 +191,7 @@ export async function buildDistributionForEvent(
       const dominantSlot = slots.filter((s) => s === '10Z').length >= slots.length / 2 ? '10Z' : '22Z';
       const points = inp.forecasts.map((f) => {
         const st = statFor(f.model, slotOf(f.slot, f.capturedAt));
-        return { model: f.model, value: correctPoint(Number(f.tmaxC), Number(st?.bias ?? 0)) };
+        return { model: f.model, value: correctPoint(Number(f.tmaxC), biasOf(st)) };
       });
       const haveWeights = inp.forecasts.some((f) => statFor(f.model, slotOf(f.slot, f.capturedAt))?.weight != null);
       const weights = new Map(
@@ -186,7 +208,7 @@ export async function buildDistributionForEvent(
       const probs = gaussianBucketProbs(muNative, sigmaNative, ladder);
       const hashBase = [
         'house_gaussian', String(lead), String(statsVersion),
-        ...inp.forecasts.map((f) => f.id).sort(),
+        ...inp.forecasts.map((f) => f.id).sort(), ...biasTag,
       ];
       await write('house_gaussian', probs, muNative, sigmaNative, hashBase, false);
       if (nowcastCtx) {
@@ -204,7 +226,7 @@ export async function buildDistributionForEvent(
   const pool: number[] = [];
   const ensembleIds: string[] = [];
   for (const ens of inp.ensembles) {
-    const bias = Number(inp.stats.find((s) => s.model === ens.model && s.lead === lead)?.bias ?? 0);
+    const bias = biasOf(inp.stats.find((s) => s.model === ens.model && s.lead === lead));
     for (const m of ens.members) pool.push(toNative(correctPoint(Number(m), bias), unit));
     ensembleIds.push(ens.id);
   }
@@ -213,7 +235,7 @@ export async function buildDistributionForEvent(
       const sigmaNative = toNativeSigma(blendSigmaC('10Z'));
       const probs = dressedEnsembleProbs(pool, sigmaNative, ladder); // throws under 20 members
       const muNative = pool.reduce((a, b) => a + b, 0) / pool.length;
-      const hashBase = ['house_ensemble', String(lead), String(statsVersion), ...ensembleIds.sort()];
+      const hashBase = ['house_ensemble', String(lead), String(statsVersion), ...ensembleIds.sort(), ...biasTag];
       await write('house_ensemble', probs, muNative, sigmaNative, hashBase, false);
       if (nowcastCtx) {
         const constrained = applyRunningMaxConstraint(probs, ladder, nowcastCtx.runningMax, nowcastCtx.lift);

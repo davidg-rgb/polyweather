@@ -186,6 +186,42 @@ describe('buildDistributionForEvent (§6.16)', () => {
     const he = await rows(db, `select 1 from bucket_probabilities where event_id = '${ev}' and source = 'house_ensemble'`);
     expect(he.length).toBe(0);
   });
+
+  it('biasCorrect:false centers on the RAW cross-model consensus (no per-model debias) — the convergence split', async () => {
+    // Same 21/22/23 forecasts + biases [+1, 0, −1] / weights [.5,.3,.2] as the calibrated test. The CALIBRATED
+    // center is 21.4 (20·.5 + 22·.3 + 24·.2); the RAW center drops the bias → 21·.5 + 22·.3 + 23·.2 = 21.7. The
+    // 0.3°C gap = the weighted bias the convergence seed must NOT apply (it would move us off the crowd's center).
+    const ev = await seedCityEvent('rawcity', 'RAWC', '2026-06-12');
+    await db.exec(`
+      insert into forecast_snapshots (icao, model, target_date, lead_days, tmax_c, snapshot_slot, source, captured_at) values
+        ('RAWC', 'ecmwf_ifs025', '2026-06-12', 1, 21.0, '10Z', 'forecast_api', '2026-06-11T10:15:00Z'),
+        ('RAWC', 'gfs_seamless', '2026-06-12', 1, 22.0, '10Z', 'forecast_api', '2026-06-11T10:15:00Z'),
+        ('RAWC', 'icon_seamless', '2026-06-12', 1, 23.0, '10Z', 'forecast_api', '2026-06-11T10:15:00Z');
+      insert into model_stats (icao, model, lead_days, snapshot_slot, bias_c, residual_sigma_c, weight, stats_version) values
+        ('RAWC', 'ecmwf_ifs025', 1, '10Z', 1.0, 1.2, 0.5, 3),
+        ('RAWC', 'gfs_seamless', 1, '10Z', 0.0, 1.4, 0.3, 3),
+        ('RAWC', 'icon_seamless', 1, '10Z', -1.0, 1.6, 0.2, 3),
+        ('RAWC', 'blend', 1, '10Z', 0.0, 1.5, null, 3);
+    `);
+
+    // calibrated (default) first → μ 21.4.
+    await buildDistributionForEvent(port, cfg, ev, deps);
+    // raw → μ 21.7, AND it must be a SEPARATE row (the 'raw' hash tag prevents the on-conflict-drop collision).
+    const rawRes = await buildDistributionForEvent(port, cfg, ev, { ...deps, biasCorrect: false });
+    expect(rawRes.written).toBeGreaterThanOrEqual(1); // not silently dropped as a hash collision with the calibrated row
+
+    const hg = await rows<{ mu_native: string; sigma_native: string }>(
+      db,
+      `select mu_native, sigma_native from bucket_probabilities
+       where event_id = '${ev}' and source = 'house_gaussian' order by mu_native`,
+    );
+    const mus = hg.map((r) => Number(r.mu_native));
+    expect(mus).toHaveLength(2); // calibrated + raw coexist
+    expect(mus[0]).toBeCloseTo(21.4, 6); // calibrated center
+    expect(mus[1]).toBeCloseTo(21.7, 6); // raw consensus center (the convergence seed's number)
+    // sigma is unchanged by the split — only the systematic offset is dropped, the spread stays calibrated.
+    expect(hg.every((r) => Number(r.sigma_native) === 1.5)).toBe(true);
+  });
 });
 
 describe('buildDistributions job (§6.16)', () => {

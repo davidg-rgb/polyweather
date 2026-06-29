@@ -19,12 +19,23 @@ export const dynamic = 'force-dynamic';
 const GREEN = 'var(--ams-tertiary)';
 const RED = 'var(--ams-red)';
 // Arms are coloured by POSITION (not absolute hour, since cities race different hours) on the categorical ramp.
-const ARM_PALETTE = ['var(--ams-arm-13)', 'var(--ams-arm-14)', 'var(--ams-arm-15)', 'var(--ams-arm-16)'];
-const ARM_DASH = [undefined, '5 3', '2 3', '7 3 2 3'];
+// Six slots so a widened race (e.g. 10–15 local) keeps distinct colours without wrapping.
+const ARM_PALETTE = [
+  'var(--ams-arm-13)', 'var(--ams-arm-14)', 'var(--ams-arm-15)', 'var(--ams-arm-16)',
+  'var(--ams-tertiary)', 'var(--ams-secondary-dim)',
+];
+const ARM_DASH = [undefined, '5 3', '2 3', '7 3 2 3', '1 2', '9 3'];
 
 const signedUsd = (v: number | null, dp = 2): string =>
   v == null ? '—' : `${v >= 0 ? '+' : '−'}${fmtUsd(Math.abs(v), dp)}`;
 const pnlClass = (v: number | null): string => (v == null ? '' : v >= 0 ? 'pos' : 'neg');
+
+/** The entry-time watcher's confidence → a tile colour + a short badge label. */
+const WATCH_UI: Record<string, { color: string; badge: string }> = {
+  sufficient: { color: GREEN, badge: 'confident' },
+  provisional: { color: 'var(--ams-secondary)', badge: 'provisional' },
+  insufficient: { color: 'var(--ams-secondary-dim)', badge: 'gathering' },
+};
 
 /** One city's section: standings tiles, the arm leaderboard, the equity chart, today's call, the bet log. */
 function CityPanel({ city }: { city: CitySimCity }): ReactElement {
@@ -35,6 +46,8 @@ function CityPanel({ city }: { city: CitySimCity }): ReactElement {
   const nGradedDays = num(city.coverage?.nGradedDays) ?? 0;
   const nPending = num(city.coverage?.nPending) ?? 0;
   const armColor = (h: number): string => ARM_PALETTE[Math.max(0, city.armHours.indexOf(h)) % ARM_PALETTE.length]!;
+  const watch = city.entryWatch;
+  const watchUi = WATCH_UI[watch.confidence] ?? WATCH_UI.insufficient!;
 
   const series: EquitySeries[] = city.armHours
     .filter((h) => city.chart.byHour[h])
@@ -65,7 +78,12 @@ function CityPanel({ city }: { city: CitySimCity }): ReactElement {
         <div className="tile">
           <div className="cap">Leading arm</div>
           <div className="big sky">{city.leaderHour != null ? `${city.leaderHour}:00` : '—'}</div>
-          <div className="sub">{city.leaderHour != null ? `best of ${city.armHours.length} arms` : 'no graded bets yet'}</div>
+          <div className="sub">best P&amp;L of {city.armHours.length} arms</div>
+        </div>
+        <div className="tile" title={watch.rationale}>
+          <div className="cap">Best entry-time ⓘ</div>
+          <div className="big" style={{ color: watchUi.color }}>{watch.recommendedHour != null ? `${watch.recommendedHour}:00` : '—'}</div>
+          <div className="sub">watcher · {watchUi.badge}</div>
         </div>
         <div className="tile">
           <div className="cap">Coverage</div>
@@ -77,6 +95,13 @@ function CityPanel({ city }: { city: CitySimCity }): ReactElement {
           <div className="big" style={{ fontSize: '1.2rem' }}>{fmtDate(city.coverage?.firstDate)} →</div>
           <div className="sub">{fmtDate(city.coverage?.lastDate)}</div>
         </div>
+      </div>
+
+      {/* entry-time watcher verdict — the continuously-updated optimal-entry recommendation */}
+      <div className="info-banner" style={{ marginTop: '0.9rem', borderLeftColor: watchUi.color }}>
+        <strong style={{ color: watchUi.color }}>Entry-time watcher:</strong> {watch.rationale}
+        <span className="cap muted"> (ranks arms by the 95% lower bound of edge = won−ask, so a thin lucky arm
+        can't out-rank a deep one; recommends, never prunes — keep racing all arms.)</span>
       </div>
 
       {/* arm leaderboard */}
@@ -95,8 +120,10 @@ function CityPanel({ city }: { city: CitySimCity }): ReactElement {
               const ng = num(a.nGraded) ?? 0;
               const edgeShown = ng > 0 && Number.isFinite(a.edge);
               return (
-                <tr key={a.hour} className={a.isLeader ? 'rec-row' : undefined}>
-                  <td style={{ color: armColor(a.hour), fontWeight: 700 }}>{a.hour}:00{a.isLeader ? ' 🥇' : ''}</td>
+                <tr key={a.hour} className={a.recommended ? 'rec-row' : undefined}>
+                  <td style={{ color: armColor(a.hour), fontWeight: 700 }}>
+                    {a.hour}:00{a.isLeader ? ' 🥇' : ''}{a.recommended ? ' ⭐' : ''}
+                  </td>
                   <td>{num(a.nBets) ?? 0}</td>
                   <td>{ng}</td>
                   <td>{hit == null ? '—' : `${fmtPct(hit, 0)}${ng > 0 ? ` (${fmtPct(a.hitCiLo, 0)}–${fmtPct(a.hitCiHi, 0)})` : ''}`}</td>

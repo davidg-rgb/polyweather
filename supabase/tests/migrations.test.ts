@@ -245,6 +245,11 @@ describe('migrations 0001–0010', () => {
       // place_inputs/record/grade_inputs/settle) + dash_city_sim (operator read, added to WEB_AUTHENTICATED below)
       // + the daily city-paper-trade cron at 10:00 UTC (count 27 → 28). NOT trading — analytics. CITY-SIM.md.
       '0070_city_paper_sim.sql',
+      // 0071 = the convergence/accuracy forecast SPLIT (bot.consensusSource ops mirror — the bot's house seed
+      // centers on the RAW cross-model consensus, not our bias-corrected accuracy forecast) + the entry-time
+      // WATCHER's wider arm race (widen WSSS/OPKC to {10..15} so the watcher samples both sides of the peak).
+      // Config/seed-data only — no table/RPC/cron change (cron count stays 28). CITY-SIM.md.
+      '0071_convergence_split_and_entry_watch.sql',
     ]);
   });
 });

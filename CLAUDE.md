@@ -48,7 +48,14 @@ dashboard, TypeScript monorepo (`packages/core|io|trading`, `supabase/functions`
   `city_sim_config` row. Seeds **Singapore (WSSS)** + **Karachi (OPKC)** — the most forecast-accurate °C markets
   with a liquid Polymarket book — racing arms 11/12/13/14 (tropical ~12:30 peak); migration `0070`, Edge fn
   `city-paper-trade`, `/paper-trade` page, seed `scripts/city-sim.ts`. NOT trading — measures net-profit-vs-market.
-  **BUILT + fully tested (1700+ green); go-live operator-gated** — apply 0070 + deploy edge fn + seed). Tests: `pnpm test`, `pnpm typecheck`.
+  **+ 2026-06-30 (§6/§7): the ENTRY-TIME WATCHER** (`core/sim/entry-watch.ts`, live on `/paper-trade`) — recommends
+  the optimal entry hour from the graded ledger, ranking arms by the 95%-lower-bound of edge (shrinkage, not the
+  point estimate; ⭐ ≠ the 🥇 P&L leader); arms widened to {10..15} (migration `0071`) so it samples both sides of
+  the peak. **+ the convergence/accuracy forecast SPLIT** — the opening-convergence bot's house seed now centers on
+  the RAW cross-model consensus (`buildDistributionForEvent({biasCorrect:false})`, `BotConfig.consensusSource=
+  'ensemble_raw'`), NOT our bias-corrected accuracy forecast: the convergence play bets on what the *crowd* believes,
+  so a truth-correction that helps the paper-trade hurts it. **BUILT + fully tested (1715 green); go-live
+  operator-gated** — apply 0070+0071 + deploy edge fn + seed). Tests: `pnpm test`, `pnpm typecheck`.
 - Build is COMPLETE (P0–P8). Remaining work is operator/deploy-gated — see BUILD-STATE.
 - **Headline analytics deliverable (2026-06-16): the Amsterdam paper-trade head-to-head** —
   `$10/day` on our predicted bucket at 13/14/15/16 local, racing to find the best time to bet,

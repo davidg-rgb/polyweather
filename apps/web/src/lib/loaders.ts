@@ -16,16 +16,19 @@ import {
   peakHourWindow,
   rankCitiesByRoi,
   recommendBestTime,
+  recommendEntryHour,
   scoreLocked,
   summarize,
 } from '@weather-edge/core';
 import type {
   AppConfig,
+  ArmGradedBets,
   BestTimeView,
   CityRoi,
   ConvergenceView,
   DailyRow,
   EdgeRow,
+  EntryWatchResult,
   LockedBuy,
   ReplicaStrategy,
   ReplicaSummary,
@@ -953,6 +956,10 @@ export interface CitySimArm {
   hitRate: unknown;
   avgAsk: unknown;
   isLeader: boolean;
+  /** The entry-time watcher's pick (max edgeCiLo among arms with ≥minGraded bets) — distinct from isLeader (max P&L). */
+  recommended: boolean;
+  /** 1 = best by edgeCiLo among ELIGIBLE arms; null when the arm is too thin to rank. */
+  watchRank: number | null;
   /** Per-arm CIs from the graded (won, ask) rows via core/sim/stats armEdgeStats (same idiom as /amsterdam). */
   hitCiLo: number;
   hitCiHi: number;
@@ -989,6 +996,8 @@ export interface CitySimCity {
   coverage: { firstDate: string | null; lastDate: string | null; nDays: unknown; nGradedDays: unknown; nPending: unknown };
   arms: CitySimArm[];
   leaderHour: number | null;
+  /** The continuously-updated entry-time recommendation from the graded ledger (core/sim/entry-watch). */
+  entryWatch: EntryWatchResult;
   totals: { pnl: unknown; nGraded: unknown; nWon: unknown; staked: unknown };
   chart: { dates: string[]; byHour: Record<number, (number | null)[]> };
   betLog: CitySimBetRow[];
@@ -1010,7 +1019,7 @@ interface CitySimCityPayload {
   armHours: number[];
   stakeUsd: unknown;
   coverage: CitySimCity['coverage'];
-  arms: Omit<CitySimArm, 'isLeader' | 'hitCiLo' | 'hitCiHi' | 'edge' | 'edgeCiLo' | 'edgeCiHi' | 'ev' | 'evCiLo' | 'evCiHi'>[];
+  arms: Omit<CitySimArm, 'isLeader' | 'recommended' | 'watchRank' | 'hitCiLo' | 'hitCiHi' | 'edge' | 'edgeCiLo' | 'edgeCiHi' | 'ev' | 'evCiLo' | 'evCiHi'>[];
   leader: { hour: number } | null;
   totals: CitySimCity['totals'];
   equityByArm: Record<string, { date: string; cum: unknown; status: string }[]>;
@@ -1043,15 +1052,26 @@ export async function getCitySim(db: WebDb): Promise<CitySimView | null> {
   const cities: CitySimCity[] = (v.cities ?? []).map((c) => {
     const leaderHour = c.leader?.hour ?? null;
     const betsByArm = c.betsByArm ?? {};
+    // The graded (won, ask) bets per arm — the single source the per-arm CIs AND the entry-time watcher read.
+    const armBets: ArmGradedBets[] = (c.arms ?? []).map((a) => ({
+      hour: a.hour,
+      bets: (betsByArm[String(a.hour)] ?? [])
+        .map((r) => ({ won: r.won === true, ask: toNum(r.ask) }))
+        .filter((r): r is { won: boolean; ask: number } => r.ask != null),
+    }));
+    // The continuously-updated optimal-entry-hour recommendation (recomputed every load as the ledger grows).
+    const entryWatch = recommendEntryHour(armBets);
+    const watchByHour = new Map(entryWatch.arms.map((w) => [w.hour, w]));
     const arms: CitySimArm[] = (c.arms ?? [])
       .map((a) => {
-        const graded = (betsByArm[String(a.hour)] ?? [])
-          .map((r) => ({ won: r.won === true, ask: toNum(r.ask) }))
-          .filter((r): r is { won: boolean; ask: number } => r.ask != null);
+        const graded = armBets.find((x) => x.hour === a.hour)?.bets ?? [];
         const s = armEdgeStats(graded);
+        const w = watchByHour.get(a.hour);
         return {
           ...a,
           isLeader: a.hour === leaderHour,
+          recommended: w?.recommended ?? false,
+          watchRank: w?.rank ?? null,
           hitCiLo: s.hitCiLo,
           hitCiHi: s.hitCiHi,
           edge: s.edge,
@@ -1096,6 +1116,7 @@ export async function getCitySim(db: WebDb): Promise<CitySimView | null> {
       coverage: c.coverage,
       arms,
       leaderHour,
+      entryWatch,
       totals: c.totals,
       chart: { dates, byHour },
       betLog: c.betLog ?? [],

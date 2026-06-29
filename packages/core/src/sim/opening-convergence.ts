@@ -620,9 +620,34 @@ export function zeroSkillPassRate(
 // an equality test asserts they match (F10-r8-FP). Pure (reads flat key/value rows) — no I/O.
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 
+/**
+ * THE CONVERGENCE FORECAST SOURCE (2026-06-29). The opening-convergence play sells into what the CROWD
+ * will believe the temperature is — so its house seed must center on the consensus the marginal trader's
+ * weather app shows, NOT our accuracy-tuned (bias-corrected) forecast. (A −1°C "truth" correction that
+ * wins the paper-trade — held to resolution, scored on truth — LOSES the convergence: it moves us off the
+ * crowd's Schelling point.) The paper-trade keeps the calibrated center; this knob governs ONLY the bot's
+ * convergence seed.
+ *   - 'ensemble_raw'  (DEFAULT): the raw cross-model ensemble center (drop the per-model model_stats bias;
+ *                     keep weights + sigma). The available, free proxy for "what the major models say",
+ *                     which the consumer apps are themselves derived from. ⇒ biasCorrect = false.
+ *   - 'calibrated':   the bias-corrected center (the old behavior / the accuracy lens). ⇒ biasCorrect = true.
+ *   - 'wunderground': RESERVED — the strongest anchor (Polymarket's resolution source + a popular app), but
+ *                     not yet wired; until the WU forecast feed lands the seed falls back to the
+ *                     'ensemble_raw' center (a legitimate consensus proxy) and logs that it did. ⇒ biasCorrect = false.
+ */
+export type ConsensusSource = 'ensemble_raw' | 'calibrated' | 'wunderground';
+export const CONSENSUS_SOURCES: readonly ConsensusSource[] = ['ensemble_raw', 'calibrated', 'wunderground'];
+
+/** Should the convergence seed apply the per-model bias correction? Only 'calibrated' keeps it. */
+export function seedBiasCorrect(source: ConsensusSource): boolean {
+  return source === 'calibrated';
+}
+
 export interface BotConfig extends OpeningCfg {
   /** the operator instant-kill (bot_enabled='1'/'0'). */
   enabled: boolean;
+  /** the convergence seed's forecast source (the accuracy/convergence split — see ConsensusSource). */
+  consensusSource: ConsensusSource;
   // caps (absolute-$, §9R-A / I-11)
   perMarketUsd: number;
   totalConcurrentUsd: number;
@@ -671,6 +696,9 @@ export const BOT_DEFAULTS: BotConfig = {
   // (handoff §3 + §16-D). Operator-tunable via the `bot.cities` config row; migration 0066 mirrors THIS.
   cities: ['amsterdam', 'chengdu', 'manila', 'qingdao', 'madrid', 'guangzhou', 'kuala-lumpur', 'beijing', 'shanghai', 'paris'],
   enabled: false,
+  // the convergence seed centers on the RAW cross-model consensus (the crowd's Schelling point), not our
+  // accuracy-tuned bias-corrected forecast — the accuracy/convergence split (see ConsensusSource).
+  consensusSource: 'ensemble_raw',
   perMarketUsd: 40,
   totalConcurrentUsd: 100,
   paperBankrollUsd: 200,
@@ -739,9 +767,16 @@ export function parseBotConfig(rows: { key: string; value: string | null }[]): B
     if (v == null || v.trim() === '') return dflt;
     return v.split(',').map((s) => s.trim()).filter(Boolean);
   };
+  // a string override accepted ONLY from a fixed allow-set (an unknown/typo value falls back to the default —
+  // a stray bot.consensusSource must never silently disable the convergence split or pick an unbuilt source).
+  const enumStr = <T extends string>(key: string, dflt: T, allowed: readonly T[]): T => {
+    const v = map.get(key);
+    return v != null && (allowed as readonly string[]).includes(v) ? (v as T) : dflt;
+  };
   const D = BOT_DEFAULTS;
   return {
     cities: csv('bot.cities', D.cities),
+    consensusSource: enumStr('bot.consensusSource', D.consensusSource, CONSENSUS_SOURCES),
     minVol24hUsd: clamp('bot.minVol24hUsd', D.minVol24hUsd, 0, 1e12),
     peakMidMax: clamp('bot.peakMidMax', D.peakMidMax, 0, 1),
     listingMaxHours: clamp('bot.listingMaxHours', D.listingMaxHours, 0, 1e6),

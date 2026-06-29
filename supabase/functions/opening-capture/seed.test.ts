@@ -56,7 +56,11 @@ const dist = (minutesAgo: number): DistLike => ({
 });
 
 /** Build a spy SeedDeps whose latest_house_dist returns the configured response on each successive call. */
-function makeDeps(distSeq: (DistLike | null)[], quality: { nModels: number; hasStats: boolean } = { nModels: 5, hasStats: true }) {
+function makeDeps(
+  distSeq: (DistLike | null)[],
+  quality: { nModels: number; hasStats: boolean } = { nModels: 5, hasStats: true },
+  over: Partial<Pick<SeedDeps, 'botCfg' | 'buildDist'>> = {},
+) {
   const calls: string[] = [];
   let fetchCalls = 0;
   let distIdx = 0;
@@ -91,6 +95,7 @@ function makeDeps(distSeq: (DistLike | null)[], quality: { nModels: number; hasS
     models: ['ecmwf_ifs025'],
     stations: [{ icao: 'EHAM', lat: 52.3, lon: 4.76, tz: 'Europe/Amsterdam' }],
     log: () => {},
+    ...over,
   } as unknown as SeedDeps;
   return { deps, calls: () => calls, fetchCalls: () => fetchCalls };
 }
@@ -129,5 +134,27 @@ describe('seedHouseDist — seedFreshnessMin throttle + OM-on-absence (EDGE2-1)'
     const res = await seedHouseDist(makeEv(), 'poly-1', KEYS, deps);
     expect(res.seeded).toBe(false);
     expect(res.reason).toContain('quality_gate');
+  });
+
+  // THE CONVERGENCE/ACCURACY SPLIT: the seed forwards biasCorrect to buildDistributionForEvent per
+  // botCfg.consensusSource. ensemble_raw/wunderground ⇒ raw center (false); calibrated ⇒ true.
+  it.each([
+    ['ensemble_raw', false],
+    ['calibrated', true],
+    ['wunderground', false],
+  ] as const)('consensusSource=%s ⇒ buildDist called with biasCorrect=%s', async (source, expected) => {
+    const seen: (boolean | undefined)[] = [];
+    const buildDist = (async (_db, _cfg, _evId, d) => {
+      seen.push(d.biasCorrect);
+      return { written: 1, skipped: 0 };
+    }) as NonNullable<SeedDeps['buildDist']>;
+    const { deps } = makeDeps([dist(200), dist(200)], { nModels: 5, hasStats: true }, {
+      botCfg: { ...BOT_DEFAULTS, consensusSource: source },
+      buildDist,
+    });
+    const res = await seedHouseDist(makeEv(), 'poly-1', KEYS, deps);
+    expect(res.seeded).toBe(true);
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen.every((b) => b === expected)).toBe(true);
   });
 });
