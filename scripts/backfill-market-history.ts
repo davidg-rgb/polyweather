@@ -11,20 +11,31 @@
  *      Post-cutoff prices are NEVER used (C2: they embed the day's
  *      observations and would leak truth into the walk-forward backtest);
  *      events lacking pre-cutoff points are skipped for that lead and counted.
+ *   3. (--full-series) the COMPLETE per-bucket point series → market_price_history
+ *      (0072), the minute/hour odds path (1) discards. A dedicated append-only
+ *      archive — NOT market_snapshots, which ops_downsample would thin to 1/day
+ *      for >30-day-old rows. Single price per bucket (implied prob), no bid/ask.
  *
  * Scope: cities already in the DB (discovery owns city creation — historical
  * events for unmodeled cities have no station/tz/forecasts to backtest
  * against; they are counted and skipped). Existing live rows are never
  * clobbered: events upsert by poly_event_id (slug/natural-key collisions
  * adopt the stored row), snapshots collide on (bucket_id, captured_at),
- * consensus rows on the §7.12 (event_id, source, inputs_hash) key.
+ * consensus rows on the §7.12 (event_id, source, inputs_hash) key, full-series
+ * points on (bucket_id, t).
  *
- * Resumable: backfill_progress scope 'ev:{poly_event_id}' marks completed
- * events — re-runs skip them without refetching prices-history (--refetch
- * overrides). --limit bounds events ingested per run.
+ * Resumable: backfill_progress scope 'ev:{id}' (daily) / 'evfull:{id}'
+ * (--full-series, an independent namespace so the two modes don't shadow each
+ * other) marks completed events — re-runs skip them without refetching
+ * prices-history (--refetch overrides). --limit bounds events ingested per run.
+ *
+ * --earliest-scan is a separate READ-ONLY mode: paginate tag 104596 closed=true
+ * to the floor and print the earliest/latest listed date + count PER CITY (no DB
+ * writes) — answers "how far back does Polymarket have this market per city".
  *
  * Run: pnpm tsx scripts/backfill-market-history.ts [--from 2025-06-01]
- *        [--limit 200] [--refetch]
+ *        [--limit 200] [--refetch] [--full-series] [--fidelity 1]
+ *      pnpm tsx scripts/backfill-market-history.ts --earliest-scan
  */
 import { createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
@@ -55,6 +66,10 @@ export interface MarketHistoryArgs {
   limit?: number;
   /** Re-ingest events already marked done. */
   refetch?: boolean;
+  /** Persist the FULL per-bucket point series → market_price_history (uses the 'evfull:' progress namespace). */
+  fullSeries?: boolean;
+  /** Provenance: the prices-history fidelity (minutes) the caller fetched at — stored on each point. */
+  fidelity?: number;
 }
 
 export interface MarketHistoryDeps {
@@ -82,9 +97,123 @@ export interface MarketHistoryStats {
   snapshotRows: number;
   consensusRows: number;
   leadsSkippedNoPreCutoff: number;
+  /** Full per-bucket points written to market_price_history (--full-series only). */
+  priceHistoryRows: number;
 }
 
 const sha256 = (s: string): string => createHash('sha256').update(s).digest('hex');
+
+/**
+ * Persist a bucket's full point series → market_price_history (--full-series). Dedups by `t` (a token's
+ * series shouldn't repeat an instant, but a fidelity bucket could) so the multi-row INSERT never carries an
+ * in-statement duplicate of the (bucket_id, t) key; ON CONFLICT DO NOTHING makes a re-run a no-op. Chunked to
+ * keep the parameter count bounded on the multi-thousand-point series a 1-min fidelity can produce.
+ */
+async function insertFullSeries(
+  db: Db,
+  bucketId: string,
+  points: PricePoint[],
+  fidelityMin: number | null,
+): Promise<number> {
+  const byT = new Map<number, PricePoint>();
+  for (const pt of points) if (Number.isFinite(pt.t) && Number.isFinite(pt.p)) byT.set(pt.t, pt);
+  const unique = [...byT.values()];
+  const CHUNK = 500;
+  let written = 0;
+  for (let i = 0; i < unique.length; i += CHUNK) {
+    const chunk = unique.slice(i, i + CHUNK);
+    const valuesSql: string[] = [];
+    const params: unknown[] = [];
+    for (const pt of chunk) {
+      const b = params.length;
+      valuesSql.push(`($${b + 1}, $${b + 2}, $${b + 3}, $${b + 4})`);
+      params.push(bucketId, new Date(pt.t * 1000).toISOString(), pt.p, fidelityMin);
+    }
+    const r = await db.query<{ id: string }>(
+      `insert into market_price_history (bucket_id, t, p, fidelity_min)
+       values ${valuesSql.join(', ')}
+       on conflict (bucket_id, t) do nothing
+       returning id`,
+      params,
+    );
+    written += r.length;
+  }
+  return written;
+}
+
+/** One city's listed-market date span, from the closed-events floor scan. */
+export interface CityFloor {
+  city: string;
+  earliest: string;
+  latest: string;
+  count: number;
+}
+
+export interface CityFloorScan {
+  /** Per-city date spans, sorted earliest-first. */
+  floors: CityFloor[];
+  events: number;
+  pagesScanned: number;
+  /**
+   * True when a fetch error stopped us BEFORE the list was exhausted — Gamma 422s past offset ~2100 (a hard
+   * pagination-depth cap). The caller MUST page in ASCENDING endDate order so offset 0 is the genuine floor and
+   * the cap only truncates the recent tail, never the floor. (Gamma also `archived`s events older than the
+   * closed-list window, so the floor here is the closed-LIST floor, not Polymarket's all-time first market.)
+   */
+  capped: boolean;
+  stopReason: string;
+}
+
+/**
+ * Paginate tag 104596 closed=true and aggregate the listed-date span PER CITY — read-only, no DB. City from
+ * the slug (`temperature-in-{city}-on-…`, year-tolerant); date from the authoritative event endDate (T12:00Z
+ * on the target day) falling back to closedTime/createdAt — robust to the yearless 2025-slug trap. Returns
+ * sorted earliest-first. The caller pages in ascending endDate order (offset 0 = the floor); a fetch error
+ * (Gamma's offset-depth 422) STOPS the scan gracefully and sets `capped` rather than throwing, so the floor +
+ * every city seen so far are still reported. Answers "how far back does Polymarket list this market per city".
+ */
+export async function scanCityFloors(deps: {
+  fetchPage: (offset: number) => Promise<RawGammaEvent[]>;
+  log: (msg: string) => void;
+}): Promise<CityFloorScan> {
+  const byCity = new Map<string, { earliest: string; latest: string; count: number }>();
+  let events = 0;
+  let pagesScanned = 0;
+  let capped = false;
+  let stopReason = 'exhausted';
+  for (let offset = 0; ; offset += PAGE_SIZE) {
+    let page: RawGammaEvent[];
+    try {
+      page = await deps.fetchPage(offset);
+    } catch (e) {
+      capped = true;
+      stopReason = `fetch stopped at offset ${offset} (${e instanceof Error ? e.message : String(e)}) — likely Gamma's pagination-depth cap`;
+      deps.log(stopReason);
+      break;
+    }
+    pagesScanned++;
+    for (const ev of page) {
+      const city = /temperature-in-(.+?)-on-/.exec(ev.slug)?.[1];
+      if (!city) continue;
+      const date = String(ev.endDate ?? ev.closedTime ?? ev.createdAt ?? '').slice(0, 10);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
+      const cur = byCity.get(city);
+      if (!cur) byCity.set(city, { earliest: date, latest: date, count: 1 });
+      else {
+        if (date < cur.earliest) cur.earliest = date;
+        if (date > cur.latest) cur.latest = date;
+        cur.count++;
+      }
+    }
+    events += page.length;
+    deps.log(`scanned offset ${offset} (+${page.length} events, ${byCity.size} cities so far)`);
+    if (page.length < PAGE_SIZE) break;
+  }
+  const floors = [...byCity.entries()]
+    .map(([city, v]) => ({ city, earliest: v.earliest, latest: v.latest, count: v.count }))
+    .sort((a, b) => a.earliest.localeCompare(b.earliest) || a.city.localeCompare(b.city));
+  return { floors, events, pagesScanned, capped, stopReason };
+}
 
 /** Last point per UTC day — the daily snapshot series. */
 export function dailyLastPoints(points: PricePoint[]): PricePoint[] {
@@ -172,8 +301,9 @@ export async function backfillMarketHistory(
     pages: 0, eventsSeen: 0, ingested: 0, skippedAlreadyDone: 0, skippedNotClosed: 0,
     skippedBeforeFrom: 0, skippedParse: 0, skippedUnknownCity: 0, eventsErrored: 0,
     winnersRecorded: 0, historyCalls: 0, snapshotRows: 0, consensusRows: 0,
-    leadsSkippedNoPreCutoff: 0,
+    leadsSkippedNoPreCutoff: 0, priceHistoryRows: 0,
   };
+  const fidelityMin = Number.isFinite(args.fidelity) ? (args.fidelity as number) : null;
 
   paging: for (let offset = 0; ; offset += PAGE_SIZE) {
     const page = await deps.fetchPage(offset);
@@ -186,8 +316,9 @@ export async function backfillMarketHistory(
         continue;
       }
 
-      // city first (cheap), then the progress gate, then the parse.
-      const scope = `ev:${String(ev.id)}`;
+      // city first (cheap), then the progress gate, then the parse. --full-series uses its OWN namespace so a
+      // prior daily-only run's 'done' marker does not shadow the full-series fetch (and vice-versa).
+      const scope = `${args.fullSeries ? 'evfull' : 'ev'}:${String(ev.id)}`;
       if (!args.refetch && (await getProgress(db, SCRIPT, scope)).status === 'done') {
         stats.skippedAlreadyDone++;
         continue;
@@ -255,6 +386,10 @@ export async function backfillMarketHistory(
           );
           stats.historyCalls++;
           series.push(points);
+          // --full-series: the COMPLETE point series → market_price_history (the minute/hour archive).
+          if (args.fullSeries) {
+            stats.priceHistoryRows += await insertFullSeries(db, bucketIds[i]!, points, fidelityMin);
+          }
           for (const pt of dailyLastPoints(points)) {
             const r = await db.query<{ id: string }>(
               `insert into market_snapshots (bucket_id, mid, captured_at)
@@ -304,6 +439,7 @@ export async function backfillMarketHistory(
   log(
     `${SCRIPT} complete: ${stats.ingested} ingested of ${stats.eventsSeen} seen — ` +
       `winners ${stats.winnersRecorded} · snapshots ${stats.snapshotRows} · consensus ${stats.consensusRows} · ` +
+      (args.fullSeries ? `price-history ${stats.priceHistoryRows} · ` : '') +
       `leads skipped (no pre-cutoff) ${stats.leadsSkippedNoPreCutoff} · unknown-city ${stats.skippedUnknownCity} · ` +
       `parse-skipped ${stats.skippedParse} · errored ${stats.eventsErrored}`,
   );
@@ -318,35 +454,73 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       from: { type: 'string' },
       limit: { type: 'string' },
       refetch: { type: 'boolean' },
+      'full-series': { type: 'boolean' },
+      fidelity: { type: 'string' },
+      'earliest-scan': { type: 'boolean' },
     },
   });
-  const db = makeScriptDb();
   // Cloudflare fronts the CLOB host and rejects bare library user agents.
   const headers = { 'User-Agent': 'weather-edge/0.1 (research backfill)', Accept: 'application/json' };
-  try {
-    await backfillMarketHistory(
-      {
-        from: values.from,
-        limit: values.limit ? Number(values.limit) : undefined,
-        refetch: values.refetch ?? false,
-      },
-      {
-        db,
-        fetchPage: (offset) =>
-          ioFetchJson(
-            `https://gamma-api.polymarket.com/events?tag_id=104596&closed=true&limit=${PAGE_SIZE}&offset=${offset}`,
-            { headers },
-          ) as Promise<RawGammaEvent[]>,
-        fetchPricesHistory: (tokenId) =>
-          ioFetchJson(
-            `https://clob.polymarket.com/prices-history?market=${tokenId}&interval=max&fidelity=10`,
-            { headers },
-          ),
-        log: console.log,
-        now: () => new Date(),
-      },
+  const fetchPage = (offset: number) =>
+    ioFetchJson(
+      `https://gamma-api.polymarket.com/events?tag_id=104596&closed=true&limit=${PAGE_SIZE}&offset=${offset}`,
+      { headers },
+    ) as Promise<RawGammaEvent[]>;
+
+  if (values['earliest-scan']) {
+    // Read-only: page in ASCENDING endDate order so offset 0 is the genuine floor (Gamma 422s past offset
+    // ~2100, and scanCityFloors handles that gracefully). Progress to stderr; the table to stdout.
+    const fetchPageAsc = (offset: number) =>
+      ioFetchJson(
+        `https://gamma-api.polymarket.com/events?tag_id=104596&closed=true&order=endDate&ascending=true&limit=${PAGE_SIZE}&offset=${offset}`,
+        { headers },
+      ) as Promise<RawGammaEvent[]>;
+    const scan = await scanCityFloors({ fetchPage: fetchPageAsc, log: (m) => console.error(m) });
+    console.log(`\ncity                  earliest     latest       n`);
+    console.log(`────────────────────  ──────────   ──────────   ─────`);
+    for (const f of scan.floors) {
+      console.log(`${f.city.padEnd(20)}  ${f.earliest}   ${f.latest}   ${f.count}`);
+    }
+    console.log(
+      `\n${scan.floors.length} cities · ${scan.events} closed events scanned · earliest overall ` +
+        `${scan.floors[0]?.earliest ?? '—'} (${scan.floors[0]?.city ?? '—'}).`,
     );
-  } finally {
-    await db.end();
+    if (scan.capped) {
+      console.log(
+        `\n⚠ ${scan.stopReason}.\n` +
+          `  Paged ascending, so offset 0 IS the floor — the earliest dates above are real. But Gamma caps offset\n` +
+          `  depth (~2100 events) AND archives events older than the closed-list window, so (a) cities added after\n` +
+          `  the reachable tail may be absent, and (b) markets older than this closed-list floor exist only via a\n` +
+          `  direct slug lookup or the per-city '/series' endpoint, not this list.`,
+      );
+    }
+  } else {
+    // --full-series defaults to 1-min fidelity (the archive's whole point); daily mode keeps the 10-min default.
+    const fidelity = values.fidelity ? Number(values.fidelity) : values['full-series'] ? 1 : 10;
+    const db = makeScriptDb();
+    try {
+      await backfillMarketHistory(
+        {
+          from: values.from,
+          limit: values.limit ? Number(values.limit) : undefined,
+          refetch: values.refetch ?? false,
+          fullSeries: values['full-series'] ?? false,
+          fidelity,
+        },
+        {
+          db,
+          fetchPage,
+          fetchPricesHistory: (tokenId) =>
+            ioFetchJson(
+              `https://clob.polymarket.com/prices-history?market=${tokenId}&interval=max&fidelity=${fidelity}`,
+              { headers },
+            ),
+          log: console.log,
+          now: () => new Date(),
+        },
+      );
+    } finally {
+      await db.end();
+    }
   }
 }

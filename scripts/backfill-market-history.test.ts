@@ -24,7 +24,7 @@ import {
   type RawGammaEvent,
 } from '../packages/core/src/index.ts';
 import { freshDb, rows } from '../supabase/tests/harness.ts';
-import { backfillMarketHistory, dailyLastPoints, lastPreCutoff, SCRIPT } from './backfill-market-history.ts';
+import { backfillMarketHistory, dailyLastPoints, lastPreCutoff, scanCityFloors, SCRIPT } from './backfill-market-history.ts';
 import type { Db } from './lib/backfill.ts';
 import { toPgliteParam } from './lib/pglite-param.ts';
 
@@ -216,5 +216,108 @@ describe('backfill-market-history (§6.22, C2)', () => {
     expect(s1).toMatchObject({ skippedNotClosed: 1, ingested: 0 });
     const s2 = await backfillMarketHistory({ from: '2026-06-10', refetch: true }, deps([resolvedEvent()]));
     expect(s2).toMatchObject({ skippedBeforeFrom: 1, ingested: 0 });
+  });
+
+  it('--full-series persists the COMPLETE per-bucket series to market_price_history (own progress namespace, idempotent)', async () => {
+    const winPts = parsePricesHistory(winnerHistory());
+    const losePts = parsePricesHistory(loserHistory());
+    const wUniq = new Set(winPts.map((p) => p.t)).size; // dedup-by-t — what insertFullSeries actually writes
+    const lUniq = new Set(losePts.map((p) => p.t)).size;
+    const expected = wUniq + 10 * lUniq; // winner token gets the winner series, the other 10 buckets the loser series
+
+    // The 'ev:' scope is already done from earlier tests; 'evfull:' is a SEPARATE namespace so this still ingests.
+    const stats = await backfillMarketHistory({ fullSeries: true, fidelity: 1 }, deps([resolvedEvent()]));
+    expect(stats).toMatchObject({ ingested: 1, historyCalls: 11 });
+    expect(stats.priceHistoryRows).toBe(expected);
+
+    const cnt = (await rows<{ n: number }>(db, `select count(*)::int as n from market_price_history`))[0]!.n;
+    expect(cnt).toBe(expected);
+
+    // the winner bucket carries its full deduped series at the recorded fidelity; spot-check a real point.
+    const winBucketRows = await rows<{ p: string; fidelity_min: number }>(
+      db,
+      `select mph.p, mph.fidelity_min from market_price_history mph
+       join market_buckets b on b.id = mph.bucket_id
+       where b.label = '80-81°F' order by mph.t`,
+    );
+    expect(winBucketRows).toHaveLength(wUniq);
+    expect(winBucketRows.every((r) => r.fidelity_min === 1)).toBe(true);
+    const probe = winPts[Math.floor(winPts.length / 2)]!;
+    const [hit] = await rows<{ p: string }>(
+      db,
+      `select mph.p from market_price_history mph join market_buckets b on b.id = mph.bucket_id
+       where b.label = '80-81°F' and mph.t = $1`,
+      [new Date(probe.t * 1000).toISOString()],
+    );
+    expect(Number(hit!.p)).toBeCloseTo(probe.p, 6);
+
+    // idempotent: a refetch re-walks prices-history but every (bucket_id, t) conflicts → ZERO new rows.
+    const again = await backfillMarketHistory({ fullSeries: true, fidelity: 1, refetch: true }, deps([resolvedEvent()]));
+    expect(again.priceHistoryRows).toBe(0);
+    const cnt2 = (await rows<{ n: number }>(db, `select count(*)::int as n from market_price_history`))[0]!.n;
+    expect(cnt2).toBe(expected);
+  });
+});
+
+describe('scanCityFloors — the per-city closed-market date floor (read-only)', () => {
+  const ev = (slug: string, endDate: string | null, closedTime?: string): RawGammaEvent =>
+    ({ id: slug, slug, title: slug, endDate: endDate ?? undefined, closedTime, closed: true, markets: [] }) as unknown as RawGammaEvent;
+
+  it('aggregates earliest/latest/count per city from the slug + endDate, year-tolerant, sorted earliest-first', async () => {
+    const page = [
+      ev('highest-temperature-in-nyc-on-june-9-2026', '2026-06-09T12:00:00Z'),
+      ev('highest-temperature-in-nyc-on-may-1-2026', '2026-05-01T12:00:00Z'),
+      ev('highest-temperature-in-paris-on-june-9', '2025-06-09T12:00:00Z'), // YEARLESS 2025 slug — date from endDate
+      ev('highest-temperature-in-paris-on-june-10', '2025-06-10T12:00:00Z'),
+      ev('highest-temperature-in-tokyo-on-jan-2-2026', null, '2026-01-02T15:00:00Z'), // endDate missing → closedTime
+      ev('some-unrelated-market-slug', '2024-01-01T00:00:00Z'), // no city match → ignored
+    ];
+    const { floors, capped } = await scanCityFloors({
+      fetchPage: async (offset) => (offset === 0 ? page : []),
+      log: () => {},
+    });
+
+    expect(capped).toBe(false); // clean exhaustion (a short page), not the Gamma cap
+    expect(floors.map((f) => f.city)).toEqual(['paris', 'tokyo', 'nyc']); // sorted by earliest date asc (2025-06 < 2026-01 < 2026-05)
+    expect(floors.find((f) => f.city === 'nyc')).toMatchObject({ earliest: '2026-05-01', latest: '2026-06-09', count: 2 });
+    expect(floors.find((f) => f.city === 'paris')).toMatchObject({ earliest: '2025-06-09', latest: '2025-06-10', count: 2 });
+    expect(floors.find((f) => f.city === 'tokyo')).toMatchObject({ earliest: '2026-01-02', count: 1 });
+    expect(floors.some((f) => f.city.includes('unrelated'))).toBe(false);
+  });
+
+  it('paginates to the floor (multiple full pages then a short one)', async () => {
+    const full = Array.from({ length: 100 }, (_, i) =>
+      ev(`highest-temperature-in-city${i % 3}-on-june-${(i % 28) + 1}-2026`, `2026-06-${String((i % 28) + 1).padStart(2, '0')}T12:00:00Z`),
+    );
+    let calls = 0;
+    const { floors, events, capped } = await scanCityFloors({
+      fetchPage: async (offset) => {
+        calls++;
+        return offset === 0 ? full : full.slice(0, 10); // page 2 is short → stop
+      },
+      log: () => {},
+    });
+    expect(calls).toBe(2); // one full page (100) + one short page (10) → halt
+    expect(capped).toBe(false);
+    expect(events).toBe(110);
+    expect(floors.reduce((a, f) => a + f.count, 0)).toBe(110);
+    expect(floors.map((f) => f.city).sort()).toEqual(['city0', 'city1', 'city2']);
+  });
+
+  it("a fetch error (Gamma's offset-depth 422) STOPS gracefully — partial floors kept, capped=true, no throw", async () => {
+    const full = Array.from({ length: 100 }, (_, i) =>
+      ev(`highest-temperature-in-nyc-on-june-${(i % 28) + 1}-2026`, `2026-06-${String((i % 28) + 1).padStart(2, '0')}T12:00:00Z`),
+    );
+    const scan = await scanCityFloors({
+      fetchPage: async (offset) => {
+        if (offset === 0) return full; // first page OK
+        throw new Error('HTTP 422 from gamma-api.polymarket.com'); // the real cap behaviour
+      },
+      log: () => {},
+    });
+    expect(scan.capped).toBe(true);
+    expect(scan.stopReason).toMatch(/422|pagination-depth/);
+    expect(scan.events).toBe(100); // the page we DID get is still aggregated
+    expect(scan.floors.find((f) => f.city === 'nyc')).toMatchObject({ earliest: '2026-06-01', count: 100 });
   });
 });

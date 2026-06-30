@@ -24,7 +24,43 @@ re-asserts every shape live (run before deploys; 12/12 PASS 2026-06-11).
   observed), min_order_size, neg_risk.
 - `GET clob.polymarket.com/prices-history?market=…&interval=max&fidelity=10`
   → `{history: [{t: epoch_seconds, p}]}` (`parsePricesHistory`). Old markets
-  may serve an empty history. Rate limits: book 1500/10s, prices-history 1000/10s.
+  may serve an empty history. `fidelity` is the resolution in MINUTES (min 1);
+  `p` is a **single price (implied prob) per bucket — NO bid/ask or depth**. Rate
+  limits: book 1500/10s, prices-history 1000/10s.
+
+### Historical reconstruction (`scripts/backfill-market-history.ts`)
+- Enumerate via Gamma `events?tag_id=104596&closed=true` (paginate). Each closed
+  event → 11 bucket YES tokens → `prices-history?interval=max`.
+- **How far back (VERIFIED live 2026-06-30):** the `closed=true` list floors at
+  **~2025-12-30** (atlanta/dallas/nyc the earliest, via `order=endDate&ascending=true`;
+  51 cities, the original 8 at Dec-2025, the rest added Feb–Apr 2026). Gamma **422s past
+  offset ~2100** (a hard pagination-depth cap), so page ASCENDING (offset 0 = the floor).
+  `--earliest-scan` does exactly this — ascending pages, caps gracefully, prints
+  earliest/latest/count PER CITY + a caveat when the cap is hit. (Because the ascending
+  sweep is cut at the offset cap, the `latest`/`count` columns are truncated at the cap,
+  not the true latest — only `earliest`, the floor, is authoritative.)
+- **Deeper history via `series_id` (VERIFIED live 2026-06-30):** Gamma `archived`s
+  events older than the closed-list window OUT of the `closed=true` list, but the per-city
+  series reaches them: `GET /series?slug={city}-daily-weather` → `{id}` (e.g. london→10006,
+  nyc→10005, atlanta→10739), then `GET /events?series_id={id}&order=endDate&ascending=true`
+  paginates the FULL history with **no archival wall** — London goes back to **2025-01-22**
+  (~2.5× the closed-list depth). Two structural caveats on the old events: they carry **7
+  buckets, not 11**, and **yearless slugs** (`highest-temperature-in-london-on-jan-22`) —
+  the latter is rejected by the ingestion's year-anchored city regex, so reaching this depth
+  needs a relaxed regex + a `series_id` enumeration source (the date-window params
+  `end_date_min/max` are a dead end — return n=0). The bucket-count is already variable in
+  ingestion. NOTE: pre-system dates have NO historical forecasts, so the forecast-vs-market
+  backtest can't run on them; the value is the standalone implied-prob archive (convergence
+  / efficiency study of the price path).
+- **Granularity:** daily-temp markets live ~2–3 days, so `interval=max` at
+  `fidelity=1` reconstructs the full minute path per bucket. Default backfill keeps
+  only the daily last-point + the lead-1/0 consensus cutoffs (C2 no-look-ahead);
+  `--full-series [--fidelity N]` persists the COMPLETE per-bucket series →
+  `market_price_history` (0072) — a dedicated APPEND-ONLY archive, NOT
+  `market_snapshots` (which `ops_downsample` thins to 1/day past 30 days). Note:
+  point density = trading activity (thin markets / tails are sparse), and `p` is a
+  single price, not executable odds — true bid/ask/depth exists only in the forward
+  live captures (`market_snapshots` poll / `opening_captures`).
 
 ## Open-Meteo (free tier; paid key switches to `customer-` hosts)
 

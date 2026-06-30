@@ -250,6 +250,11 @@ describe('migrations 0001–0010', () => {
       // WATCHER's wider arm race (widen WSSS/OPKC to {10..15} so the watcher samples both sides of the peak).
       // Config/seed-data only — no table/RPC/cron change (cron count stays 28). CITY-SIM.md.
       '0071_convergence_split_and_entry_watch.sql',
+      // 0072 = market_price_history archive: the full-resolution historical price-per-bucket series the
+      // `backfill-market-history --full-series` mode persists (the minute/hour odds path the daily-only backfill
+      // discards). A DEDICATED append-only table — NOT market_snapshots, which ops_downsample would thin to
+      // 1/day for >30-day-old rows. RLS-enabled, operator-read; no cron (count stays 28).
+      '0072_market_price_history.sql',
     ]);
   });
 });
