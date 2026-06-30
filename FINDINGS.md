@@ -219,6 +219,20 @@ genuinely out-of-market information.
 > (chw1) — i.e. the convergence seed should be the calibrated forecast, not `ensemble_raw` (a correction to the
 > 2026-06-29 split, for the *selection* objective). Rail stays DORMANT; live config unchanged. **`CONVERGENCE-TUNING.md`.**
 
+> **↳ NEW 2026-06-30 — the MAKER-EXIT redirect is BUILT + SIMULATED → it FLIPS the edge POSITIVE, but still KILLs
+> the gate (the first positive-EV config in twelve signals).** The open lever from the line above was built (pure
+> no-look-ahead engine `core/sim/opening-maker-exit-replay.ts` — take profit as a MAKER, $0 fee + rebate, fills
+> only when a later bid lifts the resting sell; TAKER stop-loss + a hard time-stop at resolvesAt−Nh) + simulated
+> over the 708-event panel, with an **agent-team dynamic Workflow** (`tune-maker-exit`: 7 parallel coordinate
+> agents/round × ≤3 rounds, stop-on-no-gain) fine-tuning entry/exit to maximize net profit. Result (hand-verified):
+> the maker exit **moves the same strategy from the taker's −3.0% to +1.8% (no rebate) / +5.1% / +$313 (with the
+> measured weather maker rebate)** — the FIRST positive expectation in the whole program. **But the §9R-E gate
+> still KILLs:** the 17-day city-clustered 95% CI is **[−1.6%, +11.5%]** (ciLow just below 0) — positive-EV, not
+> yet statistically clear of zero (winFrac 58.8% + zsMC 2.8% both clear; ciLow is the lone miss). Tuned params:
+> tp 0.12 / sl 0.20 / tstop 18h / chw 0 / depth $150 / makerWindow 30 (the maker ENTRY also fills at the 30-min
+> window, recovering the entry spread). NOT a GO — three assumptions (the maker-fill model, the rebate tier, the
+> 17-day extent) resolve only forward; it earns a **live forward test**, not capital. Rail DORMANT. **`MAKER-EXIT-SIM.md`.**
+
 ---
 
 ## The question, precisely

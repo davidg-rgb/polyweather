@@ -8,6 +8,14 @@
 > variant is the one open lever (must beat the §12 adverse-selection wall), and the **calibrated `house_gaussian`
 > out-selects `ensemble_raw`** for bracketing the winner (73.9% vs 52.8%). Rail stays DORMANT; live config unchanged.
 
+> **↳ 2026-06-30 — the MAKER-EXIT lever is BUILT + SIMULATED → flips POSITIVE, still KILLs (see `MAKER-EXIT-SIM.md`).**
+> The open lever above was built (`core/sim/opening-maker-exit-replay.ts` — maker take-profit, $0 fee + rebate,
+> taker SL + a resolvesAt−Nh time-stop) + tuned by an agent-team Workflow maximizing net profit. The maker exit
+> moves the same strategy from **−3.0% (taker) to +1.8% (no rebate) / +5.1% / +$313 (measured rebate)** — the first
+> positive-EV config in twelve signals — but the §9R-E gate **still KILLs** (17-day CI [−1.6%, +11.5%], ciLow just
+> below 0). Tuned: tp 0.12 / sl 0.20 / tstop 18h / chw 0 / depth $150 / makerWindow 30. Earns a **live forward test**
+> (real maker-fill rates + the real rebate tier replace the assumptions), NOT capital. Rail DORMANT.
+
 > **Status: GREENLIT FOR BUILD (operator decision, 2026-06-27).** The first signal in twelve that did
 > **not** die at its cheap gate. This handoff is the baseline requirements doc for next session: we open
 > with the alignment questions (§9), then run the **`architect` skill** with this file as input to produce

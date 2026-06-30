@@ -111,6 +111,12 @@ FAIL** (`WALLET-RECON-HANDOFF.md §12`: a resting order fills preferentially whe
 which is exactly the failure mode a maker exit invites. So this is a **measured-forward hypothesis** the data
 motivates, not a green light. It is the one lever this verdict leaves genuinely open.
 
+> **↳ TESTED 2026-06-30 (`MAKER-EXIT-SIM.md`).** The maker-exit variant was built + simulated over the same panel,
+> with an agent-team optimizer maximizing net profit. It **flips the edge positive** — the same strategy nets
+> **+1.8 % (no rebate) / +5.1 % / +$313 (measured rebate)** vs the taker's −3.0 % — the first positive-EV config in
+> the program. But it **still KILLs the §9R-E gate** (17-day CI [−1.6 %, +11.5 %], ciLow just below 0): positive in
+> expectation, not yet statistically clear of zero. Earns a live forward test, not capital. Rail stays DORMANT.
+
 ### Finding 2 — the convergence seed should be the CALIBRATED gaussian, not the raw ensemble
 
 The selection diagnostic — does the forecast bracket the eventual winner — is decisive and **contradicts an

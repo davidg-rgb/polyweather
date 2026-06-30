@@ -40,6 +40,16 @@ dashboard, TypeScript monorepo (`packages/core|io|trading`, `supabase/functions`
 > edge**. Two carry-forwards: a **maker-exit** variant is the one open lever (must beat the §12 adverse-selection
 > wall), and the **calibrated `house_gaussian` out-selects `ensemble_raw`** for bracketing the winner (73.9% vs
 > 52.8%). Rail stays DORMANT; live config unchanged — the Phase-0.5 spike on real-book depth is still the live gate.
+>
+> **↳ UPDATE 2026-06-30 (2) — the MAKER-EXIT lever is BUILT + SIMULATED → flips POSITIVE, still KILLs (`MAKER-EXIT-SIM.md`).**
+> Built the maker-exit engine (`core/sim/opening-maker-exit-replay.ts`: take profit as a MAKER — $0 fee + rebate,
+> fills only when a later bid lifts the resting sell; TAKER stop-loss + a hard time-stop at resolvesAt−Nh) and ran
+> an **agent-team dynamic Workflow** (`tune-maker-exit`: 7 parallel coordinate agents/round × ≤3 rounds, stop-on-no-gain)
+> to maximize net profit. The maker exit moves the SAME strategy from the taker's **−3.0% to +1.8% (no rebate) /
+> +5.1% / +$313 (measured weather maker rebate)** — the **first positive-EV config in twelve signals** — but the
+> §9R-E gate **still KILLs** (17-day city-clustered CI [−1.6%, +11.5%], ciLow just below 0; winFrac + zsMC clear).
+> Tuned: tp 0.12 / sl 0.20 / tstop 18h / chw 0 / depth $150 / makerWindow 30. NOT a GO (three assumptions resolve
+> only forward) → it earns a **live forward test**, not capital. Rail stays DORMANT; live config unchanged.
 
 - Hosted Supabase ref: `lenysiqxihsmxljvyybt` (eu-north-1) · Prod: `weather-edge-two.vercel.app`
 - Canonical docs: **`FINDINGS.md`** (the R&D verdict — start here: is there a tradable edge? no, and why),

@@ -41,6 +41,7 @@ import {
   type OpeningLabel,
   type EntryCandidate,
   type OpenPosition,
+  type PaperFill,
 } from './opening-convergence.ts';
 import { takerFeePerShare } from '../fees.ts';
 
@@ -193,23 +194,26 @@ const NOT_EXECUTED = (reason: string): BracketTrade => ({
 // 1 · replayEvent — the per-market bracket lifecycle (entry → maker/taker fill → bracket exit → settle)
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 
+/** The entry leg's result: the chosen forecast-center candidate + the maker/taker fill + its tick indices. */
+export interface EntryFill {
+  chosen: EntryCandidate;
+  entryIdx: number;
+  fillIdx: number;
+  fill: PaperFill;
+  isMaker: boolean;
+}
+
 /**
- * Replay ONE market's bracket trade at a given take-profit. Pure + total.
- *
- *  1. ENTER at the FIRST enterable tick — selectEntries(cap, cfg, tickTime, { requireFlatOpen:false }) — and pick
- *     the forecast CENTER (the candidate with the highest modelProb = argmax houseProb). One entry per event.
- *  2. FILL maker-first: rest at makerLimit; over LATER ticks paperFill maker if an ask trades through the limit
- *     within makerFillWindowMin, else cancel + taker fallback (bracketDecision cancel_maker_take → paperFill taker).
- *  3. EXIT: walk ticks forward from the fill calling bracketDecision(pos, execBid, tickTime, tz, cfgWithTp) until
- *     take_profit / stop_loss / time_stop fires; sell at that tick's execBid (taker fee on the exit). NO LOOK-AHEAD.
- *  4. SETTLE leftover-open-at-series-end at the resolution winner ($1/$0), else mark to the last realizable execBid.
- *
- * cfgWithTp overrides cfg.tpDeltaPp with the swept value. bestReachableBid is a SEPARATE report-only pass.
+ * The SHARED entry leg — find the first enterable tick, pick the forecast-center candidate (argmax houseProb),
+ * and run the maker-first fill lifecycle (rest at makerLimit; fill maker if a later ask trades THROUGH the limit
+ * within makerFillWindowMin, else cancel + taker fallback). Pure + total — returns the fill, or a `reason` string
+ * ('no_ticks'|'never_enterable'|'never_filled'). Extracted so the taker bracket engine (replayEvent) AND the
+ * maker-EXIT engine (sim/opening-maker-exit-replay.ts) share ONE tested entry path — the entry leg is identical
+ * across the two; only the exit differs. (selectEntries' requireFlatOpen:false is the post-falsification universe.)
  */
-export function replayEvent(input: EventReplayInput, cfg: OpeningCfg, tpDeltaPp: number): BracketTrade {
-  if (!input || !Array.isArray(input.ticks) || input.ticks.length === 0) return NOT_EXECUTED('no_ticks');
+export function enterAndFill(input: EventReplayInput, cfg: OpeningCfg): EntryFill | { reason: string } {
+  if (!input || !Array.isArray(input.ticks) || input.ticks.length === 0) return { reason: 'no_ticks' };
   const ticks = input.ticks;
-  const cfgTp: OpeningCfg = { ...cfg, tpDeltaPp };
 
   // ── (1) find the FIRST enterable tick + the forecast-center candidate ─────────────────────────────────
   let entryIdx = -1;
@@ -224,11 +228,11 @@ export function replayEvent(input: EventReplayInput, cfg: OpeningCfg, tpDeltaPp:
       break;
     }
   }
-  if (!chosen || entryIdx < 0) return NOT_EXECUTED('never_enterable');
+  if (!chosen || entryIdx < 0) return { reason: 'never_enterable' };
 
   // ── (2) maker-first fill lifecycle over LATER ticks (the maker rests in the book) ─────────────────────
   const entryTime = new Date(ticks[entryIdx]!.capturedAt).getTime();
-  let fill = null as ReturnType<typeof paperFill>;
+  let fill: PaperFill | null = null;
   let isMaker = false;
   let fillIdx = -1;
   for (let j = entryIdx + 1; j < ticks.length; j++) {
@@ -256,7 +260,29 @@ export function replayEvent(input: EventReplayInput, cfg: OpeningCfg, tpDeltaPp:
       break;
     }
   }
-  if (!fill || fillIdx < 0) return NOT_EXECUTED('never_filled'); // order rested unfilled to series end
+  if (!fill || fillIdx < 0) return { reason: 'never_filled' }; // order rested unfilled to series end
+  return { chosen, entryIdx, fillIdx, fill, isMaker };
+}
+
+/**
+ * Replay ONE market's bracket trade at a given take-profit. Pure + total.
+ *
+ *  1. ENTER at the FIRST enterable tick — selectEntries(cap, cfg, tickTime, { requireFlatOpen:false }) — and pick
+ *     the forecast CENTER (the candidate with the highest modelProb = argmax houseProb). One entry per event.
+ *  2. FILL maker-first: rest at makerLimit; over LATER ticks paperFill maker if an ask trades through the limit
+ *     within makerFillWindowMin, else cancel + taker fallback (bracketDecision cancel_maker_take → paperFill taker).
+ *  3. EXIT: walk ticks forward from the fill calling bracketDecision(pos, execBid, tickTime, tz, cfgWithTp) until
+ *     take_profit / stop_loss / time_stop fires; sell at that tick's execBid (taker fee on the exit). NO LOOK-AHEAD.
+ *  4. SETTLE leftover-open-at-series-end at the resolution winner ($1/$0), else mark to the last realizable execBid.
+ *
+ * cfgWithTp overrides cfg.tpDeltaPp with the swept value. bestReachableBid is a SEPARATE report-only pass.
+ */
+export function replayEvent(input: EventReplayInput, cfg: OpeningCfg, tpDeltaPp: number): BracketTrade {
+  const ef = enterAndFill(input, cfg);
+  if ('reason' in ef) return NOT_EXECUTED(ef.reason);
+  const ticks = input.ticks;
+  const cfgTp: OpeningCfg = { ...cfg, tpDeltaPp };
+  const { chosen, fillIdx, fill, isMaker } = ef;
 
   const shares = fill.shares;
   const stakeUsd = fill.price * fill.shares;
