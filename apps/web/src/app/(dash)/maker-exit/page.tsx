@@ -79,7 +79,7 @@ function GateBanner({ view }: { view: MakerExitView }): ReactElement {
         </div>
         <div className="tile" style={{ minWidth: 0 }}>
           <div className="cap">zero-skill MC</div>
-          <div className="big" style={{ fontSize: '1.1rem', color: g.zeroSkillPassRate < 0.05 ? GREEN : RED }}>
+          <div className="big" style={{ fontSize: '1.1rem', color: Number.isFinite(g.zeroSkillPassRate) && g.zeroSkillPassRate < 0.05 ? GREEN : RED }}>
             {Number.isFinite(g.zeroSkillPassRate) ? fmtPct(g.zeroSkillPassRate, 1) : '—'}
           </div>
           <div className="sub">&lt; 5% required</div>

@@ -99,23 +99,40 @@ describe('0073 maker-exit paper loop — schema + RPCs', () => {
   });
 });
 
-describe('0073 bot_deadman_check — cadence-aware tick threshold (bot.tickStaleMin)', () => {
-  it('a 10-min-old tick does NOT alarm with bot.tickStaleMin=45, but DOES under the 3-min default', async () => {
+describe('0073 bot_deadman_check — cadence-aware, MODE-SCOPED tick threshold (bot.tickStaleMin.<mode>)', () => {
+  it('a 10-min paper tick does NOT alarm with bot.tickStaleMin.paper=45, but DOES under the 3-min default', async () => {
     const db = await freshDb();
     try {
       // a recent forward gate snapshot (so the gate branch never alarms) + a 10-min-old paper tick.
       await db.query(`insert into bot_gate_snapshot (computed_at, mode, source, label) values (now(), 'paper', 'forward', 'INSUFFICIENT_DATA')`);
       await db.query(`insert into bot_tick_log (as_of, mode, ran) values (now() - interval '10 minutes', 'paper', true)`);
 
-      // 0073 seeds bot.tickStaleMin=45 → greatest(45,3)=45 min threshold → a 10-min tick is fresh → no alarm.
+      // 0073 seeds bot.tickStaleMin.paper=45 → greatest(45,3)=45 min threshold → a 10-min tick is fresh → no alarm.
       const ok = await rows<{ out: { alarmed: boolean } }>(db, `select public.bot_deadman_check() as out`);
       expect(ok[0]!.out.alarmed).toBe(false);
 
-      // remove the override → the threshold falls back to 3× tickIntervalSec (≈1.5 → floored to 3 min) → the
+      // remove the PAPER override → the threshold falls back to 3× tickIntervalSec (≈1.5 → floored to 3 min) → the
       // SAME 10-min tick now alarms. This is exactly the false-alarm the cadence-aware override prevents.
-      await db.query(`delete from config where key = 'bot.tickStaleMin'`);
+      await db.query(`delete from config where key = 'bot.tickStaleMin.paper'`);
       const stale = await rows<{ out: { alarmed: boolean } }>(db, `select public.bot_deadman_check() as out`);
       expect(stale[0]!.out.alarmed).toBe(true);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it('the 45-min relaxation is MODE-SCOPED: a future live 30s-tick bot keeps its tight ~3-min deadman', async () => {
+    const db = await freshDb();
+    try {
+      // simulate the live bot: tradingMode=live, a 30s tick interval, and a 10-min-old LIVE tick.
+      await db.query(`insert into config (key, value) values ('tradingMode', 'live') on conflict (key) do update set value = excluded.value`);
+      await db.query(`insert into bot_gate_snapshot (computed_at, mode, source, label) values (now(), 'live', 'forward', 'INSUFFICIENT_DATA')`);
+      await db.query(`insert into bot_tick_log (as_of, mode, ran) values (now() - interval '10 minutes', 'live', true)`);
+
+      // bot.tickStaleMin.paper=45 is present (from 0073) but it must NOT apply to LIVE mode — the live threshold
+      // falls back to greatest(3× tickIntervalSec, 3) = 3 min, so a 10-min live tick alarms (positions unmanaged).
+      const out = await rows<{ out: { alarmed: boolean } }>(db, `select public.bot_deadman_check() as out`);
+      expect(out[0]!.out.alarmed).toBe(true);
     } finally {
       await db.close();
     }

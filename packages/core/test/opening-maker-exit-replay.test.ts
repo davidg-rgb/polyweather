@@ -17,6 +17,7 @@ import {
 } from '../src/sim/opening-maker-exit-replay.ts';
 import type { EventReplayInput, ReplayTick } from '../src/sim/opening-bracket-replay.ts';
 import { OPENING_DEFAULTS, type OpeningBucket } from '../src/sim/opening-convergence.ts';
+import { takerFeePerShare } from '../src/fees.ts';
 
 const TZ = 'Europe/Amsterdam';
 const DATE = '2026-06-20';
@@ -93,6 +94,22 @@ describe('replayMakerExitEvent', () => {
     expect(reb.netPnlUsd).toBeGreaterThan(noReb.netPnlUsd); // the rebate strictly improves the maker P&L
   });
 
+  it('the maker rebate is a FRACTION of the taker fee (rate · takerFee · shares), not the full fee magnitude (20× bug guard)', () => {
+    const ticks = [...entryTicks(), tick('2026-06-20T01:00:00Z', 1, { execBid: 0.45, execAsk: 0.46 })];
+    const feeRate = 0.05;
+    const R = 0.25; // the documented weather rebate tier (reward-farming.ts / reward-inventory.ts)
+    const t = replayMakerExitEvent(input(ticks), cfg({ tpDeltaPp: 0.25, makerRebateRate: R, takerFeeRate: feeRate }), RESOLVE_MS);
+    expect(t.exitKind).toBe('maker_take_profit');
+    expect(t.isMakerEntry).toBe(true);
+    expect(t.isMakerExit).toBe(true);
+    const shares = t.stakeUsd / t.entryPrice; // stakeUsd = fill.price · shares
+    // the convention: rebate = rate · takerFeePerShare(price, feeRate) · shares, credited on BOTH maker legs.
+    const expected = R * (takerFeePerShare(t.entryPrice, feeRate) + takerFeePerShare(t.exitPrice, feeRate)) * shares;
+    expect(t.rebateUsd).toBeCloseTo(expected, 9);
+    // the BUG (takerFeePerShare(p, 1)) would credit 1/feeRate = 20× this — pin that it does NOT.
+    expect(t.rebateUsd).toBeLessThan(expected * 2);
+  });
+
   it('taker stop-loss crosses into the bid and pays the taker fee', () => {
     // entry ~0.12 (maker), then the bid collapses below the ternary stop → taker SL
     const ticks = [...entryTicks(), tick('2026-06-20T01:00:00Z', 1, { execBid: 0.04, execAsk: 0.05 })];
@@ -114,6 +131,30 @@ describe('replayMakerExitEvent', () => {
     expect(t.exitKind).toBe('taker_time_stop');
     expect(t.exitPrice).toBeCloseTo(0.18, 9);
     expect(t.feeUsd).toBeGreaterThan(0);
+  });
+
+  it('RUNWAY GUARD: an entry already past its resolvesAt−N time-stop at the fill tick is SKIPPED (no_runway), not force-flattened', () => {
+    const ticks = [...entryTicks(), tick('2026-06-20T01:00:00Z', 1, { execBid: 0.45, execAsk: 0.46 })];
+    // fill is at 2026-06-20T00:10Z; resolvesAt 2026-06-21T10:00Z, tstop 34h → time-stop 2026-06-20T00:00Z, BEFORE
+    // the fill. The shared entry gate (local-noon clock) lets it in, but THIS engine's clock has no runway → skip.
+    const t = replayMakerExitEvent(input(ticks), cfg({ tpDeltaPp: 0.25, tstopHoursBeforeResolve: 34 }), RESOLVE_MS);
+    expect(t.executed).toBe(false);
+    expect(t.exitKind).toBe('no_runway');
+    expect(Number.isNaN(t.netReturn)).toBe(true); // not a realized (loss) row — excluded from the §9R-E panel
+  });
+
+  it('RUNWAY GUARD also covers the local-noon FALLBACK clock (resolvesAt unknown)', () => {
+    // resolvesAt null → the time-stop is local noon (timeStopLocalHour 12). Enter pre-noon (runway OK at selection),
+    // but the fill lands AFTER noon → no runway under the fallback clock → skip. Pins the round-2 refinement that
+    // dropped the `fin(resolvesAtMs)` precondition so the noon-fallback path is guarded too.
+    const ticks = [
+      tick('2026-06-20T09:00:00Z', 0.1, { execAsk: 0.16, bestAsk: 0.16, execBid: 0.14 }), // 11:00 local — selectEntries enters (60m runway to noon)
+      tick('2026-06-20T10:10:00Z', 1.3, { execAsk: 0.12, bestAsk: 0.12, execBid: 0.11 }), // 12:10 local — fill, PAST the noon time-stop
+      tick('2026-06-20T13:00:00Z', 4, { execBid: 0.45, execAsk: 0.46 }),
+    ];
+    const t = replayMakerExitEvent(input(ticks), cfg({ tpDeltaPp: 0.25, timeStopLocalHour: 12 }), null); // resolvesAt unknown → noon fallback
+    expect(t.executed).toBe(false);
+    expect(t.exitKind).toBe('no_runway');
   });
 
   it('NO LOOK-AHEAD: a huge up-tick after the stop-loss fired does not rescue the trade', () => {

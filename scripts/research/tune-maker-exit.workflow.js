@@ -79,7 +79,10 @@ function coordAgent(coord, incumbent, phaseName) {
       'baselineObjective (the objective at the value closest to ' + incVal + '), ' +
       'atBoundary (true iff bestValue is the first or last in the swept list ' + JSON.stringify(coord.vals) + '), and a one-line note.',
     { schema: COORD_SCHEMA, label: 'tune:' + coord.key, phase: phaseName },
-  )
+    // OVERRIDE coord with the TRUSTED assigned key — applyTop writes p[r.coord]=r.bestValue, so a paraphrased
+    // LLM coord ('take-profit' vs 'tp') would silently write a junk key and DROP that axis's update. The agent
+    // owns exactly this one coordinate (coord.key); never trust its free-form echo of the key.
+  ).then((r) => (r && typeof r === 'object' ? { ...r, coord: coord.key } : r))
 }
 
 function verifyAgent(candidates, phaseName) {

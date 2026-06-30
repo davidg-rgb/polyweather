@@ -46,8 +46,10 @@ function mean(xs: number[]): number {
 
 /** The maker-exit engine's config — the bot's OpeningCfg + the two maker-exit knobs. */
 export interface MakerExitCfg extends OpeningCfg {
-  /** the maker rebate rate (rate·p·(1−p)·shares credited on a MAKER fill; 0 = conservative pure fee-saving). The
-   *  project measured a live weather maker rebate (MAKER-REBATE-HANDOFF.md) — swept here, never assumed. */
+  /** the maker rebate rate — a FRACTION of the taker fee credited on a MAKER fill (rate · takerFeePerShare(p,
+   *  takerFeeRate) · shares), matching reward-farming.ts / reward-inventory.ts (weather tier ≈ 0.25). 0 = the
+   *  conservative pure fee-saving floor. The project measured a live weather maker rebate (MAKER-REBATE-HANDOFF.md)
+   *  — swept here, never assumed. */
   makerRebateRate: number;
   /** the HARD time-stop: flatten (taker) at the latest this many hours BEFORE the market resolves ("at the latest
    *  N hours from bet closing"). Falls back to the local-noon clock only if resolvesAt is unknown. */
@@ -177,7 +179,11 @@ export function replayMakerExitEvent(
   const entryAgeH = fin(ticks[fillIdx]!.hoursSinceListing) ? ticks[fillIdx]!.hoursSinceListing : null;
   const observedEntrySpread = spreadAt(ticks[fillIdx]!, bucketIdx);
   const rebateRateUsed = Math.max(0, cfg.makerRebateRate);
-  const rebate = (p: number): number => rebateRateUsed * takerFeePerShare(p, 1) * shares; // rate·p·(1−p)·shares
+  // rebate = a FRACTION of the taker fee at the fill price (rate · takerFeePerShare(p, takerFeeRate) · shares) —
+  // the convention reward-farming.ts:299 / reward-inventory.ts:251 use. The fee-rate factor is load-bearing:
+  // takerFeePerShare(p, 1) would credit the FULL fee-magnitude (1/takerFeeRate ≈ 20× too large at rate 0.05),
+  // inflating netPnl → the §9R-E gate in the FALSE-PASS direction once the operator turns the rebate on.
+  const rebate = (p: number): number => rebateRateUsed * takerFeePerShare(p, cfg.takerFeeRate) * shares;
   const entryRebate = isMakerEntry ? rebate(fill.price) : 0;
 
   // the resting maker SELL limit (the take-profit target price) + the protective stop.
@@ -194,6 +200,20 @@ export function replayMakerExitEvent(
     } catch {
       timeStopMs = Number.POSITIVE_INFINITY; // no clock → carry to series end (settles below)
     }
+  }
+
+  // ── RUNWAY GUARD (entry/exit clock agreement) ──────────────────────────────────────────────────────
+  // The SHARED entry gate (selectEntries) checks runway against the LOCAL-NOON clock (timeStopLocalHour), but
+  // THIS engine's time-stop is resolvesAt − N h (or the noon fallback when resolvesAt is unknown), which for a
+  // local-MIDNIGHT daily resolution sits BEFORE noon. A market first-enterable AFTER its maker-exit time-stop
+  // passes the noon runway gate yet is already past THIS clock at the fill tick, so the exit walk would fire
+  // taker_time_stop on the FIRST post-fill tick — a deterministic spread+fee loss at ~zero hold that biases the
+  // realized §9R-E panel down (one-directional). Skip it (no_runway) so the panel measures only markets with real
+  // runway under whichever clock governs this exit. Guard on timeStopMs (not resolvesAtMs): when NO clock exists
+  // timeStopMs is +Infinity → not finite → no skip (carries to series end), so the noon-fallback path is covered too.
+  const entryFillMs = new Date(entryAt).getTime();
+  if (Number.isFinite(timeStopMs) && Number.isFinite(entryFillMs) && timeStopMs <= entryFillMs) {
+    return NOT_EXECUTED(eventId, city, targetDate, 'no_runway');
   }
 
   // ── exit walk from the tick AFTER the fill (a resting order needs a later tick to be lifted). NO LOOK-AHEAD ──

@@ -261,6 +261,10 @@ describe('migrations 0001–0010', () => {
       // record_bot_gate_snapshot / record_bot_tick + the cadence-aware bot_deadman tick threshold (bot.tickStaleMin)
       // + the maker-exit-panel cron at */15 (count 28 → 29). NOT trading — analytics; rail paper/DORMANT.
       '0073_maker_exit_paper_loop.sql',
+      // 0074 = code-review fix: latest_house_dist filters seeded=true so the bot's RAW convergence seed is never
+      // shadowed by a fresher production CALIBRATED house_gaussian (the 2026-06-29 consensus split was silently
+      // defeated on the seed-reuse read path). Bot-only function; everything else byte-identical to 0066 §6.2.
+      '0074_latest_house_dist_seeded.sql',
     ]);
   });
 });

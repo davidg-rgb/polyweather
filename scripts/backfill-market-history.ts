@@ -354,7 +354,17 @@ export async function backfillMarketHistory(
   const fidelityMin = Number.isFinite(args.fidelity) ? (args.fidelity as number) : null;
 
   paging: for (let offset = 0; ; offset += PAGE_SIZE) {
-    const page = await deps.fetchPage(offset);
+    let page: RawGammaEvent[];
+    try {
+      page = await deps.fetchPage(offset);
+    } catch (e) {
+      // Gamma 422s past offset ~2100 (a hard pagination-depth cap) — a non-retryable 4xx that ioFetchJson throws.
+      // STOP gracefully (mirroring scanCityFloors) rather than crash the whole backfill: per-event progress is
+      // already committed, so we keep what we ingested + surface the cap instead of a silent truncation.
+      log(`fetch stopped at offset ${offset} (${e instanceof Error ? e.message : String(e)}) — likely Gamma's ` +
+        `pagination-depth cap; ingested ${stats.ingested}/${stats.eventsSeen} so far. Use --series-scan for deeper history.`);
+      break paging;
+    }
     stats.pages++;
     for (const ev of page) {
       stats.eventsSeen++;
@@ -595,27 +605,35 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
           continue;
         }
         resolved++;
-        const stats = await backfillMarketHistory(
-          {
-            from: values.from,
-            limit: values.limit ? Number(values.limit) : undefined,
-            refetch: values.refetch ?? false,
-            fullSeries: values['full-series'] ?? false,
-            fidelity,
-            allowYearless: true,
-          },
-          {
-            db,
-            fetchPage: (offset) =>
-              ioFetchJson(
-                `https://gamma-api.polymarket.com/events?series_id=${seriesId}&order=endDate&ascending=true&limit=${PAGE_SIZE}&offset=${offset}`,
-                { headers },
-              ) as Promise<RawGammaEvent[]>,
-            fetchPricesHistory,
-            log: console.log,
-            now: () => new Date(),
-          },
-        );
+        let stats: MarketHistoryStats;
+        try {
+          stats = await backfillMarketHistory(
+            {
+              from: values.from,
+              limit: values.limit ? Number(values.limit) : undefined,
+              refetch: values.refetch ?? false,
+              fullSeries: values['full-series'] ?? false,
+              fidelity,
+              allowYearless: true,
+            },
+            {
+              db,
+              fetchPage: (offset) =>
+                ioFetchJson(
+                  `https://gamma-api.polymarket.com/events?series_id=${seriesId}&order=endDate&ascending=true&limit=${PAGE_SIZE}&offset=${offset}`,
+                  { headers },
+                ) as Promise<RawGammaEvent[]>,
+              fetchPricesHistory,
+              log: console.log,
+              now: () => new Date(),
+            },
+          );
+        } catch (e) {
+          // one city's hard failure (a non-retryable hiccup the paging guard didn't catch) must not abort the
+          // whole multi-city sweep — log + continue so the remaining cities still ingest.
+          console.log(`✗ ${slug} (series ${seriesId}): failed — ${e instanceof Error ? e.message : String(e)} (skipped)`);
+          continue;
+        }
         console.log(
           `✓ ${slug} (series ${seriesId}): ingested ${stats.ingested}/${stats.eventsSeen}` +
             (values['full-series'] ? ` · price-history ${stats.priceHistoryRows}` : ``) +

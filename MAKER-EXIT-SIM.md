@@ -1,5 +1,29 @@
 # Maker-Exit Simulation — the convergence edge, tested as a MAKER edge
 
+> **⚠ CORRECTION (2026-06-30, code review).** The maker-rebate credit in `opening-maker-exit-replay.ts` was
+> computed as `rebateRate · takerFeePerShare(p, **1**) · shares` — it dropped the fee-rate factor, so it credited
+> the **full taker-fee magnitude** instead of a fraction of it (the `reward-farming.ts`/`reward-inventory.ts`
+> convention `rebateRate · takerFeePerShare(p, **feeRate**) · shares`). Consequence: the **rebate-on** numbers
+> below (**+5.1 % / +$313**, CI **[−1.6 %, +11.5 %]**) were run with `--rebate 0.05`, which under the old formula
+> = **100 % of the taker fee** (≈ 4× the real **25 %** weather tier) — they are **overstated** and must be
+> regenerated with the fixed engine (use `--rebate 0.25` for the weather tier). **Unaffected:** the **no-rebate
+> +1.8 %** figure, and the **KILL verdict** — which the correction only *reinforces* (the true rebate is smaller).
+> The **live forward loop pins `makerRebateRate = 0`**, so the §9R-E gate of record never used the inflated path;
+> the forward loop **measures** the real rebate. (Fixed + pinned by a magnitude test in `opening-maker-exit-replay.test.ts`.)
+
+> **⚠ CORRECTION (2026-06-30, code review) — two more reasons to REGENERATE the numbers below.**
+> 1. **Archive bucket misalignment (shared with `CONVERGENCE-TUNING.md`).** This sim runs over the same local
+>    archive via `tune-convergence.loadPanel`/`buildSet` → `buildHistoryEvent`. The archive was written in raw
+>    Gamma order while the DB seed/winner are temperature-sorted, so the replay attached the wrong forecast prob +
+>    winner to each bucket. Fixed at the root (`pull-market-history` now sorts canonically); **re-pull + re-run**.
+> 2. **In-sample headline.** Unlike `tune-convergence` (which reports an out-of-sample TEST fold), the maker-exit
+>    params were tuned and the §9R-E verdict measured on the **same** 708-event panel (winner's-curse). The +EV
+>    figures are an in-sample upper bound; the true out-of-sample result is **no better** — which only **reinforces
+>    the KILL**. The regenerated run should adopt the same date-based train/test split.
+>
+> Neither changes the **verdict (KILL / earns a forward test, not capital)** or touches the **live forward loop**
+> (aligned `opening_captures`, not the archive). They mean the specific magnitudes here are not citable until re-run.
+
 > **What it is.** `CONVERGENCE-TUNING.md` Finding 1 said the convergence edge is **real but a maker edge, not a
 > taker edge** (the price-path edge is +8.2% frictionless, but the taker round-trip spread eats it → −3.0% net;
 > breakeven at ×0.70 of the real spread). This is the build + simulation that **tests the redirect**: take profit

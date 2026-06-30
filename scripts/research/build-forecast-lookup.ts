@@ -108,10 +108,15 @@ async function loadBlend(db: ScriptDb): Promise<BlendRow[]> {
             from forecast_snapshots fs
             where coalesce(fs.seeded,false)=false and fs.lead_days in (0,1,2)
             group by fs.icao, fs.target_date, fs.model, fs.lead_days),
+     -- LEFT JOIN (not inner): the weighted blend uses only calibrated (ms-matched) models — SUM(ms.weight*…)
+     -- skips the null rows — but tmax_c_raw + n_models must span the FULL forecast ensemble (the doc's "RAW
+     -- multi-model ensemble mean … the convergence Schelling point"). An inner join silently dropped any model
+     -- present in forecast_snapshots but missing a latest-version model_stats cell from BOTH the raw mean and
+     -- the count, biasing the Schelling-point proxy toward the calibrated subset.
      blend as (select fc.icao, fc.target_date, fc.lead_days,
                       sum(ms.weight*(fc.tmax-ms.bias))/nullif(sum(ms.weight),0) tmax_c_blend,
                       avg(fc.tmax) tmax_c_raw, count(*) n_models
-               from fc join ms on ms.icao=fc.icao and ms.model=fc.model and ms.lead_days=fc.lead_days
+               from fc left join ms on ms.icao=fc.icao and ms.model=fc.model and ms.lead_days=fc.lead_days
                group by fc.icao, fc.target_date, fc.lead_days)
      select me.poly_event_id as event_id, c.slug as city, c.unit as unit, me.target_date::text as weather_date,
             b.lead_days::int as lead_days, b.tmax_c_blend::float8 as tmax_c_blend,
@@ -119,7 +124,8 @@ async function loadBlend(db: ScriptDb): Promise<BlendRow[]> {
        from blend b
        join market_events me on me.icao_at_creation = b.icao and me.target_date = b.target_date
        join cities c on c.id = me.city_id
-      where me.poly_event_id is not null`,
+      where me.poly_event_id is not null
+        and me.kind = 'highest'`,  // Tmax forecast joins highest-temperature markets only (a city+date can also have a 'lowest' event)
   );
 }
 
@@ -128,7 +134,8 @@ async function loadBuckets(db: ScriptDb): Promise<Map<string, BucketSpan[]>> {
     `select me.poly_event_id as event_id, mb.bucket_idx::int as idx,
             mb.low_native::int as low, mb.high_native::int as high
        from market_buckets mb join market_events me on me.id = mb.event_id
-      where me.poly_event_id is not null`,
+      where me.poly_event_id is not null
+        and me.kind = 'highest'`,  // match loadBlend: highest-temperature markets only
   );
   const m = new Map<string, BucketSpan[]>();
   for (const r of rows) {

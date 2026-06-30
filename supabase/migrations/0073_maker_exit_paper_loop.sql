@@ -282,9 +282,10 @@ as $$
 declare
   v_mode        text    := coalesce((select value from config where key = 'tradingMode'), 'paper');
   v_tick_int    numeric := coalesce((select value::numeric from config where key = 'bot.tickIntervalSec'), 30);
-  -- cadence-aware: an explicit bot.tickStaleMin (minutes) overrides the 3×-tick-interval default (0073) so a
-  -- periodic re-replay loop's tick log does not false-alarm; absent ⇒ the original behavior, live bot unchanged.
-  v_thresh_min  numeric := coalesce((select value::numeric from config where key = 'bot.tickStaleMin'), (v_tick_int * 3) / 60);
+  -- cadence-aware AND MODE-SCOPED: a 'bot.tickStaleMin.<mode>' override (minutes) relaxes the 3×-tick-interval
+  -- default ONLY for that mode, so the periodic paper re-replay loop (*/15) gets a 45-min floor while a future
+  -- live 30s-tick bot keeps its tight ~3-min deadman. Absent ⇒ the original behavior, live bot TRULY unchanged.
+  v_thresh_min  numeric := coalesce((select value::numeric from config where key = 'bot.tickStaleMin.' || v_mode), (v_tick_int * 3) / 60);
   v_gate_stale_min numeric := coalesce((select value::numeric from config where key = 'bot.gateStaleMin'), 180);
   v_last_tick   timestamptz;
   v_tick_age    numeric;
@@ -328,12 +329,14 @@ revoke all on function public.bot_deadman_check() from public, anon, authenticat
 grant  execute on function public.bot_deadman_check() to service_role;
 
 -- ════════════════════════════════════════════════════════════════════════════════════════════════════════
--- SECTION 7 · config — the maker-exit tick-staleness override (additive; not in the 0066 BOT_DEFAULTS mirror,
--- so the F10-r8-FP equality test is unaffected; the tuned maker-exit entry/exit params live in CODE
--- (MAKER_EXIT_TUNED) so the loop never mutates the shared bot.* keys opening-capture + convergence-panel read).
+-- SECTION 7 · config — the maker-exit tick-staleness override, MODE-SCOPED to 'paper' (additive; not in the 0066
+-- BOT_DEFAULTS mirror, so the F10-r8-FP equality test is unaffected; the tuned maker-exit entry/exit params live
+-- in CODE (MAKER_EXIT_TUNED) so the loop never mutates the shared bot.* keys opening-capture + convergence-panel
+-- read). Mode-scoped (NOT a global 'bot.tickStaleMin') so a future live 30s-tick bot keeps its tight ~3-min
+-- deadman — the 45-min relaxation applies ONLY to the paper re-replay loop, honoring SECTION 6's "live unchanged".
 -- ════════════════════════════════════════════════════════════════════════════════════════════════════════
 insert into public.config (key, value) values
-  ('bot.tickStaleMin', '45')   -- 3× the 15-min maker-exit-panel cadence (the periodic re-replay loop's tick floor)
+  ('bot.tickStaleMin.paper', '45')   -- 3× the 15-min maker-exit-panel cadence (the paper re-replay loop's tick floor)
 on conflict (key) do nothing;
 
 -- ════════════════════════════════════════════════════════════════════════════════════════════════════════

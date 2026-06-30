@@ -282,18 +282,23 @@ describe('0066 capture/seed RPCs (via pglitePort + FN_ARGS)', () => {
     }
   });
 
-  it('latest_house_dist joins the freshest non-nowcast house_gaussian to its labelled buckets; null for an unknown event', async () => {
+  it('latest_house_dist returns the SEEDED raw dist (joined to labelled buckets), NOT a fresher production calibrated row (0074); null for an unknown event', async () => {
     const evId = await seedEvent(db, { slug: 'ld-city', date: '2026-06-20', winner: 2, nBuckets: 3 });
-    await insDist(db, evId, { source: 'house_gaussian', hash: 'h1', probs: '{0.1,0.2,0.7}' });
+    // the bot's OWN raw-consensus seed (seeded=true), and a NEWER production CALIBRATED row (seeded=false) for the
+    // SAME event with a DIFFERENT center. Pre-0074 the newer calibrated row shadowed the seed (the bug); the seed
+    // must read back its own raw dist regardless of a fresher calibrated write.
+    await insDist(db, evId, { source: 'house_gaussian', hash: 'hg-raw',  probs: '{0.1,0.2,0.7}', seeded: true,  ageMin: 30 });
+    await insDist(db, evId, { source: 'house_gaussian', hash: 'hg-cal',  probs: '{0.7,0.2,0.1}', seeded: false, ageMin: 5 });
 
-    const dist = (await port.rpc<{ latest_house_dist: { source: string; buckets: { label: string; prob: number }[] } | null }>(
+    const dist = (await port.rpc<{ latest_house_dist: { source: string; seeded: boolean; buckets: { label: string; prob: number }[] } | null }>(
       'latest_house_dist', { p_event_id: evId },
     ))[0]!.latest_house_dist!;
     expect(dist).not.toBeNull();
     expect(dist.source).toBe('house_gaussian');
+    expect(dist.seeded).toBe(true); // the bot's own seed, not the fresher calibrated row
     expect(dist.buckets.length).toBe(3);
     expect(dist.buckets[2]!.label).toBe('22°C'); // joined from market_buckets (W6b — bare probs[] carries no label)
-    expect(Number(dist.buckets[2]!.prob)).toBeCloseTo(0.7, 6);
+    expect(Number(dist.buckets[2]!.prob)).toBeCloseTo(0.7, 6); // the RAW center (0.7), not the calibrated 0.1
 
     const none = (await port.rpc<{ latest_house_dist: unknown }>(
       'latest_house_dist', { p_event_id: '00000000-0000-0000-0000-000000000000' },

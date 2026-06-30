@@ -27,6 +27,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { resolveSeriesId } from '../backfill-market-history.ts';
+import { parseBucketLabel, bucketRange } from '../../packages/core/src/buckets.ts';
 
 const HEADERS = { 'User-Agent': 'weather-edge/0.1 (research backfill)', Accept: 'application/json' };
 const PAGE_SIZE = 100;
@@ -108,6 +109,8 @@ interface CitySummary {
   buckets: number;
   points: number;
   emptyBuckets: number;
+  /** true if series pagination stopped on a persistent fetch failure (the archive for this city may be truncated). */
+  capped?: boolean;
 }
 
 async function pullCity(
@@ -125,11 +128,19 @@ async function pullCity(
     return sum;
   }
 
-  // enumerate the full series, ascending (offset 0 = the floor)
+  // enumerate the full series, ascending (offset 0 = the floor). fetchJson returns null ONLY on a persistent
+  // failure (a successful empty page is []), so distinguish the two: null mid-pagination = a TRUNCATED archive
+  // (warn loudly + flag — do NOT treat it as end-of-list, the silent-truncation trap), [] = the real series end.
   const events: RawEvent[] = [];
   for (let offset = 0; ; offset += PAGE_SIZE) {
     const page = (await fetchJson(seriesEventsUrl(seriesId, offset))) as RawEvent[] | null;
-    if (!page || page.length === 0) break;
+    if (page === null) {
+      sum.capped = true;
+      console.warn(`⚠ ${city}: series pagination fetch FAILED at offset ${offset} after retries — archive may be ` +
+        `TRUNCATED (got ${events.length} events so far). Re-run pull-market-history to resume from the floor.`);
+      break;
+    }
+    if (page.length === 0) break; // genuine end of the series
     events.push(...page);
     if (page.length < PAGE_SIZE) break;
   }
@@ -154,7 +165,18 @@ async function pullCity(
 
     const startTs = ev.createdAt ? epoch(ev.createdAt) : epoch(endIso) - 4 * 86400;
     const endTs = epoch(endIso);
-    const markets = ev.markets ?? [];
+    // Sort buckets into the DB's CANONICAL temperature order (bucketRange.lo asc) — the SAME sort parseGammaEvent
+    // applies (gamma.ts:307) — so the archive's bucket idx shares ONE index space with the DB's
+    // market_buckets.bucket_idx, and hence with the house_gaussian seed + winner_idx (history-replay-ingest) AND
+    // the forecast-lookup pred_bucket_l*. Raw Gamma market order is NOT temperature-sorted (the open tails land
+    // mid-array), so without this the archive idx is a DIFFERENT index space than every DB-derived idx — silently
+    // misaligning the replay's house-seed/winner AND the forecast↔odds join. Unparseable labels sort last (the DB
+    // would have dropped such an event at parse).
+    const bucketLo = (m: RawMarket): number => {
+      try { return bucketRange(parseBucketLabel(m.groupItemTitle ?? '')).lo; }
+      catch { return Number.POSITIVE_INFINITY; }
+    };
+    const markets = [...(ev.markets ?? [])].sort((a, b) => bucketLo(a) - bucketLo(b));
 
     const buckets = await pool(markets, opts.concurrency, async (m, idx) => {
       const tokenYes = m.clobTokenIds ? (JSON.parse(m.clobTokenIds) as string[])[0] : null;

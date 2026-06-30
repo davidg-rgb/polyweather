@@ -41,6 +41,7 @@ import {
   type ArchiveEvent,
 } from '../../packages/core/src/sim/history-replay-ingest.ts';
 import { BOT_DEFAULTS, type OpeningCfg } from '../../packages/core/src/sim/opening-convergence.ts';
+import { localHourInstant } from '../../packages/core/src/time.ts';
 
 export const SCRIPT = 'tune-convergence';
 const OUT_DIR = join(dirname(fileURLToPath(import.meta.url)), 'out');
@@ -56,7 +57,10 @@ export const DEPTH_FLOORS = [25, 50, 100];
 export const TPS = [0.04, 0.06, 0.08, 0.1, 0.15, 0.2, 0.25];
 // a COARSE TP set for the (expensive) entry-grid selection pass; the full TPS refines on the SELECTED cell (§3).
 export const GRID_TPS = [0.06, 0.1, 0.15, 0.25];
-export const SL_DELTAS = [0.08, 0.12, 0.2, 0.99]; // 0.99 ≈ "no stop"
+// NB: a large slDeltaPp does NOT disable the stop — the ternary (entry−Δ>0 ? entry−Δ : entry×(1−slFrac)) falls to
+// the RELATIVE floor entry×(1−slFrac) for cheap entries (e.g. 0.99 at entry 0.15 → a ~50%-drawdown stop, not no-stop).
+// So for the cheap entries this thesis targets, slDeltaPp values above ~entry are degenerate (all map to that floor).
+export const SL_DELTAS = [0.08, 0.12, 0.2, 0.99];
 export const TIME_STOPS = [11, 12, 14, 16];
 export const TRAIN_FRAC = 0.6; // earliest 60% of distinct dates = TRAIN, the rest = TEST
 
@@ -211,10 +215,14 @@ export async function loadPanel(db: ScriptDb, archiveIdx: Map<string, string>, a
           and exists (select 1 from bucket_probabilities bp where bp.event_id=me.id and bp.source='house_gaussian')
           ${allowlistOnly ? 'and c.slug = any($1::text[])' : ''}
      ),
+     -- seeded=false: PRODUCTION dists only. A bot city is also a production-scored station, so post-split it
+     -- can carry BOTH a calibrated production house_gaussian (seeded=false) AND a bot-seeded RAW one (seeded=true);
+     -- without this filter the distinct-on made_at-asc pick mixes regimes across events. The offline tuner scores
+     -- against the production dists (the seed-isolation principle: bot-seeded rows never enter analytics/scoring).
      hg as (select distinct on (bp.event_id) bp.event_id, bp.probs from bucket_probabilities bp
-              join ev on ev.id=bp.event_id where bp.source='house_gaussian' order by bp.event_id, bp.made_at asc),
+              join ev on ev.id=bp.event_id where bp.source='house_gaussian' and coalesce(bp.seeded,false)=false order by bp.event_id, bp.made_at asc),
      he as (select distinct on (bp.event_id) bp.event_id, bp.probs from bucket_probabilities bp
-              join ev on ev.id=bp.event_id where bp.source='house_ensemble' order by bp.event_id, bp.made_at asc)
+              join ev on ev.id=bp.event_id where bp.source='house_ensemble' and coalesce(bp.seeded,false)=false order by bp.event_id, bp.made_at asc)
      select ev.poly_event_id, ev.city, ev.tz, ev.target_date, ev.winner_idx, ev.grading_mismatch,
             hg.probs house_gaussian, he.probs house_ensemble
        from ev left join hg on hg.event_id=ev.id left join he on he.event_id=ev.id`,
@@ -340,11 +348,19 @@ async function main(): Promise<void> {
           if (d.winnerInBought) {
             inBought++;
             // the winner's harvestable re-rating: its peak archive mid after open − its open mid (forecast-free).
+            // CAP the peak window at the LATEST time-stop (16:00 local = max of TIME_STOPS): the bot flattens by
+            // then, so the winner's terminal convergence to ~1 at resolution is NOT harvestable — including the
+            // post-time-stop tail would report a hold-to-resolution ceiling, not what an exit could capture.
             const wb = p.archive.buckets.find((b) => b.idx === p.winnerIdx);
             if (wb && wb.points.length > 1) {
-              const open = wb.points[0]![1];
-              const peak = Math.max(...wb.points.map((pt) => pt[1]));
-              if (fin(open) && fin(peak)) harvest.push(peak - open);
+              let cutTs = Number.POSITIVE_INFINITY;
+              try { cutTs = localHourInstant(p.tz, p.targetDate, 16).getTime() / 1000; } catch { /* bad tz → no cap */ }
+              const pts = wb.points.filter((pt) => pt[0] <= cutTs);
+              if (pts.length > 1) {
+                const open = pts[0]![1];
+                const peak = Math.max(...pts.map((pt) => pt[1]));
+                if (fin(open) && fin(peak)) harvest.push(peak - open);
+              }
             }
           }
         }
@@ -355,7 +371,8 @@ async function main(): Promise<void> {
       }
     }
     emit('  (winnerHarvest = mean, over markets where the winner was bracketed, of the winner bucket\'s peak mid −');
-    emit('   its open mid — the upside a perfect exit on the WINNER could harvest; the basket nets the losers against it.)');
+    emit('   its open mid, peak measured BEFORE the 16:00-local time-stop — the upside a perfect exit on the WINNER');
+    emit('   could harvest by the latest exit; the basket nets the losers against it. NOT the hold-to-resolution ~1.)');
     emit('');
 
     // ── 2 · the GRID on TRAIN (select) → TEST (validate). spread×1 (calibrated). ──────────────────────────

@@ -290,6 +290,25 @@ describe('backfill-market-history (§6.22, C2)', () => {
     expect(w.startTs).toBe(Math.floor(Date.parse('2026-06-08T02:01:53.543794Z') / 1000)); // createdAt
     expect(w.startTs).toBeLessThan(w.endTs);
   });
+
+  it("a fetch error (Gamma's offset-depth 422) STOPS the backfill gracefully — no throw, partial stats returned", async () => {
+    // ioFetchJson throws a non-retryable UpstreamError on a 422; the paging loop must catch + break (mirroring
+    // scanCityFloors) so an already-ingested page survives and the whole run does not crash mid-sweep.
+    let logged = '';
+    const stats = await backfillMarketHistory(
+      { refetch: true },
+      {
+        db: scriptDb,
+        fetchPage: async () => { throw new Error('HTTP 422 from gamma-api.polymarket.com'); },
+        fetchPricesHistory: async (tokenId: string) => routeHistory(tokenId),
+        log: (m: string) => { logged += m; },
+        now: () => NOW,
+      },
+    );
+    expect(stats.ingested).toBe(0);
+    expect(stats.pages).toBe(0); // the throwing page was never counted; no exception propagated
+    expect(logged).toMatch(/422|pagination-depth/);
+  });
 });
 
 describe('scanCityFloors — the per-city closed-market date floor (read-only)', () => {

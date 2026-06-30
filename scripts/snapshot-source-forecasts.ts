@@ -76,8 +76,10 @@ export function liveSources(env: NodeJS.ProcessEnv): SourceDef[] {
   return sourcesFromKeys({
     owm: env['OPENWEATHERMAP_API_KEY'],
     weatherapi: env['WEATHERAPI_API_KEY'],
-    // canonical name + the *_DEMO_* fallbacks (the key was set locally as Google_MAPS_DEMO_API_KEY).
-    google: env['GOOGLE_WEATHER_API_KEY'] ?? env['GOOGLE_MAPS_DEMO_API_KEY'] ?? env['Google_MAPS_DEMO_API_KEY'],
+    // canonical name + the *_DEMO_* fallbacks (the key was set locally as Google_MAPS_DEMO_API_KEY). Use `||`
+    // (falsy), NOT `??`: .env.example ships a BLANK `GOOGLE_WEATHER_API_KEY=` (→ '') so nullish-coalescing would
+    // stop at the empty string and never reach the *_DEMO_* aliases — matching the Edge fn (snapshot-sources).
+    google: env['GOOGLE_WEATHER_API_KEY'] || env['GOOGLE_MAPS_DEMO_API_KEY'] || env['Google_MAPS_DEMO_API_KEY'],
   });
 }
 

@@ -74,11 +74,21 @@ async function main(): Promise<void> {
 
   let rows = 0;
   let events = 0;
+  let skippedFiles = 0;
   for (const city of cities) {
     const dir = join(OUT_ROOT, city);
     const files = readdirSync(dir).filter((f) => f.endsWith('.json'));
     for (const f of files) {
-      const ev = JSON.parse(readFileSync(join(dir, f), 'utf8')) as EventFile;
+      let ev: EventFile;
+      try {
+        ev = JSON.parse(readFileSync(join(dir, f), 'utf8')) as EventFile;
+      } catch (e) {
+        // a truncated/corrupt event file (e.g. pull-market-history killed mid writeFileSync) must NOT abort the
+        // whole multi-hundred-million-row flatten — log + skip + count it (the reconciliation below surfaces the gap).
+        console.error(`  ⚠ skipped corrupt file ${city}/${f}: ${e instanceof Error ? e.message : String(e)}`);
+        skippedFiles++;
+        continue;
+      }
       const endTs = Math.floor(new Date(ev.endDate).getTime() / 1000);
       let buf = '';
       for (const b of ev.buckets) {
@@ -101,6 +111,30 @@ async function main(): Promise<void> {
   gz.end();
   await once(sink, 'finish');
   const bytes = statSync(outPath).size;
+
+  // Reconcile the row count against the pulled point total (the docstring's promised assertion). Only meaningful
+  // for a FULL run — a --cities subset legitimately flattens fewer rows. Warn, never throw, so a partial/stale
+  // archive still produces a usable CSV; the warning is the signal that the archive is incomplete.
+  if (!cityFilter) {
+    const summaryPath = join(OUT_ROOT, 'summary.json');
+    if (existsSync(summaryPath)) {
+      try {
+        const pulled = (JSON.parse(readFileSync(summaryPath, 'utf8')) as { totals?: { points?: number } }).totals?.points;
+        if (typeof pulled === 'number' && pulled !== rows) {
+          console.warn(
+            `⚠ row/point mismatch: flattened ${rows.toLocaleString()} rows vs ${pulled.toLocaleString()} pulled points` +
+              (skippedFiles ? ` (${skippedFiles} corrupt files skipped)` : '') + ' — archive may be incomplete or stale.',
+          );
+        } else if (typeof pulled === 'number') {
+          console.log(`✓ row count matches the pulled point total (${pulled.toLocaleString()}).`);
+        }
+      } catch {
+        /* unreadable summary.json → skip the reconciliation (not fatal) */
+      }
+    }
+  }
+  if (skippedFiles) console.warn(`⚠ ${skippedFiles} event file(s) were corrupt/unreadable and skipped.`);
+
   console.log(
     `\n=== flatten complete: ${events} events · ${rows.toLocaleString()} rows → ${outPath}\n` +
       `    ${(bytes / 1e6).toFixed(0)} MB gz (${(bytes / 1e9).toFixed(2)} GB) ===`,

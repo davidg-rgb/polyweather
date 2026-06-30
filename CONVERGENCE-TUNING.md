@@ -1,5 +1,18 @@
 # Convergence Tuning — the 708-event archive verdict on the bot's entry/exit thresholds
 
+> **⚠ CORRECTION (2026-06-30, code review) — the archive verdict below must be REGENERATED before it is cited.**
+> The local price-history archive was written by `pull-market-history` in **raw Gamma market order**, but the DB
+> house seed (`bucket_probabilities.probs`) and `winner_idx` it is joined to are in the DB's **temperature-sorted**
+> bucket index space (`parseGammaEvent` sorts by `bucketRange.lo`). The two index spaces **diverge** (the open
+> tails land mid-array in raw order), so `history-replay-ingest.buildHistoryEvent` attached each archive bucket's
+> price path to the **wrong** forecast prob and graded it against the **wrong** winner. The replay-based numbers
+> here (+8.2% gross, the breakeven ×0.70, the per-cell P&L, the PASS/KILL) were therefore computed on **misaligned
+> buckets** and are NOT reliable. **Fixed at the root:** `pull-market-history` now sorts each event's buckets into
+> the DB canonical order before assigning idx (so the archive shares ONE index space with the DB everywhere). The
+> existing on-disk archive is still raw — **re-pull it (`pull-market-history --refetch`) and re-run this tuner**;
+> the `house_gaussian` SELECTOR diagnostic (the 73.9% bracket rate) reads the DB seed+winner directly and is
+> **unaffected**, and so is the **live forward loop** (it uses `opening_captures`, aligned by label, not the archive).
+>
 > **What it is.** A read-only tuning harness that turns the local price-history archive
 > (`scripts/research/out/market-history`, 6 275 events / ~238 M points) — joined to the bot's **real**
 > forecast seed (`bucket_probabilities`) and the true resolution — into the **largest backtest of the

@@ -10,7 +10,7 @@ import type { PGlite } from '@electric-sql/pglite';
 import { owmForecastUrl, parseOwmDailyMax } from '../packages/core/src/index.ts';
 import { freshDb } from '../supabase/tests/harness.ts';
 import { toPgliteParam } from './lib/pglite-param.ts';
-import { snapshotSourceForecasts, type Db, type SourceDef } from './snapshot-source-forecasts.ts';
+import { snapshotSourceForecasts, liveSources, type Db, type SourceDef } from './snapshot-source-forecasts.ts';
 
 const RESEARCH = join(import.meta.dirname, '..', 'research');
 const fixture = (f: string): unknown => JSON.parse(readFileSync(join(RESEARCH, f), 'utf8'));
@@ -96,5 +96,19 @@ describe('snapshot-source-forecasts (§ external-source capture)', () => {
     });
     expect(stats.failures).toBe(2); // both stations
     expect(stats.written).toBe(0);
+  });
+});
+
+describe('liveSources — Google key fallback chain (|| not ??)', () => {
+  it('a BLANK GOOGLE_WEATHER_API_KEY falls through to the Google_MAPS_DEMO_API_KEY alias', () => {
+    // .env.example ships GOOGLE_WEATHER_API_KEY= (empty string); nullish-coalescing would stop at '' and drop
+    // google. With `||` the blank canonical key falls through to the operator's existing *_DEMO_* alias.
+    const sources = liveSources({ GOOGLE_WEATHER_API_KEY: '', Google_MAPS_DEMO_API_KEY: 'demo-key' } as NodeJS.ProcessEnv);
+    expect(sources.some((s) => s.source === 'google')).toBe(true);
+  });
+
+  it('no Google key under any name → no google source', () => {
+    const sources = liveSources({} as NodeJS.ProcessEnv);
+    expect(sources.some((s) => s.source === 'google')).toBe(false);
   });
 });
