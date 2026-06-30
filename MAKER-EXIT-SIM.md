@@ -122,6 +122,8 @@ amsterdam  2026-06-27 33°C    buy 0.229T → T:stop_loss    sell 0.028 = −$18
   (it already makes the entry; add the maker TP + the resolvesAt−Nh time-stop), capture **real** maker fills +
   the **real** rebate tier, and let the live §9R-E gate adjudicate on real-book depth. The tuned params above are
   the starting point, **re-validated forward** (the sweep is in-sample; the OOS discipline still applies).
+  **Build-ready spec: `MAKER-EXIT-PAPER-LOOP-HANDOFF.md`** — reuses the live capture + the bot tables + the pure
+  maker-exit core; measures the three assumptions for real; paper-only, hard-gated, operator funds/keys.
 
 ---
 
