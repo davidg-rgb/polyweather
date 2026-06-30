@@ -24,7 +24,14 @@ import {
   type RawGammaEvent,
 } from '../packages/core/src/index.ts';
 import { freshDb, rows } from '../supabase/tests/harness.ts';
-import { backfillMarketHistory, dailyLastPoints, lastPreCutoff, scanCityFloors, SCRIPT } from './backfill-market-history.ts';
+import {
+  backfillMarketHistory,
+  dailyLastPoints,
+  lastPreCutoff,
+  resolveSeriesId,
+  scanCityFloors,
+  SCRIPT,
+} from './backfill-market-history.ts';
 import type { Db } from './lib/backfill.ts';
 import { toPgliteParam } from './lib/pglite-param.ts';
 
@@ -319,5 +326,48 @@ describe('scanCityFloors — the per-city closed-market date floor (read-only)',
     expect(scan.stopReason).toMatch(/422|pagination-depth/);
     expect(scan.events).toBe(100); // the page we DID get is still aggregated
     expect(scan.floors.find((f) => f.city === 'nyc')).toMatchObject({ earliest: '2026-06-01', count: 100 });
+  });
+});
+
+describe('--series-scan deep history (resolveSeriesId + yearless archived ingest)', () => {
+  it('resolveSeriesId: id on a hit, null on a 200-empty/null miss, panama override, string-id + object body', async () => {
+    const requested: string[] = [];
+    const fetchSeries = (slug: string): Promise<unknown> => {
+      requested.push(slug);
+      return Promise.resolve(slug === 'london-daily-weather' ? [{ id: 10006, slug }] : []);
+    };
+    expect(await resolveSeriesId('london', { fetchSeries })).toBe(10006); // array body → first row's id
+    expect(await resolveSeriesId('panama-city', { fetchSeries })).toBe(null); // no hit, but override is applied:
+    expect(requested).toContain('panama-daily-weather'); // …the panama-city → panama series-slug override
+    // object (non-array) body + string id coerced to number
+    expect(await resolveSeriesId('nyc', { fetchSeries: () => Promise.resolve({ id: '10005' }) })).toBe(10005);
+    // explicit null / id-less body → null (caller logs + skips)
+    expect(await resolveSeriesId('nope', { fetchSeries: () => Promise.resolve(null) })).toBe(null);
+    expect(await resolveSeriesId('nope', { fetchSeries: () => Promise.resolve([{ slug: 'x' }]) })).toBe(null);
+  });
+
+  it('ingests a yearless archived event with allowYearless (year sourced from endDate) — and rejects it without', async () => {
+    // the resolved NYC fixture, stripped to Gamma's archived YEARLESS slug form (no -2026).
+    const yearless = (): RawGammaEvent => {
+      const e = resolvedEvent();
+      e.slug = e.slug.replace(/-\d{4}$/, '');
+      e.endDate = '2026-06-09T12:00:00Z'; // referenceYear derives from this → 2026
+      return e;
+    };
+    expect(yearless().slug).not.toMatch(/-\d{4}$/); // sanity: the year really is gone
+
+    // default closed-list backfill: the strict slug regex rejects yearless → nothing ingested.
+    const strict = await backfillMarketHistory({ refetch: true }, deps([yearless()]));
+    expect(strict.ingested).toBe(0);
+    expect(strict.skippedParse + strict.skippedUnknownCity).toBeGreaterThan(0);
+
+    // --series-scan path: allowYearless parses it (year from endDate=2026) and ingests the full event.
+    const ok = await backfillMarketHistory({ allowYearless: true, refetch: true }, deps([yearless()]));
+    expect(ok).toMatchObject({ ingested: 1, winnersRecorded: 1, historyCalls: 11 });
+    const [evRow] = await rows<{ target_date: string }>(
+      db,
+      `select target_date::text as target_date from market_events order by target_date desc limit 1`,
+    );
+    expect(evRow!.target_date).toBe('2026-06-09'); // month/day from slug, YEAR from endDate
   });
 });

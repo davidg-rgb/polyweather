@@ -39,19 +39,23 @@ re-asserts every shape live (run before deploys; 12/12 PASS 2026-06-11).
   earliest/latest/count PER CITY + a caveat when the cap is hit. (Because the ascending
   sweep is cut at the offset cap, the `latest`/`count` columns are truncated at the cap,
   not the true latest — only `earliest`, the floor, is authoritative.)
-- **Deeper history via `series_id` (VERIFIED live 2026-06-30):** Gamma `archived`s
-  events older than the closed-list window OUT of the `closed=true` list, but the per-city
-  series reaches them: `GET /series?slug={city}-daily-weather` → `{id}` (e.g. london→10006,
-  nyc→10005, atlanta→10739), then `GET /events?series_id={id}&order=endDate&ascending=true`
-  paginates the FULL history with **no archival wall** — London goes back to **2025-01-22**
-  (~2.5× the closed-list depth). Two structural caveats on the old events: they carry **7
-  buckets, not 11**, and **yearless slugs** (`highest-temperature-in-london-on-jan-22`) —
-  the latter is rejected by the ingestion's year-anchored city regex, so reaching this depth
-  needs a relaxed regex + a `series_id` enumeration source (the date-window params
-  `end_date_min/max` are a dead end — return n=0). The bucket-count is already variable in
-  ingestion. NOTE: pre-system dates have NO historical forecasts, so the forecast-vs-market
-  backtest can't run on them; the value is the standalone implied-prob archive (convergence
-  / efficiency study of the price path).
+- **Deeper history via `series_id` — `--series-scan` (BUILT + VERIFIED live 2026-06-30):**
+  Gamma `archived`s events older than the closed-list window OUT of the `closed=true` list,
+  but the per-city series reaches them: `GET /series?slug={city}-daily-weather` → `{id}`
+  (e.g. london→10006, nyc→10005, atlanta→10739), then
+  `GET /events?series_id={id}&order=endDate&ascending=true` paginates the FULL history with
+  **no archival wall** — London/NYC go back to **2025-01-22** (~2.5× the closed-list depth).
+  Coverage: **44/45 of our cities resolve** on the `{city}-daily-weather` stem (panama-city →
+  `panama-daily-weather`, in `SERIES_SLUG_OVERRIDES`); the date-window params
+  `end_date_min/max` are a dead end (n=0). `--series-scan [--city nyc] [--full-series]` runs
+  the SAME ingestion per city against its series pages. Two structural quirks of the old
+  events, both handled: they carry **7 buckets, not 11** (ingestion is already bucket-count-
+  agnostic), and **yearless slugs** (`…-on-jan-22`) — the live parser REJECTS those (the
+  stale-event guard), so backfill passes an opt-in `referenceYear` (from `endDate`) to
+  `parseGammaEvent`/`targetDateFromEvent`; the live path keeps the strict reject unchanged.
+  NOTE: pre-system dates have NO historical forecasts, so the forecast-vs-market backtest
+  can't run on them — the value is the standalone implied-prob archive (convergence /
+  efficiency study of the price path).
 - **Granularity:** daily-temp markets live ~2–3 days, so `interval=max` at
   `fidelity=1` reconstructs the full minute path per bucket. Default backfill keeps
   only the daily last-point + the lead-1/0 consensus cutoffs (C2 no-look-ahead);

@@ -33,9 +33,18 @@
  * to the floor and print the earliest/latest listed date + count PER CITY (no DB
  * writes) — answers "how far back does Polymarket have this market per city".
  *
+ * --series-scan reaches DEEPER history than the closed list: the tag-104596 list
+ * floors at ~Dec-2025 (Gamma archives older events out of it), but each city's
+ * `/series?slug={city}-daily-weather` → series_id enumerates the FULL lifetime
+ * (london/nyc to 2025-01-22, ~2.5×). It runs the same ingestion per city with
+ * allowYearless (archived slugs are yearless; the year comes from endDate).
+ * Combine with --full-series to archive the deep minute series too.
+ *
  * Run: pnpm tsx scripts/backfill-market-history.ts [--from 2025-06-01]
  *        [--limit 200] [--refetch] [--full-series] [--fidelity 1]
  *      pnpm tsx scripts/backfill-market-history.ts --earliest-scan
+ *      pnpm tsx scripts/backfill-market-history.ts --series-scan [--city nyc]
+ *        [--full-series] [--from 2025-06-01]
  */
 import { createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
@@ -70,6 +79,11 @@ export interface MarketHistoryArgs {
   fullSeries?: boolean;
   /** Provenance: the prices-history fidelity (minutes) the caller fetched at — stored on each point. */
   fidelity?: number;
+  /**
+   * Accept Gamma's archived YEARLESS slugs (`…-on-jan-22`, no year), sourcing the year from each event's
+   * endDate. Set ONLY by --series-scan (deep-history via series_id), where old events legitimately predate the
+   * year-in-slug convention. Off by default so closed-list backfill keeps the strict stale-event guard. */
+  allowYearless?: boolean;
 }
 
 export interface MarketHistoryDeps {
@@ -215,6 +229,35 @@ export async function scanCityFloors(deps: {
   return { floors, events, pagesScanned, capped, stopReason };
 }
 
+/**
+ * Cities whose Polymarket daily-weather SERIES slug differs from our city slug. Gamma 422s nothing here — a
+ * wrong slug just 200s with an empty body (resolveSeriesId → null), so the override is only for known names
+ * (verified live 2026-06-30: panama-city's series is `panama-daily-weather`). Add entries as they're found.
+ */
+const SERIES_SLUG_OVERRIDES: Record<string, string> = { 'panama-city': 'panama' };
+
+/** Minimal shape of a Gamma `/series` row — only the id is load-bearing for enumeration. */
+export interface RawGammaSeries {
+  id?: number | string;
+}
+
+/**
+ * Resolve a city's Polymarket daily-weather series id (the key that reaches the FULL history, incl. events
+ * Gamma archived out of the closed list). `GET /series?slug={city}-daily-weather` 200s with an empty body for
+ * an unknown city → null (caller logs + skips). Applies SERIES_SLUG_OVERRIDES for the city↔series name drift.
+ */
+export async function resolveSeriesId(
+  citySlug: string,
+  deps: { fetchSeries: (slug: string) => Promise<unknown> },
+): Promise<number | null> {
+  const slug = `${SERIES_SLUG_OVERRIDES[citySlug] ?? citySlug}-daily-weather`;
+  const body = (await deps.fetchSeries(slug)) as RawGammaSeries[] | RawGammaSeries | null;
+  const s = Array.isArray(body) ? body[0] : body;
+  if (!s || s.id === undefined || s.id === null) return null;
+  const id = Number(s.id);
+  return Number.isFinite(id) ? id : null;
+}
+
 /** Last point per UTC day — the daily snapshot series. */
 export function dailyLastPoints(points: PricePoint[]): PricePoint[] {
   const byDay = new Map<string, PricePoint>();
@@ -327,9 +370,16 @@ export async function backfillMarketHistory(
       let parsed: ParsedEvent;
       let city: CityRow | undefined;
       try {
-        const slugCity = /^(?:highest|lowest)-temperature-in-(.+)-on-[a-z]+-\d{1,2}-\d{4}$/.exec(ev.slug)?.[1] ?? '';
+        // --series-scan reaches Gamma's archived YEARLESS slugs (`…-on-jan-22`); the year then comes from
+        // endDate (passed to parseGammaEvent as referenceYear). Closed-list backfill keeps the strict pattern.
+        const cityRe = args.allowYearless
+          ? /^(?:highest|lowest)-temperature-in-(.+)-on-[a-z]+-\d{1,2}(?:-\d{4})?$/
+          : /^(?:highest|lowest)-temperature-in-(.+)-on-[a-z]+-\d{1,2}-\d{4}$/;
+        const slugCity = cityRe.exec(ev.slug)?.[1] ?? '';
         [city] = await db.query<CityRow>(`select id, tz from cities where slug = $1`, [slugCity]);
-        parsed = parseGammaEvent(ev, city?.tz);
+        const referenceYear =
+          args.allowYearless && ev.endDate ? new Date(ev.endDate).getUTCFullYear() : undefined;
+        parsed = parseGammaEvent(ev, city?.tz, referenceYear !== undefined ? { referenceYear } : undefined);
       } catch (e) {
         stats.skippedParse++;
         log(`parse failed — skipped: ${ev.slug} (${String(e)})`);
@@ -457,6 +507,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       'full-series': { type: 'boolean' },
       fidelity: { type: 'string' },
       'earliest-scan': { type: 'boolean' },
+      'series-scan': { type: 'boolean' },
+      city: { type: 'string' },
     },
   });
   // Cloudflare fronts the CLOB host and rejects bare library user agents.
@@ -466,6 +518,13 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       `https://gamma-api.polymarket.com/events?tag_id=104596&closed=true&limit=${PAGE_SIZE}&offset=${offset}`,
       { headers },
     ) as Promise<RawGammaEvent[]>;
+  // --full-series defaults to 1-min fidelity (the archive's whole point); other modes keep the 10-min default.
+  const fidelity = values.fidelity ? Number(values.fidelity) : values['full-series'] ? 1 : 10;
+  const fetchPricesHistory = (tokenId: string) =>
+    ioFetchJson(
+      `https://clob.polymarket.com/prices-history?market=${tokenId}&interval=max&fidelity=${fidelity}`,
+      { headers },
+    );
 
   if (values['earliest-scan']) {
     // Read-only: page in ASCENDING endDate order so offset 0 is the genuine floor (Gamma 422s past offset
@@ -490,13 +549,74 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
         `\n⚠ ${scan.stopReason}.\n` +
           `  Paged ascending, so offset 0 IS the floor — the earliest dates above are real. But Gamma caps offset\n` +
           `  depth (~2100 events) AND archives events older than the closed-list window, so (a) cities added after\n` +
-          `  the reachable tail may be absent, and (b) markets older than this closed-list floor exist only via a\n` +
-          `  direct slug lookup or the per-city '/series' endpoint, not this list.`,
+          `  the reachable tail may be absent, and (b) markets older than this closed-list floor are reachable only\n` +
+          `  per-city via series_id — use '--series-scan' to ingest them.`,
       );
     }
+  } else if (values['series-scan']) {
+    // Deep history: enumerate per-city by series_id (reaches events Gamma archived out of the closed list —
+    // london/nyc to 2025-01-22, ~2.5×). Resolve each city's series, then run the SAME ingestion against its
+    // ascending event pages with allowYearless (old slugs are yearless; the year comes from endDate).
+    const db = makeScriptDb();
+    try {
+      const cityRows = values.city
+        ? [{ slug: String(values.city) }]
+        : await db.query<{ slug: string }>(`select slug from cities order by slug`);
+      const agg: Partial<Record<keyof MarketHistoryStats, number>> = {};
+      let resolved = 0;
+      const missing: string[] = [];
+      for (const { slug } of cityRows) {
+        const seriesId = await resolveSeriesId(slug, {
+          fetchSeries: (s) => ioFetchJson(`https://gamma-api.polymarket.com/series?slug=${s}`, { headers }),
+        });
+        if (seriesId === null) {
+          missing.push(slug);
+          console.log(`· ${slug}: no daily-weather series found — skipped`);
+          continue;
+        }
+        resolved++;
+        const stats = await backfillMarketHistory(
+          {
+            from: values.from,
+            limit: values.limit ? Number(values.limit) : undefined,
+            refetch: values.refetch ?? false,
+            fullSeries: values['full-series'] ?? false,
+            fidelity,
+            allowYearless: true,
+          },
+          {
+            db,
+            fetchPage: (offset) =>
+              ioFetchJson(
+                `https://gamma-api.polymarket.com/events?series_id=${seriesId}&order=endDate&ascending=true&limit=${PAGE_SIZE}&offset=${offset}`,
+                { headers },
+              ) as Promise<RawGammaEvent[]>,
+            fetchPricesHistory,
+            log: console.log,
+            now: () => new Date(),
+          },
+        );
+        console.log(
+          `✓ ${slug} (series ${seriesId}): ingested ${stats.ingested}/${stats.eventsSeen}` +
+            (values['full-series'] ? ` · price-history ${stats.priceHistoryRows}` : ``) +
+            ` · snapshots ${stats.snapshotRows} · skipped-done ${stats.skippedAlreadyDone}`,
+        );
+        for (const k of Object.keys(stats) as (keyof MarketHistoryStats)[]) {
+          agg[k] = (agg[k] ?? 0) + stats[k];
+        }
+      }
+      console.log(
+        `\n--series-scan complete: ${resolved}/${cityRows.length} cities resolved` +
+          (missing.length ? ` (no series: ${missing.join(', ')})` : ``) +
+          ` · ingested ${agg.ingested ?? 0} of ${agg.eventsSeen ?? 0} seen` +
+          (values['full-series'] ? ` · price-history rows ${agg.priceHistoryRows ?? 0}` : ``) +
+          ` · snapshots ${agg.snapshotRows ?? 0} · skipped-done ${agg.skippedAlreadyDone ?? 0}` +
+          ` · unknown-city ${agg.skippedUnknownCity ?? 0} · parse-skipped ${agg.skippedParse ?? 0}`,
+      );
+    } finally {
+      await db.end();
+    }
   } else {
-    // --full-series defaults to 1-min fidelity (the archive's whole point); daily mode keeps the 10-min default.
-    const fidelity = values.fidelity ? Number(values.fidelity) : values['full-series'] ? 1 : 10;
     const db = makeScriptDb();
     try {
       await backfillMarketHistory(
@@ -507,17 +627,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
           fullSeries: values['full-series'] ?? false,
           fidelity,
         },
-        {
-          db,
-          fetchPage,
-          fetchPricesHistory: (tokenId) =>
-            ioFetchJson(
-              `https://clob.polymarket.com/prices-history?market=${tokenId}&interval=max&fidelity=${fidelity}`,
-              { headers },
-            ),
-          log: console.log,
-          now: () => new Date(),
-        },
+        { db, fetchPage, fetchPricesHistory, log: console.log, now: () => new Date() },
       );
     } finally {
       await db.end();

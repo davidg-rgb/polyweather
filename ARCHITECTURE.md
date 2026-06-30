@@ -821,7 +821,7 @@ extractStationFromUrl(url: string): { icao: string; countryCode: string } | null
            null on non-matching URL (triggers station-unverified path, never a guess).
   Called by: parseGammaEvent. Calls: none.
 
-targetDateFromEvent(ev: { slug: string; title: string; gameStartTime: string | null }, tz?: string): string
+targetDateFromEvent(ev: { slug: string; title: string; gameStartTime: string | null }, tz?: string, opts?: { referenceYear?: number }): string
   Purpose: target local date — primary: parse '…-on-{month}-{day}-{year}' slug; ALWAYS cross-check the
            title's month-day. gameStartTime is local midnight starting the target day expressed in UTC
            with a space-separated format ('2026-06-10 15:00:00+00'), so its UTC calendar date is the
@@ -830,9 +830,12 @@ targetDateFromEvent(ev: { slug: string; title: string; gameStartTime: string | n
            tz is known (existing city). For brand-new cities the check is skipped and tz is instead
            DERIVED from the slugDate↔gameStartTime offset, stored provisionally until the station's
            IANA tz is seeded. Mismatch with known tz → GammaShapeError (never bet a misdated event).
+           A YEARLESS slug is the stale-event trap and is REJECTED by default; opts.referenceYear (set
+           ONLY by the historical backfill's --series-scan, from the event's endDate) sources the year
+           so archived old events parse — the title month/day cross-check still runs.
   Called by: parseGammaEvent. Calls: localDayWindow (when tz provided).
 
-parseGammaEvent(ev: RawGammaEvent, knownTz?: string): ParsedEvent   [gamma.ts]
+parseGammaEvent(ev: RawGammaEvent, knownTz?: string, opts?: { referenceYear?: number }): ParsedEvent   [gamma.ts]
   Purpose: one raw Gamma event → typed: { slug, citySlug, targetDate, derivedTzOffset?, unit,
            station {icao, cc} | null,
            negRiskMarketId, kind: 'highest', buckets: Array<{ marketId, conditionId, label, def: BucketDef,

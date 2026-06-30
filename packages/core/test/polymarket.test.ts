@@ -112,6 +112,34 @@ describe('targetDateFromEvent (§6.9, C6)', () => {
     ).toThrow(GammaShapeError);
   });
 
+  it('historical-backfill opt-in: a yearless slug parses when referenceYear is supplied (year from endDate)', () => {
+    expect(
+      targetDateFromEvent(
+        {
+          slug: 'highest-temperature-in-london-on-january-22',
+          title: 'Will the highest temperature in London be between 36-37°F on January 22?',
+          gameStartTime: null,
+        },
+        undefined,
+        { referenceYear: 2025 },
+      ),
+    ).toBe('2025-01-22');
+  });
+
+  it('opt-in still enforces the title month/day cross-check (only the YEAR is taken on trust)', () => {
+    expect(() =>
+      targetDateFromEvent(
+        {
+          slug: 'highest-temperature-in-london-on-january-22',
+          title: 'Will the highest temperature in London be between 36-37°F on January 23?',
+          gameStartTime: null,
+        },
+        undefined,
+        { referenceYear: 2025 },
+      ),
+    ).toThrow(GammaShapeError);
+  });
+
   it('rejects slug/title date mismatches', () => {
     expect(() =>
       targetDateFromEvent({
@@ -238,6 +266,22 @@ describe('parseGammaEvent (§6.9) — full city fixtures', () => {
     const parsed = parseGammaEvent(broken);
     expect(parsed.buckets.length).toBe(10);
     expect(parsed.ladderProblems.length).toBeGreaterThan(0);
+  });
+
+  it('historical-backfill opt-in: a yearless archived event is rejected by default but parses with referenceYear', () => {
+    const ev = loadEvent('gamma-event-temperature-london-jun11.json');
+    const yearless: RawGammaEvent = { ...ev, slug: ev.slug.replace(/-\d{4}$/, '') };
+    expect(yearless.slug).not.toMatch(/-\d{4}$/); // sanity: the year really is gone
+
+    // default (live path) still refuses the yearless slug — the stale-event guard is intact
+    expect(() => parseGammaEvent(yearless)).toThrow(GammaShapeError);
+
+    // with referenceYear (the deep-history --series-scan path) it parses identically to the dated original
+    const parsed = parseGammaEvent(yearless, undefined, { referenceYear: 2026 });
+    expect(parsed.citySlug).toBe('london');
+    expect(parsed.targetDate).toBe('2026-06-11');
+    expect(parsed.buckets.length).toBe(11);
+    expect(parsed.kind).toBe('highest');
   });
 });
 

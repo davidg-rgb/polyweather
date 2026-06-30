@@ -165,18 +165,36 @@ function parseGameStartTime(s: string): Date {
 export function targetDateFromEvent(
   ev: { slug: string; title: string; gameStartTime: string | null },
   tz?: string,
+  opts?: { referenceYear?: number },
 ): string {
-  const slugMatch = /-on-([a-z]+)-(\d{1,2})-(\d{4})$/.exec(ev.slug);
-  if (!slugMatch) {
+  // Year-suffixed slug is the live default; a yearless slug is the stale-event trap and is REJECTED on the
+  // live path. The HISTORICAL backfill is the one legitimate exception — it ingests Gamma's archived yearless
+  // events (closed=true, enumerated by series_id, never order-placed), and passes opts.referenceYear (the
+  // event's endDate year) to source the otherwise-missing year. The title month/day cross-check below still
+  // runs either way, so only the YEAR is taken on trust (and endDate is noon-UTC on the target day = reliable).
+  let month: number | undefined;
+  let day: number;
+  let year: number;
+  const dated = /-on-([a-z]+)-(\d{1,2})-(\d{4})$/.exec(ev.slug);
+  if (dated) {
+    month = MONTHS[dated[1]!];
+    day = Number(dated[2]);
+    year = Number(dated[3]);
+  } else if (opts?.referenceYear !== undefined) {
+    const yearless = /-on-([a-z]+)-(\d{1,2})$/.exec(ev.slug);
+    if (!yearless) {
+      throw new GammaShapeError(`slug has no '-on-{month}-{day}' suffix: '${ev.slug}'`, { slug: ev.slug });
+    }
+    month = MONTHS[yearless[1]!];
+    day = Number(yearless[2]);
+    year = opts.referenceYear;
+  } else {
     throw new GammaShapeError(
       `slug has no '-on-{month}-{day}-{year}' suffix (yearless = stale-event trap): '${ev.slug}'`,
       { slug: ev.slug },
     );
   }
-  const month = MONTHS[slugMatch[1]!];
-  if (!month) throw new GammaShapeError(`unknown month '${slugMatch[1]}' in slug '${ev.slug}'`);
-  const day = Number(slugMatch[2]);
-  const year = Number(slugMatch[3]);
+  if (!month) throw new GammaShapeError(`unknown month in slug '${ev.slug}'`);
   const pad = (n: number) => String(n).padStart(2, '0');
   const targetDate = `${year}-${pad(month)}-${pad(day)}`;
 
@@ -216,8 +234,18 @@ function deriveTzOffsetHours(targetDate: string, gameStartTime: string): number 
  * GammaShapeError; validateLadder problems are attached as ladderProblems
  * (event stored but flagged unbettable).
  */
-export function parseGammaEvent(ev: RawGammaEvent, knownTz?: string): ParsedEvent {
-  const slugKind = /^(highest|lowest)-temperature-in-(.+)-on-[a-z]+-\d{1,2}-\d{4}$/.exec(ev.slug);
+export function parseGammaEvent(
+  ev: RawGammaEvent,
+  knownTz?: string,
+  opts?: { referenceYear?: number },
+): ParsedEvent {
+  // year-suffixed by default; the historical backfill opts into archived yearless slugs via opts.referenceYear
+  // (see targetDateFromEvent). Live callers pass no opts → strict pattern, behaviour unchanged.
+  const slugKind =
+    /^(highest|lowest)-temperature-in-(.+)-on-[a-z]+-\d{1,2}-\d{4}$/.exec(ev.slug) ??
+    (opts?.referenceYear !== undefined
+      ? /^(highest|lowest)-temperature-in-(.+)-on-[a-z]+-\d{1,2}$/.exec(ev.slug)
+      : null);
   if (!slugKind) {
     throw new GammaShapeError(`slug does not match the temperature-event pattern: '${ev.slug}'`, {
       slug: ev.slug,
@@ -231,7 +259,7 @@ export function parseGammaEvent(ev: RawGammaEvent, knownTz?: string): ParsedEven
   }
 
   const gameStartTime = ev.gameStartTime ?? ev.markets.find((m) => m.gameStartTime)?.gameStartTime ?? null;
-  const targetDate = targetDateFromEvent({ slug: ev.slug, title: ev.title, gameStartTime }, knownTz);
+  const targetDate = targetDateFromEvent({ slug: ev.slug, title: ev.title, gameStartTime }, knownTz, opts);
 
   const resolutionSource = ev.resolutionSource ?? ev.markets.find((m) => m.resolutionSource)?.resolutionSource;
   const station = resolutionSource ? extractStationFromUrl(resolutionSource) : null;
