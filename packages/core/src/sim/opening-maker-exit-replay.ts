@@ -25,6 +25,7 @@ import {
   selectEntries,
   paperFill,
   openingVerdict,
+  BOT_DEFAULTS,
   type OpeningCfg,
   type OpeningMarketResult,
   type OpeningVerdict,
@@ -58,6 +59,32 @@ export const MAKER_EXIT_DEFAULTS = {
   tstopHoursBeforeResolve: 12,
 } as const;
 
+/**
+ * The TUNED maker-exit params (MAKER-EXIT-SIM.md / MAKER-EXIT-PAPER-LOOP-HANDOFF §5 — the agent-team sweep's
+ * in-sample optimum on the 708-event archive). PINNED IN CODE (not the live bot.* config): the forward loop's
+ * scope is fixed to these, exactly as convergence-panel pins to BOT_DEFAULTS, so it never mutates the shared
+ * bot.* keys (which opening-capture + convergence-panel also read) and never trips the 0066 config-mirror
+ * equality test. The forward run RE-VALIDATES them — an in-sample optimum is not a forward truth. makerRebateRate
+ * stays the conservative fee-saving floor (0); the operator raises it to the confirmed weather tier once
+ * assumption #2 (the realized rebate) is cross-checked against the venue fee schedule. */
+export const MAKER_EXIT_TUNED = {
+  centerHalfWidth: 0,
+  maxEntryPrice: 0.3,
+  depthFloorUsd: 150,
+  tpDeltaPp: 0.12,
+  slDeltaPp: 0.2,
+  makerFillWindowMin: 30,
+  tstopHoursBeforeResolve: 18,
+  makerRebateRate: 0,
+} as const;
+
+/** Build the forward loop's MakerExitCfg = the §9R-locked BOT_DEFAULTS + the maker-exit defaults + the tuned
+ *  overrides, scoped to `cities` (pass BOT_DEFAULTS.cities — the 10-city §9R TRADABLE allowlist). `over` lets a
+ *  caller (a test, or a future operator override read) tighten a single knob without forking the constant. */
+export function makerExitCfg(cities: string[], over: Partial<MakerExitCfg> = {}): MakerExitCfg {
+  return { ...BOT_DEFAULTS, ...MAKER_EXIT_DEFAULTS, ...MAKER_EXIT_TUNED, cities, ...over };
+}
+
 /** One maker-exit market's realized trade (the ledger row the sim prints — entry + exit "like the logged data"). */
 export interface MakerExitTrade {
   eventId: string;
@@ -81,12 +108,30 @@ export interface MakerExitTrade {
   stakeUsd: number;
   netReturn: number;
   executed: boolean;
+  // ── measurement diagnostics (the forward paper loop's deliverable — MAKER-EXIT-PAPER-LOOP-HANDOFF §3) ──
+  /** the chosen forecast-center bucket index (the position's bucket). */
+  bucketIdx: number;
+  /** tick indices (into input.ticks) of the entry fill + the exit — the measurement anchors. */
+  entryTickIndex: number;
+  exitTickIndex: number;
+  /** ticks the resting maker SELL waited before a buyer lifted it (exitTickIndex − entryTickIndex); null on a
+   *  taker exit (assumption #1 — the real maker-fill latency, queue-blind but otherwise true to the live book). */
+  makerFillLatencyTicks: number | null;
+  /** observed top-of-book spread (bestAsk − bestBid) of the chosen bucket at the entry-fill / exit tick — the
+   *  real round-trip cost the taker bracket paid and the maker exit recovers (NaN if a side is missing). */
+  observedEntrySpread: number;
+  observedExitSpread: number;
+  /** the maker rebate rate applied to this trade's maker legs (cfg.makerRebateRate) — recorded so the forward
+   *  run MEASURES the rebate assumption (#2) at whatever tier the operator confirms, not a backtest constant. */
+  rebateRateUsed: number;
 }
 
 const NOT_EXECUTED = (eventId: string, city: string, targetDate: string, reason: string): MakerExitTrade => ({
   eventId, city, targetDate, entryLabel: '', entryAgeH: null, entryPrice: NaN, isMakerEntry: false,
   exitPrice: NaN, exitKind: reason, isMakerExit: false, entryAt: '', exitAt: '', feeUsd: 0, rebateUsd: 0,
   netPnlUsd: 0, stakeUsd: 0, netReturn: NaN, executed: false,
+  bucketIdx: -1, entryTickIndex: -1, exitTickIndex: -1, makerFillLatencyTicks: null,
+  observedEntrySpread: NaN, observedExitSpread: NaN, rebateRateUsed: 0,
 });
 
 /** the F13/F1 ternary stop (the operator-locked −12pp wherever entry>0.12, else the relative floor). */
@@ -98,6 +143,13 @@ function stopOf(entry: number, cfg: OpeningCfg): number {
 function bidAt(tick: EventReplayInput['ticks'][number], idx: number): number | null {
   const b = (Array.isArray(tick.buckets) ? tick.buckets : []).find((x) => x && x.idx === idx);
   return b && fin(b.execBid) ? b.execBid : null;
+}
+
+/** the chosen bucket's observed top-of-book spread (bestAsk − bestBid) at a tick — NaN if either side is missing.
+ *  The measured round-trip cost (the lever the maker exit recovers): logged per position for the forward read. */
+function spreadAt(tick: EventReplayInput['ticks'][number], idx: number): number {
+  const b = (Array.isArray(tick.buckets) ? tick.buckets : []).find((x) => x && x.idx === idx);
+  return b && fin(b.bestAsk) && fin(b.bestBid) ? b.bestAsk - b.bestBid : NaN;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
@@ -117,12 +169,15 @@ export function replayMakerExitEvent(
 
   const ticks = input.ticks;
   const { chosen, fillIdx, fill, isMaker: isMakerEntry } = ef;
+  const bucketIdx = chosen.bucketIdx;
   const shares = fill.shares;
   const stakeUsd = fill.price * fill.shares;
   const entryFee = fill.feeUsd; // 0 on a maker fill, taker fee on the fallback
   const entryAt = ticks[fillIdx]!.capturedAt;
   const entryAgeH = fin(ticks[fillIdx]!.hoursSinceListing) ? ticks[fillIdx]!.hoursSinceListing : null;
-  const rebate = (p: number): number => Math.max(0, cfg.makerRebateRate) * takerFeePerShare(p, 1) * shares; // rate·p·(1−p)·shares
+  const observedEntrySpread = spreadAt(ticks[fillIdx]!, bucketIdx);
+  const rebateRateUsed = Math.max(0, cfg.makerRebateRate);
+  const rebate = (p: number): number => rebateRateUsed * takerFeePerShare(p, 1) * shares; // rate·p·(1−p)·shares
   const entryRebate = isMakerEntry ? rebate(fill.price) : 0;
 
   // the resting maker SELL limit (the take-profit target price) + the protective stop.
@@ -146,49 +201,52 @@ export function replayMakerExitEvent(
   for (let j = fillIdx + 1; j < ticks.length; j++) {
     const t = ticks[j]!;
     const nowMs = new Date(t.capturedAt).getTime();
-    const bid = bidAt(t, chosen.bucketIdx);
+    const bid = bidAt(t, bucketIdx);
     if (fin(bid)) lastBid = bid;
 
     // (a) MAKER take-profit: a buyer lifts the resting sell — fill AT the limit, $0 fee + rebate.
     if (fin(bid) && bid >= exitLimit) {
-      return settle(exitLimit, 'maker_take_profit', true, rebate(exitLimit));
+      return settle(exitLimit, 'maker_take_profit', true, rebate(exitLimit), 0, j);
     }
     // (b) TAKER stop-loss: cut the loss by crossing into the bid (cannot rest above a falling market — §12).
     if (fin(bid) && bid <= slStop) {
       const fee = takerFeePerShare(bid, cfg.takerFeeRate) * shares;
-      return settle(bid, 'taker_stop_loss', false, 0, fee);
+      return settle(bid, 'taker_stop_loss', false, 0, fee, j);
     }
     // (c) HARD time-stop (resolvesAt − N h): flatten as a taker at the realizable bid (or the last seen bid).
     if (nowMs >= timeStopMs) {
       const px = fin(bid) ? bid : lastBid;
       if (px != null) {
         const fee = takerFeePerShare(px, cfg.takerFeeRate) * shares;
-        return settle(px, 'taker_time_stop', false, 0, fee);
+        return settle(px, 'taker_time_stop', false, 0, fee, j);
       }
       break; // no bid to flatten into → settle below
     }
   }
 
   // open at series end (or no bid at the time-stop) → settle at resolution if known, else mark to the last bid.
+  const endIdx = ticks.length - 1;
   if (input.resolution && !input.resolution.gradingMismatch && input.resolution.winnerIdx != null) {
-    const won = input.resolution.winnerIdx === chosen.bucketIdx;
-    return settle(won ? 1 : 0, `resolution_settle:${won ? 'win' : 'lose'}`, false, 0, 0); // redeem — no taker fee
+    const won = input.resolution.winnerIdx === bucketIdx;
+    return settle(won ? 1 : 0, `resolution_settle:${won ? 'win' : 'lose'}`, false, 0, 0, endIdx); // redeem — no taker fee
   }
-  return settle(fin(lastBid) ? lastBid : 0, 'mtm_unresolved', false, 0, 0);
+  return settle(fin(lastBid) ? lastBid : 0, 'mtm_unresolved', false, 0, 0, endIdx);
 
-  function settle(exitPrice: number, exitKind: string, isMakerExit: boolean, exitRebate: number, exitFee = 0): MakerExitTrade {
+  // exitIdx = the tick the exit fired at (the loop index, or the series end for a settle/mtm) — the measurement
+  // anchor: it dates the exit (exitAt), measures the maker-fill latency, and reads the realized exit-side spread.
+  function settle(exitPrice: number, exitKind: string, isMakerExit: boolean, exitRebate: number, exitFee: number, exitIdx: number): MakerExitTrade {
     const feeUsd = entryFee + exitFee;
     const rebateUsd = entryRebate + exitRebate;
     const netPnlUsd = shares * (exitPrice - fill.price) - feeUsd + rebateUsd;
+    const safeExitIdx = exitIdx >= fillIdx && exitIdx < ticks.length ? exitIdx : endIdx;
     return {
       eventId, city, targetDate, entryLabel: chosen.label, entryAgeH, entryPrice: fill.price, isMakerEntry,
-      exitPrice, exitKind, isMakerExit, entryAt, exitAt: lastExitAt(), feeUsd, rebateUsd, netPnlUsd, stakeUsd,
+      exitPrice, exitKind, isMakerExit, entryAt, exitAt: ticks[safeExitIdx]!.capturedAt, feeUsd, rebateUsd, netPnlUsd, stakeUsd,
       netReturn: stakeUsd > 0 ? netPnlUsd / stakeUsd : NaN, executed: true,
+      bucketIdx, entryTickIndex: fillIdx, exitTickIndex: safeExitIdx,
+      makerFillLatencyTicks: isMakerExit ? safeExitIdx - fillIdx : null,
+      observedEntrySpread, observedExitSpread: spreadAt(ticks[safeExitIdx]!, bucketIdx), rebateRateUsed,
     };
-  }
-  // the exit tick's ISO (the last tick we examined); for settle-at-end it is the series end.
-  function lastExitAt(): string {
-    return ticks[ticks.length - 1]!.capturedAt;
   }
 }
 

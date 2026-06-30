@@ -50,6 +50,16 @@ dashboard, TypeScript monorepo (`packages/core|io|trading`, `supabase/functions`
 > §9R-E gate **still KILLs** (17-day city-clustered CI [−1.6%, +11.5%], ciLow just below 0; winFrac + zsMC clear).
 > Tuned: tp 0.12 / sl 0.20 / tstop 18h / chw 0 / depth $150 / makerWindow 30. NOT a GO (three assumptions resolve
 > only forward) → it earns a **live forward test**, not capital. Rail stays DORMANT; live config unchanged.
+>
+> **↳ UPDATE 2026-06-30 (3) — the FORWARD MAKER-EXIT PAPER LOOP is BUILT + tested (operator-deploy-gated; `MAKER-EXIT-PAPER-LOOP-HANDOFF.md` §0a).**
+> Built as the maker-exit twin of `convergence-panel` (re-replay over the live `opening_captures` stream, NOT a
+> per-tick state machine): the pure `replayMakerExitEvent` now records the measurement diagnostics (maker-fill
+> latency, observed entry/exit spreads, rebate rate); new `core/sim/opening-maker-exit-view.ts` (`buildMakerExitView`)
+> + migration `0073` (`maker_exit_panel` snapshot + `dash_maker_exit` + forward `bot_gate_snapshot` writes + a
+> cadence-aware `bot_deadman` `bot.tickStaleMin`) + edge fn `maker-exit-panel` (*/15) + the `/maker-exit` dashboard
+> headlining the **three measured assumptions** (maker-fill rate #1 / realized rebate #2 / days #3). Suite **1772
+> green**, typecheck clean. Operator deploy = apply 0073 + deploy the edge fn; then ≥7 days/≥40 markets accrue → the
+> live §9R-E gate adjudicates. **No capital before a frozen paper PASS.** Boundary intact (Claude never trades/keys).
 
 - Hosted Supabase ref: `lenysiqxihsmxljvyybt` (eu-north-1) · Prod: `weather-edge-two.vercel.app`
 - Canonical docs: **`FINDINGS.md`** (the R&D verdict — start here: is there a tradable edge? no, and why),

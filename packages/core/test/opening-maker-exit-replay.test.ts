@@ -61,6 +61,29 @@ describe('replayMakerExitEvent', () => {
     expect(t.netReturn).toBeGreaterThan(0);
   });
 
+  it('records the measurement diagnostics (bucket, tick indices, maker-fill latency, spreads, rebate rate)', () => {
+    const ticks = [...entryTicks(), tick('2026-06-20T01:00:00Z', 1, { execBid: 0.45, execAsk: 0.46 })];
+    const t = replayMakerExitEvent(input(ticks), cfg({ tpDeltaPp: 0.25, makerRebateRate: 0.03 }), RESOLVE_MS);
+    expect(t.exitKind).toBe('maker_take_profit');
+    expect(t.bucketIdx).toBe(1); // the seeded center bucket
+    expect(t.entryTickIndex).toBe(1); // fills on the 2nd tick (the ask runs through the maker limit)
+    expect(t.exitTickIndex).toBe(2); // the take-profit tick
+    expect(t.makerFillLatencyTicks).toBe(1); // exit − entry, a MAKER exit so latency is recorded
+    expect(t.exitAt).toBe('2026-06-20T01:00:00Z'); // the ACTUAL exit tick, not the series end
+    expect(t.rebateRateUsed).toBe(0.03);
+    expect(Number.isFinite(t.observedEntrySpread)).toBe(true);
+    expect(t.observedExitSpread).toBeCloseTo(0.16 - 0.14, 9); // bestAsk − bestBid at the exit tick (book defaults)
+  });
+
+  it('maker-fill latency is null on a taker exit (the adverse-selection read)', () => {
+    const ticks = [...entryTicks(), tick('2026-06-20T01:00:00Z', 1, { execBid: 0.04, execAsk: 0.05 })];
+    const t = replayMakerExitEvent(input(ticks), cfg({ tpDeltaPp: 0.25, slDeltaPp: 0.06 }), RESOLVE_MS);
+    expect(t.exitKind).toBe('taker_stop_loss');
+    expect(t.makerFillLatencyTicks).toBeNull();
+    expect(t.exitTickIndex).toBe(2);
+    expect(t.rebateRateUsed).toBe(0); // MAKER_EXIT_DEFAULTS.makerRebateRate
+  });
+
   it('a maker rebate is credited on maker legs only', () => {
     const ticks = [...entryTicks(), tick('2026-06-20T01:00:00Z', 1, { execBid: 0.45, execAsk: 0.46 })];
     const noReb = replayMakerExitEvent(input(ticks), cfg({ tpDeltaPp: 0.25, makerRebateRate: 0 }), RESOLVE_MS);

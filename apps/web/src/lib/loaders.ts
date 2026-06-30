@@ -30,6 +30,7 @@ import type {
   EdgeRow,
   EntryWatchResult,
   LockedBuy,
+  MakerExitView,
   ReplicaStrategy,
   ReplicaSummary,
 } from '@weather-edge/core';
@@ -1825,4 +1826,49 @@ export async function getConvergence(db: WebDb): Promise<ConvergenceFeed | null>
   }
   if (!v) return null;
   return { generatedAt: v.generatedAt ?? null, view: v.view ?? null };
+}
+
+/** The persisted forward §9R-E verdict (the gate-of-record bot_deadman watches), surfaced in the page header. */
+export interface MakerExitGateSnapshot {
+  computedAt: string | null;
+  label: string;
+  nMarkets: number | null;
+  nCities: number | null;
+  nDistinctDays: number | null;
+  winFrac: number | null;
+  meanNetReturn: number | null;
+  ciLow: number | null;
+  ciHigh: number | null;
+  zeroSkillPassRate: number | null;
+  makerExitFrac: number | null;
+  realizedRebateUsd: number | null;
+  totalNetUsd: number | null;
+  nOpen: number | null;
+  reason: string | null;
+}
+
+export interface MakerExitFeed {
+  /** when the maker-exit-panel Edge tick produced the snapshot (null if none captured yet). */
+  generatedAt: string | null;
+  /** the computed view (entries / the three measured assumptions / money tracker / gate); null until the first tick. */
+  view: MakerExitView | null;
+  /** the latest persisted forward verdict row (separate from the in-view gate; null until the first gate write). */
+  gateSnapshot: MakerExitGateSnapshot | null;
+}
+
+/**
+ * The forward maker-exit paper loop (dash_maker_exit, 0073) for /maker-exit. The page reads the latest snapshot
+ * the maker-exit-panel Edge tick computed (the maker-exit replay view: logged entries, the three measured
+ * assumptions — maker-fill rate / realized rebate / days — the FICTIVE money tracker, and the §9R-E gate).
+ * Degrades to null (not a thrown 500) if the RPC errors so the page can deploy ahead of the 0073 RPC.
+ */
+export async function getMakerExit(db: WebDb): Promise<MakerExitFeed | null> {
+  let v: MakerExitFeed | null;
+  try {
+    v = await one<MakerExitFeed>(db, 'dash_maker_exit', {});
+  } catch {
+    return null;
+  }
+  if (!v) return null;
+  return { generatedAt: v.generatedAt ?? null, view: v.view ?? null, gateSnapshot: v.gateSnapshot ?? null };
 }

@@ -15,6 +15,7 @@ export const dynamic = 'force-dynamic';
 // nav but their routes are intentionally kept reachable by direct URL (non-destructive — operator's call).
 const NAV = [
   ['/convergence', 'convergence'], // the 12th signal — opening-convergence forward-paper overview (dash_convergence, 0069)
+  ['/maker-exit', 'maker-exit'], // the maker-exit variant forward-paper loop — the first +EV config (dash_maker_exit, 0073)
   ['/amsterdam', 'amsterdam'], // the one-accurate-city paper-trade head-to-head (analytics deliverable)
   ['/paper-trade', 'paper-trade'], // the multi-city generalization — Singapore + Karachi (dash_city_sim, 0070)
   ['/whaletracker', 'whales'], // ≥$100k Polymarket whale-trade tracker (analytics; whale-watch feed, 0055)

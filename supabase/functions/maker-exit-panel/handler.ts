@@ -1,0 +1,127 @@
+/**
+ * maker-exit-panel — the 15-min forward MAKER-EXIT paper view tick (migration 0073).
+ *
+ * The maker-exit twin of convergence-panel (0069). One idempotent run:
+ *   1. pull the RAW fresh-allowlist capture series + the venue resolution map PER CITY (convergence_capture_inputs,
+ *      service-role — the same inputs the taker bracket view uses; now carrying bestBid for the spread diagnostic).
+ *   2. run the PURE maker-exit replay view (buildMakerExitView → replayMakerExitPanel over the §9R-locked +
+ *      tuned MAKER_EXIT config) — entries, the three measured assumptions, the fictive money tracker, the gate.
+ *   3. store the small view (record_maker_exit_panel) — the /maker-exit page reads only that snapshot.
+ *   4. persist the §9R-E verdict to bot_gate_snapshot (source='forward') so bot_deadman_check watches the gate
+ *      clock + the project keeps ONE gate-of-record, and write a liveness tick (record_bot_tick).
+ *
+ * Pinned to the tuned MAKER_EXIT config (makerExitCfg = BOT_DEFAULTS §9R 10-city TRADABLE allowlist + the §5
+ * sweep optimum: tp 0.12 / sl 0.20 / tstop 18h / chw 0 / depth $150 / makerWindow 30 / rebate 0) — INTENTIONALLY
+ * NOT config-driven, exactly like convergence-panel pins to BOT_DEFAULTS, so the page's numbers match the
+ * authoritative scorer scope and the loop never mutates the shared bot.* keys. NOT trading — read-only analytics;
+ * the bot rail stays paper/DORMANT (no capital until a frozen paper PASS + an operator decision). A capture gap
+ * just yields a smaller/empty view, never a failed job; the per-city fetch-error count is surfaced in the view.
+ */
+import type { JobCtx, JobStats } from '../_shared/runJob.ts';
+import {
+  BOT_DEFAULTS,
+  buildMakerExitView,
+  makerExitCfg,
+  type RawCaptureRow,
+  type RawResolution,
+} from '../../../packages/core/src/index.ts';
+
+/** the look-back window — wide enough for the §9R-E gate (≥40 markets / ≥7 days) to accrue. */
+const PANEL_DAYS = 21;
+
+export interface MakerExitPanelDeps {
+  now: Date;
+}
+
+interface CaptureInputs {
+  captures: RawCaptureRow[];
+  resolutions: RawResolution[];
+}
+
+export async function makerExitPanel(ctx: JobCtx, deps: MakerExitPanelDeps): Promise<JobStats> {
+  const { db, log } = ctx;
+
+  // the tuned maker-exit config, pinned to the §9R 10-city TRADABLE allowlist (NOT the live bot.cities capture
+  // universe) — same scoping discipline as convergence-panel, so the page matches the authoritative scorer.
+  const cfg = makerExitCfg(BOT_DEFAULTS.cities);
+
+  // 1) raw inputs (trimmed buckets, +bestBid) for the fresh-allowlist window — fetched PER CITY to stay under the
+  //    8s PostgREST statement cap (the whole-allowlist build exceeds it); merge the per-city results.
+  const captures: RawCaptureRow[] = [];
+  const resolutions: RawResolution[] = [];
+  let cityErrors = 0;
+  for (const city of cfg.cities) {
+    try {
+      const r = await db.rpc<{ convergence_capture_inputs: CaptureInputs }>('convergence_capture_inputs', {
+        p_days: PANEL_DAYS,
+        p_cities: [city],
+      });
+      const inp = r[0]?.convergence_capture_inputs ?? { captures: [], resolutions: [] };
+      if (Array.isArray(inp.captures)) captures.push(...inp.captures);
+      if (Array.isArray(inp.resolutions)) resolutions.push(...inp.resolutions);
+    } catch (e) {
+      cityErrors++;
+      log('city inputs fetch failed (non-fatal)', { city, error: e instanceof Error ? e.message : String(e) });
+    }
+  }
+
+  // 2) the pure maker-exit view (entries / 3 measured assumptions / fictive money / §9R-E gate). cityErrors is
+  //    threaded in so the page can flag when allowlist cities were dropped this tick (a silent gate undercount).
+  const view = { ...buildMakerExitView(captures, resolutions, cfg), days: PANEL_DAYS, cityErrors };
+
+  // 3) store the small snapshot.
+  const w = await db.rpc<{ record_maker_exit_panel: number }>('record_maker_exit_panel', { p_view: view });
+  const snapshotId = Number(w[0]?.record_maker_exit_panel ?? 0);
+
+  // 4) persist the §9R-E verdict (the gate-of-record bot_deadman watches) + a liveness tick. Best-effort — a
+  //    snapshot already landed; never fail the job on the bookkeeping writes.
+  try {
+    await db.rpc('record_bot_gate_snapshot', {
+      p_payload: {
+        mode: 'paper',
+        source: 'forward',
+        label: view.gate.label,
+        nMarkets: view.gate.nMarkets,
+        nCities: view.gate.nCities,
+        nDistinctDays: view.gate.nDistinctDays,
+        winFrac: view.gate.winFrac,
+        meanNetReturn: view.gate.meanNetReturn,
+        ciLow: view.gate.ciLow,
+        ciHigh: view.gate.ciHigh,
+        zeroSkillPassRate: view.gate.zeroSkillPassRate,
+        reason: view.gate.reason,
+        makerExitFrac: view.assumptions.makerFillRate,
+        realizedRebateUsd: view.assumptions.realizedRebateUsd,
+        totalNetUsd: view.money.realizedPnlUsd,
+        nOpen: view.money.nOpen,
+      },
+    });
+    await db.rpc('record_bot_tick', {
+      p_payload: {
+        mode: 'paper',
+        ran: true,
+        placed: view.money.nEntries,
+        filled: view.money.nEntries,
+        exited: view.money.nRealized,
+        gateReason: view.gate.label,
+      },
+    });
+  } catch (e) {
+    log('gate-snapshot / tick write failed (non-fatal)', { error: e instanceof Error ? e.message : String(e) });
+  }
+
+  const stats: JobStats = {
+    asOf: deps.now.toISOString(),
+    cityErrors,
+    captureRows: captures.length,
+    freshEvents: view.nFreshEvents,
+    entries: view.entries.length,
+    nMarkets: view.gate.nMarkets,
+    makerFillRate: view.assumptions.makerFillRate,
+    realizedRebateUsd: view.assumptions.realizedRebateUsd,
+    label: view.gate.label,
+    snapshotId,
+  };
+  log('maker-exit-panel complete', stats);
+  return stats;
+}

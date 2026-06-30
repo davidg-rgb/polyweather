@@ -255,6 +255,12 @@ describe('migrations 0001–0010', () => {
       // discards). A DEDICATED append-only table — NOT market_snapshots, which ops_downsample would thin to
       // 1/day for >30-day-old rows. RLS-enabled, operator-read; no cron (count stays 28).
       '0072_market_price_history.sql',
+      // 0073 = the forward MAKER-EXIT paper loop (MAKER-EXIT-PAPER-LOOP-HANDOFF.md): bestBid added to
+      // convergence_capture_inputs (the maker-exit spread diagnostic) + maker_exit_panel snapshot table +
+      // record_maker_exit_panel / dash_maker_exit (operator read, added to WEB_AUTHENTICATED below) +
+      // record_bot_gate_snapshot / record_bot_tick + the cadence-aware bot_deadman tick threshold (bot.tickStaleMin)
+      // + the maker-exit-panel cron at */15 (count 28 → 29). NOT trading — analytics; rail paper/DORMANT.
+      '0073_maker_exit_paper_loop.sql',
     ]);
   });
 });
@@ -720,6 +726,7 @@ describe('0034: internal-RPC lockdown — anon/authenticated revoked except the 
     'dash_data',  // 0065: /data forecast-accuracy-by-market operator read
     'dash_convergence',  // 0069: /convergence opening-convergence forward-paper overview operator read
     'dash_city_sim',  // 0070: /paper-trade multi-city paper-trade head-to-head operator read
+    'dash_maker_exit',  // 0073: /maker-exit forward maker-exit paper loop operator read
     'go_live_gate_inputs',
     'operator_halt', 'operator_resume', 'operator_update_config', 'operator_verify_station',
     'operator_set_champion', 'operator_skip_bet', 'operator_manual_bet',
@@ -852,8 +859,10 @@ describe('pg_cron registrations (§7.22, W11)', () => {
       'convergence-panel':        '*/15 * * * *',
       // 0070: multi-city paper-trade daily place + grade (http_post edge-fn job; W11-checked).
       'city-paper-trade':         '0 10 * * *',
+      // 0073: forward maker-exit paper view snapshot (http_post edge-fn job; W11-checked).
+      'maker-exit-panel':         '*/15 * * * *',
     };
-    expect(jobs.length).toBe(28);
+    expect(jobs.length).toBe(29);
     for (const j of jobs) {
       expect(j.schedule, `schedule for ${j.jobname}`).toBe(expected[j.jobname]);
     }

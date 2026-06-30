@@ -7,10 +7,55 @@
 > No capital, ever, until a frozen paper PASS. Claude builds the software; the **operator** funds + holds the
 > signing key; Claude never places a trade or touches credentials.
 
-Status: **BUILD-READY.** The decision core (`core/sim/opening-maker-exit-replay.ts`), the capture layer
-(`opening-capture` edge fn, LIVE), the bot tables (migration 0066, 0 rows — created, never used), and the gate
-(`openingVerdict`) all exist. This is the deferred **Phase-2 loop** of `ARCHITECTURE-OPENING-CONVERGENCE.md`,
-specialized to the maker-exit lifecycle and now **justified by a measured positive expectation**.
+Status: **BUILT (2026-06-30) — tested, operator-deploy-gated.** The forward loop is built as the maker-exit twin
+of `convergence-panel` (the perf-proven re-replay-over-accumulated-captures design, NOT a fragile per-tick state
+machine — see §0b): it reuses the live capture stream + the tested `replayMakerExitPanel` engine wholesale and
+persists the §9R-E verdict to `bot_gate_snapshot` (the gate the deadman already watches). Full suite **1772
+green**, typecheck clean. The decision core, the capture layer (`opening-capture`, LIVE), and the gate all
+pre-existed; this loop is the thin shell + the measurement columns + the dashboard over them.
+
+---
+
+## 0a. BUILT — what shipped + the operator deploy steps (read first)
+
+**Shipped (committed, not deployed):**
+- **Pure core (tested):** `core/sim/opening-maker-exit-replay.ts` — `MakerExitTrade` extended with the measurement
+  diagnostics (`bucketIdx`, `entryTickIndex`/`exitTickIndex`, `makerFillLatencyTicks`, `observedEntrySpread`/
+  `observedExitSpread`, `rebateRateUsed`) computed in `replayMakerExitEvent`; `MAKER_EXIT_TUNED` + `makerExitCfg()`
+  pin the §5 params in CODE (so the loop never mutates the shared `bot.*` config). `core/sim/opening-maker-exit-view.ts`
+  — `buildMakerExitView` (the maker-exit twin of `buildConvergenceView`): entries + the THREE measured assumptions +
+  the fictive money tracker + the §9R-E gate, reusing `buildEvents` + `replayMakerExitPanel`. +28 tests.
+- **Migration `0073_maker_exit_paper_loop.sql`:** `bestBid` added to `convergence_capture_inputs` (the spread
+  diagnostic reads it); `maker_exit_panel` snapshot table + `record_maker_exit_panel`; additive maker-exit
+  aggregate columns on `bot_gate_snapshot` + `record_bot_gate_snapshot`; `record_bot_tick`; `dash_maker_exit`
+  (operator read); cadence-aware `bot_deadman_check` (`bot.tickStaleMin`) so the 15-min loop's tick log doesn't
+  false-alarm; the `maker-exit-panel` cron (*/15). +5 pglite-twin tests.
+- **Edge fn `supabase/functions/maker-exit-panel/`** (`index` + `handler`) — pages the fresh-allowlist captures
+  per city, runs `buildMakerExitView`, writes the snapshot + the forward gate snapshot + a tick. Registered in
+  `config.toml` (`verify_jwt = false`).
+- **Dashboard `/maker-exit`** — page + `getMakerExit` loader + nav entry, headlining the three measured assumptions.
+
+**Operator deploy steps (the boundary §6 stays intact — paper-only, no key, no capital):**
+1. Apply migration 0073: `npx --no-install supabase db push --use-api --project-ref lenysiqxihsmxljvyybt` (or via
+   the Supabase MCP `apply_migration`). Adds the snapshot table/RPCs/cron + the deadman update. Idempotent.
+2. Deploy the edge fn: `npx --no-install supabase functions deploy maker-exit-panel --use-api --project-ref lenysiqxihsmxljvyybt`.
+   The `*/15` cron (added by 0073) then drives it; until deploy the cron POST 404s harmlessly.
+3. Vercel auto-rebuilds on push → `/maker-exit` goes live (degrades to a "deploying" message until the first tick).
+4. Let it accrue ≥7 distinct target days / ≥40 markets (~1–3 weeks), then read `/maker-exit` (or `dash_maker_exit`)
+   for the forward §9R-E verdict. **PASS + an explicit operator GO → the separate small-real step; else KILL →
+   FINDINGS.md, rail DORMANT.** No capital before a frozen paper PASS.
+
+## 0b. Design note — why re-replay, not a per-tick state machine
+
+The literal handoff §3 reads as a stateful per-tick position manager, but `replayMakerExitEvent` replays an
+event's WHOLE accumulated tick series at once and returns a completed trade — so the faithful, lower-risk build is
+the **re-replay design**: `opening-capture` already accumulates the full forward two-sided book; each 15-min tick
+re-runs the tested `replayMakerExitPanel` over the (downsampled) fresh-allowlist captures and persists. This
+measures all three assumptions IDENTICALLY (the captures are the real forward book; the fill model is the same
+pure function; days accrue as captures grow) **without** prematurely building the live-execution state machine
+(correctly deferred to the post-PASS live step per §6). It also dodges the exact bug class that bit the
+bracket-exit replay (an impure stateful shell hauling the whole series). The gate is computed over the persisted
+forward panel; the replay window stays bounded (still-open events close within ~1–2 days given the 18h time-stop).
 
 ---
 

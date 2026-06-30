@@ -86,3 +86,6 @@ verify_jwt = false
 
 [functions.convergence-panel]
 verify_jwt = false
+
+[functions.maker-exit-panel]
+verify_jwt = false
