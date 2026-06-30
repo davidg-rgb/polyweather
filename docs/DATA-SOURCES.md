@@ -22,15 +22,19 @@ re-asserts every shape live (run before deploys; 12/12 PASS 2026-06-11).
   descend: the BEST quote is the LAST element of each array** (live-verified);
   `normalizeBook` reorders best-first. Carries hash, tick_size (0.01 AND 0.001
   observed), min_order_size, neg_risk.
-- `GET clob.polymarket.com/prices-history?market=…&interval=max&fidelity=10`
-  → `{history: [{t: epoch_seconds, p}]}` (`parsePricesHistory`). Old markets
-  may serve an empty history. `fidelity` is the resolution in MINUTES (min 1);
-  `p` is a **single price (implied prob) per bucket — NO bid/ask or depth**. Rate
-  limits: book 1500/10s, prices-history 1000/10s.
+- `GET clob.polymarket.com/prices-history?market=…` → `{history: [{t: epoch_seconds, p}]}`
+  (`parsePricesHistory`). **TWO query forms, and the difference is load-bearing (VERIFIED
+  live 2026-06-30):** `interval=max&fidelity=N` returns an EMPTY history for markets older
+  than ~2 weeks; the explicit `startTs={createdAt}&endTs={endDate}&fidelity=N` form returns
+  the FULL series at ANY age. So historical backfill/pulls MUST use startTs/endTs (live polling
+  of fresh markets can use interval=max). `fidelity` is the resolution in MINUTES (min 1;
+  ~3000 pts/bucket at fidelity=1 over a 2–3-day market life); `p` is a **single price (implied
+  prob) per bucket — NO bid/ask or depth**. Rate limits: book 1500/10s, prices-history 1000/10s.
 
 ### Historical reconstruction (`scripts/backfill-market-history.ts`)
 - Enumerate via Gamma `events?tag_id=104596&closed=true` (paginate). Each closed
-  event → 11 bucket YES tokens → `prices-history?interval=max`.
+  event → its bucket YES tokens (7 old / 11 new) → `prices-history?startTs/endTs`
+  over the event's [createdAt, endDate] life (NOT interval=max — empty for old markets).
 - **How far back (VERIFIED live 2026-06-30):** the `closed=true` list floors at
   **~2025-12-30** (atlanta/dallas/nyc the earliest, via `order=endDate&ascending=true`;
   51 cities, the original 8 at Dec-2025, the rest added Feb–Apr 2026). Gamma **422s past
@@ -56,8 +60,8 @@ re-asserts every shape live (run before deploys; 12/12 PASS 2026-06-11).
   NOTE: pre-system dates have NO historical forecasts, so the forecast-vs-market backtest
   can't run on them — the value is the standalone implied-prob archive (convergence /
   efficiency study of the price path).
-- **Granularity:** daily-temp markets live ~2–3 days, so `interval=max` at
-  `fidelity=1` reconstructs the full minute path per bucket. Default backfill keeps
+- **Granularity:** daily-temp markets live ~2–3 days, so `startTs/endTs` at
+  `fidelity=1` reconstructs the full minute path per bucket (~3000 pts). Default backfill keeps
   only the daily last-point + the lead-1/0 consensus cutoffs (C2 no-look-ahead);
   `--full-series [--fidelity N]` persists the COMPLETE per-bucket series →
   `market_price_history` (0072) — a dedicated APPEND-ONLY archive, NOT
@@ -65,6 +69,32 @@ re-asserts every shape live (run before deploys; 12/12 PASS 2026-06-11).
   point density = trading activity (thin markets / tails are sparse), and `p` is a
   single price, not executable odds — true bid/ask/depth exists only in the forward
   live captures (`market_snapshots` poll / `opening_captures`).
+
+### Local research archive + analysis stack (`scripts/research/`, NO DB)
+The DB backfill above keeps only thinned points; for convergence / efficiency study of the
+FULL minute price path we pull a standalone local archive (gitignored, `scripts/research/out/`):
+- `pull-market-history.ts` — per-city `series_id` enumeration → `prices-history?startTs/endTs`
+  (the explicit-window form, NOT `interval=max`, which serves EMPTY for markets older than ~2wk —
+  verified live 2026-06-30). Writes one JSON per event:
+  `out/market-history/{city}/{date}__{eventId}.json` (resumable; skips files already on disk).
+  `fidelity` is MINUTES (1 ≈ per-minute, ~3000 pts/bucket over a 2–3-day market life).
+- `flatten-market-history.ts` — collapses the per-event JSON into ONE tidy long-format
+  `out/market-history-flat.csv.gz` (one row per price point; streaming + backpressure-aware, so
+  the ~247M-row full set never lands in RAM). Columns:
+  `city,target_date,event_id,end_ts,bucket_idx,label,resolved_outcome,t,p` (`end_ts` = resolution
+  epoch → `secs_to_resolution = end_ts − t`; `t` = point epoch s; `p` = implied prob of this
+  bucket's YES). UTF-8 (Node default; `label` carries `°F`).
+- `csv-to-parquet.py` — converts that csv.gz → Parquet for repeated analysis / model training.
+  Parquet wins when ONE large file is read MANY times: columnar (a pass reads only the columns it
+  needs), per-column compression + dictionary encoding, and row-group / predicate pushdown
+  (`filter city='london'` skips other cities' bytes). A `.csv.gz` must be fully re-decompressed +
+  re-parsed every pass. Bounded-memory (streams chunks → `ParquetWriter`); `--partition city`
+  writes a Hive dataset (`city=london/…`, auto-detected by DuckDB/Polars/Spark/pyarrow);
+  `--p32` stores `p` as float32 (half that column, ML-feature precision).
+- **The parquet engine** is `pyarrow` (the backend pandas' `read_parquet`/`to_parquet` require;
+  also the Polars/DuckDB interop layer + `pyarrow.dataset` out-of-core reads). Installed on the
+  dev box (`pyarrow 24.0.0`, Python 3.13) via `python -m pip install pyarrow`. The TS scripts have
+  no parquet dep — conversion + analysis are Python-side, by design.
 
 ## Open-Meteo (free tier; paid key switches to `customer-` hosts)
 

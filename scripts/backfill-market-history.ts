@@ -4,7 +4,8 @@
  *
  * Gamma closed events for tag 104596 (paginated) → parseGammaEvent →
  * market_events/market_buckets (closed, resolved winner from outcomePrices) →
- * per bucket YES token: CLOB prices-history (interval=max) →
+ * per bucket YES token: CLOB prices-history (startTs/endTs over the event's [createdAt,endDate] life —
+ *   NOT interval=max, which returns an empty history for markets older than ~2 weeks) →
  *   1. market_snapshots at DAILY granularity (last point per UTC day), and
  *   2. market_consensus rows AT THE ADR-16 CUTOFFS ONLY — for each lead in
  *      {1, 0}, the last price point at-or-before cutoff = startUtc − lead·24h.
@@ -90,8 +91,12 @@ export interface MarketHistoryDeps {
   db: Db;
   /** One Gamma closed-events page (tag 104596, closed=true). */
   fetchPage: (offset: number) => Promise<RawGammaEvent[]>;
-  /** CLOB GET /prices-history?market={token}&interval=max for a YES token. */
-  fetchPricesHistory: (tokenId: string) => Promise<unknown>;
+  /**
+   * CLOB GET /prices-history for a YES token. `window` (the event's [createdAt, endDate]) selects the
+   * startTs/endTs form — REQUIRED for a historical backfill: interval=max returns an EMPTY history for
+   * markets older than ~2 weeks (verified live), so without a window old events would archive nothing.
+   */
+  fetchPricesHistory: (tokenId: string, window?: { startTs: number; endTs: number }) => Promise<unknown>;
   log: (msg: string) => void;
   now: () => Date;
 }
@@ -428,11 +433,24 @@ export async function backfillMarketHistory(
           bucketIds.push(row!.id);
         }
 
-        // prices-history per bucket → daily snapshots + per-bucket point series
+        // prices-history per bucket → daily snapshots + per-bucket point series.
+        // The CLOB `interval=max` form returns an EMPTY history for markets older than ~2 weeks (verified
+        // live 2026-06-30) — fatal for a HISTORICAL backfill, where every event is old. So pass each event's
+        // [createdAt, endDate] window and query startTs/endTs, which returns the full series at any age.
+        const endIso = ev.closedTime ?? ev.endDate ?? null;
+        const endTs = endIso ? Math.floor(Date.parse(endIso) / 1000) : undefined;
+        const startTs = parsed.createdAt
+          ? Math.floor(Date.parse(parsed.createdAt) / 1000)
+          : endTs !== undefined
+            ? endTs - 7 * 86400 // generous floor: daily markets live ≤ ~4d; an early startTs just starts at first trade
+            : undefined;
+        const window =
+          startTs !== undefined && endTs !== undefined && startTs < endTs ? { startTs, endTs } : undefined;
+
         const series: PricePoint[][] = [];
         for (let i = 0; i < parsed.buckets.length; i++) {
           const points = parsePricesHistory(
-            await deps.fetchPricesHistory(parsed.buckets[i]!.tokenYes),
+            await deps.fetchPricesHistory(parsed.buckets[i]!.tokenYes, window),
           );
           stats.historyCalls++;
           series.push(points);
@@ -520,9 +538,11 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     ) as Promise<RawGammaEvent[]>;
   // --full-series defaults to 1-min fidelity (the archive's whole point); other modes keep the 10-min default.
   const fidelity = values.fidelity ? Number(values.fidelity) : values['full-series'] ? 1 : 10;
-  const fetchPricesHistory = (tokenId: string) =>
+  const fetchPricesHistory = (tokenId: string, window?: { startTs: number; endTs: number }) =>
     ioFetchJson(
-      `https://clob.polymarket.com/prices-history?market=${tokenId}&interval=max&fidelity=${fidelity}`,
+      window
+        ? `https://clob.polymarket.com/prices-history?market=${tokenId}&startTs=${window.startTs}&endTs=${window.endTs}&fidelity=${fidelity}`
+        : `https://clob.polymarket.com/prices-history?market=${tokenId}&interval=max&fidelity=${fidelity}`,
       { headers },
     );
 

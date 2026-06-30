@@ -264,6 +264,32 @@ describe('backfill-market-history (§6.22, C2)', () => {
     const cnt2 = (await rows<{ n: number }>(db, `select count(*)::int as n from market_price_history`))[0]!.n;
     expect(cnt2).toBe(expected);
   });
+
+  it('requests prices-history by the event [createdAt, endDate] window — never bare interval=max (old-event regression)', async () => {
+    // interval=max returns an EMPTY history for markets older than ~2 weeks, so a historical backfill MUST
+    // query startTs/endTs. Lock that in: every fetchPricesHistory call must carry the event's time window.
+    const windows: Array<{ startTs: number; endTs: number } | undefined> = [];
+    const stats = await backfillMarketHistory(
+      { refetch: true },
+      {
+        db: scriptDb,
+        fetchPage: async (offset: number) => (offset === 0 ? [resolvedEvent()] : []),
+        fetchPricesHistory: async (tokenId: string, window?: { startTs: number; endTs: number }) => {
+          windows.push(window);
+          return routeHistory(tokenId);
+        },
+        log: () => {},
+        now: () => NOW,
+      },
+    );
+    expect(stats.historyCalls).toBe(11);
+    expect(windows).toHaveLength(11);
+    expect(windows.every((w) => w !== undefined)).toBe(true); // NOT undefined → never the interval=max branch
+    const w = windows[0]!;
+    expect(w.endTs).toBe(Math.floor(Date.parse('2026-06-10T05:30:49Z') / 1000)); // closedTime wins over endDate
+    expect(w.startTs).toBe(Math.floor(Date.parse('2026-06-08T02:01:53.543794Z') / 1000)); // createdAt
+    expect(w.startTs).toBeLessThan(w.endTs);
+  });
 });
 
 describe('scanCityFloors — the per-city closed-market date floor (read-only)', () => {
