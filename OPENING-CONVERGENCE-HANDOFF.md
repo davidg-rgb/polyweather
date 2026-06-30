@@ -1,5 +1,13 @@
 # OPENING-CONVERGENCE — Build Handoff
 
+> **↳ 2026-06-30 — TUNED ON 708 EVENTS → KILL at executable spread (see `CONVERGENCE-TUNING.md`).** The bracket
+> thesis was tuned on the price-history archive joined to the bot's real `house_gaussian` seed (708 events, the
+> live n≈2 was un-gradeable). No entry/exit threshold set clears the frozen §9R-E gate out-of-sample: the
+> convergence price-path edge is REAL (+8.2% frictionless) but the **taker round-trip spread eats it** (breakeven
+> ×0.70 of the real spread) — a **maker edge, not a taker edge**. Two findings carried forward: a **maker-exit**
+> variant is the one open lever (must beat the §12 adverse-selection wall), and the **calibrated `house_gaussian`
+> out-selects `ensemble_raw`** for bracketing the winner (73.9% vs 52.8%). Rail stays DORMANT; live config unchanged.
+
 > **Status: GREENLIT FOR BUILD (operator decision, 2026-06-27).** The first signal in twelve that did
 > **not** die at its cheap gate. This handoff is the baseline requirements doc for next session: we open
 > with the alignment questions (§9), then run the **`architect` skill** with this file as input to produce

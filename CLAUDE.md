@@ -31,6 +31,15 @@ dashboard, TypeScript monorepo (`packages/core|io|trading`, `supabase/functions`
 > efficiency findings — it is the single exception that earned a real test. The other eleven signals stay dead.
 > **Boundary (NON-NEGOTIABLE): Claude builds the software; the operator funds a dedicated wallet + holds the
 > signing key (`.env.local`, never in chat); Claude never places a trade or touches credentials.**
+>
+> **↳ UPDATE 2026-06-30 — the bracket thesis is now TUNED on 708 events → KILL at executable spread (`CONVERGENCE-TUNING.md`).**
+> The starved live panel (n≈2) was replaced by the price-history archive joined to the bot's real `house_gaussian`
+> seed (708 events / 45 cities / 17 days), run through the same engine across an entry/exit grid validated
+> out-of-sample. No threshold set clears §9R-E: the convergence price-path edge is REAL (+8.2% frictionless) but
+> the **taker round-trip spread consumes it** (breakeven ×0.70 of the real spread) — a **maker edge, not a taker
+> edge**. Two carry-forwards: a **maker-exit** variant is the one open lever (must beat the §12 adverse-selection
+> wall), and the **calibrated `house_gaussian` out-selects `ensemble_raw`** for bracketing the winner (73.9% vs
+> 52.8%). Rail stays DORMANT; live config unchanged — the Phase-0.5 spike on real-book depth is still the live gate.
 
 - Hosted Supabase ref: `lenysiqxihsmxljvyybt` (eu-north-1) · Prod: `weather-edge-two.vercel.app`
 - Canonical docs: **`FINDINGS.md`** (the R&D verdict — start here: is there a tradable edge? no, and why),

@@ -201,6 +201,24 @@ genuinely out-of-market information.
 > n=2/1-day is noise and the §9R-E gate refuses a verdict. Verdict accrues with capture (~**2026-07-06**, the hold
 > scorer's horizon). Rail DORMANT; no capital until the frozen §9R-E net-profit gate PASSes.
 
+> **↳ NEW 2026-06-30 — the bracket-exit thesis is TUNED + measured on 708 events (not n=2) → KILL at executable
+> spread; the convergence edge is a MAKER edge.** The forward bracket screen was starved (n≈2), so the local
+> price-history archive (6 275 events / ~238 M points) was joined to the bot's **real** archived `house_gaussian`
+> seed + the true resolution → a **708-event / 45-city / 17-day** resolved panel, run through the SAME pure engine
+> (`tune-convergence.ts` + `core/sim/history-replay-ingest.ts`; the mid-only archive's two-sided book is
+> SYNTHESIZED from the mid via `CALIBRATED_BOOK`, fit from the live real books, and SWEPT). Across an entry×exit
+> grid validated **out-of-sample** (train/test by date), **no threshold set clears the frozen §9R-E gate**: the
+> best OOS cell nets **−2.6%** (full panel −3.0%, KILL; the 10-city allowlist cut −5.0%). The decisive number is
+> the **spread sweep** — the price-path edge is REAL (**+8.2%** at a frictionless book, PASS) but the **taker
+> round-trip spread + fees consume it**: **breakeven at ×0.70 of the real spread**. The convergence-created spread
+> is captured by the maker who quotes it, not the taker who crosses it — the **same efficiency wall** as the other
+> eleven, now on 708 events. TP/SL/time-stop are not the lever (all KILL; tight stops are worse). **Two new
+> findings:** (1) the edge survives only if you recover ≥30% of the spread → a **maker-exit** variant is the one
+> open lever, but it must beat the §12 maker-spray **adverse-selection** wall (motivated hypothesis, not a GO);
+> (2) for SELECTION, the calibrated `house_gaussian` brackets the winner **73.9%** vs the raw ensemble's **52.8%**
+> (chw1) — i.e. the convergence seed should be the calibrated forecast, not `ensemble_raw` (a correction to the
+> 2026-06-29 split, for the *selection* objective). Rail stays DORMANT; live config unchanged. **`CONVERGENCE-TUNING.md`.**
+
 ---
 
 ## The question, precisely

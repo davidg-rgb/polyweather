@@ -36,6 +36,7 @@ export * from './sim/badatmath-replica.ts';
 export * from './sim/opening-convergence.ts';
 export * from './sim/opening-bracket-replay.ts';
 export * from './sim/opening-bracket-ingest.ts';
+export * from './sim/history-replay-ingest.ts';
 export * from './sim/opening-convergence-view.ts';
 // sim/complete-set-arb is intentionally not re-exported from the barrel: it re-defines BookLevel
 // (which is also in types.ts) and the sim is imported directly in arb scripts and edge functions.
