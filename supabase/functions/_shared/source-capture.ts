@@ -13,8 +13,10 @@
  * blend, or run-calibration's model_stats.
  */
 import {
+  googleForecastUrl,
   leadDays,
   owmForecastUrl,
+  parseGoogleDailyMax,
   parseOwmDailyMax,
   parseWeatherApiDailyMax,
   weatherApiForecastUrl,
@@ -102,7 +104,11 @@ export async function captureSourceForecasts(
 }
 
 /** Build the live source list from whatever API keys are present (env-agnostic). */
-export function sourcesFromKeys(keys: { owm?: string | undefined; weatherapi?: string | undefined }): SourceDef[] {
+export function sourcesFromKeys(keys: {
+  owm?: string | undefined;
+  weatherapi?: string | undefined;
+  google?: string | undefined;
+}): SourceDef[] {
   const sources: SourceDef[] = [];
   if (keys.owm) {
     const owmKey = keys.owm;
@@ -118,6 +124,14 @@ export function sourcesFromKeys(keys: { owm?: string | undefined; weatherapi?: s
       source: 'weatherapi',
       url: (c) => weatherApiForecastUrl(c, waKey),
       parse: (json) => parseWeatherApiDailyMax(json), // date is already location-local; tz unused
+    });
+  }
+  if (keys.google) {
+    const gKey = keys.google;
+    sources.push({
+      source: 'google',
+      url: (c) => googleForecastUrl(c, gKey), // up to 10 days; the richest free comparison source (IBM/TWC lineage)
+      parse: (json) => parseGoogleDailyMax(json), // displayDate is already location-local; tz unused
     });
   }
   return sources;

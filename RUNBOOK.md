@@ -272,11 +272,13 @@ vercel --prod          # or the project's normal deploy trigger
 
 ## External-source collection (snapshot-sources)
 
-External comparison sources (OpenWeatherMap, WeatherAPI.com) are captured into
-`source_forecasts`, **isolated from trading** — scored against the same WU/IEM
-truth by `source_accuracy` / `scripts/check-source-accuracy.ts` but never in
-`list_enabled_models`, the house blend, or `model_stats`. Two capture paths,
-one shared loop (`functions/_shared/source-capture.ts`):
+External comparison sources (OpenWeatherMap, WeatherAPI.com, **Google Maps Platform
+Weather** — 10-day daily forecast, free tier 10k calls/mo, IBM/TWC lineage = the
+richest free source; NO deep history, the API caps at 24h so it is forward-only)
+are captured into `source_forecasts`, **isolated from trading** — scored against the
+same WU/IEM truth by `source_accuracy` / `scripts/check-source-accuracy.ts` but never
+in `list_enabled_models`, the house blend, or `model_stats`. Two capture paths, one
+shared loop (`functions/_shared/source-capture.ts`):
 
 - **Autonomous (production):** the `snapshot-sources` Edge Function on pg_cron,
   `25 10,22 * * *` UTC (10Z/22Z slots, just after the Open-Meteo snapshot). This
@@ -288,11 +290,17 @@ one shared loop (`functions/_shared/source-capture.ts`):
 
 ```bash
 # 1) set the source keys as Edge Function secrets (NOT echoed; .env.functions or inline)
-supabase secrets set OPENWEATHERMAP_API_KEY=… WEATHERAPI_API_KEY=… --project-ref "$SUPABASE_REF"
+#    GOOGLE_WEATHER_API_KEY is the canonical name (the fn also accepts the *_DEMO_* alias the key
+#    may sit under locally); ~46 calls/day = ~1.4k/mo, well within the 10k free tier.
+supabase secrets set OPENWEATHERMAP_API_KEY=… WEATHERAPI_API_KEY=… GOOGLE_WEATHER_API_KEY=… --project-ref "$SUPABASE_REF"
 # 2) deploy the function (matches the rest of the stack: api bundler, no JWT)
 supabase functions deploy snapshot-sources --use-api --no-verify-jwt --project-ref "$SUPABASE_REF"
 # 3) apply migration 0026 to register the cron job (or via the management API / MCP apply_migration)
 ```
+
+> **Google seeded 2026-06-30:** a manual `snapshot-source-forecasts` run already wrote the first Google batch
+> (345 rows / 10-day forecast × ~46 stations) to prod. Set the Edge secret (step 1 above) so the twice-daily cron
+> keeps accruing it; until then re-run the manual seed to add a slot. Google is forward-only (no history to backfill).
 
 With **no keys set** the function still runs but writes nothing and raises a
 one-time `CONFIG` WARN (`snapshot-sources:no-keys`); if **every fetch fails**

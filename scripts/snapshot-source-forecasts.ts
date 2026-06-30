@@ -73,7 +73,12 @@ export async function snapshotSourceForecasts(db: Db, deps: SnapshotSourceDeps):
 
 /** Build the live source list from whatever API keys are present. */
 export function liveSources(env: NodeJS.ProcessEnv): SourceDef[] {
-  return sourcesFromKeys({ owm: env['OPENWEATHERMAP_API_KEY'], weatherapi: env['WEATHERAPI_API_KEY'] });
+  return sourcesFromKeys({
+    owm: env['OPENWEATHERMAP_API_KEY'],
+    weatherapi: env['WEATHERAPI_API_KEY'],
+    // canonical name + the *_DEMO_* fallbacks (the key was set locally as Google_MAPS_DEMO_API_KEY).
+    google: env['GOOGLE_WEATHER_API_KEY'] ?? env['GOOGLE_MAPS_DEMO_API_KEY'] ?? env['Google_MAPS_DEMO_API_KEY'],
+  });
 }
 
 async function liveFetchJson(url: string): Promise<unknown> {
@@ -86,7 +91,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   loadEnv();
   const sources = liveSources(process.env);
   if (sources.length === 0) {
-    console.error('No source API keys set (OPENWEATHERMAP_API_KEY / WEATHERAPI_API_KEY) — nothing to capture.');
+    console.error('No source API keys set (OPENWEATHERMAP_API_KEY / WEATHERAPI_API_KEY / GOOGLE_WEATHER_API_KEY) — nothing to capture.');
     process.exit(1);
   }
   const db = makeScriptDb();

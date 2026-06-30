@@ -19,6 +19,8 @@ deno?.serve(async (req: Request) => {
   const sources = sourcesFromKeys({
     owm: getEnv('OPENWEATHERMAP_API_KEY'),
     weatherapi: getEnv('WEATHERAPI_API_KEY'),
+    // canonical secret name; the *_DEMO_* fallbacks accept the key under the name the operator already set locally.
+    google: getEnv('GOOGLE_WEATHER_API_KEY') || getEnv('GOOGLE_MAPS_DEMO_API_KEY') || getEnv('Google_MAPS_DEMO_API_KEY'),
   });
   return runJob(
     'snapshot-sources',
