@@ -174,3 +174,21 @@ truth by `source_accuracy()` / `scripts/check-source-accuracy.ts`.
 - Incoming webhook; delivery counted ONLY on HTTP 2xx; a failed post never
   consumes the dedupe key; health-monitor re-sends unsent rows; BET_REC also
   records `bets.audit.slack_delivered`.
+
+## Forecast-enriched odds archive (2026-06-30)
+
+The flattened Polymarket-odds archive (`out/market-history-flat.csv.gz`) can be **joined to our weather
+predictions** at three horizons — **2 days prior, 1 day prior, day-of**:
+
+- **`build-forecast-lookup.ts`** → `out/forecast-by-event.csv` — per event (keyed by the Gamma `event_id`): the
+  predicted Tmax in the market's **native unit** at lead 2 / 1 / 0, two views — `pred_c_l*` (the CALIBRATED house
+  blend: Σ weight·(tmax−bias)/Σ weight over the models, `model_stats` latest) and `pred_raw_l*` (the RAW
+  multi-model mean — the consumer-app / WU-Google Schelling proxy) — plus `pred_bucket_l*` (the market bucket the
+  calibrated prediction lands in). Forecast coverage is the DB-tracked, **≥2026-04-01** subset (~2 134 of 6 275
+  events; older/untracked events get blanks).
+- **`enrich-market-history.ts`** → `out/market-history-flat-enriched.csv.gz` — broadcasts those columns onto
+  **every price-point row** by `event_id` (238 M rows, ~33 % carry a forecast). Re-run `csv-to-parquet.py` (now
+  header-driven — handles the extra columns) for the Parquet.
+- Predicted temperatures are the **debiased weighted ensemble** ("blend"); the per-city best SINGLE model (vs the
+  WU-resolved truth) was `best_match` / `icon_seamless` (see the session notes). Join key is `event_id`, NOT the
+  archive's `target_date` column (that is the RESOLUTION date; the forecast uses the DB station-local weather day).

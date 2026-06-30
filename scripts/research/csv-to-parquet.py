@@ -25,6 +25,7 @@ Requires: pyarrow, pandas (installed: the "parquet engine").
 """
 
 import argparse
+import gzip
 import sys
 import time
 from pathlib import Path
@@ -34,58 +35,69 @@ import pyarrow as pa
 import pyarrow.dataset as ds
 import pyarrow.parquet as pq
 
-# The columns flatten-market-history.ts emits, in order. Explicit dtypes — never let pandas guess
-# per-chunk (guessing risks a dtype drift between chunks that corrupts the Parquet schema).
-COLUMNS = [
-    "city", "target_date", "event_id", "end_ts",
-    "bucket_idx", "label", "resolved_outcome", "t", "p",
-]
+# The base columns flatten-market-history.ts emits. enrich-market-history.ts appends FORECAST columns
+# (pred_c_l*, pred_raw_l*, pred_bucket_l*, fc_city, weather_date, unit) — handled generically below. Explicit
+# dtypes for the known cols (never let pandas guess per-chunk → dtype drift would corrupt the Parquet schema);
+# any UNKNOWN appended column is treated as a nullable float64 (the forecast temps/buckets are numeric-with-NaN).
+BASE_PA = {
+    "city": pa.string(), "target_date": pa.string(), "event_id": pa.string(),
+    "end_ts": pa.int64(), "bucket_idx": pa.int16(), "label": pa.string(),
+    "resolved_outcome": pa.string(), "t": pa.int64(),
+    "fc_city": pa.string(), "weather_date": pa.string(), "unit": pa.string(),
+}
+BASE_PD = {
+    "city": "string", "target_date": "string", "event_id": "string",
+    "end_ts": "int64", "bucket_idx": "int16", "label": "string",
+    "resolved_outcome": "string", "t": "int64",
+    "fc_city": "string", "weather_date": "string", "unit": "string",
+}
 
 
-def build_schema(p32: bool) -> pa.Schema:
-    return pa.schema([
-        ("city", pa.string()),
-        ("target_date", pa.string()),
-        ("event_id", pa.string()),
-        ("end_ts", pa.int64()),       # event resolution epoch (s)
-        ("bucket_idx", pa.int16()),   # 0..~30 buckets per event
-        ("label", pa.string()),       # e.g. "80-81°F"  (nullable)
-        ("resolved_outcome", pa.string()),  # 'win' | 'lose' | null
-        ("t", pa.int64()),            # price-point epoch (s)
-        ("p", pa.float32() if p32 else pa.float64()),  # implied prob 0..1
-    ])
+def read_header(inp: Path) -> list:
+    """The CSV column names, in order (so the enriched + base files both work without code changes)."""
+    with gzip.open(inp, "rt", encoding="utf-8") as fh:
+        return fh.readline().rstrip("\n").split(",")
 
 
-def pandas_dtypes(p32: bool) -> dict:
-    # int columns are always present (never NaN) so plain int dtypes are safe in read_csv.
-    return {
-        "city": "string", "target_date": "string", "event_id": "string",
-        "end_ts": "int64", "bucket_idx": "int16",
-        "label": "string", "resolved_outcome": "string",
-        "t": "int64", "p": "float32" if p32 else "float64",
-    }
+def build_schema(columns: list, p32: bool) -> pa.Schema:
+    def pa_for(c: str) -> pa.DataType:
+        if c == "p":
+            return pa.float32() if p32 else pa.float64()
+        return BASE_PA.get(c, pa.float64())  # unknown (forecast) col → nullable float64
+    return pa.schema([(c, pa_for(c)) for c in columns])
+
+
+def pandas_dtypes(columns: list, p32: bool) -> dict:
+    out = {}
+    for c in columns:
+        if c == "p":
+            out[c] = "float32" if p32 else "float64"
+        else:
+            out[c] = BASE_PD.get(c, "float64")  # unknown (forecast) col → float64 (NaN-friendly)
+    return out
 
 
 def chunks(inp: Path, p32: bool, chunk_rows: int):
     """Yield (RecordBatch, n_rows) from the gzip CSV, schema-coerced, bounded memory."""
-    schema = build_schema(p32)
+    columns = read_header(inp)
+    schema = build_schema(columns, p32)
     reader = pd.read_csv(
         inp,
         compression="gzip",
-        encoding="utf-8",          # flatten-market-history.ts writes utf-8 (Node default); labels carry "°F"
-        dtype=pandas_dtypes(p32),
-        usecols=COLUMNS,           # ignore any extra cols defensively
+        encoding="utf-8",          # flatten/enrich write utf-8 (Node default); labels carry "°F"
+        dtype=pandas_dtypes(columns, p32),
+        usecols=columns,
         chunksize=chunk_rows,
-        keep_default_na=True,      # empty label/outcome -> <NA> -> parquet null
+        keep_default_na=True,      # empty label/outcome/forecast -> <NA>/NaN -> parquet null
     )
     for df in reader:
         # from_pandas with an explicit schema enforces identical types across every chunk
-        batch = pa.RecordBatch.from_pandas(df[COLUMNS], schema=schema, preserve_index=False)
+        batch = pa.RecordBatch.from_pandas(df[columns], schema=schema, preserve_index=False)
         yield batch, len(df)
 
 
 def convert_single(inp: Path, out: Path, comp: str, p32: bool, chunk_rows: int) -> int:
-    schema = build_schema(p32)
+    schema = build_schema(read_header(inp), p32)
     rows = 0
     out.parent.mkdir(parents=True, exist_ok=True)
     writer = pq.ParquetWriter(out, schema, compression=comp)
@@ -100,7 +112,7 @@ def convert_single(inp: Path, out: Path, comp: str, p32: bool, chunk_rows: int) 
 
 
 def convert_partitioned(inp: Path, out_dir: Path, comp: str, p32: bool, chunk_rows: int) -> int:
-    schema = build_schema(p32)
+    schema = build_schema(read_header(inp), p32)
     rows = 0
     counter = {"n": 0}
 
