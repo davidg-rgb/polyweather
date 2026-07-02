@@ -28,7 +28,7 @@ import { parseArgs } from 'node:util';
 import { pathToFileURL } from 'node:url';
 import { makeScriptDb } from '../lib/script-db.ts';
 import { loadEnv } from '../lib/load-env.ts';
-import { indexArchive, loadPanel, buildSet, type PanelEvent } from './tune-convergence.ts';
+import { indexArchive, loadPanel, buildSet, splitByDate, type PanelEvent } from './tune-convergence.ts';
 import {
   replayMakerExitPanel,
   MAKER_EXIT_DEFAULTS,
@@ -91,13 +91,86 @@ function loadCache(): { events: EventReplayInput[]; resolves: Map<string, number
   };
 }
 
+// ── the per-city selector-accuracy gate (the 2026-07-03 entry lever) ────────────────────────────────
+/**
+ * Per-city selector accuracy fitted on PRE-PANEL data ONLY: resolved 'highest' markets with target_date
+ * 2026-05-13 → 2026-06-12 (the archive panel starts 2026-06-13, so a gate derived from this table is
+ * temporally OUT-OF-SAMPLE for the whole replay). Pick = the CALIBRATED house blend's bucket (latest
+ * model_stats debias+weights over forecast_snapshots, floor→market_buckets span), scored vs the market-
+ * resolved winner, leads 1+2 pooled (the entry-decision leads). hits0 = exact bucket, hits1 = within ±1.
+ * Source query: CONVERGENCE-TUNING.md §per-city (run 2026-07-03 against prod). lucknow n=2 → ungated-out
+ * by the Wilson bound naturally.
+ */
+export const CITY_GATE_PRE0613: Record<string, { n: number; hits0: number; hits1: number }> = {
+  amsterdam: { n: 58, hits0: 5, hits1: 20 },   ankara: { n: 58, hits0: 20, hits1: 53 },
+  atlanta: { n: 56, hits0: 12, hits1: 36 },    austin: { n: 56, hits0: 32, hits1: 48 },
+  beijing: { n: 58, hits0: 25, hits1: 49 },    'buenos-aires': { n: 58, hits0: 15, hits1: 49 },
+  busan: { n: 58, hits0: 23, hits1: 44 },      'cape-town': { n: 56, hits0: 16, hits1: 48 },
+  chengdu: { n: 58, hits0: 12, hits1: 35 },    chicago: { n: 58, hits0: 29, hits1: 44 },
+  chongqing: { n: 58, hits0: 16, hits1: 32 },  dallas: { n: 58, hits0: 31, hits1: 48 },
+  denver: { n: 58, hits0: 36, hits1: 49 },     guangzhou: { n: 58, hits0: 21, hits1: 44 },
+  helsinki: { n: 58, hits0: 11, hits1: 34 },   houston: { n: 58, hits0: 25, hits1: 47 },
+  jeddah: { n: 58, hits0: 11, hits1: 44 },     karachi: { n: 58, hits0: 28, hits1: 54 },
+  'kuala-lumpur': { n: 58, hits0: 25, hits1: 48 }, london: { n: 58, hits0: 9, hits1: 40 },
+  'los-angeles': { n: 58, hits0: 23, hits1: 53 }, lucknow: { n: 2, hits0: 1, hits1: 2 },
+  madrid: { n: 58, hits0: 30, hits1: 55 },     manila: { n: 58, hits0: 20, hits1: 42 },
+  'mexico-city': { n: 58, hits0: 41, hits1: 47 }, miami: { n: 52, hits0: 23, hits1: 47 },
+  milan: { n: 58, hits0: 10, hits1: 45 },      munich: { n: 58, hits0: 20, hits1: 51 },
+  nyc: { n: 58, hits0: 18, hits1: 51 },        'panama-city': { n: 56, hits0: 36, hits1: 55 },
+  paris: { n: 58, hits0: 34, hits1: 53 },      qingdao: { n: 58, hits0: 18, hits1: 47 },
+  'san-francisco': { n: 56, hits0: 31, hits1: 46 }, 'sao-paulo': { n: 56, hits0: 25, hits1: 46 },
+  seattle: { n: 56, hits0: 26, hits1: 39 },    seoul: { n: 58, hits0: 17, hits1: 37 },
+  shanghai: { n: 58, hits0: 15, hits1: 43 },   shenzhen: { n: 58, hits0: 8, hits1: 36 },
+  singapore: { n: 58, hits0: 16, hits1: 47 },  taipei: { n: 58, hits0: 21, hits1: 43 },
+  tokyo: { n: 58, hits0: 21, hits1: 45 },      toronto: { n: 58, hits0: 10, hits1: 38 },
+  warsaw: { n: 58, hits0: 14, hits1: 48 },     wellington: { n: 58, hits0: 23, hits1: 43 },
+  wuhan: { n: 58, hits0: 18, hits1: 44 },
+};
+
+/** Wilson 95% lower bound on a binomial proportion (the shrinkage the entry-watch idiom uses — rank by the
+ *  conservative bound, never the point estimate). Pure; 0 on an empty sample. */
+export function wilsonLower(hits: number, n: number, z = 1.96): number {
+  if (!(n > 0) || !Number.isFinite(hits)) return 0;
+  const p = Math.min(1, Math.max(0, hits / n));
+  const z2 = z * z;
+  const center = p + z2 / (2 * n);
+  const rad = z * Math.sqrt((p * (1 - p) + z2 / (4 * n)) / n);
+  return Math.max(0, (center - rad) / (1 + z2 / n));
+}
+
+/** The cities whose pre-panel Wilson-LB accuracy clears `minLb` on `metric` ('hit0' = exact bucket — the
+ *  chw0 pick quality; 'hit1' = ±1 bracket). Pure. minLb ≤ 0 = no gate (every table city passes). */
+export function gateCities(
+  table: Record<string, { n: number; hits0: number; hits1: number }>,
+  metric: 'hit0' | 'hit1',
+  minLb: number,
+): string[] {
+  return Object.entries(table)
+    .filter(([, r]) => wilsonLower(metric === 'hit0' ? r.hits0 : r.hits1, r.n) >= minLb)
+    .map(([c]) => c)
+    .sort();
+}
+
 export interface SimParams {
   tp: number; sl: number; tstopHours: number; chw: number; maxEntry: number; depth: number;
   rebate: number; makerWindow: number; perPos: number; feeRate: number;
+  /** exit-structure lever: where the resting maker sell sits ('delta' = entry+tp — the historical default). */
+  tpMode: 'delta' | 'abs' | 'model';
+  /** the absolute resting-sell target for tpMode='abs'. */
+  tpAbs: number;
+  /** entry-timing lever: hours past listing before an entry is allowed (0 = first enterable tick). */
+  minEntryAgeH: number;
+  /** entry-selection lever: the per-city accuracy gate's Wilson-LB floor (0 = no gate). */
+  cityGateLb: number;
+  /** which accuracy metric the gate uses (hit0 = exact bucket, hit1 = ±1 bracket). */
+  gateMetric: 'hit0' | 'hit1';
+  /** entry lever: never let the taker fallback chase a book past the entry reservation (false = historical). */
+  noChase: boolean;
 }
 export const DEFAULT_PARAMS: SimParams = {
   tp: 0.1, sl: 0.2, tstopHours: 12, chw: 0, maxEntry: 0.3, depth: 100,
   rebate: 0, makerWindow: BOT_DEFAULTS.makerFillWindowMin, perPos: BOT_DEFAULTS.perPositionUsd, feeRate: BOT_DEFAULTS.takerFeeRate,
+  tpMode: 'delta', tpAbs: 0.35, minEntryAgeH: 0, cityGateLb: 0, gateMetric: 'hit1', noChase: false,
 };
 
 export function cfgFrom(p: SimParams, cities: string[]): MakerExitCfg {
@@ -106,6 +179,7 @@ export function cfgFrom(p: SimParams, cities: string[]): MakerExitCfg {
     centerHalfWidth: p.chw, maxEntryPrice: p.maxEntry, depthFloorUsd: p.depth, perPositionUsd: p.perPos,
     tpDeltaPp: p.tp, slDeltaPp: p.sl, takerFeeRate: p.feeRate, makerFillWindowMin: p.makerWindow,
     makerRebateRate: p.rebate, tstopHoursBeforeResolve: p.tstopHours,
+    tpMode: p.tpMode, tpAbsTarget: p.tpAbs, minEntryAgeH: p.minEntryAgeH, noChaseTakerFallback: p.noChase,
   };
 }
 
@@ -135,14 +209,20 @@ function writeLedger(ledger: MakerExitTrade[], p: SimParams): void {
 }
 
 export function run(p: SimParams, events: EventReplayInput[], resolves: Map<string, number | null>, writeFiles: boolean): Record<string, unknown> {
-  const cities = [...new Set(events.map((e) => e.city))];
-  const panel = replayMakerExitPanel(events, cfgFrom(p, cities), resolves);
+  // the per-city accuracy gate (fitted PRE-panel → OOS here): drop events in cities whose Wilson-LB accuracy
+  // misses the floor. cityGateLb ≤ 0 = no gate (the historical full-universe behavior).
+  const gated = p.cityGateLb > 0 ? new Set(gateCities(CITY_GATE_PRE0613, p.gateMetric, p.cityGateLb)) : null;
+  const scoped = gated ? events.filter((e) => gated.has(e.city)) : events;
+  const cities = [...new Set(scoped.map((e) => e.city))];
+  const panel = replayMakerExitPanel(scoped, cfgFrom(p, cities), resolves);
   if (writeFiles) writeLedger(panel.ledger, p);
   // the optimizer objective: mean realized net return, but only credited when the §9R-E count floor is met
   // (≥40 realized markets) — so it cannot "win" by entering a handful of lucky trades.
   const objective = panel.nRealized >= GATE_MIN_MARKETS ? panel.meanNetReturn : -1;
   return {
     params: p,
+    nEventsScoped: scoped.length,
+    nGatedCities: cities.length,
     nRealized: panel.nRealized,
     nExecuted: panel.nExecuted,
     makerExitFrac: panel.makerExitFrac,
@@ -165,6 +245,11 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       tp: { type: 'string' }, sl: { type: 'string' }, 'tstop-hours': { type: 'string' },
       chw: { type: 'string' }, 'max-entry': { type: 'string' }, depth: { type: 'string' },
       rebate: { type: 'string' }, 'maker-window': { type: 'string' }, 'per-pos': { type: 'string' }, 'fee-rate': { type: 'string' },
+      'tp-mode': { type: 'string' }, 'tp-abs': { type: 'string' }, 'min-entry-age-h': { type: 'string' },
+      'city-gate-lb': { type: 'string' }, 'gate-metric': { type: 'string' },
+      cities: { type: 'string' }, // comma list, or 'allowlist' = BOT_DEFAULTS.cities (the live forward loop's scope)
+      'no-chase': { type: 'boolean' },
+      split: { type: 'boolean' },
       sweep: { type: 'string' },
     },
   });
@@ -173,17 +258,39 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     process.stdout.write(`RESULT ${JSON.stringify({ builtCache: true, events: n, cities, days, cache: CACHE_PATH })}\n`);
   } else {
     const num = (k: string, d: number): number => { const v = values[k as keyof typeof values]; const n = Number(v); return v != null && Number.isFinite(n) ? n : d; };
+    const tpModeRaw = String(values['tp-mode'] ?? DEFAULT_PARAMS.tpMode);
+    const tpMode: SimParams['tpMode'] = tpModeRaw === 'abs' || tpModeRaw === 'model' ? tpModeRaw : 'delta';
+    const gateMetricRaw = String(values['gate-metric'] ?? DEFAULT_PARAMS.gateMetric);
     const base: SimParams = {
       tp: num('tp', DEFAULT_PARAMS.tp), sl: num('sl', DEFAULT_PARAMS.sl), tstopHours: num('tstop-hours', DEFAULT_PARAMS.tstopHours),
       chw: num('chw', DEFAULT_PARAMS.chw), maxEntry: num('max-entry', DEFAULT_PARAMS.maxEntry), depth: num('depth', DEFAULT_PARAMS.depth),
       rebate: num('rebate', DEFAULT_PARAMS.rebate), makerWindow: num('maker-window', DEFAULT_PARAMS.makerWindow),
       perPos: num('per-pos', DEFAULT_PARAMS.perPos), feeRate: num('fee-rate', DEFAULT_PARAMS.feeRate),
+      tpMode, tpAbs: num('tp-abs', DEFAULT_PARAMS.tpAbs), minEntryAgeH: num('min-entry-age-h', DEFAULT_PARAMS.minEntryAgeH),
+      cityGateLb: num('city-gate-lb', DEFAULT_PARAMS.cityGateLb),
+      gateMetric: gateMetricRaw === 'hit0' ? 'hit0' : 'hit1',
+      noChase: values['no-chase'] === true,
     };
-    const { events, resolves, meta } = loadCache();
-    process.stderr.write(`${SCRIPT} · ${meta}\n`);
+    const { events: allEvents, resolves, meta } = loadCache();
+    // --cities: scope the panel (e.g. 'allowlist' = the §9R 10-city TRADABLE set the live forward loop runs on).
+    const citiesRaw = values['cities'] as string | undefined;
+    const cityScope = citiesRaw
+      ? new Set(citiesRaw === 'allowlist' ? BOT_DEFAULTS.cities : citiesRaw.split(',').map((s) => s.trim()))
+      : null;
+    const events = cityScope ? allEvents.filter((e) => cityScope.has(e.city)) : allEvents;
+    process.stderr.write(`${SCRIPT} · ${meta}${cityScope ? ` · scoped to ${new Set(events.map((e) => e.city)).size} cities (${events.length} events)` : ''}\n`);
 
-    // --sweep "param:v1,v2,…" runs the sim once per value (others held at the flags) → one RESULT line each, so a
-    // tuning agent line-searches a coordinate in ONE command. param ∈ the SimParams kebab keys.
+    // --split: score the SAME params on the date-based TRAIN/TEST folds (+ FULL) — the OOS discipline the
+    // 2026-06-30 review demanded (the in-sample headline was the winner's-curse). Select on train, QUOTE test.
+    const scopes: Array<{ scope: string; evs: EventReplayInput[] }> = (() => {
+      if (!values['split']) return [{ scope: 'full', evs: events }];
+      const { train, test, cutDate } = splitByDate(events, 0.6);
+      process.stderr.write(`  split at ${cutDate}: train ${train.length} / test ${test.length} events\n`);
+      return [{ scope: 'train', evs: train }, { scope: 'test', evs: test }, { scope: 'full', evs: events }];
+    })();
+
+    // --sweep "param:v1,v2,…" runs the sim once per value (others held at the flags) → one RESULT line each
+    // (× each --split scope), so a tuning agent line-searches a coordinate in ONE command.
     const sweep = values['sweep'] as string | undefined;
     if (sweep) {
       const [param, listRaw] = sweep.split(':');
@@ -191,20 +298,25 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       const KEY: Record<string, keyof SimParams> = {
         tp: 'tp', sl: 'sl', 'tstop-hours': 'tstopHours', chw: 'chw', 'max-entry': 'maxEntry',
         depth: 'depth', rebate: 'rebate', 'maker-window': 'makerWindow',
+        'tp-abs': 'tpAbs', 'min-entry-age-h': 'minEntryAgeH', 'city-gate-lb': 'cityGateLb',
       };
       const key = KEY[String(param)];
       if (!key || vals.length === 0) { process.stderr.write(`bad --sweep "${sweep}"\n`); process.exit(1); }
       for (const v of vals) {
-        const out = run({ ...base, [key]: v }, events, resolves, false);
-        process.stdout.write(`RESULT ${JSON.stringify({ sweepParam: param, sweepValue: v, ...out })}\n`);
+        for (const { scope, evs } of scopes) {
+          const out = run({ ...base, [key]: v }, evs, resolves, false);
+          process.stdout.write(`RESULT ${JSON.stringify({ sweepParam: param, sweepValue: v, scope, ...out })}\n`);
+        }
       }
     } else {
-      const out = run(base, events, resolves, true);
-      process.stderr.write(
-        `  realized ${out['nRealized']} · makerExit ${pct(out['makerExitFrac'] as number)} · winFrac ${pct(out['winFrac'] as number)} · ` +
-        `meanNetRet ${pct(out['meanNetReturn'] as number)} · total ${usd(out['totalNetUsd'] as number)} · ${out['verdict']}\n`,
-      );
-      process.stdout.write(`RESULT ${JSON.stringify(out)}\n`);
+      for (const { scope, evs } of scopes) {
+        const out = run(base, evs, resolves, scope === 'full');
+        process.stderr.write(
+          `  [${scope}] realized ${out['nRealized']} · makerExit ${pct(out['makerExitFrac'] as number)} · winFrac ${pct(out['winFrac'] as number)} · ` +
+          `meanNetRet ${pct(out['meanNetReturn'] as number)} · total ${usd(out['totalNetUsd'] as number)} · ${out['verdict']}\n`,
+        );
+        process.stdout.write(`RESULT ${JSON.stringify({ scope, ...out })}\n`);
+      }
     }
   }
 }

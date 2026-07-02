@@ -1,6 +1,20 @@
 # Convergence Tuning — the 708-event archive verdict on the bot's entry/exit thresholds
 
-> **⚠ CORRECTION (2026-06-30, code review) — the archive verdict below must be REGENERATED before it is cited.**
+> **✅ RE-PULLED + REGENERATED 2026-07-03.** The archive's seeded window (June 10 → July 2, 1 108 events, all 45
+> cities) was re-pulled with the canonical bucket sort and both harnesses re-run on the grown **819-event /
+> 45-city / 20-day** panel. Headline movements: the misalignment had been **understating** the edge — the
+> maker-exit variant now **PASSES the full-panel §9R-E gate at the same tuned params** (+6.7 % rebate-0 /
+> +7.6 % rebate-0.25, CI excl 0 — see `MAKER-EXIT-SIM.md`, which also records the 2026-07-03 improvement
+> campaign: four new levers tested + rejected, coordinate optimum re-confirmed). The regenerated TAKER verdict:
+> **still KILL** (best OOS cell: FULL +2.5 %, CI [−5.0 %, +9.9 %]) — but the **breakeven spread moved ×0.70 →
+> ×1.14**: on correctly-aligned buckets the taker price-path edge is positive in expectation even AT the
+> calibrated spread; it fails only the statistical bar (ciLow ≤ 0). Finding 1's direction stands (the maker
+> exit is where the edge clears the gate); **Finding 2 re-confirms almost exactly** (gaussian brackets the
+> winner 74.4 % vs `ensemble_raw` 53.0 % at chw1 on 819 events; 79 % vs 62 % at lead 1 on the ~2 100-event
+> DB panel). The historical numbers in the body below are the ORIGINAL (misaligned-archive) run, kept for the
+> record — cite the regenerated ones.
+
+> **⚠ CORRECTION (2026-06-30, code review) — RESOLVED 2026-07-03 (see above).**
 > The local price-history archive was written by `pull-market-history` in **raw Gamma market order**, but the DB
 > house seed (`bucket_probabilities.probs`) and `winner_idx` it is joined to are in the DB's **temperature-sorted**
 > bucket index space (`parseGammaEvent` sorts by `bucketRange.lo`). The two index spaces **diverge** (the open

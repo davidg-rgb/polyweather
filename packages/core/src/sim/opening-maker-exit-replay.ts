@@ -54,6 +54,20 @@ export interface MakerExitCfg extends OpeningCfg {
   /** the HARD time-stop: flatten (taker) at the latest this many hours BEFORE the market resolves ("at the latest
    *  N hours from bet closing"). Falls back to the local-noon clock only if resolvesAt is unknown. */
   tstopHoursBeforeResolve: number;
+  /**
+   * OPTIONAL take-profit placement mode (the 2026-07-03 exit-structure lever). Where does the resting maker
+   * SELL sit?
+   *   - 'delta' (default — the historical behavior, byte-identical): entry + tpDeltaPp.
+   *   - 'abs':   an ABSOLUTE convergence target (tpAbsTarget, e.g. 0.35) — "sell into the 30+ mid-range peak",
+   *              independent of what we paid. Floored at entry+0.02 (never rest at/below the entry).
+   *   - 'model': OUR forecast prob for the bucket (the level the convergence thesis says the price converges
+   *              TO) — the self-consistent target. Same entry+0.02 floor.
+   * A higher limit harvests more per fill but fills less often (unfilled → carried to the taker time-stop —
+   * exactly the §12 adverse-selection trade-off this engine measures honestly).
+   */
+  tpMode?: 'delta' | 'abs' | 'model';
+  /** the absolute resting-sell target when tpMode='abs' (default 0.35). */
+  tpAbsTarget?: number;
 }
 
 export const MAKER_EXIT_DEFAULTS = {
@@ -186,8 +200,14 @@ export function replayMakerExitEvent(
   const rebate = (p: number): number => rebateRateUsed * takerFeePerShare(p, cfg.takerFeeRate) * shares;
   const entryRebate = isMakerEntry ? rebate(fill.price) : 0;
 
-  // the resting maker SELL limit (the take-profit target price) + the protective stop.
-  const exitLimit = fill.price + cfg.tpDeltaPp;
+  // the resting maker SELL limit (the take-profit target price) + the protective stop. tpMode 'abs'/'model'
+  // replace the relative entry+Δ with an absolute / forecast-prob convergence target, floored at entry+0.02
+  // (a resting sell at/below the entry is degenerate). Default 'delta' = the historical entry+tpDeltaPp.
+  const tpMode = cfg.tpMode ?? 'delta';
+  const exitLimit =
+    tpMode === 'abs' ? Math.max(fill.price + 0.02, fin(cfg.tpAbsTarget) ? cfg.tpAbsTarget : 0.35)
+    : tpMode === 'model' ? Math.max(fill.price + 0.02, chosen.modelProb)
+    : fill.price + cfg.tpDeltaPp;
   const slStop = stopOf(fill.price, cfg);
 
   // the HARD time-stop: resolvesAt − N hours ("at the latest N hours from bet closing"); fall back to local noon.

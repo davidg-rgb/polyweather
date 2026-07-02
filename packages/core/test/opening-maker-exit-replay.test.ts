@@ -175,6 +175,118 @@ describe('replayMakerExitEvent', () => {
   });
 });
 
+describe('tpMode — the exit-structure lever (2026-07-03)', () => {
+  // entry fills MAKER at the limit 0.16 on tick 1 (entryTicks) — all modes share the entry leg.
+
+  it("'abs' rests the sell at the ABSOLUTE convergence target, independent of the entry", () => {
+    const ticks = [...entryTicks(), tick('2026-06-20T01:00:00Z', 1, { execBid: 0.36, execAsk: 0.37 })];
+    const t = replayMakerExitEvent(input(ticks), cfg({ tpMode: 'abs', tpAbsTarget: 0.35, tpDeltaPp: 0.1 }), RESOLVE_MS);
+    expect(t.exitKind).toBe('maker_take_profit');
+    expect(t.exitPrice).toBeCloseTo(0.35, 9); // the abs target — NOT entry+tpDeltaPp (0.26), NOT the bid (0.36)
+    expect(t.feeUsd).toBe(0);
+  });
+
+  it("'abs' does NOT fill while the bid sits below the target (carried to the taker time-stop)", () => {
+    const ticks = [
+      ...entryTicks(),
+      tick('2026-06-20T01:00:00Z', 1, { execBid: 0.3, execAsk: 0.31 }), // +14pp over entry — 'delta' would exit; 'abs' rests on
+      tick('2026-06-20T23:00:00Z', 23, { execBid: 0.28, execAsk: 0.29 }), // past resolvesAt−12h → taker flatten
+    ];
+    const t = replayMakerExitEvent(input(ticks), cfg({ tpMode: 'abs', tpAbsTarget: 0.35, tstopHoursBeforeResolve: 12 }), RESOLVE_MS);
+    expect(t.exitKind).toBe('taker_time_stop');
+    expect(t.exitPrice).toBeCloseTo(0.28, 9);
+  });
+
+  it("'abs' floors the limit at entry+0.02 when the target is at/below the entry (degenerate guard)", () => {
+    const ticks = [...entryTicks(), tick('2026-06-20T01:00:00Z', 1, { execBid: 0.19, execAsk: 0.2 })];
+    const t = replayMakerExitEvent(input(ticks), cfg({ tpMode: 'abs', tpAbsTarget: 0.05 }), RESOLVE_MS);
+    expect(t.exitKind).toBe('maker_take_profit');
+    expect(t.exitPrice).toBeCloseTo(t.entryPrice + 0.02, 9);
+  });
+
+  it("'model' rests the sell AT our forecast prob (the convergence target itself)", () => {
+    // the center bucket's houseProb is 0.4 (the fixture ladder) — the bid reaching 0.45 fills AT 0.40.
+    const ticks = [...entryTicks(), tick('2026-06-20T01:00:00Z', 1, { execBid: 0.45, execAsk: 0.46 })];
+    const t = replayMakerExitEvent(input(ticks), cfg({ tpMode: 'model', tpDeltaPp: 0.1 }), RESOLVE_MS);
+    expect(t.exitKind).toBe('maker_take_profit');
+    expect(t.exitPrice).toBeCloseTo(0.4, 9);
+    expect(t.isMakerExit).toBe(true);
+  });
+
+  it("unset/'delta' stays byte-identical to the historical entry+tpDeltaPp behavior", () => {
+    const ticks = [...entryTicks(), tick('2026-06-20T01:00:00Z', 1, { execBid: 0.45, execAsk: 0.46 })];
+    const unset = replayMakerExitEvent(input(ticks), cfg({ tpDeltaPp: 0.25 }), RESOLVE_MS);
+    const explicit = replayMakerExitEvent(input(ticks), cfg({ tpDeltaPp: 0.25, tpMode: 'delta', tpAbsTarget: 0.35 }), RESOLVE_MS);
+    expect(explicit).toEqual(unset);
+    expect(unset.exitPrice).toBeCloseTo(unset.entryPrice + 0.25, 9);
+  });
+});
+
+describe('noChaseTakerFallback — the no-chase entry guard (2026-07-03, tested + REJECTED, kept as an option)', () => {
+  // entry decided at t0 (ask 0.16 ≤ reservation 0.20); the book RUNS AWAY during the maker rest; the 15-min
+  // window elapses at t1 (ask 0.46 — no maker fill possible, taker fallback would chase).
+  const chaseTicks = (): ReplayTick[] => [
+    tick('2026-06-20T00:00:00Z', 0.1, { execAsk: 0.16, bestAsk: 0.16, execBid: 0.14 }),
+    tick('2026-06-20T00:20:00Z', 0.4, { execAsk: 0.46, bestAsk: 0.46, execBid: 0.44 }),
+    tick('2026-06-20T00:40:00Z', 0.8, { execAsk: 0.18, bestAsk: 0.18, execBid: 0.16 }),
+    tick('2026-06-20T02:00:00Z', 2.2, { execBid: 0.5, execAsk: 0.51 }),
+  ];
+
+  it('OFF (default) chases: the taker fallback pays the run-away ask (the historical behavior)', () => {
+    const t = replayMakerExitEvent(input(chaseTicks()), cfg({ tpDeltaPp: 0.25 }), RESOLVE_MS);
+    expect(t.executed).toBe(true);
+    expect(t.entryTickIndex).toBe(1);
+    expect(t.entryPrice).toBeCloseTo(0.46 + OPENING_DEFAULTS.paperSlippage, 9); // worse-of + slippage — the chase
+  });
+
+  it('ON skips the run-away tick and takes when the ask comes back inside the reservation', () => {
+    const t = replayMakerExitEvent(input(chaseTicks()), cfg({ tpDeltaPp: 0.25, noChaseTakerFallback: true }), RESOLVE_MS);
+    expect(t.executed).toBe(true);
+    expect(t.entryTickIndex).toBe(2); // t1 skipped (0.46 > reservation 0.20), takes t2 (0.18)
+    expect(t.entryPrice).toBeCloseTo(0.18 + OPENING_DEFAULTS.paperSlippage, 9);
+  });
+
+  it('ON never fills when the book never comes back inside', () => {
+    const ticks = chaseTicks().slice(0, 2); // ends on the run-away tick
+    const t = replayMakerExitEvent(input(ticks), cfg({ noChaseTakerFallback: true }), RESOLVE_MS);
+    expect(t.executed).toBe(false);
+  });
+});
+
+describe('minEntryAgeH — the entry-timing lever (2026-07-03)', () => {
+  // t0 enterable young → (no gate) maker-fill t1 at limit 0.16; with a 1h floor the entry walk skips to t2
+  // (age 1.3) → maker-fill t3 at the CHEAPER limit 0.13 (the later, faded book).
+  const agedTicks = (): ReplayTick[] => [
+    tick('2026-06-20T00:00:00Z', 0.1, { execAsk: 0.16, bestAsk: 0.16, execBid: 0.14 }),
+    tick('2026-06-20T00:10:00Z', 0.3, { execAsk: 0.12, bestAsk: 0.12, execBid: 0.11 }),
+    tick('2026-06-20T01:10:00Z', 1.3, { execAsk: 0.13, bestAsk: 0.13, execBid: 0.12 }),
+    tick('2026-06-20T01:20:00Z', 1.5, { execAsk: 0.1, bestAsk: 0.1, execBid: 0.09 }),
+    tick('2026-06-20T02:00:00Z', 2.2, { execBid: 0.45, execAsk: 0.46 }),
+  ];
+
+  it('0/unset = the historical first-enterable-tick entry', () => {
+    const t = replayMakerExitEvent(input(agedTicks()), cfg({ tpDeltaPp: 0.25 }), RESOLVE_MS);
+    expect(t.executed).toBe(true);
+    expect(t.entryTickIndex).toBe(1); // fills on the tick after the first (young) enterable tick
+    expect(t.entryPrice).toBeCloseTo(0.16, 9);
+  });
+
+  it('skips enterable ticks younger than the floor — enters later, at the later book', () => {
+    const t = replayMakerExitEvent(input(agedTicks()), cfg({ tpDeltaPp: 0.25, minEntryAgeH: 1 }), RESOLVE_MS);
+    expect(t.executed).toBe(true);
+    expect(t.entryTickIndex).toBe(3); // entry decided at t2 (age 1.3), maker fill at t3
+    expect(t.entryPrice).toBeCloseTo(0.13, 9);
+  });
+
+  it('an unknown hoursSinceListing fails the ARMED gate (fail closed — no entry)', () => {
+    const ticks = agedTicks().map((t) => ({ ...t, hoursSinceListing: NaN }));
+    const gated = replayMakerExitEvent(input(ticks), cfg({ minEntryAgeH: 1 }), RESOLVE_MS);
+    expect(gated.executed).toBe(false);
+    const ungated = replayMakerExitEvent(input(ticks), cfg({}), RESOLVE_MS);
+    expect(ungated.executed).toBe(true); // the gate off → unknown age is fine (historical behavior)
+  });
+});
+
 describe('replayMakerExitPanel', () => {
   it('returns a ledger + the §9R-E verdict + the maker-exit fraction', () => {
     const winTicks = [...entryTicks(), tick('2026-06-20T01:00:00Z', 1, { execBid: 0.45, execAsk: 0.46 })];

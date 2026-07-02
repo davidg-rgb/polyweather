@@ -45,6 +45,24 @@ pre-existed; this loop is the thin shell + the measurement columns + the dashboa
    for the forward §9R-E verdict. **PASS + an explicit operator GO → the separate small-real step; else KILL →
    FINDINGS.md, rail DORMANT.** No capital before a frozen paper PASS.
 
+## 0a-bis. UPDATE 2026-07-03 — corrected-archive validation PASSES; scope widened 10→45; seed recommendation
+
+The 2026-07-03 check-and-improve campaign (`MAKER-EXIT-SIM.md` top banner + §campaign) re-pulled the misaligned
+archive canonically and regenerated everything: **the pinned §5 params PASS the full-panel backtest gate**
+(819 ev / 45 cities / 20 days: +6.7 % / CI [+0.3 %, +12.0 %] at rebate 0; +7.6 % at the fixed 0.25 tier), and a
+four-lever improvement sweep (city gate / absolute TP / delayed entry / no-chase) **rejected every variant** —
+the pinned config is the coordinate-wise optimum on corrected data. Two alignment changes for THIS loop:
+1. **Panel scope = the live `bot.cities` capture universe (~45), not the 10-city trade allowlist** — handler
+   changed 2026-07-03 (falls back to the 10-city set if config is unreadable). The validated PASS lives on the
+   broad panel; the 10-city subset is structurally starved for the city-clustered CI (backtest: CI
+   [−7.8 %, +13.9 %] even at n=88). **Needs an edge-fn redeploy** (deploy step 2 below). Which cities carry
+   eventual capital stays a separate §9R liquidity decision — this loop measures the SIGNAL.
+2. **Recommended (operator): flip `bot.consensusSource` `ensemble_raw` → `calibrated`.** The backtest PASS is
+   measured with the production CALIBRATED gaussian seed; the live capture currently seeds the raw consensus,
+   which selects the winner 21 pp worse (74.4 % vs 53.0 % bracket at chw1 — re-confirmed on 819 + ~2 100 events).
+   One config-row update, read live each tick, no redeploy. Honest note: the forward panel becomes mixed-seed at
+   the flip date (pre-flip captures keep their raw-seeded houseProb; the re-replay scores what was captured).
+
 ## 0b. Design note — why re-replay, not a per-tick state machine
 
 The literal handoff §3 reads as a stateful per-tick position manager, but `replayMakerExitEvent` replays an

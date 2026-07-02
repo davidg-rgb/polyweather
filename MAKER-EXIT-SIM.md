@@ -1,6 +1,35 @@
 # Maker-Exit Simulation — the convergence edge, tested as a MAKER edge
 
-> **⚠ CORRECTION (2026-06-30, code review).** The maker-rebate credit in `opening-maker-exit-replay.ts` was
+> **✅ REGENERATED 2026-07-03 — the corrected archive PASSES the full-panel §9R-E gate at the SAME tuned config.**
+> Both 2026-06-30 corrections below are RESOLVED: the archive was re-pulled canonically sorted (1 108 events,
+> June-10→July-2 window — the whole seeded panel) and the sim re-run with the fixed rebate formula and a
+> date-based train/test split. On the corrected **819-event / 45-city / 20-day** panel, the pinned
+> `MAKER_EXIT_TUNED` config (tp 0.12 / sl 0.20 / tstop 18 h / chw 0 / maxEntry 0.30 / depth $150 / window 30):
+>
+> | scenario | n | winFrac | mean net | total $ | 95 % CI | zsMC | §9R-E |
+> |---|---|---|---|---|---|---|---|
+> | rebate 0 (fee-saving floor) | 382 | 62.8 % | **+6.7 %** | **+$515** | **[+0.3 %, +12.0 %]** | 3.2 % | **PASS** |
+> | rebate 0.25 (weather tier, fixed formula) | 382 | 63.1 % | **+7.6 %** | **+$583** | **[+1.1 %, +12.9 %]** | 3.1 % | **PASS** |
+>
+> The bucket misalignment had been **depressing** the measured edge (+1.8 % → +6.7 % at rebate 0). The params were
+> fitted on the *old misaligned* panel, so this run is a quasi-clean validation, not an in-sample fit; the 60/40
+> date folds are both positive-mean (train +5.9 %, test +7.8 %) with zsMC clearing on each, though each fold alone
+> is ciLow<0 (too few days per fold for the city-clustered CI). A coordinate re-sweep on the corrected panel
+> re-confirms the tuned cell as the optimum on every axis (tp/sl/tstop/chw/maxEntry/window; depth robust across
+> $100–225, $100 slightly stronger). **Four NEW levers were built, tested and REJECTED** (see §"the 2026-07-03
+> improvement campaign" below): a per-city accuracy gate, an absolute "sell into 30+¢" take-profit, delayed entry,
+> and a no-chase taker-fallback guard — each loses to the tuned baseline with a clear mechanism.
+>
+> **This is still a backtest on the calibrated synthetic book** — the frozen discipline stands: the LIVE forward
+> paper loop (real books, real maker fills; `MAKER-EXIT-PAPER-LOOP-HANDOFF.md`) is the gate of record before any
+> capital. Two live-loop alignment actions follow from this run (both operator-gated): widen the forward panel's
+> scope from the 10-city trade allowlist to the 45-city capture universe (the 10-city subset is structurally
+> starved: CI [−7.8 %, +13.9 %] even at n=88 — handler change committed, needs a redeploy), and flip
+> `bot.consensusSource` `ensemble_raw` → `calibrated` (the PASS was measured with the calibrated gaussian seed;
+> the live capture currently seeds the raw consensus, which selects 21 pp worse — Finding 2, re-confirmed on
+> ~2 100 events).
+
+> **⚠ CORRECTION (2026-06-30, code review) — RESOLVED 2026-07-03, see the banner above.** The maker-rebate credit in `opening-maker-exit-replay.ts` was
 > computed as `rebateRate · takerFeePerShare(p, **1**) · shares` — it dropped the fee-rate factor, so it credited
 > the **full taker-fee magnitude** instead of a fraction of it (the `reward-farming.ts`/`reward-inventory.ts`
 > convention `rebateRate · takerFeePerShare(p, **feeRate**) · shares`). Consequence: the **rebate-on** numbers
@@ -11,7 +40,7 @@
 > The **live forward loop pins `makerRebateRate = 0`**, so the §9R-E gate of record never used the inflated path;
 > the forward loop **measures** the real rebate. (Fixed + pinned by a magnitude test in `opening-maker-exit-replay.test.ts`.)
 
-> **⚠ CORRECTION (2026-06-30, code review) — two more reasons to REGENERATE the numbers below.**
+> **⚠ CORRECTION (2026-06-30, code review) — RESOLVED 2026-07-03 (re-pulled + re-run with --split; banner above).**
 > 1. **Archive bucket misalignment (shared with `CONVERGENCE-TUNING.md`).** This sim runs over the same local
 >    archive via `tune-convergence.loadPanel`/`buildSet` → `buildHistoryEvent`. The archive was written in raw
 >    Gamma order while the DB seed/winner are temperature-sorted, so the replay attached the wrong forecast prob +
@@ -126,6 +155,36 @@ amsterdam  2026-06-27 33°C    buy 0.229T → T:stop_loss    sell 0.028 = −$18
 ```
 
 ---
+
+## The 2026-07-03 improvement campaign — four new levers built, tested, REJECTED
+
+The operator asked for a full check-and-improve pass on the convergence setup (entry pick, exit structure,
+timing, per-city source accuracy). Foundation first: the archive was **re-pulled canonically sorted** (the
+2026-06-30 misalignment fix) and every number regenerated — see the top banner (the tuned config now **PASSES**
+the full-panel gate). Then four new levers were implemented as engine/harness options (all default-off,
+byte-identical when unset), swept with the 60/40 date-split OOS discipline, and **all four rejected**:
+
+| lever | engine knob | best variant | full-panel result vs baseline +6.7 % CI[+0.3, +12.0] | why it loses |
+|---|---|---|---|---|
+| per-city accuracy gate | `cityGateLb` (Wilson-LB floor on the PRE-panel per-city hit table `CITY_GATE_PRE0613`, fitted 05-13→06-12 — temporally OOS for the whole replay) | lb 0.7/hit1 (17 cities) | mean +8.3 % but CI [−2.7 %, +16.3 %] → KILL | concentration cuts the CITY-cluster count → the clustered CI widens faster than the mean improves; bad-selector cities still contribute (the exit sells into the mid-life convergence, not resolution) |
+| absolute take-profit ("sell into 30+¢") | `tpMode:'abs'` + `tpAbsTarget` | 0.40 | +4.0 % CI [−2.3 %, +9.3 %] → KILL (0.30 → −0.7 %; 0.25 → −3.5 %) | the harvest is **entry-relative**: a level target forces near-entry exits on expensive entries (tiny wins, full-size losers) and over-asks on cheap ones |
+| forecast-prob take-profit | `tpMode:'model'` (rest AT our prob) | — | +4.8 % CI [+0.6 %, +10.7 %] → PASS but below baseline | the mode's prob (~0.35–0.45) over-asks vs the +12 pp sweet spot — fewer fills, more time-stops |
+| delayed entry ("wait for a dip") | `minEntryAgeH` | 2 h / 4 h / 8 h | −1.0 % / −4.6 % / −7.3 % → KILL, monotone | **the first enterable tick IS the low** — the convergence prices in fast; every hour of delay forfeits re-rating |
+| no-chase taker fallback | `noChaseTakerFallback` | on | +5.4 % CI [−2.5 %, +11.3 %] → KILL | a book that runs away during the maker rest is running *toward* the convergence — refusing to chase forfeits more winners than it avoids losers (the 0.465-entry LA loser is real but outweighed) |
+
+Plus the classic-coordinate re-sweep on the corrected panel: **tp 0.12 / sl 0.20 / tstop 18 h / chw 0 /
+maxEntry 0.30 / window 30 is the unique PASS cell on every axis** (each ±1 step lowers ciLow); depth is robust
+across $100–225 (100: ciLow +1.1 %; 150: +0.3 %; 225: +0.1 % — the pin keeps $150, selected on TRAIN).
+
+**The per-city source-accuracy question (the operator's hypothesis) was answered on ~2 100 resolved events**
+(3× this panel, all 45 cities, leads 0/1/2): the **calibrated house blend dominates every individual source at
+every lead** (hit-±1 88 %/79 %/75 % at lead 0/1/2 vs the best single NWP model ~70 %/66 %/62 % and the raw
+ensemble 66 %/62 %/59 %). No per-city single-model override survives multiple-comparisons scrutiny (the 8
+cities where one model beats the blend >10 pp are best-of-10 picks at n≈48 — and mostly the low-accuracy
+cities anyway). Per-city accuracy VARIES enormously (karachi/LA/miami ≥95 % bracket at lead 1; amsterdam 52 %)
+— but per the gate test above, that variation is not harvestable as a trade filter; its real use is the
+**seed choice** (calibrated > raw, everywhere) and the eventual capital-scope decision. The commercial Lane-B
+sources (google/OWM/WeatherAPI) have only days of history — re-scoreable in ~a month.
 
 ## What this changes — and the load-bearing assumptions
 

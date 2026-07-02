@@ -216,10 +216,14 @@ export function enterAndFill(input: EventReplayInput, cfg: OpeningCfg): EntryFil
   const ticks = input.ticks;
 
   // ── (1) find the FIRST enterable tick + the forecast-center candidate ─────────────────────────────────
+  // the OPTIONAL minEntryAgeH entry-timing gate (0/unset = off → byte-identical): skip ticks younger than the
+  // floor; an unknown age fails the armed gate (fail closed — cannot verify "old enough").
+  const minAgeH = cfg.minEntryAgeH ?? 0;
   let entryIdx = -1;
   let chosen: EntryCandidate | null = null;
   for (let i = 0; i < ticks.length; i++) {
     const t = ticks[i]!;
+    if (minAgeH > 0 && !(fin(t.hoursSinceListing) && t.hoursSinceListing >= minAgeH)) continue;
     const cands = selectEntries(captureOf(input, t), cfg, new Date(t.capturedAt), { requireFlatOpen: false });
     if (cands.length > 0) {
       // the forecast CENTER = the highest-modelProb (argmax houseProb) candidate; ONE entry per event.
@@ -246,6 +250,12 @@ export function enterAndFill(input: EventReplayInput, cfg: OpeningCfg): EntryFil
       // (not break) keeps the window elapsed so the take retries when the bucket reappears, else the event
       // ends `never_filled` — matching the bot's real cancel-maker-then-take-the-current-book semantics.
       if (!fin(liveAsk)) continue;
+      // the OPTIONAL no-chase guard (unset = off → byte-identical): never take a book that ran away past the
+      // reservation the entry decision was priced at — retry when it comes back inside, else never_filled.
+      if (cfg.noChaseTakerFallback === true) {
+        const reservation = Math.min(cfg.maxEntryPrice, chosen.modelProb - cfg.entryEdgeMargin);
+        if (liveAsk > reservation) continue;
+      }
       fill = paperFill(chosen, chosen.execAsk, liveAsk, cfg, false);
       isMaker = false;
       fillIdx = j;

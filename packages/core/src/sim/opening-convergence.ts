@@ -126,6 +126,22 @@ export interface OpeningCfg {
   paperSlippage: number;
   /** the weather taker fee rate the paper model charges (V2 fees are protocol-set; paper models it). */
   takerFeeRate: number;
+  /**
+   * OPTIONAL entry-timing gate (the 2026-07-03 tuning lever): do not enter before the market is at least this
+   * many hours past listing (skip younger ticks in the replay's entry walk). 0/unset = enter at the FIRST
+   * enterable tick (the historical behavior — byte-identical for every existing caller). A tick with an
+   * unknown hoursSinceListing fails the gate when it is armed (cannot verify the age → skip, fail closed).
+   */
+  minEntryAgeH?: number;
+  /**
+   * OPTIONAL no-chase guard on the taker fallback (the 2026-07-03 entry lever): when the maker window elapses,
+   * only take the CURRENT book if its ask is still within the entry reservation (min(maxEntryPrice,
+   * modelProb − entryEdgeMargin) — the same bar the entry decision passed). Without it (unset/false — the
+   * historical behavior) the fallback pays the worse-of ask at the fallback tick, which can CHASE a book that
+   * ran away during the maker rest (e.g. a 0.30-capped entry filling at 0.465). Skipped ticks retry (the
+   * vanished-bucket `continue` semantics) — the take happens when the ask comes back inside, else never_filled.
+   */
+  noChaseTakerFallback?: boolean;
 }
 
 /** A bucket selected to buy at the flat open. */

@@ -51,6 +51,17 @@ dashboard, TypeScript monorepo (`packages/core|io|trading`, `supabase/functions`
 > Tuned: tp 0.12 / sl 0.20 / tstop 18h / chw 0 / depth $150 / makerWindow 30. NOT a GO (three assumptions resolve
 > only forward) → it earns a **live forward test**, not capital. Rail stays DORMANT; live config unchanged.
 >
+> **↳ UPDATE 2026-07-03 — the archive was MISALIGNED-then-CORRECTED → the tuned maker-exit config now PASSES the backtest §9R-E gate (`MAKER-EXIT-SIM.md` banner); four new improvement levers tested + REJECTED.**
+> The on-disk archive predated the 06-30 canonical-sort fix → re-pulled (1 108 events) + every verdict regenerated on the
+> grown **819-event / 45-city / 20-day** panel: the SAME pinned config nets **+6.7 % / +$515, CI [+0.3 %, +12.0 %], PASS**
+> (rebate 0; +7.6 % at the fixed 0.25 tier) — the misalignment had been UNDERSTATING the edge. A four-lever improvement
+> campaign (per-city accuracy gate / absolute "sell at 30+¢" TP / delayed entry / no-chase fallback) was built + swept
+> OOS → **all rejected** (first-tick entry IS the low; entry-relative TP beats level targets; city-gating widens the
+> clustered CI). Per-city source accuracy (~2 100 events): the calibrated blend dominates every source at every lead →
+> two operator-gated alignment actions: redeploy `maker-exit-panel` (scope 10→45-city capture universe) + flip
+> `bot.consensusSource` → `calibrated`. **Backtest ≠ GO: the live forward paper loop stays the gate of record; no
+> capital before a frozen paper PASS.** Rail otherwise DORMANT; boundary intact.
+>
 > **↳ UPDATE 2026-06-30 (3) — the FORWARD MAKER-EXIT PAPER LOOP is BUILT + tested (operator-deploy-gated; `MAKER-EXIT-PAPER-LOOP-HANDOFF.md` §0a).**
 > Built as the maker-exit twin of `convergence-panel` (re-replay over the live `opening_captures` stream, NOT a
 > per-tick state machine): the pure `replayMakerExitEvent` now records the measurement diagnostics (maker-fill

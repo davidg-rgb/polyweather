@@ -10,18 +10,23 @@
  *   4. persist the §9R-E verdict to bot_gate_snapshot (source='forward') so bot_deadman_check watches the gate
  *      clock + the project keeps ONE gate-of-record, and write a liveness tick (record_bot_tick).
  *
- * Pinned to the tuned MAKER_EXIT config (makerExitCfg = BOT_DEFAULTS §9R 10-city TRADABLE allowlist + the §5
- * sweep optimum: tp 0.12 / sl 0.20 / tstop 18h / chw 0 / depth $150 / makerWindow 30 / rebate 0) — INTENTIONALLY
- * NOT config-driven, exactly like convergence-panel pins to BOT_DEFAULTS, so the page's numbers match the
- * authoritative scorer scope and the loop never mutates the shared bot.* keys. NOT trading — read-only analytics;
- * the bot rail stays paper/DORMANT (no capital until a frozen paper PASS + an operator decision). A capture gap
- * just yields a smaller/empty view, never a failed job; the per-city fetch-error count is surfaced in the view.
+ * PARAMS stay pinned to the tuned MAKER_EXIT config (the §5 sweep optimum: tp 0.12 / sl 0.20 / tstop 18h /
+ * chw 0 / depth $150 / makerWindow 30 / rebate 0 — re-confirmed as the coordinate-wise optimum on the CORRECTED
+ * 819-event archive, 2026-07-03) so the loop never mutates the shared bot.* keys. The panel SCOPE, however, is
+ * the live `bot.cities` CAPTURE universe (~45 cities), NOT the 10-city TRADABLE allowlist (2026-07-03 change):
+ * the corrected-archive §9R-E validation PASSES on the 45-city panel (n=382, CI [+0.3%, +12.0%]) while the
+ * 10-city subset is structurally starved (10 city-clusters → CI [−7.8%, +13.9%] even at n=88) — the paper gate
+ * measures the SIGNAL, and the capture stream already spans the full universe; which cities eventually carry
+ * capital stays a separate §9R liquidity decision. NOT trading — read-only analytics; the bot rail stays
+ * paper/DORMANT (no capital until a frozen paper PASS + an operator decision). A capture gap just yields a
+ * smaller/empty view, never a failed job; the per-city fetch-error count is surfaced in the view.
  */
 import type { JobCtx, JobStats } from '../_shared/runJob.ts';
 import {
   BOT_DEFAULTS,
   buildMakerExitView,
   makerExitCfg,
+  parseBotConfig,
   type RawCaptureRow,
   type RawResolution,
 } from '../../../packages/core/src/index.ts';
@@ -41,9 +46,17 @@ interface CaptureInputs {
 export async function makerExitPanel(ctx: JobCtx, deps: MakerExitPanelDeps): Promise<JobStats> {
   const { db, log } = ctx;
 
-  // the tuned maker-exit config, pinned to the §9R 10-city TRADABLE allowlist (NOT the live bot.cities capture
-  // universe) — same scoping discipline as convergence-panel, so the page matches the authoritative scorer.
-  const cfg = makerExitCfg(BOT_DEFAULTS.cities);
+  // the tuned maker-exit PARAMS pinned in code; the panel SCOPE = the live bot.cities CAPTURE universe (the
+  // 2026-07-03 corrected-archive validation passed on the 45-city panel — the 10-city trade subset is
+  // structurally starved for the clustered CI). Falls back to BOT_DEFAULTS.cities if the config row is absent.
+  let scopeCities: string[] = BOT_DEFAULTS.cities;
+  try {
+    const live = parseBotConfig(await db.getConfigRows()).cities;
+    if (Array.isArray(live) && live.length > 0) scopeCities = live;
+  } catch {
+    /* config unreadable → the conservative 10-city fallback */
+  }
+  const cfg = makerExitCfg(scopeCities);
 
   // 1) raw inputs (trimmed buckets, +bestBid) for the fresh-allowlist window — fetched PER CITY to stay under the
   //    8s PostgREST statement cap (the whole-allowlist build exceeds it); merge the per-city results.
