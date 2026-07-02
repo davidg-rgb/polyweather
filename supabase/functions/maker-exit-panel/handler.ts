@@ -34,13 +34,39 @@ import {
 /** the look-back window — wide enough for the §9R-E gate (≥40 markets / ≥7 days) to accrue. */
 const PANEL_DAYS = 21;
 
+/**
+ * per-city fetch tuning — the 45-city scope must fit the ~400s isolate wall-clock with margin. The 2026-07-03
+ * 45-city redeploy's first ticks DIED at the wall: 45 SEQUENTIAL convergence_capture_inputs calls (~3–8s each,
+ * unbounded — the DbPort fetch has no timeout, so one hung statement stalls the whole loop) never reached the
+ * snapshot write, leaving job_runs rows wedged 'running' and the gate-of-record stale. Bounded concurrency keeps
+ * each statement under the 8s PostgREST cap while collapsing the wall to ~⌈45/5⌉ batches; the per-city timeout
+ * bounds a hung fetch; the overall budget degrades to a PARTIAL view (skipped cities count into cityErrors,
+ * which the page already surfaces) — a partial snapshot beats a dead tick.
+ */
+const FETCH_CONCURRENCY = 5;
+const CITY_TIMEOUT_MS = 30_000;
+const FETCH_BUDGET_MS = 240_000;
+
 export interface MakerExitPanelDeps {
   now: Date;
+  /** test seams — production uses the module defaults above. */
+  fetchConcurrency?: number;
+  cityTimeoutMs?: number;
+  fetchBudgetMs?: number;
 }
 
 interface CaptureInputs {
   captures: RawCaptureRow[];
   resolutions: RawResolution[];
+}
+
+/** race a promise against a rejection timer (the DbPort has no fetch timeout); always clears the timer. */
+function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const killer = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(label)), ms);
+  });
+  return Promise.race([p, killer]).finally(() => clearTimeout(timer)) as Promise<T>;
 }
 
 export async function makerExitPanel(ctx: JobCtx, deps: MakerExitPanelDeps): Promise<JobStats> {
@@ -59,23 +85,51 @@ export async function makerExitPanel(ctx: JobCtx, deps: MakerExitPanelDeps): Pro
   const cfg = makerExitCfg(scopeCities);
 
   // 1) raw inputs (trimmed buckets, +bestBid) for the fresh-allowlist window — fetched PER CITY to stay under the
-  //    8s PostgREST statement cap (the whole-allowlist build exceeds it); merge the per-city results.
+  //    8s PostgREST statement cap (the whole-allowlist build exceeds it), through a bounded worker pool with a
+  //    per-city timeout + an overall budget (see the tuning block above); merge the per-city results. Interleaved
+  //    arrival order is safe: buildEvents groups per event and sorts ticks by capturedAt internally.
+  const fetchConcurrency = deps.fetchConcurrency ?? FETCH_CONCURRENCY;
+  const cityTimeoutMs = deps.cityTimeoutMs ?? CITY_TIMEOUT_MS;
+  const fetchBudgetMs = deps.fetchBudgetMs ?? FETCH_BUDGET_MS;
   const captures: RawCaptureRow[] = [];
   const resolutions: RawResolution[] = [];
   let cityErrors = 0;
-  for (const city of cfg.cities) {
-    try {
-      const r = await db.rpc<{ convergence_capture_inputs: CaptureInputs }>('convergence_capture_inputs', {
-        p_days: PANEL_DAYS,
-        p_cities: [city],
-      });
-      const inp = r[0]?.convergence_capture_inputs ?? { captures: [], resolutions: [] };
-      if (Array.isArray(inp.captures)) captures.push(...inp.captures);
-      if (Array.isArray(inp.resolutions)) resolutions.push(...inp.resolutions);
-    } catch (e) {
-      cityErrors++;
-      log('city inputs fetch failed (non-fatal)', { city, error: e instanceof Error ? e.message : String(e) });
+  let budgetSkipped = 0;
+  const fetchStarted = Date.now();
+  let nextCity = 0;
+  const worker = async (): Promise<void> => {
+    for (;;) {
+      const i = nextCity++;
+      if (i >= cfg.cities.length) return;
+      const city = cfg.cities[i]!;
+      if (Date.now() - fetchStarted > fetchBudgetMs) {
+        budgetSkipped++;
+        cityErrors++;
+        continue;
+      }
+      try {
+        const r = await withTimeout(
+          db.rpc<{ convergence_capture_inputs: CaptureInputs }>('convergence_capture_inputs', {
+            p_days: PANEL_DAYS,
+            p_cities: [city],
+          }),
+          cityTimeoutMs,
+          `convergence_capture_inputs(${city}) timed out after ${cityTimeoutMs}ms`,
+        );
+        const inp = r[0]?.convergence_capture_inputs ?? { captures: [], resolutions: [] };
+        if (Array.isArray(inp.captures)) captures.push(...inp.captures);
+        if (Array.isArray(inp.resolutions)) resolutions.push(...inp.resolutions);
+      } catch (e) {
+        cityErrors++;
+        log('city inputs fetch failed (non-fatal)', { city, error: e instanceof Error ? e.message : String(e) });
+      }
     }
+  };
+  await Promise.all(
+    Array.from({ length: Math.max(1, Math.min(fetchConcurrency, cfg.cities.length)) }, () => worker()),
+  );
+  if (budgetSkipped > 0) {
+    log('fetch budget exhausted — partial view', { budgetSkipped, budgetMs: fetchBudgetMs });
   }
 
   // 2) the pure maker-exit view (entries / 3 measured assumptions / fictive money / §9R-E gate). cityErrors is
@@ -126,6 +180,7 @@ export async function makerExitPanel(ctx: JobCtx, deps: MakerExitPanelDeps): Pro
   const stats: JobStats = {
     asOf: deps.now.toISOString(),
     cityErrors,
+    budgetSkipped,
     captureRows: captures.length,
     freshEvents: view.nFreshEvents,
     entries: view.entries.length,
