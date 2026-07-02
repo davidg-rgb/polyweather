@@ -102,6 +102,19 @@ pnpm tsx scripts/city-sim.ts --from 2026-05-01 --to 2026-06-29
 **Turn it off / pause a city:** `update city_sim_config set active=false where slug='karachi';` (data + dashboard
 stay; no new bets). Full stop: `select cron.unschedule('city-paper-trade');`.
 
+**Run window (migration `0075`):** `city_sim_config.active_until` (date, nullable) caps how many calendar
+days a city keeps PLACING new bets once (re)activated — null = unbounded. `city_sim_active_configs()` gates
+on `active and (active_until is null or current_date <= active_until)`; grading is unaffected (bets placed
+before the cutoff still settle after it passes). Reactivate for a fresh N-day run:
+`update city_sim_config set active=true, active_until=current_date + (N-1), updated_at=now() where slug=...;`
+**2026-07-03 incident:** both cities silently went `active=false` sometime after the 06-30 arm-hour widening
+(no code change, no Slack alert — prod Slack is paused except `WHALE_TRADE`) and the rail sat idle for 3 days
+(06-30→07-02) until `job_runs.stats` (`cities:0`) surfaced it. Reactivated + capped to a 30-day run
+(`active_until='2026-07-31'`) and backfilled the gap via `city-sim.ts --from 2026-06-30 --to 2026-07-02`
+(29 bets, all graded same run). **If `/paper-trade` looks stale, check `city_sim_config.active` and the
+latest `job_runs` row for `city-paper-trade` first** — the cron can report `status:'ok'` with `cities:0` and
+look healthy while doing nothing.
+
 ## 4. Add a city
 
 One INSERT — pick arm hours that bracket the city's intraday peak (query `intraday_advances` for the

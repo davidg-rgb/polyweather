@@ -265,6 +265,13 @@ describe('migrations 0001–0010', () => {
       // shadowed by a fresher production CALIBRATED house_gaussian (the 2026-06-29 consensus split was silently
       // defeated on the seed-reuse read path). Bot-only function; everything else byte-identical to 0066 §6.2.
       '0074_latest_house_dist_seeded.sql',
+      // 0075 = the multi-city paper-trade RUN WINDOW: city_sim_config.active_until (date, nullable) caps how
+      // many calendar days a city keeps PLACING new bets once (re)activated (null = unbounded); gated inside
+      // city_sim_active_configs() (`active and (active_until is null or current_date <= active_until)`).
+      // Grading is untouched (city_sim_grade_inputs has no city_sim_config dependency). Data-only reactivation
+      // of singapore/karachi to a 30-day window — no table/RPC-signature/cron change (cron count stays 29).
+      // CITY-SIM.md §3.
+      '0075_city_sim_run_window.sql',
     ]);
   });
 });
