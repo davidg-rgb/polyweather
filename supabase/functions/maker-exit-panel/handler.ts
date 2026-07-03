@@ -240,6 +240,7 @@ export async function makerExitPanel(ctx: JobCtx, deps: MakerExitPanelDeps): Pro
     nMarkets: view.gate.nMarkets,
     makerFillRate: view.assumptions.makerFillRate,
     realizedRebateUsd: view.assumptions.realizedRebateUsd,
+    qualifyingTickFrac: view.assumptions.qualifyingTickFrac,
     label: view.gate.label,
     snapshotId,
   };

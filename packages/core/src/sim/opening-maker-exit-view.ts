@@ -106,6 +106,15 @@ export interface MakerExitAssumptions {
   nMarkets: number;
   nCities: number;
   nDistinctDays: number;
+  /** #4 — SIGNAL-BACKLOG #1 follow-on (2026-07-03): of every tick the resting TP sell was live (realized trades
+   *  only), the fraction whose prior-tick mid put it in Polymarket's reward-qualifying band — weighted by
+   *  resting ticks. Measures the pool-SHARE-agnostic input directly on the live book: does the order even
+   *  qualify? The $ pool share stays an explicit unknown — this never accrues or assumes a dollar amount. NaN
+   *  with zero resting ticks accrued yet. */
+  qualifyingTickFrac: number;
+  /** the raw numerator/denominator behind qualifyingTickFrac (so a reader sees the sample size, not just the ratio). */
+  nQualifyingRestingTicks: number;
+  nRestingTicks: number;
 }
 
 /** The §9R-E gate progress toward a verdict — straight from openingVerdict over the realized maker-exit ledger. */
@@ -280,6 +289,9 @@ export function buildMakerExitView(
     nMarkets: panel.verdict.nMarkets, // #3 — the temporal extent the CI narrows over
     nCities: panel.verdict.nCities,
     nDistinctDays: panel.verdict.nDistinctDays,
+    qualifyingTickFrac: panel.qualifyingTickFrac, // #4 — the reward-eligibility tick diagnostic
+    nQualifyingRestingTicks: panel.nQualifyingRestingTicks,
+    nRestingTicks: panel.nRestingTicks,
   };
 
   // ── gate progress: ALL counts + the label/reason come straight from the ONE openingVerdict over the realized

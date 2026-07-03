@@ -125,6 +125,17 @@ function AssumptionTiles({ view }: { view: MakerExitView }): ReactElement {
         <div className="big">{a.nDistinctDays}<span className="muted" style={{ fontSize: '0.9rem' }}> / {view.gate.minDistinctDays}</span></div>
         <div className="sub">{a.nMarkets} markets · {a.nCities} cities (the CI narrows as these grow)</div>
       </div>
+      <div className="tile rec">
+        <div className="tile-head">
+          <span className="cap">#4 · Reward-qualifying ticks</span>
+          <span className="chip soft">pool SHARE unmeasured</span>
+        </div>
+        <div className="big" style={{ color: SKY }}>{Number.isFinite(a.qualifyingTickFrac) ? fmtPct(a.qualifyingTickFrac, 0) : '—'}</div>
+        <div className="sub">
+          of {a.nRestingTicks} resting ticks in Polymarket&apos;s reward band ({a.nQualifyingRestingTicks} qualifying)
+          — the pool $ / competition share stays an explicit unknown, never assumed here
+        </div>
+      </div>
       <div className="tile">
         <div className="cap">Observed spread</div>
         <div className="big" style={{ fontSize: '1.2rem' }}>{pp(a.meanObservedEntrySpread)} / {pp(a.meanObservedExitSpread)}</div>

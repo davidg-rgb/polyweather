@@ -367,6 +367,76 @@ describe('rewardCfg — liquidity-reward accrual on the resting TP sell (SIGNAL-
   });
 });
 
+describe('restingTicks / qualifyingRestingTicks — the reward-ELIGIBILITY tick diagnostic (SIGNAL-BACKLOG #1 follow-on, 2026-07-03)', () => {
+  // reuses the exact fixture from the rewardCfg $accrual tests above: eligibility is judged on the PRIOR tick's
+  // mid, no look-ahead. fillIdx=1 (00:10); the exit walk then visits 00:40 (prior mid = the 00:10 fill tick's
+  // DEFAULT mid 0.15 → 22c from the 0.37 target, ineligible), 00:50 (prior mid = 00:40's 0.20 → 17c, ineligible),
+  // 01:00 (prior mid = 00:50's 0.365 → 0.5c, ELIGIBLE — and the bid also reaches the target here, firing the TP).
+  const ticks = () => [
+    ...entryTicks(),
+    tick('2026-06-20T00:40:00Z', 0.8, { execBid: 0.20, execAsk: 0.21, mid: 0.20 }),
+    tick('2026-06-20T00:50:00Z', 0.95, { execBid: 0.30, execAsk: 0.31, mid: 0.365 }),
+    tick('2026-06-20T01:00:00Z', 1, { execBid: 0.37, execAsk: 0.38, mid: 0.365 }),
+  ];
+
+  it('counts 3 resting ticks / 1 qualifying — measured even with NO rewardCfg configured (pool-share-agnostic)', () => {
+    const t = replayMakerExitEvent(input(ticks()), cfg({ tpMode: 'abs', tpAbsTarget: 0.37 }), RESOLVE_MS);
+    expect(t.exitKind).toBe('maker_take_profit');
+    expect(t.rewardUsd).toBe(0); // no $ pool configured — the diagnostic is independent of that
+    expect(t.restingTicks).toBe(3);
+    expect(t.qualifyingRestingTicks).toBe(1);
+  });
+
+  it('is IDENTICAL whether or not cfg.rewardCfg is set, as long as maxSpreadCents matches (reuses the exact formula)', () => {
+    const noCfg = replayMakerExitEvent(input(ticks()), cfg({ tpMode: 'abs', tpAbsTarget: 0.37 }), RESOLVE_MS);
+    const withCfg = replayMakerExitEvent(
+      input(ticks()),
+      cfg({ tpMode: 'abs', tpAbsTarget: 0.37, rewardCfg: { dailyPoolUsd: 240, maxSpreadCents: 4.5, myPoolShareIfQualifying: 0.01 } }),
+      RESOLVE_MS,
+    );
+    expect(withCfg.restingTicks).toBe(noCfg.restingTicks);
+    expect(withCfg.qualifyingRestingTicks).toBe(noCfg.qualifyingRestingTicks);
+  });
+
+  it('follows cfg.rewardCfg.maxSpreadCents when configured — NOT the 4.5c fallback', () => {
+    // a wider 20c band admits the 00:40→00:50 interval too (17c from target, within 20c but not 4.5c).
+    const wide = replayMakerExitEvent(
+      input(ticks()),
+      cfg({ tpMode: 'abs', tpAbsTarget: 0.37, rewardCfg: { dailyPoolUsd: 240, maxSpreadCents: 20, myPoolShareIfQualifying: 0.01 } }),
+      RESOLVE_MS,
+    );
+    expect(wide.restingTicks).toBe(3);
+    expect(wide.qualifyingRestingTicks).toBe(2); // was 1 at the 4.5c default
+  });
+
+  it('a single-tick resting window that immediately qualifies counts 1/1', () => {
+    // tpDeltaPp 0.02 → exitLimit = entryPrice(0.16)+0.02 = 0.18; the ONE resting tick's prior mid (the entry-fill
+    // tick's default 0.15) sits 3c away — within the 4.5c default band — AND the bid reaches 0.18 on that same tick.
+    const t = replayMakerExitEvent(
+      input([...entryTicks(), tick('2026-06-20T01:00:00Z', 1, { execBid: 0.19, execAsk: 0.2 })]),
+      cfg({ tpDeltaPp: 0.02 }),
+      RESOLVE_MS,
+    );
+    expect(t.exitKind).toBe('maker_take_profit');
+    expect(t.restingTicks).toBe(1);
+    expect(t.qualifyingRestingTicks).toBe(1);
+  });
+
+  it('is 0/0 on a not-executed trade (no_runway, off-universe, junk)', () => {
+    const noRunway = replayMakerExitEvent(
+      input([...entryTicks(), tick('2026-06-20T01:00:00Z', 1, { execBid: 0.45, execAsk: 0.46 })]),
+      cfg({ tpDeltaPp: 0.25, tstopHoursBeforeResolve: 34 }),
+      RESOLVE_MS,
+    );
+    expect(noRunway.executed).toBe(false);
+    expect(noRunway.restingTicks).toBe(0);
+    expect(noRunway.qualifyingRestingTicks).toBe(0);
+    const junk = replayMakerExitEvent(null as unknown as EventReplayInput, cfg(), RESOLVE_MS);
+    expect(junk.restingTicks).toBe(0);
+    expect(junk.qualifyingRestingTicks).toBe(0);
+  });
+});
+
 describe('replayMakerExitEventBasket — SIGNAL-BACKLOG.md #5 (basket entry, variance reduction not a new edge)', () => {
   // a ladder where BOTH bucket 0 and bucket 1 qualify (bucket 2 never does, as in the default fixture) —
   // bucket1 stays the argmax (houseProb 0.4 > bucket0's 0.35), so a basketSize:1 request must degenerate
@@ -496,9 +566,51 @@ describe('replayMakerExitPanel', () => {
     expect(panel.verdict.label).toBe('INSUFFICIENT_DATA'); // 2 markets < the ≥40 floor — by design
   });
 
+  it('qualifyingTickFrac is WEIGHTED BY RESTING TICKS across the panel, not a simple mean of per-trade fractions', () => {
+    // event A: 3 resting ticks / 1 qualifying (frac 1/3) — the shared SIGNAL-BACKLOG #1b fixture.
+    const ticksA = [
+      ...entryTicks(),
+      tick('2026-06-20T00:40:00Z', 0.8, { execBid: 0.20, execAsk: 0.21, mid: 0.20 }),
+      tick('2026-06-20T00:50:00Z', 0.95, { execBid: 0.30, execAsk: 0.31, mid: 0.365 }),
+      tick('2026-06-20T01:00:00Z', 1, { execBid: 0.37, execAsk: 0.38, mid: 0.365 }),
+    ];
+    // event B: 1 resting tick / 1 qualifying (frac 1/1) — the SAME shared cfg (tpMode 'abs'/0.37), so its fill
+    // tick's mid is overridden to sit right next to the target (0.5c away — eligible), and the very next tick's
+    // bid reaches 0.37 immediately (one resting tick, no earlier ineligible interval).
+    const ticksB: ReplayTick[] = [
+      tick('2026-06-20T00:00:00Z', 0.1, { execAsk: 0.16, bestAsk: 0.16, execBid: 0.14 }),
+      tick('2026-06-20T00:10:00Z', 0.3, { execAsk: 0.12, bestAsk: 0.12, execBid: 0.11, mid: 0.365 }),
+      tick('2026-06-20T01:00:00Z', 1, { execBid: 0.37, execAsk: 0.38 }),
+    ];
+    const events: EventReplayInput[] = [
+      { ...input(ticksA), eventId: 'A', city: 'amsterdam' },
+      { ...input(ticksB), eventId: 'B', city: 'chengdu' },
+    ];
+    const res = new Map<string, number | null>([['A', RESOLVE_MS], ['B', RESOLVE_MS]]);
+    const panel = replayMakerExitPanel(
+      events,
+      cfg({ tpMode: 'abs', tpAbsTarget: 0.37, cities: ['amsterdam', 'chengdu'] }),
+      res,
+    );
+    expect(panel.nRealized).toBe(2);
+    expect(panel.nRestingTicks).toBe(panel.ledger.reduce((a, t) => a + t.restingTicks, 0));
+    expect(panel.nQualifyingRestingTicks).toBe(panel.ledger.reduce((a, t) => a + t.qualifyingRestingTicks, 0));
+    expect(panel.qualifyingTickFrac).toBeCloseTo(panel.nQualifyingRestingTicks / panel.nRestingTicks, 9);
+    // the tick-weighted fraction must differ from the simple (unweighted) mean of the two trades' own fractions
+    // whenever their resting-tick counts differ — pins that this is NOT trade-averaged.
+    const perTradeFracs = panel.ledger.map((t) => t.qualifyingRestingTicks / t.restingTicks).filter(Number.isFinite);
+    const simpleMean = perTradeFracs.reduce((a, b) => a + b, 0) / perTradeFracs.length;
+    if (panel.ledger.some((t) => t.restingTicks !== panel.ledger[0]!.restingTicks)) {
+      expect(panel.qualifyingTickFrac).not.toBeCloseTo(simpleMean, 6);
+    }
+  });
+
   it('is total on an empty panel', () => {
     const panel = replayMakerExitPanel([], cfg(), new Map());
     expect(panel.ledger.length).toBe(0);
     expect(panel.verdict.label).toBe('INSUFFICIENT_DATA');
+    expect(panel.nRestingTicks).toBe(0);
+    expect(panel.nQualifyingRestingTicks).toBe(0);
+    expect(Number.isNaN(panel.qualifyingTickFrac)).toBe(true);
   });
 });

@@ -140,6 +140,10 @@ describe('maker-exit-panel per-city fetch pool', () => {
     expect(db.writes).toEqual(
       expect.arrayContaining(['record_maker_exit_panel', 'record_bot_gate_snapshot', 'record_bot_tick']),
     );
+    // SIGNAL-BACKLOG #1 follow-on — the reward-eligibility tick diagnostic flows into the stats payload (the
+    // fake captures are empty, so it's the "no realized trades yet" NaN, but the field must be present + wired).
+    expect('qualifyingTickFrac' in stats).toBe(true);
+    expect(Number.isNaN(stats.qualifyingTickFrac as number)).toBe(true);
   });
 });
 

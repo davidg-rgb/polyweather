@@ -175,6 +175,17 @@ export interface MakerExitTrade {
   /** the maker rebate rate applied to this trade's maker legs (cfg.makerRebateRate) — recorded so the forward
    *  run MEASURES the rebate assumption (#2) at whatever tier the operator confirms, not a backtest constant. */
   rebateRateUsed: number;
+  // ── reward-ELIGIBILITY diagnostic (SIGNAL-BACKLOG #1 follow-on, 2026-07-03) — measures the tick-level input
+  // the pool-SHARE assumption above cannot resolve: does the resting TP sell even sit in Polymarket's
+  // reward-qualifying band? ALWAYS measured (does not require cfg.rewardCfg to be configured — a $ pool/share
+  // is never assumed here, only the docs-verbatim eligibility formula reused verbatim from restingSellQmin). ──
+  /** ticks the resting maker TP sell was live before the exit fired (safeExitIdx − fillIdx; 0 if the exit fired
+   *  on the entry-fill tick itself, which cannot happen today but is kept total). */
+  restingTicks: number;
+  /** of restingTicks, how many ticks' PRIOR-tick mid put the resting sell in the reward-qualifying band
+   *  (restingSellQmin > 0 — the exact 1b eligibility formula; the max-spread band is cfg.rewardCfg's when a
+   *  pool is configured for this run, else the REC-3 weather-universal 4.5c default). */
+  qualifyingRestingTicks: number;
 }
 
 const NOT_EXECUTED = (eventId: string, city: string, targetDate: string, reason: string): MakerExitTrade => ({
@@ -183,7 +194,17 @@ const NOT_EXECUTED = (eventId: string, city: string, targetDate: string, reason:
   rewardUsd: 0, netPnlUsd: 0, stakeUsd: 0, netReturn: NaN, executed: false,
   bucketIdx: -1, entryTickIndex: -1, exitTickIndex: -1, makerFillLatencyTicks: null,
   observedEntrySpread: NaN, observedExitSpread: NaN, rebateRateUsed: 0,
+  restingTicks: 0, qualifyingRestingTicks: 0,
 });
+
+/** Polymarket's published resting-order reward band for the weather universe (rewards.max_spread, in CENTS) —
+ *  REC-3/MAKER-REBATE-HANDOFF.md; reward-inventory.ts's own DEFAULT_INVENTORY_PARAMS pins the same 4.5. Used
+ *  ONLY as the eligibility-diagnostic's fallback band when cfg.rewardCfg is unset (the live paper loop runs
+ *  with no $ pool configured today, but the tick-qualification diagnostic still needs a band to check against).
+ *  When cfg.rewardCfg IS set, its own maxSpreadCents governs instead, so a sweep stays self-consistent with its
+ *  own dollar accrual. A real, documented venue parameter — NOT an assumption (unlike myPoolShareIfQualifying /
+ *  dailyPoolUsd, which stay explicit unknowns SIGNAL-BACKLOG.md #1's follow-on deliberately does not invent). */
+export const REWARD_ELIGIBILITY_MAX_SPREAD_CENTS = 4.5;
 
 /**
  * Reward-eligible qualification of a resting SELL at `restPrice` for `shares`, at the market's `mid`
@@ -313,37 +334,50 @@ function runMakerExitLeg(
   // ── exit walk from the tick AFTER the fill (a resting order needs a later tick to be lifted). NO LOOK-AHEAD ──
   let lastBid: number | null = null;
   let rewardAcc = 0; // accrued liquidity-reward income on the resting SELL (0 forever when cfg.rewardCfg is unset)
+  let restingTicksCount = 0; // SIGNAL-BACKLOG #1 follow-on — ticks the resting sell was live (always counted)
+  let qualifyingRestingCount = 0; // of those, how many prior-tick mids put it in the reward-qualifying band
   let prevMs = entryFillMs; // the resting sell starts accruing from the moment it began resting
+  // the eligibility band: cfg.rewardCfg's configured spread when a $ pool is being swept (byte-identical to the
+  // pre-existing accrual math below), else the REC-3 weather-universal default — so the diagnostic still runs
+  // when cfg.rewardCfg is unset (today's live paper loop).
+  const eligibilityMaxSpreadCents = cfg.rewardCfg?.maxSpreadCents ?? REWARD_ELIGIBILITY_MAX_SPREAD_CENTS;
   for (let j = fillIdx + 1; j < ticks.length; j++) {
     const t = ticks[j]!;
     const nowMs = new Date(t.capturedAt).getTime();
     const bid = bidAt(t, bucketIdx);
     if (fin(bid)) lastBid = bid;
 
-    // reward accrual for the interval the resting sell just finished being live (SIGNAL-BACKLOG #1b) — eligibility
-    // is evaluated on the PRIOR tick's mid (the state known at the interval's start — no look-ahead into tick j).
+    // resting-tick reward-ELIGIBILITY diagnostic (SIGNAL-BACKLOG #1 follow-on) — ALWAYS measured, pool-SHARE-
+    // agnostic: does the PRIOR tick's mid put the resting sell in the qualifying band (no look-ahead into tick
+    // j)? Independent of whether a $ pool is configured — it never assumes a dollar amount or a competition share.
+    restingTicksCount++;
+    const qDiag = restingSellQmin(exitLimit, shares, midAt(ticks[j - 1]!, bucketIdx), eligibilityMaxSpreadCents);
+    if (qDiag > 0) qualifyingRestingCount++;
+
+    // reward $ accrual for the interval the resting sell just finished being live (SIGNAL-BACKLOG #1b) — only
+    // when cfg.rewardCfg is configured (the dollar accrual stays opt-in). qDiag above reuses the SAME formula
+    // + the SAME band when cfg.rewardCfg is set — byte-identical to the pre-existing accrual behavior.
     if (cfg.rewardCfg && Number.isFinite(nowMs) && nowMs > prevMs) {
       const dtHours = (nowMs - prevMs) / 3_600_000;
-      const q = restingSellQmin(exitLimit, shares, midAt(ticks[j - 1]!, bucketIdx), cfg.rewardCfg.maxSpreadCents);
-      if (q > 0) rewardAcc += cfg.rewardCfg.myPoolShareIfQualifying * cfg.rewardCfg.dailyPoolUsd * (dtHours / 24);
+      if (qDiag > 0) rewardAcc += cfg.rewardCfg.myPoolShareIfQualifying * cfg.rewardCfg.dailyPoolUsd * (dtHours / 24);
     }
     prevMs = nowMs;
 
     // (a) MAKER take-profit: a buyer lifts the resting sell — fill AT the limit, $0 fee + rebate.
     if (fin(bid) && bid >= exitLimit) {
-      return settle(exitLimit, 'maker_take_profit', true, rebate(exitLimit), 0, j, rewardAcc);
+      return settle(exitLimit, 'maker_take_profit', true, rebate(exitLimit), 0, j, rewardAcc, restingTicksCount, qualifyingRestingCount);
     }
     // (b) TAKER stop-loss: cut the loss by crossing into the bid (cannot rest above a falling market — §12).
     if (fin(bid) && bid <= slStop) {
       const fee = takerFeePerShare(bid, cfg.takerFeeRate) * shares;
-      return settle(bid, 'taker_stop_loss', false, 0, fee, j, rewardAcc);
+      return settle(bid, 'taker_stop_loss', false, 0, fee, j, rewardAcc, restingTicksCount, qualifyingRestingCount);
     }
     // (c) HARD time-stop (resolvesAt − N h): flatten as a taker at the realizable bid (or the last seen bid).
     if (nowMs >= timeStopMs) {
       const px = fin(bid) ? bid : lastBid;
       if (px != null) {
         const fee = takerFeePerShare(px, cfg.takerFeeRate) * shares;
-        return settle(px, 'taker_time_stop', false, 0, fee, j, rewardAcc);
+        return settle(px, 'taker_time_stop', false, 0, fee, j, rewardAcc, restingTicksCount, qualifyingRestingCount);
       }
       break; // no bid to flatten into → settle below
     }
@@ -353,13 +387,16 @@ function runMakerExitLeg(
   const endIdx = ticks.length - 1;
   if (input.resolution && !input.resolution.gradingMismatch && input.resolution.winnerIdx != null) {
     const won = input.resolution.winnerIdx === bucketIdx;
-    return settle(won ? 1 : 0, `resolution_settle:${won ? 'win' : 'lose'}`, false, 0, 0, endIdx, rewardAcc); // redeem — no taker fee
+    return settle(won ? 1 : 0, `resolution_settle:${won ? 'win' : 'lose'}`, false, 0, 0, endIdx, rewardAcc, restingTicksCount, qualifyingRestingCount); // redeem — no taker fee
   }
-  return settle(fin(lastBid) ? lastBid : 0, 'mtm_unresolved', false, 0, 0, endIdx, rewardAcc);
+  return settle(fin(lastBid) ? lastBid : 0, 'mtm_unresolved', false, 0, 0, endIdx, rewardAcc, restingTicksCount, qualifyingRestingCount);
 
   // exitIdx = the tick the exit fired at (the loop index, or the series end for a settle/mtm) — the measurement
   // anchor: it dates the exit (exitAt), measures the maker-fill latency, and reads the realized exit-side spread.
-  function settle(exitPrice: number, exitKind: string, isMakerExit: boolean, exitRebate: number, exitFee: number, exitIdx: number, rewardUsd: number = 0): MakerExitTrade {
+  function settle(
+    exitPrice: number, exitKind: string, isMakerExit: boolean, exitRebate: number, exitFee: number, exitIdx: number,
+    rewardUsd: number = 0, restingTicks: number = 0, qualifyingRestingTicks: number = 0,
+  ): MakerExitTrade {
     const feeUsd = entryFee + exitFee;
     const rebateUsd = entryRebate + exitRebate;
     const netPnlUsd = shares * (exitPrice - fill.price) - feeUsd + rebateUsd + rewardUsd;
@@ -371,6 +408,7 @@ function runMakerExitLeg(
       bucketIdx, entryTickIndex: fillIdx, exitTickIndex: safeExitIdx,
       makerFillLatencyTicks: isMakerExit ? safeExitIdx - fillIdx : null,
       observedEntrySpread, observedExitSpread: spreadAt(ticks[safeExitIdx]!, bucketIdx), rebateRateUsed,
+      restingTicks, qualifyingRestingTicks,
     };
   }
 }
@@ -576,6 +614,15 @@ export interface MakerExitPanel {
   nRealized: number;
   /** the share of realized exits that were MAKER take-profits (vs taker SL/time-stop) — the adverse-selection read. */
   makerExitFrac: number;
+  /** SIGNAL-BACKLOG #1 follow-on (2026-07-03): of every tick the resting TP sell was live across REALIZED trades,
+   *  the fraction whose prior-tick mid qualified for Polymarket's reward band — weighted by resting ticks (NOT a
+   *  simple mean of per-trade fractions, so a trade that rested longer counts proportionally more). Pool-SHARE-
+   *  agnostic: measures only whether the order qualifies, never assumes a $ pool or a competition share. NaN when
+   *  zero resting ticks have accrued yet. */
+  qualifyingTickFrac: number;
+  /** the raw numerator/denominator behind qualifyingTickFrac (transparency on the sample size). */
+  nQualifyingRestingTicks: number;
+  nRestingTicks: number;
 }
 
 /**
@@ -594,6 +641,8 @@ export function replayMakerExitPanel(
   const panel: OpeningMarketResult[] = [];
   let makerExits = 0;
   let realized = 0;
+  let restingTicksTotal = 0;
+  let qualifyingRestingTotal = 0;
   for (const e of evs) {
     if (e.resolution?.gradingMismatch) continue; // ambiguous payout — out of scoring entirely
     const t = replayMakerExitEvent(e, cfg, resolvesByEvent.get(e.eventId) ?? null);
@@ -602,6 +651,8 @@ export function replayMakerExitPanel(
     if (!t.exitKind.startsWith('mtm_')) {
       realized++;
       if (t.isMakerExit) makerExits++;
+      restingTicksTotal += t.restingTicks;
+      qualifyingRestingTotal += t.qualifyingRestingTicks;
       panel.push({ city: e.city, targetDate: e.targetDate, netPnlUsd: t.netPnlUsd, stakeUsd: t.stakeUsd, netReturn: t.netReturn, executed: true });
     }
   }
@@ -616,6 +667,9 @@ export function replayMakerExitPanel(
     nExecuted: ledger.length,
     nRealized: realized,
     makerExitFrac: realized ? makerExits / realized : NaN,
+    qualifyingTickFrac: restingTicksTotal > 0 ? qualifyingRestingTotal / restingTicksTotal : NaN,
+    nQualifyingRestingTicks: qualifyingRestingTotal,
+    nRestingTicks: restingTicksTotal,
   };
 }
 
@@ -635,6 +689,11 @@ export interface MakerExitPanelBasket {
   nRealized: number;
   /** the share of realized LEGS (across every realized basket) that exited as a maker take-profit. */
   makerExitFrac: number;
+  /** the basket twin of replayMakerExitPanel's qualifyingTickFrac (SIGNAL-BACKLOG #1 follow-on) — weighted by
+   *  resting ticks across every leg of every fully-realized basket. NaN when zero resting ticks have accrued. */
+  qualifyingTickFrac: number;
+  nQualifyingRestingTicks: number;
+  nRestingTicks: number;
 }
 
 /**
@@ -653,6 +712,8 @@ export function replayMakerExitPanelBasket(
   let makerExitLegs = 0;
   let realizedLegs = 0;
   let realized = 0;
+  let restingTicksTotal = 0;
+  let qualifyingRestingTotal = 0;
   for (const e of evs) {
     if (e.resolution?.gradingMismatch) continue;
     const t = replayMakerExitEventBasket(e, cfg, resolvesByEvent.get(e.eventId) ?? null);
@@ -663,6 +724,8 @@ export function replayMakerExitPanelBasket(
       realized++;
       realizedLegs += t.legs.length;
       makerExitLegs += t.legs.filter((l) => l.isMakerExit).length;
+      restingTicksTotal += t.legs.reduce((a, l) => a + l.restingTicks, 0);
+      qualifyingRestingTotal += t.legs.reduce((a, l) => a + l.qualifyingRestingTicks, 0);
       panel.push({ city: e.city, targetDate: e.targetDate, netPnlUsd: t.netPnlUsd, stakeUsd: t.stakeUsd, netReturn: t.netReturn, executed: true });
     }
   }
@@ -676,5 +739,8 @@ export function replayMakerExitPanelBasket(
     nExecuted: ledger.length,
     nRealized: realized,
     makerExitFrac: realizedLegs ? makerExitLegs / realizedLegs : NaN,
+    qualifyingTickFrac: restingTicksTotal > 0 ? qualifyingRestingTotal / restingTicksTotal : NaN,
+    nQualifyingRestingTicks: qualifyingRestingTotal,
+    nRestingTicks: restingTicksTotal,
   };
 }

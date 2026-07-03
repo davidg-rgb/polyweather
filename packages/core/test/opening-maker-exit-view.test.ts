@@ -57,6 +57,16 @@ describe('buildMakerExitView', () => {
     expect(Number.isFinite(view.assumptions.meanObservedExitSpread)).toBe(true);
     expect(view.assumptions.rebateRateUsed).toBe(0); // the conservative fee-saving floor
 
+    // #4 — the reward-eligibility tick diagnostic (SIGNAL-BACKLOG #1 follow-on): measured with NO $ pool
+    // configured (makerExitCfg never sets rewardCfg) — pool-share-agnostic, purely tick-level eligibility.
+    expect(view.assumptions.nRestingTicks).toBeGreaterThan(0);
+    expect(view.assumptions.nQualifyingRestingTicks).toBeGreaterThanOrEqual(0);
+    expect(view.assumptions.nQualifyingRestingTicks).toBeLessThanOrEqual(view.assumptions.nRestingTicks);
+    expect(view.assumptions.qualifyingTickFrac).toBeCloseTo(
+      view.assumptions.nQualifyingRestingTicks / view.assumptions.nRestingTicks,
+      9,
+    );
+
     // money tracker + the tuned params surfaced
     expect(view.money.netPnlUsd).toBeGreaterThan(0);
     expect(view.money.nEntries).toBe(2);
@@ -84,5 +94,8 @@ describe('buildMakerExitView', () => {
     expect(view.gate.label).toBe('INSUFFICIENT_DATA');
     expect(view.money.nEntries).toBe(0);
     expect(Number.isNaN(view.assumptions.makerFillRate)).toBe(true);
+    expect(Number.isNaN(view.assumptions.qualifyingTickFrac)).toBe(true);
+    expect(view.assumptions.nRestingTicks).toBe(0);
+    expect(view.assumptions.nQualifyingRestingTicks).toBe(0);
   });
 });
