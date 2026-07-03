@@ -13,20 +13,43 @@
  * in-memory, so the ~65 exclusion runs take seconds, not process spawns. Read-only; writes only
  * out/jackknife-maker-exit.md + a RESULT json line. Never imports packages/trading.
  *
+ * CLI (SIGNAL-BACKLOG.md #5 amended spec, 2026-07-03): --chw <N> overrides centerHalfWidth on the pinned
+ * config (basket sizes >1 need a candidate set wider than the mode-only default); --basket-size <N>
+ * dispatches to replayMakerExitPanelBasket (mirrors sim-maker-exit.ts's run() dispatch — 1 = the historical
+ * single-bucket engine); --out <path> overrides the report destination. No flags = today's exact behavior.
+ *
  * Run: pnpm tsx scripts/research/jackknife-maker-exit.ts
+ *      pnpm tsx scripts/research/jackknife-maker-exit.ts --chw 1 --basket-size 2 --out scripts/research/out/jackknife-maker-exit-basket2.md
  */
 import { writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { parseArgs } from 'node:util';
 import { loadCache, cfgFrom, DEFAULT_PARAMS, type SimParams } from './sim-maker-exit.ts';
-import { replayMakerExitPanel } from '../../packages/core/src/sim/opening-maker-exit-replay.ts';
+import { replayMakerExitPanel, replayMakerExitPanelBasket } from '../../packages/core/src/sim/opening-maker-exit-replay.ts';
 import type { EventReplayInput } from '../../packages/core/src/sim/opening-bracket-replay.ts';
 import type { OpeningVerdict } from '../../packages/core/src/sim/opening-convergence.ts';
 
 const OUT_DIR = join(dirname(fileURLToPath(import.meta.url)), 'out');
 
-/** the pinned MAKER_EXIT_TUNED config (MAKER-EXIT-SIM.md §5 — the corrected-archive PASS cell). */
-const TUNED: SimParams = { ...DEFAULT_PARAMS, tp: 0.12, sl: 0.2, tstopHours: 18, depth: 150, makerWindow: 30 };
+// ── CLI: --chw / --basket-size / --out (SIGNAL-BACKLOG.md #5 amended spec) — no flags = today's behavior. ──
+const { values: cliArgs } = parseArgs({
+  options: { chw: { type: 'string' }, 'basket-size': { type: 'string' }, out: { type: 'string' } },
+});
+const num = (k: 'chw' | 'basket-size', d: number): number => {
+  const v = cliArgs[k];
+  const n = Number(v);
+  return v != null && Number.isFinite(n) ? n : d;
+};
+const OUT_PATH = cliArgs.out ?? join(OUT_DIR, 'jackknife-maker-exit.md');
+const OUT_LABEL = cliArgs.out ?? 'scripts/research/out/jackknife-maker-exit.md';
+
+/** the pinned MAKER_EXIT_TUNED config (MAKER-EXIT-SIM.md §5 — the corrected-archive PASS cell), with the
+ *  optional --chw / --basket-size CLI overrides (default: chw 0 / basket 1, identical to the pinned config). */
+const TUNED: SimParams = {
+  ...DEFAULT_PARAMS, tp: 0.12, sl: 0.2, tstopHours: 18, depth: 150, makerWindow: 30,
+  chw: num('chw', DEFAULT_PARAMS.chw), basketSize: num('basket-size', DEFAULT_PARAMS.basketSize),
+};
 
 interface JackRow {
   held: string;
@@ -44,7 +67,12 @@ function replay(
   dayBlockNull: boolean,
 ): OpeningVerdict {
   const cities = [...new Set(events.map((e) => e.city))];
-  return replayMakerExitPanel(events, cfgFrom(TUNED, cities), resolves, dayBlockNull ? { dayBlockNull: true } : {}).verdict;
+  const cfg = cfgFrom(TUNED, cities);
+  const opts = dayBlockNull ? { dayBlockNull: true } : {};
+  // mirrors sim-maker-exit.ts's run() dispatch: basketSize>1 → the basket engine, else the historical single-bucket path.
+  return TUNED.basketSize > 1
+    ? replayMakerExitPanelBasket(events, cfg, resolves, opts).verdict
+    : replayMakerExitPanel(events, cfg, resolves, opts).verdict;
 }
 
 const pct = (v: number | undefined, d = 1): string => (v != null && Number.isFinite(v) ? `${(v * 100).toFixed(d)}%` : '—');
@@ -82,7 +110,8 @@ const md = [
   `# jackknife — maker-exit corrected-archive PASS robustness (${new Date().toISOString().slice(0, 10)})`,
   '',
   `Cache: ${meta}`,
-  `Pinned config: tp ${TUNED.tp} / sl ${TUNED.sl} / tstop ${TUNED.tstopHours}h / chw ${TUNED.chw} / maxEntry ${TUNED.maxEntry} / depth $${TUNED.depth} / makerWindow ${TUNED.makerWindow} / rebate ${TUNED.rebate}`,
+  `Pinned config: tp ${TUNED.tp} / sl ${TUNED.sl} / tstop ${TUNED.tstopHours}h / chw ${TUNED.chw} / maxEntry ${TUNED.maxEntry} / depth $${TUNED.depth} / makerWindow ${TUNED.makerWindow} / rebate ${TUNED.rebate}` +
+    (TUNED.basketSize > 1 ? ` / basket ${TUNED.basketSize}` : ''),
   '',
   '## Baseline',
   '',
@@ -103,7 +132,7 @@ const md = [
   '',
 ].join('\n');
 
-writeFileSync(join(OUT_DIR, 'jackknife-maker-exit.md'), md + '\n');
+writeFileSync(OUT_PATH, md + '\n');
 process.stdout.write(md + '\n');
 process.stdout.write(
   `RESULT ${JSON.stringify({
@@ -118,6 +147,6 @@ process.stdout.write(
     lodoFlips: flips(lodo).map((r) => r.held),
     locoWorst: loco[0],
     lodoWorst: lodo[0],
-    out: 'scripts/research/out/jackknife-maker-exit.md',
+    out: OUT_LABEL,
   })}\n`,
 );
