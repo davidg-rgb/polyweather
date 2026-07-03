@@ -1,5 +1,16 @@
 # Maker-Exit Simulation — the convergence edge, tested as a MAKER edge
 
+> **✅ RE-RUN 2026-07-03 ~09:50Z (the morning-queue baseline re-run) — the PASS HOLDS on the grown panel; robustness slightly improved.**
+> Cache rebuilt post-incident on the same corrected archive: **827 events / 45 cities / 20 days** (the intended 21st
+> day, 07-02, had not graded in yet — its markets resolved during the morning DB outage; re-joins the panel once
+> fetch-actuals/grading catch up). Same pinned `MAKER_EXIT_TUNED` config, rebate 0: realized 386, winFrac 63.0 %,
+> **+6.9 % / +$534, CI [+0.4 %, +12.1 %], zsMC 3.2 % → PASS** (was +6.7 %/+$515, CI [+0.3 %, +12.0 %] at 819 ev).
+> 60/40 date folds: train +5.9 % / test +8.2 %, both positive-mean, each alone ciLow<0 (days-per-fold, unchanged).
+> Jackknife: **LOCO flips 16→15 of 45** (worst shenzhen CI [−0.4 %, +11.0 %]), **LODO flips 8→7 of 20** (worst
+> 2026-06-30 CI [−1.0 %, +11.2 %]) — every exclusion keeps the mean +4.9…+8.8 %; **the DAY-BLOCK tightening still
+> PASSES (day CI [+2.4 %, +12.6 %], day-flip MC 3.3 %)**. Same verdict as below: real-but-marginal, day-block-robust;
+> the LIVE forward paper loop stays the gate of record — no capital on a backtest.
+
 > **✅ REGENERATED 2026-07-03 — the corrected archive PASSES the full-panel §9R-E gate at the SAME tuned config.**
 > Both 2026-06-30 corrections below are RESOLVED: the archive was re-pulled canonically sorted (1 108 events,
 > June-10→July-2 window — the whole seeded panel) and the sim re-run with the fixed rebate formula and a

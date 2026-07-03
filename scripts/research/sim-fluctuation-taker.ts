@@ -52,7 +52,7 @@ const DISTS_CACHE_PATH = join(OUT_DIR, 'fluctuation-dists.json.gz');
  *  6h granularity keeps the cache small while never letting a tick read a dist that postdates it. */
 const THIN_HOURS = 6;
 /** DB gentleness after the 2026-07-03 IO incident: chunk the id list so no single statement is heavy. */
-const ID_CHUNK = 200;
+const ID_CHUNK = 100;
 
 interface DistsCache {
   builtAt: string;
@@ -88,6 +88,11 @@ async function buildDistsCache(): Promise<{ events: number; withDists: number; d
              join ev on ev.id = bp.event_id
             where bp.source = 'house_gaussian'
               and coalesce(bp.seeded, false) = false
+              -- coarse, INDEX-PRUNABLE made_at window (leads 0..2 always fall inside target_date −3d…+1d in any
+              -- tz); the precise tz-aware lead filter below stays authoritative. Without this the per-row
+              -- "at time zone" ran over an event's ENTIRE dist history and timed out on the convalescing DB.
+              and bp.made_at >= (ev.target_date - 3)::timestamptz
+              and bp.made_at <  (ev.target_date + 2)::timestamptz
          )
          select distinct on (poly_event_id, hbin) poly_event_id, made_at, probs
            from d
