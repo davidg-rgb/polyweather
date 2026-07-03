@@ -668,6 +668,30 @@ expected to survive.
 > (untracked). Lens waived — prior-consistent negative, no behavior change. The external report's sole
 > open gap is now CLOSED. Recorded in `FINDINGS.md`.
 
+## 12. CITY-SCAN — historical city-sim replay across all 45 cities (operator-requested 2026-07-03 evening)
+
+> **📌 PRE-REGISTERED (2026-07-03 ~21:10 local, orchestrator — locked BEFORE any measurement).** Analytics
+> SELECTION study, not a capital gate: replay the city-sim $10/day predicted-bucket taker bet historically
+> across every city × entry hour, to (a) shortlist "another Karachi" candidates for live paper-trade
+> enrollment and (b) map the entry-hour pattern for future (paper) automation. Honest prior: mechanism-A
+> pooled efficiency (KILL-GATE 2 + 5 confirmations) says the POOLED result should be ≈0; the question is
+> per-city/per-hour heterogeneity, which only live forward data can confirm (Karachi precedent).
+> - **Data:** local maker-exit cache (844 ev / 45 c / 21 d tick series, real asks) + `bucket_probabilities`
+>   (latest house calibrated build strictly ≤ bet tick — no look-ahead); resolved winners from the cache.
+> - **Bet rule (mirrors the live city-sim):** at the first captured tick ≥ hour H local (H ∈ {9..19},
+>   city tz), buy $10 of the forecast-mode bucket at the real ask (city-sim ask/fee conventions reused
+>   from the existing engine code, not re-derived), hold to resolution.
+> - **Multiplicity control (THE point):** date split TRAIN = target days ≤ 2026-06-24, TEST = ≥ 06-25.
+>   Selection ONLY on TRAIN: rank city×arm cells by the entry-watch shrinkage lower bound (reuse
+>   `core/sim/entry-watch.ts`'s LB verbatim). Confirmation ONLY on TEST for the top-5 TRAIN cells:
+>   net PnL + day-clustered CI. **Candidate bar: TRAIN LB > 0 AND TEST net > 0.** Everything else is
+>   descriptive.
+> - **Pattern read (descriptive, pooled):** ROI-by-local-hour curve with day-clustered CI (all cities),
+>   win-rate vs payout decomposition by hour (the floor-lock tradeoff), entry-ask distribution win/loss.
+> - **Output handling:** candidates → operator decision to enroll in `city_sim_config` (LIVE PAPER
+>   measurement, the Karachi path). NO capital implication; the §9R boundary unchanged. INSUFFICIENT-style
+>   humility mandatory: ~13/8 TRAIN/TEST days → wide CIs; the scan SELECTS, the live loop CONFIRMS.
+
 ## What NOT to do
 
 Don't build items 5–10 before items 1–4 resolve — 1–4 are all read-only analysis over data that
