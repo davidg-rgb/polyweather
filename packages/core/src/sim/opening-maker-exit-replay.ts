@@ -341,7 +341,11 @@ function runMakerExitLeg(
   // pre-existing accrual math below), else the REC-3 weather-universal default — so the diagnostic still runs
   // when cfg.rewardCfg is unset (today's live paper loop).
   const eligibilityMaxSpreadCents = cfg.rewardCfg?.maxSpreadCents ?? REWARD_ELIGIBILITY_MAX_SPREAD_CENTS;
-  for (let j = fillIdx + 1; j < ticks.length; j++) {
+  // j is hoisted so the post-loop diagnostic catch-up below can see where the walk stopped: ticks.length when
+  // the loop exhausted normally, or the break tick (the no-bid time-stop) — the ONE early exit that does not
+  // `return settle(...)` from inside the loop.
+  let j = fillIdx + 1;
+  for (; j < ticks.length; j++) {
     const t = ticks[j]!;
     const nowMs = new Date(t.capturedAt).getTime();
     const bid = bidAt(t, bucketIdx);
@@ -385,6 +389,18 @@ function runMakerExitLeg(
 
   // open at series end (or no bid at the time-stop) → settle at resolution if known, else mark to the last bid.
   const endIdx = ticks.length - 1;
+  // DIAGNOSTIC CATCH-UP (review lens A, 2026-07-03): the no-bid time-stop `break` leaves ticks (j, endIdx]
+  // unvisited, but the settle below records the exit at endIdx — the position (and its resting TP sell) stays
+  // live through every one of those ticks, so count them with the SAME prior-tick-mid qualifying check. This
+  // enforces the invariant restingTicks === exitTickIndex − entryTickIndex on EVERY settle path (a normally-
+  // exhausted loop lands here with j === ticks.length → the range is empty → no-op). Diagnostic counts ONLY —
+  // the $ rewardAcc keeps its pre-existing 1b behavior (stops accruing at the break), so every dollar output
+  // stays byte-identical.
+  for (let k = j + 1; k <= endIdx; k++) {
+    restingTicksCount++;
+    const q = restingSellQmin(exitLimit, shares, midAt(ticks[k - 1]!, bucketIdx), eligibilityMaxSpreadCents);
+    if (q > 0) qualifyingRestingCount++;
+  }
   if (input.resolution && !input.resolution.gradingMismatch && input.resolution.winnerIdx != null) {
     const won = input.resolution.winnerIdx === bucketIdx;
     return settle(won ? 1 : 0, `resolution_settle:${won ? 'win' : 'lose'}`, false, 0, 0, endIdx, rewardAcc, restingTicksCount, qualifyingRestingCount); // redeem — no taker fee

@@ -437,6 +437,70 @@ describe('restingTicks / qualifyingRestingTicks — the reward-ELIGIBILITY tick 
   });
 });
 
+describe('the no-bid time-stop break path — the diagnostic catch-up (review lens A fix, 2026-07-03)', () => {
+  // entry fills at idx 1 (00:10). At idx 2 (22:10) the time-stop (resolvesAt−12h = 22:00Z) has passed but the
+  // bucket has NO bid — and none was seen since the fill — so the walk `break`s instead of returning, and the
+  // trade settles at the SERIES END (endIdx 4). The resting TP sell stays live through every one of those
+  // post-break ticks; the pre-fix defect skipped ticks (2, 4] from BOTH diagnostic counts.
+  const noBid: Partial<OpeningBucket> = { execBid: NaN, bestBid: NaN, execAsk: NaN, bestAsk: NaN };
+  const noBidTicks = (): ReplayTick[] => [
+    ...entryTicks(),
+    tick('2026-06-20T22:10:00Z', 22.2, { ...noBid, mid: 0.365 }), // idx 2 — time-stop fires, no bid → break
+    tick('2026-06-20T22:40:00Z', 22.7, { ...noBid, mid: 0.20 }), //  idx 3 — post-break, must still be counted
+    tick('2026-06-20T23:00:00Z', 23.0, { ...noBid, mid: 0.20 }), //  idx 4 — endIdx, the settle tick
+  ];
+  const noBidOver: Partial<MakerExitCfg> = { tpMode: 'abs', tpAbsTarget: 0.37, tstopHoursBeforeResolve: 12 };
+
+  it('counts every tick through the settle index, evaluates qualifying in the post-break range, and leaves the P&L untouched', () => {
+    const t = replayMakerExitEvent(input(noBidTicks()), cfg(noBidOver), RESOLVE_MS);
+    // (c) trading behavior unchanged by the diagnostic: the break path still settles at resolution (winner=1),
+    // fee-free (maker entry + redeem), reward-free — nothing folded into the P&L.
+    expect(t.executed).toBe(true);
+    expect(t.exitKind).toBe('resolution_settle:win');
+    expect(t.exitPrice).toBe(1);
+    expect(t.feeUsd).toBe(0);
+    expect(t.rewardUsd).toBe(0);
+    const shares = t.stakeUsd / t.entryPrice;
+    expect(t.netPnlUsd).toBeCloseTo(shares * (1 - t.entryPrice), 9);
+    // (a) the invariant: the resting sell was live from the fill (idx 1) through the settle (endIdx 4) — 3
+    // ticks, NOT the 1 tick the pre-fix walk had counted before breaking.
+    expect(t.entryTickIndex).toBe(1);
+    expect(t.exitTickIndex).toBe(4);
+    expect(t.restingTicks).toBe(3);
+    expect(t.restingTicks).toBe(t.exitTickIndex - t.entryTickIndex);
+    // (b) qualifying is actually EVALUATED in the post-break range: the one qualifying tick is k=3, whose
+    // PRIOR-tick mid (idx 2's 0.365) sits 0.5c from the 0.37 limit — in band; idx 2 (prior mid 0.15, 22c) and
+    // idx 4 (prior mid 0.20, 17c) are out of band. Pre-fix this came back 0.
+    expect(t.qualifyingRestingTicks).toBe(1);
+  });
+
+  it('the break→mtm path (no resolution) obeys the same invariant', () => {
+    const t = replayMakerExitEvent(input(noBidTicks(), null), cfg(noBidOver), RESOLVE_MS);
+    expect(t.executed).toBe(true);
+    expect(t.exitKind).toBe('mtm_unresolved');
+    expect(t.exitPrice).toBe(0); // no bid ever seen post-fill → marks to 0 (pre-existing behavior, unchanged)
+    expect(t.restingTicks).toBe(t.exitTickIndex - t.entryTickIndex);
+    expect(t.restingTicks).toBe(3);
+    expect(t.qualifyingRestingTicks).toBe(1);
+  });
+
+  it('INVARIANT: restingTicks === exitTickIndex − entryTickIndex on EVERY settle path', () => {
+    const cases: { name: string; ticks: ReplayTick[]; over: Partial<MakerExitCfg>; winner?: number | null }[] = [
+      { name: 'maker_take_profit', ticks: [...entryTicks(), tick('2026-06-20T01:00:00Z', 1, { execBid: 0.45, execAsk: 0.46 })], over: { tpDeltaPp: 0.25 } },
+      { name: 'taker_stop_loss', ticks: [...entryTicks(), tick('2026-06-20T01:00:00Z', 1, { execBid: 0.04, execAsk: 0.05 })], over: { tpDeltaPp: 0.25, slDeltaPp: 0.06 } },
+      { name: 'taker_time_stop (with bid)', ticks: [...entryTicks(), tick('2026-06-20T21:50:00Z', 10, { execBid: 0.18, execAsk: 0.19 }), tick('2026-06-20T22:10:00Z', 11, { execBid: 0.18, execAsk: 0.19 })], over: { tpDeltaPp: 0.25, tstopHoursBeforeResolve: 12 } },
+      { name: 'no-bid break → resolution', ticks: noBidTicks(), over: noBidOver },
+      { name: 'no-bid break → mtm', ticks: noBidTicks(), over: noBidOver, winner: null },
+      { name: 'held to series end → resolution', ticks: [...entryTicks(), tick('2026-06-20T02:00:00Z', 2, { execBid: 0.18, execAsk: 0.19 })], over: { tpDeltaPp: 0.25, tstopHoursBeforeResolve: 12 } },
+    ];
+    for (const c of cases) {
+      const t = replayMakerExitEvent(input(c.ticks, c.winner === undefined ? 1 : c.winner), cfg(c.over), RESOLVE_MS);
+      expect(t.executed, c.name).toBe(true);
+      expect(t.restingTicks, c.name).toBe(t.exitTickIndex - t.entryTickIndex);
+    }
+  });
+});
+
 describe('replayMakerExitEventBasket — SIGNAL-BACKLOG.md #5 (basket entry, variance reduction not a new edge)', () => {
   // a ladder where BOTH bucket 0 and bucket 1 qualify (bucket 2 never does, as in the default fixture) —
   // bucket1 stays the argmax (houseProb 0.4 > bucket0's 0.35), so a basketSize:1 request must degenerate
