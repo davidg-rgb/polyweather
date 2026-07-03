@@ -49,6 +49,26 @@
 > backtest alone is not a GO: the panel needs more days, which the live forward loop accrues daily. Full tables:
 > `scripts/research/out/jackknife-maker-exit.md`.
 
+> **📊 LEDGER DECOMPOSITION (2026-07-03 overnight, `scripts/research/maker-exit-ledger-analytics.ts`) — the
+> ENTIRE edge rides on the maker take-profit leg; its LIVE fill rate is the one number that decides everything.**
+> At the pinned config over the corrected panel (382 realized):
+>
+> | exit kind | n | win rate | mean return | total $ |
+> |---|---|---|---|---|
+> | maker_take_profit | 187 (49.0 %) | 100 % | +41.3 % | **+$1 543** |
+> | taker_time_stop | 157 (41.1 %) | 33.8 % | −13.4 % | −$421 |
+> | taker_stop_loss | 38 (9.9 %) | 0 % | −79.9 % | −$607 |
+>
+> Net +$515. The TP leg must out-earn a structural −$1 028 drag from the two taker exits — so the verdict is
+> hyper-sensitive to the **realized maker-fill rate** (backtest: 49.0 % of realized exits; the live forward
+> loop's early read is **0.30** on a tiny n — if that persists at scale, the edge inverts; this is assumption #1
+> of `MAKER-EXIT-PAPER-LOOP-HANDOFF.md` §1, now with the precise sensitivity quantified). **Maker-fill latency:
+> median 47 ticks ≈ ~16 h, p90 ≈ 34 h** (20-min cache cadence) — winning sells rest for MANY hours, so the live
+> fill-rate read needs a measurement window spanning ≥ a day, and the resting order wears adverse-selection risk
+> the whole time. Per-city: 26/45 net-positive; leaders (ankara/LA/singapore/dallas/houston) track the per-city
+> accuracy table; the city-gate lever already showed gating on this does not survive the clustered CI. Full
+> tables: `scripts/research/out/maker-exit-ledger-analytics.md`.
+
 > **⚠ CORRECTION (2026-06-30, code review) — RESOLVED 2026-07-03, see the banner above.** The maker-rebate credit in `opening-maker-exit-replay.ts` was
 > computed as `rebateRate · takerFeePerShare(p, **1**) · shares` — it dropped the fee-rate factor, so it credited
 > the **full taker-fee magnitude** instead of a fraction of it (the `reward-farming.ts`/`reward-inventory.ts`
