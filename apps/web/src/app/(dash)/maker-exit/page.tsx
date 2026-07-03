@@ -132,7 +132,7 @@ function AssumptionTiles({ view }: { view: MakerExitView }): ReactElement {
         </div>
         <div className="big" style={{ color: SKY }}>{Number.isFinite(a.qualifyingTickFrac) ? fmtPct(a.qualifyingTickFrac, 0) : '—'}</div>
         <div className="sub">
-          of {a.nRestingTicks} resting ticks in Polymarket&apos;s reward band ({a.nQualifyingRestingTicks} qualifying)
+          of {a.nRestingTicks ?? 0} resting ticks in Polymarket&apos;s reward band ({a.nQualifyingRestingTicks ?? 0} qualifying)
           — the pool $ / competition share stays an explicit unknown, never assumed here
         </div>
       </div>
