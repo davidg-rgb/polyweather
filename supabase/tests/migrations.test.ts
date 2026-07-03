@@ -278,6 +278,15 @@ describe('migrations 0001–0010', () => {
       // read that died server-side + the ~3-8 s/city that pushed the maker-exit-panel tick past the isolate
       // wall, 2026-07-03). Signatures/contracts/grants byte-identical; no table/cron change (count stays 29).
       '0076_capture_read_scaling.sql',
+      // 0077 = capture read thinning: convergence_capture_inputs re-bodied to keep ONE row per event per
+      // 20-min epoch grid bucket (min captured_at per bucket, id tiebreak) PLUS always the newest tick per
+      // event (the 0069 `rn = cnt` invariant — the replay's time-stop + open-position marks), decided over
+      // SLIM columns before the PK join-back — the 0069 `rn % 3` stride still detoasted ~1.2 GB/tick at
+      // 45-city × 21-day scope (the 2026-07-03 disk-bound panel incident). Same 20-min cadence CLASS as the
+      // SAMPLE_MIN=20 backtest (not an identical grid convention); signature/contract/grants byte-identical
+      // (deliberately NO raw param — the 0054/0058 overload trap; bot_capture_series stays the full-fidelity
+      // read). No table/cron change (count stays 29).
+      '0077_capture_read_thinning.sql',
     ]);
   });
 });

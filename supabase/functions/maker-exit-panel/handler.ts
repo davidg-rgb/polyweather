@@ -84,9 +84,11 @@ export async function makerExitPanel(ctx: JobCtx, deps: MakerExitPanelDeps): Pro
   }
   const cfg = makerExitCfg(scopeCities);
 
-  // 1) raw inputs (trimmed buckets, +bestBid) for the fresh-allowlist window — fetched PER CITY to stay under the
-  //    8s PostgREST statement cap (the whole-allowlist build exceeds it), through a bounded worker pool with a
-  //    per-city timeout + an overall budget (see the tuning block above); merge the per-city results. Interleaved
+  // 1) raw inputs (trimmed buckets, +bestBid; since 0077 server-thinned to ONE row per event per 20-min grid
+  //    bucket PLUS the newest tick per event — the SAMPLE_MIN cadence class, so each per-city statement
+  //    detoasts a fraction of the tick series) for the fresh-allowlist window — fetched PER CITY to stay under the 8s PostgREST
+  //    statement cap (the whole-allowlist build exceeds it), through a bounded worker pool with a per-city
+  //    timeout + an overall budget (see the tuning block above); merge the per-city results. Interleaved
   //    arrival order is safe: buildEvents groups per event and sorts ticks by capturedAt internally.
   const fetchConcurrency = deps.fetchConcurrency ?? FETCH_CONCURRENCY;
   const cityTimeoutMs = deps.cityTimeoutMs ?? CITY_TIMEOUT_MS;
