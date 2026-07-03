@@ -172,6 +172,67 @@ winner not null`). If one market is UMA-stuck for hours, proceed at 44 with a no
   (today proved surprises cost half a day).
 - **Day 3:** POST-FABLE-HANDOFF.md · final memory entry · leave the system accruing.
 
+## The autonomous /loop prompt — v6, NIGHT-BUILD (paste as-is after /clear; self-paced — no interval)
+
+```
+/loop Polyweather FASTTRACK orchestrator v6 (NIGHT-BUILD; token reset ~04:10Z/06:10 local — build maximum value until then, wind down at ~04:00Z). You are PLANNER/ORCHESTRATOR/CHECKER/ADJUDICATOR ONLY — sonnet agents build/run/draft in worktrees (never commit); you verify, review, integrate, record, push. FILES ARE THE STATE — read FIRST, every cycle: FASTTRACK-PLAN.md ("NIGHT-BUILD slate" = the six lane briefs N1–N6 + cycle log C1–C27), docs/ops/GATE-DAY-PLAYBOOK.md, docs/ops/REWARD-INSTR-ROLLOUT.md (v2 section), SIGNAL-BACKLOG.md §12, POST-FABLE-HANDOFF.md, TaskList. Board: main == origin @ (git log; c2893e4 or later); suite 138 files/2009 green; backlog FULLY CLOSED — NO new signal hunts, N1–N6 are the ONLY build lanes (frontend/docs/scripts; none touch the gate engine).
+
+CYCLE 1 (setup): (a) verify the first post-v2-deploy :35 maker-exit tick (23:35Z 07-03 or later): job_runs.stats carries dominantDisqualifier, tick healthy (ok/cityErrors≤2/nMarkets≥40/~95–250s), snapshot view.assumptions carries the WHY fields — RECORD the first observed values in the cycle log (expected signature: high in-band + low fail-min-size + dominant 'none' ⇒ the mid<0.10 two-sided regime); (b) dispatch ALL SIX lanes N1–N6 as parallel background sonnet agents (worktree isolation; paste each lane's brief from the NIGHT-BUILD slate section VERBATIM + the standing constraints: no commits, no DB writes, no migrations APPLIED — stage-dark only, report exact suite/typecheck counts).
+
+EACH CYCLE after: 1. INTEGRATE finished lanes SERIALLY (verify footprint matches brief · exact counts green · numbers copied-not-recomputed where applicable · ONE lens only for staged SQL or computed-display numbers (N2/N3), direct review otherwise → apply diff to main → full suite+typecheck on merged tree → commit (conventional style, Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>) → push (Vercel deploys)). Stalls >45 min → ONE corrective re-brief to a fresh agent, else record the lane blocked and move on.
+2. GATE WATCH every cycle: latest bot_gate_snapshot (mode='paper'). <7 days → note accrual (mkts/cities/days + makerFillRate vs 0.49 + rebate). ≥7 days → the label is rendered: execute docs/ops/GATE-DAY-PLAYBOOK.md — KILL → PRE-AUTHORIZED (C21): record the full package (FINDINGS closing block + CLAUDE.md banner + SIGNAL-BACKLOG §13 re-open criteria) without re-asking, commit+push, lead the summary with it; INSUFFICIENT-regression → package 3 checks; PASS → present + stage package 2's §9R decision doc ONLY — capital/wallet/keys are OPERATOR-PHYSICAL, never pre-authorized, never blurred.
+3. PROD HEALTH (cheap probes, never :35–:42 UTC): opening-capture (*/10: ok/<60s/inserted>0) · maker-exit-panel (:35 hourly: ok + qualifyingTickFrac trend, reads so far 0 @ 19:35Z + 0 @ 20:35Z 07-03) · convergence-panel (*/15: ok/<60s/cityErrors≤2). Two identical failures = the pre-authorized playbook (throttle capture → pause offender → IO refill → staggered re-enable). Migrations/destructive SQL: STAGE ONLY at night.
+4. GUARDRAILS: ONE heavy DB op project-wide; :35–:42 blackout; no capital/keys, rail paper/DORMANT; no new signal hunts; never touch other agents' uncommitted files; suite+typecheck green before every commit; agents never commit.
+5. RECORD + PACE: cycle tick + TaskList each cycle. Wakeups: lanes in flight → 1500s; integration backlog → continue now. WIND-DOWN at ~04:00Z (or all lanes integrated/blocked earlier): stop dispatching, integrate what's done, record any un-integrated lane's worktree path + state in the cycle log, /remember (full state: lanes landed/blocked, staged migrations awaiting the operator, gate status, the 10:00Z #31 check owed by the morning session), then a final summary ending with the operator's morning items: apply any staged migrations (N2/N3 if dark), the 10:00Z ankara/houston °F verification, the gate label if still unrendered, and the pre-placement-forecast decision if N2 went dark. The gate deadmen page on real prod problems — do NOT keep a wakeup alive past wind-down.
+```
+
+## NIGHT-BUILD slate (2026-07-04 ~01:15 local — operator directive: token reset ~06:10 local / ~04:10Z; build maximum value until then; NO new signal work — the backlog stays closed)
+
+> Board at slate creation: main == origin @ `c2893e4`; the evening token-spend slate is 5/5 integrated
+> (gate-drafts `3365a06` · °F tests `44e4603` · cs-harden `7efedac` · reward-instr v2 `5a38f6d`
+> MERGED+DEPLOYED · paper-trade page `c2893e4` incl. the operator current-bet box + Stockholm times).
+> Suite 138 files / 2009 tests green. Open watches: #34 one-time v2 tick verification (23:35Z+),
+> #30 gate label (6/7 days last read; KILL pre-authorized per C21+GATE-DAY-PLAYBOOK.md, PASS stage-only),
+> #31 enrollment verification (10:00Z — lands AFTER the token reset; morning session handles it).
+> All lanes below are frontend/docs/scripts — NONE touch the gate engine. Discipline: worktree per lane,
+> no commits by agents, orchestrator integrates serially (suite+typecheck on each merged tree), pushes
+> (Vercel deploys); ONE review lens only where a lane stages SQL or computes displayed numbers;
+> migrations NEVER applied at night — STAGE-DARK pattern (build the UI behind a null-guard so it ships
+> dark and lights up when the operator applies the staged migration).
+
+- **N1 — /signals verdict explorer (the product flagship).** New page + committed static asset
+  (the `city-scan-results.ts` idiom): every signal from FINDINGS.md — the 12 numbered signals + the
+  major prior angles — as structured rows: name, mechanism class (A adverse-selection / B fee-fill-wall /
+  latency / structural), the ONE key number with CI, verdict, doc pointer. Hero: "the market measured
+  efficient twelve ways." Glass idiom per /efficiency. Golden-value tests asserting figures match
+  FINDINGS.md verbatim (copy, never recompute). The forward maker-exit gate row renders its LIVE status
+  from dash_maker_exit (the one dynamic row — reuse the /maker-exit loader pattern).
+- **N2 — pre-placement forecast completing the current-bet box.** The known gap from `c2893e4`: before
+  the 10:00Z tick the box shows the latest bet, not today's intended temp. Agent FIRST maps the keyless
+  data path (existing RPCs only — what does the web app have access to that carries the current
+  house_gaussian blend per enrolled city? dash_data? any city-sim RPC?). If an existing RPC suffices →
+  build. If not → write migration `009x_dash_city_forecast.sql` (SECURITY DEFINER read-only dash RPC,
+  operator_guard idiom) STAGED-NOT-APPLIED + the UI behind a null-guard (ships dark). One lens on the
+  SQL if staged.
+- **N3 — /maker-exit assumptions trend (gate-day instrumentation).** The three measured assumptions
+  (makerFillRate / realizedRebateUsd / qualifyingTickFrac + the v2 WHY fields) over time — the data
+  exists in `maker_exit_panel` snapshots (view.assumptions per snapshot). Agent maps the read path: if
+  dash_maker_exit only returns latest → STAGE-DARK a `dash_maker_exit_history(n)` RPC migration + build
+  the sparklines behind a null-guard. Small multiples above tile #4; the fill-rate line annotated with
+  the 0.30 warning + 0.49 backtest reference lines. One lens on staged SQL.
+- **N4 — README + product positioning (the repo is PUBLIC).** Root README.md presenting the analytics
+  product: what Polyweather measures (calibrated multi-model Tmax forecasting vs prediction markets),
+  the honest headline (12 signals tested, market efficient — FINDINGS.md), the dashboards, the
+  architecture in 10 lines, run/test instructions, the no-trading-advice + DORMANT-rail boundary.
+  Terse, numbers-first, zero hype; no secrets/keys/refs beyond what's already public in the repo.
+- **N5 — grading-lag ops helper (gate-day package-3 support).** `scripts/ops/grading-lag.ts`: read-only;
+  lists resolved-but-ungraded markets for the forward panel window (target_date passed, winner unset)
+  + the distinct-day impact ("day N would join at grading"). Playbook package 3 references it. Tiny.
+- **N6 — dashboard nav + glass-idiom consistency sweep.** Shared compact nav (the dash pages are
+  islands: /, /efficiency, /maker-exit, /paper-trade, /amsterdam, /data, /sharps, /rewards,
+  /whaletracker, /convergence…) + per-page idiom drift fixes (fonts/cards/spacing only — NO data-logic
+  changes). Screenshot-free: assert via render tests where they exist; keep diffs per page small.
+
 ## The autonomous /loop prompt — v5, gate-watch + enrollment-forward (paste as-is; self-paced — no interval)
 
 > v4 (below, superseded) closed at C20: deploy verified (first `qualifyingTickFrac` = 0), item 12 adjudicated
@@ -275,6 +336,7 @@ EACH CYCLE, in order:
 
 ## Orchestrator cycle log (v2 loop, from 2026-07-03 ~17:30 local)
 
+- **C27 (~01:20 local / 23:20Z — evening slate 5/5 INTEGRATED; NIGHT-BUILD handoff written):** cityscan-page landed (`c2893e4`): §12-appendix data verbatim (6 consistency flags recorded, incl. correcting the "monotone" phrasing — collapse is 14h→19h, 9h–13h is a flat shelf) + 31 golden/consistency tests + the SVG 11-bar hero + **the operator's current-bet box** (bidding date + predicted temp per city from the EXISTING dash_city_sim payload — predictedC IS predicted_native per 0070; "bidding now"/"latest bet" states) + **all absolute times Europe/Stockholm** (per-date dual-IANA, DST-proven: Houston 14:00→21:00 CEST, Singapore 11:00→05:00 CEST) + °F label fix. Combined tree **138 files / 2009 tests green**. KNOWN GAP (operator's call): pre-placement forecasts pre-10:00Z don't exist in the payload → NIGHT-BUILD lane N2. Operator going offline; token reset ~04:10Z; directive = maximum build until then → **NIGHT-BUILD slate N1–N6 written above + the v6 loop prompt; session /remember + /clear handoff.** Open at handoff: #34 one-time v2 tick verification (23:35Z+ — v6 cycle 1a), #30 gate label (6/7 days; KILL pre-authorized, PASS stage-only), #31 at 10:00Z (morning session).
 - **C26 (~00:55 local / 22:53Z — reward-instr v2 MERGED + PUSHED + DEPLOYED; verification = the 23:35Z tick):** Both lenses ZERO gate-math/correctness defects (Lens A walked all 5 settle() sites incl. the v1-bug post-break loop — threaded symmetrically; Lens B verified jsonb additivity end-to-end + old-snapshot em-dash handling). Batched fix pass (1 LOW tie-break → strict-majority both axes + 2 boundary tests that FAIL against the old code · 1 MEDIUM defaults-caveat → ROLLOUT.md v2 section incl. **the documented reading of the live 0/1,732: the mid<0.10 strict two-sided regime zeroes one-sided quotes** + tile WHY-line defaults caption) → zero outstanding. Merged tree **136 files / 1975 tests green** + typecheck clean → commit `5a38f6d` pushed → **maker-exit-panel DEPLOYED** (authed CLI). Verify next: 23:35Z tick's job_runs.stats carries `dominantDisqualifier` (+ the WHY fields land in snapshot assumptions). Remaining lanes: cityscan-page (#35+#37 — appendix null-fill + F° + operator current-bet box + Stockholm times) in flight; task #31 (10:00Z) + gate watch (last read 6/7 days) continue.
 - **C25 (~00:45 local 07-04 / 22:44Z — three lanes landed: cs-harden + f-unit-test MERGED+PUSHED; reward-instr-2 → 2 lenses; cityscan-page → data-appendix resume):** **f-unit-test (#33) DONE, merged `44e4603`:** NO °F defect — 0070's convert-then-round path verified end-to-end; 28 regression tests (17 core KHOU 2°F-ladder fixtures incl. the x.5°F bucket-PAIR boundary + 11 PGlite twin: full °F place→grade→settle round trip); houston's 10:00Z tick de-risked. **cs-harden (#32) DONE, merged `7efedac`:** lens 6/7 zero-defect + 1 MEDIUM (mode-banner mislabel on mixed flag combos) fixed via ONE corrective re-brief (`describeMode()` from effective toggles, all 4 combos verified live); `--legacy` bit-for-bit; hardened default: munich/16h + b-aires/14h become INELIGIBLE (findings-1×3 compounding), **candidate set UNCHANGED {ankara/14h, houston/14h}**. **reward-instr-2 REPORTED** (7 files, no migration, 1954/135 green, gate-math-untouched claim; KEY: the 'none'-case test reproduces the live 0/1,732 symptom — within-band + above-min-size but mid<0.10 ⇒ the strict two-sided regime zeroes one-sided quotes — the concrete why-zero hypothesis) → engine-adjacent, **2 lenses dispatched** (ri2-lens-a engine math / ri2-lens-b semantics+surfaces). **cityscan-page REPORTED** (correctly refused to fabricate the 9 unpreserved curve rows) → §12 **Data appendix appended** (full pooled curve + terciles + per-cell top-5 from the two bit-identical runs, C16/C17 source) + agent resumed to fill nulls from the canonical doc + the F° label fix. Gate probe skipped this cycle (22:35Z tick mid-blackout); next wake reads it.
 - **C24 (~00:25 local 07-04 / 22:24Z 07-03 — gate-drafts INTEGRATED · cs-harden REPORTED → lens dispatched):** **gate-drafts (#36) DONE:** GATE-DAY-PLAYBOOK.md reviewed (2 fixes: re-open bar ALL-of-3 → necessary-#1+strengtheners; /convergence scope caution on the deactivation checklist), committed+pushed `3365a06`. Its best catch: §9R's B/C entry/exit rules were locked for the DEAD flat-open thesis — any PASS-day sizing must reconcile the maker-exit config first. **cs-harden reported:** one-file diff (+224/−32); `--legacy` reproduces the recorded run BIT-FOR-BIT; hardened default excludes 296 fallback bets + 244 ineligible cells → munich/16h + buenos-aires/14h become INELIGIBLE (fallback removal drops n 10→9 — a findings-1×3 compounding interaction), houston LB +3.1→+4.5pp exactly matching city-scan-2's independent counterfactual; **locked-bar candidate set UNCHANGED {ankara/14h, houston/14h}** = what's enrolled. Selection-affecting → single lens dispatched (`cs-harden-lens`) before merge. Still in flight: f-unit-test · reward-instr-2 · cityscan-page.
