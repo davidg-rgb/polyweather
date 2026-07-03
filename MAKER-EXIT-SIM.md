@@ -1,5 +1,16 @@
 # Maker-Exit Simulation — the convergence edge, tested as a MAKER edge
 
+> **✅ TRUE 21-DAY RE-RUN 2026-07-03 ~13:41Z — 07-02 graded 45/45, the intended 21st day joined the panel; the PASS HOLDS, essentially unchanged.**
+> Cache rebuilt post-grading: **844 events / 45 cities / 21 days**. Same pinned `MAKER_EXIT_TUNED` config, rebate 0:
+> realized 393, winFrac 62.8 %, **+6.8 % / +$535, CI [+0.25 %, +11.9 %], zsMC 2.7 % → PASS** (was
+> +6.9 %/+$534, CI [+0.4 %, +12.1 %] at 827 ev/20 d). 60/40 date folds: train +5.9 % / test +7.9 %, both
+> positive-mean, each alone ciLow<0 (days-per-fold, unchanged). Jackknife: **LOCO flips 15/45** (worst
+> shenzhen CI [−0.5 %, +10.8 %]); **LODO flips 9/21, up from 7/20 — the date axis stays the fragile one**
+> (worst 2026-06-30 CI [−1.2 %, +11.0 %]); **the DAY-BLOCK tightening PASSES (day CI [+2.2 %, +11.9 %],
+> day-flip MC 3.3 %)**. Read unchanged: real-but-marginal, day-block-robust — more DAYS is the one thing
+> that firms the CI, and the live forward paper loop accrues them for free. **The forward loop stays the
+> gate of record; no capital on a backtest.** (Full jackknife tables: `scripts/research/out/jackknife-maker-exit.md`.)
+
 > **✅ RE-RUN 2026-07-03 ~09:50Z (the morning-queue baseline re-run) — the PASS HOLDS on the grown panel; robustness slightly improved.**
 > Cache rebuilt post-incident on the same corrected archive: **827 events / 45 cities / 20 days** (the intended 21st
 > day, 07-02, had not graded in yet — its markets resolved during the morning DB outage; re-joins the panel once

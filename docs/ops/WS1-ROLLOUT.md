@@ -23,6 +23,29 @@
 Project ref: `lenysiqxihsmxljvyybt`. All `psql`/SQL via the SQL editor or MCP `execute_sql`; deploys via the
 authed CLI (`npx --no-install supabase … --use-api --project-ref lenysiqxihsmxljvyybt`, the repo's idiom).
 
+> **✅ EXECUTED 2026-07-03 ~14:55–15:20Z (operator-approved "all"; run by the orchestrator session). Outcome
+> per step, including three evidence-based deviations:**
+> - **Step 1 ✅** 0077 + 0078 applied via MCP; verify: 1 overload/thinned/janitor all true; **the single-city
+>   canary went from >60 s (pre-0077, timed out the MCP client) to instant** (506 thinned captures).
+> - **Step 2 ✅** maker-exit-panel deployed (hardened). **Step 3 ⚠ ADJUDICATED, not literally met:** two manual
+>   probe ticks: 149.7 s/cityErrors 4/58 mkts (cold), then 213 s/15 (back-to-back — consecutive heavy ticks
+>   still cycle the cache; the disk is the floor). Both `ok` + snapshot + gate. **Deviation 1: maker-exit-panel
+>   STAYS HOURLY (`35 * * * *`, `bot.tickStaleMin.paper` stays '180')** — 4×/hour heavy ticks is the exact
+>   compounding-load pattern of the 07-03 incidents; hourly ticks complete reliably and the gate accrues.
+>   Revisit after the */2-era rows age out of the 21-day window (~2 wks) or on an instance upsize.
+>   **HUGE side-benefit: the forward gate now sees 43–58 markets/tick (was 5–8)** — the broken fetch path had
+>   been starving the gate-of-record's accrual all along.
+> - **Step 4 ✅** convergence-panel v7 deployed. **Step 5 ✅** cron 26 re-enabled `*/15`; **first tick: `ok`,
+>   23.2 s, cityErrors 0, snapshot 350** (10-city scope + 0077 + bounded pool = fully clean).
+> - **Steps 6–7 ✅ / Step 8 skipped-correctly:** dry-run = **0 candidates** (the table only has data since
+>   06-27 — nothing is resolved ≥25 d). The tool is proven; it becomes the real TOAST relief valve from ~late
+>   July. **Deviation 2: no `--execute`** (nothing to delete). **Deviation 3 / Step 9 DEFERRED:** VACUUM
+>   ANALYZE moved to a quiet overnight window — stats are sane (reltuples correct); the disk, not the planner,
+>   is the current floor. **Step 10 superseded by Deviation 1** (capture stays `*/10` permanently — operator-
+>   approved: the flat-open thesis is dead and `*/10` halves TOAST growth).
+> - **Steady state as left:** capture `*/10` · maker-exit-panel hourly `:35` · convergence-panel `*/15` (23 s
+>   clean) · deadman thresholds matched · suite 135 files/1928 green · local commits `52f115d`+`6c053f1`+`c0892ec`.
+
 ---
 
 ## Current state assumed (verify before starting)

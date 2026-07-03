@@ -468,6 +468,9 @@ instrument the system is strong, and *that* is the product:
 | Analytics infrastructure buildout | `BLUEPRINT-analytics-buildout.md` | — |
 | Amsterdam analytics deliverable | `AMSTERDAM-SIM.md` | — |
 | Live status + operator TODO | `BUILD-STATE.md` | Active Phase |
+| Signal backlog — untested angles, priority-ordered, pre-registered gates | `SIGNAL-BACKLOG.md` | — |
+| Backlog #9 precip/snow/wind markets — **KILL at the liquidity gate** (2026-07-03: temp ladders median $34k/24h; precip/wind are sparse one-offs ≤$802/24h — no universe worth a forecast pipeline) | `SIGNAL-BACKLOG.md` | item 9 |
+| Backlog #7 sharp order-arrival signal — **KILL, structurally impossible keyless** (2026-07-03: the public book is anonymous by design; the only wallet-attributed feed is fills/settlements — order-placement data does not exist for us) | `SIGNAL-BACKLOG.md` | item 7 |
 
 ---
 
