@@ -259,6 +259,19 @@ genuinely out-of-market information.
 > record). Backtest ≠ GO; no capital before a frozen forward paper PASS.** Rail DORMANT; boundary intact.
 > **`MAKER-EXIT-SIM.md`** (banner + jackknife + decomposition), **`BUILD-STATE.md`** (overnight log).
 
+> **↳ NEW 2026-07-03 (later) — the FLUCTUATION-TAKER variant (operator-requested) is tested and KILLED
+> decisively; the 20-day baseline re-run re-confirms the maker-exit PASS.** (1) The path-signal taker sweep —
+> buy dips / ride momentum within the lead-aware forecast-center ±1 key set, exit via bracket/trailing/recenter
+> taker rules, calibrated book + real fee curve, frozen gate + day-block tightening + OOS split — returns
+> **zero passing cells of 384 even in-sample**; the best cell loses −14.3% TRAIN / −17.6% TEST / −15.8% −$2,002
+> FULL (winFrac 23%, top-10 ciHigh all < 0, both signal directions). Mechanism: cheap-bucket fluctuations are
+> information plus adverse selection, not mean-reversion, and the double taker round-trip compounds it — the
+> §12 wall, fourth confirmation. **No per-minute follow-up; the variant is dead. `FLUCTUATION-TAKER.md`.**
+> (2) The pinned maker-exit config re-run on the grown 827-event / 20-day panel: **PASS holds, slightly
+> stronger** (+6.9% / +$534, CI [+0.4%, +12.1%]; LOCO flips 16→15/45, LODO 8→7/20; day-block PASS
+> [+2.4%, +12.6%]). The 21st day (07-02) joins after post-outage grading catches up. Unchanged: backtest ≠ GO;
+> the live forward paper loop is the gate of record.
+
 ---
 
 ## The question, precisely
