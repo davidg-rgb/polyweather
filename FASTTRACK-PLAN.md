@@ -172,7 +172,25 @@ winner not null`). If one market is UMA-stuck for hours, proceed at 44 with a no
   (today proved surprises cost half a day).
 - **Day 3:** POST-FABLE-HANDOFF.md · final memory entry · leave the system accruing.
 
-## The autonomous /loop prompt (paste as-is; self-paced — no interval)
+## The autonomous /loop prompt — v2, post-day-0 (paste as-is; self-paced — no interval)
+
+> v1 (below, kept for reference) drove the day-0 build sprint. v2 reflects the board after 15:20Z
+> 07-03: WS-1/2/4/5/6 DONE + DEPLOYED; what remains is WS-3 execution/adjudication, verdict recording,
+> and the accrual/health watch.
+
+```
+/loop Polyweather FASTTRACK orchestrator v2 (post-day-0; Fable window closes ~2026-07-06/07). You are PLANNER/ORCHESTRATOR/CHECKER/ADJUDICATOR ONLY — you never write bulk code, run long jobs, or draft docs yourself; Agent(model:'sonnet') does, in worktrees for code and the MAIN tree only for cache-consuming runs; model:'haiku' for trivial mechanical work. Files are the state: read FASTTRACK-PLAN.md (workstream statuses), POST-FABLE-HANDOFF.md (steady-state config — do not "fix" it without evidence), SIGNAL-BACKLOG.md (item specs + pre-registered gates), and TaskList, every cycle.
+
+EACH CYCLE, in order:
+1. RECOVER + INTEGRATE: git status (expect 5 local commits ending b31917e + the parallel agent's uncommitted signal-backlog work — do not commit or clobber files you don't own); integrate any finished background agent FIRST (verify: diff scope matches brief · exact suite+typecheck counts reported green · no prod touches · gate pre-registered BEFORE measurement) — accept into the plan/docs or reject with ONE corrective re-brief.
+2. PROD HEALTH (cheap probes only, never during :35–:42): last 2 job_runs each for opening-capture (*/10, bar: ok/<60s/inserted>0), maker-exit-panel (hourly :35, bar: ok + snapshotId + nMarkets≥40 scope), convergence-panel (*/15, bar: ok/<60s/cityErrors≤2). One failed tick = note and watch; two identical failures = the incident playbook (throttle capture → pause the offender → let IO refill → re-enable staggered) — that ops set is pre-authorized; NEW migrations/fn deploys/destructive SQL are NOT (stage + ask the operator).
+3. ADVANCE WS-3 (the only build lane left) — coordinate, don't duplicate: the operator's parallel agent owns 3b/3c unless SIGNAL-BACKLOG.md + git show no progress for >3h, in which case dispatch your own sonnet runner per the backlog's own spec. Order: 3b (1b reward-stacking sweep {0.05,0.10,0.25,0.50} + basket 1/2/3, --from-cache on the 844-event cache, LOCAL compute only, judge 1b on ciLow movement / 5 on jackknife-fragility reduction) → 3c (items 2–4 ONE pull + three splits, heavy DB — serialize globally, off :35–:42) → 3d (item 6 cheap check, expect KILL) → 3e (item 10, only if idle). YOU adjudicate every result against its PRE-REGISTERED gate — never let a runner self-declare PASS/KILL — then record: FINDINGS.md row + SIGNAL-BACKLOG.md status + a one-line FASTTRACK tick (you are the single writer for FINDINGS/SIGNAL-BACKLOG/BUILD-STATE/MAKER-EXIT-SIM/FASTTRACK).
+4. REVIEW anything that touches engines or SQL with 1-2 sonnet lenses before accepting (the day-0 pattern: reviewers report SEVERITY·file:line·claim·evidence; you adjudicate; stop at zero code defects). Pure analysis scripts reading existing data need one lens only.
+5. GUARDRAILS (non-negotiable): ONE heavy DB operation project-wide at a time; :35–:42 blackout; no capital, no keys, rail stays paper/DORMANT — a forward-gate PASS is an OPERATOR decision, never yours (POST-FABLE-HANDOFF.md §adjudicate); commits stay local; never push; never touch the parallel agent's uncommitted files.
+6. RECORD + PACE: update TaskList + FASTTRACK ticks each cycle; BUILD-STATE addendum at day boundaries; /remember before any sleep >1h-equivalent idle stretch. ScheduleWakeup: agents in flight → 1500s fallback; only waiting on the hourly :35 tick or the parallel agent → 1800-2700s; mid-integration → continue now. STOP the loop (no wakeup) when: WS-3 verdicts are all recorded and no lane has work — write the final BUILD-STATE tick + a /remember entry and end with a status summary; the deadmen page the operator on real prod problems, the gate accrues by itself (~sufficiency 07-08→12), and POST-FABLE-HANDOFF.md carries the rest.
+```
+
+## (v1, day-0 — superseded) The autonomous /loop prompt (paste as-is; self-paced — no interval)
 
 ```
 /loop Polyweather FASTTRACK orchestrator — Fable window closes ~2026-07-06/07. You are PLANNER/ORCHESTRATOR/CHECKER ONLY: you never write bulk code, tests, or doc drafts yourself — cheaper models do; you plan, brief, review, adjudicate, integrate. Files are the state: read FASTTRACK-PLAN.md + TaskList first every cycle.
