@@ -20,6 +20,7 @@
  * past the ~400s isolate wall (the 2026-07-03 incident class; the cron was paused on v6 pending this fix).
  */
 import type { JobCtx, JobStats } from '../_shared/runJob.ts';
+import { retryWrite, withTimeout } from '../_shared/retry.ts';
 import {
   BOT_DEFAULTS,
   buildConvergenceView,
@@ -40,26 +41,35 @@ const FETCH_CONCURRENCY = 5;
 const CITY_TIMEOUT_MS = 30_000;
 const FETCH_BUDGET_MS = 240_000;
 
+/**
+ * terminal-write retry tuning (WS-5, 2026-07-03) — mirrors maker-exit-panel's (one incident class, one fix
+ * shape). See _shared/retry.ts for the idempotency argument.
+ *
+ * ARITHMETIC — this stays under the ~400s isolate wall with margin to spare:
+ *   fetch phase worst case  = FETCH_BUDGET_MS (240s) + one in-flight city's CITY_TIMEOUT_MS tail (30s) = 270s
+ *   (unchanged by this fix — the budget check only stops NEW claims, the city already in flight when the
+ *   budget trips still runs to its own timeout).
+ *   terminal-write phase worst case = 3 attempts × RECORD_WRITE_TIMEOUT_MS (15s = 45s) + 2 backoffs
+ *   (3s + 8s = 11s) = 56s (every attempt hangs to its own timeout — the true worst case, not the common one).
+ *   total = 270s + 56s = 326s, leaving a ~74s (≈19%) margin under the 400s wall even in the all-hang case.
+ */
+const RECORD_WRITE_RETRIES = 2;
+const RECORD_WRITE_BACKOFF_MS = [3_000, 8_000];
+const RECORD_WRITE_TIMEOUT_MS = 15_000;
+
 export interface ConvergencePanelDeps {
   now: Date;
   /** test seams — production uses the module defaults above. */
   fetchConcurrency?: number;
   cityTimeoutMs?: number;
   fetchBudgetMs?: number;
+  /** test seam for the terminal-write retry backoff — production uses the real setTimeout-based sleep. */
+  retrySleep?: (ms: number) => Promise<void>;
 }
 
 interface CaptureInputs {
   captures: RawCaptureRow[];
   resolutions: RawResolution[];
-}
-
-/** race a promise against a rejection timer (the DbPort has no fetch timeout); always clears the timer. */
-function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const killer = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error(label)), ms);
-  });
-  return Promise.race([p, killer]).finally(() => clearTimeout(timer)) as Promise<T>;
 }
 
 export async function convergencePanel(ctx: JobCtx, deps: ConvergencePanelDeps): Promise<JobStats> {
@@ -123,8 +133,26 @@ export async function convergencePanel(ctx: JobCtx, deps: ConvergencePanelDeps):
   //    threaded in so the page can flag when allowlist cities were dropped this tick (a silent gate undercount).
   const view = { ...buildConvergenceView(captures, resolutions, cfg), days: PANEL_DAYS, cityErrors };
 
-  // 3) store the small snapshot.
-  const w = await db.rpc<{ record_convergence_panel: number }>('record_convergence_panel', { p_view: view });
+  // 3) store the small snapshot — BOUNDED RETRY (WS-5): one transient "upstream request timeout" on this
+  //    single insert must not discard the several minutes of per-city fetch work already done (today's
+  //    incident). Safe to retry: record_convergence_panel is a pure insert + prune-to-200 (no upsert, no
+  //    uniqueness constraint), and dash_convergence reads only the LATEST row — see _shared/retry.ts for the
+  //    full idempotency argument and the tuning block above for the wall-clock arithmetic.
+  const w = await retryWrite(
+    () => db.rpc<{ record_convergence_panel: number }>('record_convergence_panel', { p_view: view }),
+    {
+      retries: RECORD_WRITE_RETRIES,
+      delaysMs: RECORD_WRITE_BACKOFF_MS,
+      attemptTimeoutMs: RECORD_WRITE_TIMEOUT_MS,
+      label: 'record_convergence_panel',
+      onRetry: (attempt, e) =>
+        log('record_convergence_panel write failed — retrying', {
+          attempt: attempt + 1,
+          error: e instanceof Error ? e.message : String(e),
+        }),
+    },
+    deps.retrySleep,
+  );
   const snapshotId = Number(w[0]?.record_convergence_panel ?? 0);
 
   const stats: JobStats = {

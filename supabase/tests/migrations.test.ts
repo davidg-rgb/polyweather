@@ -287,6 +287,15 @@ describe('migrations 0001–0010', () => {
       // (deliberately NO raw param — the 0054/0058 overload trap; bot_capture_series stays the full-fidelity
       // read). No table/cron change (count stays 29).
       '0077_capture_read_thinning.sql',
+      // 0078 = job_runs janitor (WS-5): claim_job_run re-bodied to sweep THIS job's own OTHER 'running' rows
+      // older than 30 min (a dead isolate that never reached complete_job_run) to 'failed' at the top of every
+      // claim — the 0011 CAS takeover only ever revisits the EXACT (job, period_key) row being reclaimed, so a
+      // wedged OLDER slot from a different tick was never touched by a later slot's claim (4 permanently-wedged
+      // rows, 2026-07-03). 30 min is a hard >4x-the-isolate-wall margin, scoped to p_job only. Signature,
+      // return shape, and every existing decision branch are byte-identical — a pure body addition; the
+      // service_role-only grant is re-asserted per the 0046/0047 re-body idiom (same contract, stated
+      // explicitly). No table/cron change (count stays 29).
+      '0078_job_runs_janitor.sql',
     ]);
   });
 });

@@ -9,7 +9,7 @@
  * remaining cities are skipped and counted, and the snapshot still lands; (4) INTERLEAVED per-city arrival is
  * safe — buildEvents groups per event and sorts ticks internally, so out-of-order merges lose nothing.
  */
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { convergencePanel } from '../functions/convergence-panel/handler.ts';
 import type { DbPort } from '../functions/_shared/db.ts';
 import type { JobCtx } from '../functions/_shared/runJob.ts';
@@ -25,6 +25,8 @@ interface FakeDbOpts {
   behavior?: (city: string, i: number) => CityBehavior;
   /** rows returned per city (default none — an empty capture window). */
   rowsFor?: (city: string) => unknown[];
+  /** how many leading calls to record_convergence_panel throw before one succeeds; Infinity = always fails. */
+  writeFailures?: number;
 }
 
 interface FakeDb {
@@ -39,6 +41,7 @@ const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
 function fakeDb(opts: FakeDbOpts = {}): FakeDb {
   const state: FakeDb = { port: null as unknown as DbPort, fetchedCities: [], maxInFlight: 0, writes: [] };
   let inFlight = 0;
+  let writeAttempts = 0;
   state.port = {
     async rpc<T>(fn: string, args: Record<string, unknown>): Promise<T[]> {
       if (fn === 'convergence_capture_inputs') {
@@ -58,7 +61,13 @@ function fakeDb(opts: FakeDbOpts = {}): FakeDb {
         }
       }
       state.writes.push(fn);
-      if (fn === 'record_convergence_panel') return [{ record_convergence_panel: 7 }] as T[];
+      if (fn === 'record_convergence_panel') {
+        if (writeAttempts < (opts.writeFailures ?? 0)) {
+          writeAttempts++;
+          throw new Error('upstream request timeout');
+        }
+        return [{ record_convergence_panel: 7 }] as T[];
+      }
       return [];
     },
     async getConfigRows() {
@@ -115,13 +124,27 @@ describe('convergence-panel per-city fetch pool (v7)', () => {
   });
 
   it('an exhausted budget skips remaining cities into cityErrors and still writes a partial snapshot', async () => {
-    const db = fakeDb({ behavior: () => 30 });
-    // budget 0ms: the first wave (claimed at elapsed≈0) proceeds; every later claim sees elapsed≥30ms → skipped.
-    const stats = await convergencePanel(ctx(db), { now: NOW, fetchConcurrency: 2, fetchBudgetMs: 0 });
-    expect(db.fetchedCities.length).toBe(2);
-    expect(stats.budgetSkipped).toBe(CITIES.length - 2);
-    expect(stats.cityErrors).toBe(CITIES.length - 2); // skipped cities surface through the count the page shows
-    expect(db.writes).toContain('record_convergence_panel'); // partial view beats a dead tick
+    // FAKE TIMERS (2026-07-03, WS-5): this test previously raced real wall-clock Date.now() against a
+    // real setTimeout-based city latency — under machine load the scheduling jitter between "the first
+    // wave's synchronous budget check" and "the actual elapsed ms" could let an extra city slip through
+    // or drop (observed flake: "expected 1 to be 2"). Fake timers freeze Date.now() at exactly
+    // fetchStarted until explicitly advanced, so the fetchBudgetMs:0 boundary is decided by the SAME
+    // clock the test controls — deterministic regardless of host speed.
+    vi.useFakeTimers();
+    try {
+      const db = fakeDb({ behavior: () => 30 });
+      // budget 0ms: the first wave (claimed at elapsed≡0, frozen by the fake clock) proceeds; every later
+      // claim (after the 30ms fake-timer advance below) sees elapsed≥30ms → skipped.
+      const statsPromise = convergencePanel(ctx(db), { now: NOW, fetchConcurrency: 2, fetchBudgetMs: 0 });
+      await vi.advanceTimersByTimeAsync(100); // fires every in-flight 30ms city sleep + drains the fallout
+      const stats = await statsPromise;
+      expect(db.fetchedCities.length).toBe(2);
+      expect(stats.budgetSkipped).toBe(CITIES.length - 2);
+      expect(stats.cityErrors).toBe(CITIES.length - 2); // skipped cities surface through the count the page shows
+      expect(db.writes).toContain('record_convergence_panel'); // partial view beats a dead tick
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('the healthy path fetches every allowlist city exactly once with zero errors', async () => {
@@ -145,5 +168,24 @@ describe('convergence-panel per-city fetch pool (v7)', () => {
     expect(stats.captureRows).toBe(CITIES.length * 2); // every row merged despite out-of-order completion
     expect(stats.freshEvents).toBe(CITIES.length); // one fresh event per city survived the grouping
     expect(db.writes).toContain('record_convergence_panel');
+  });
+});
+
+describe('convergence-panel terminal-write retry (WS-5) — wiring, not the retry logic itself (see _shared/retry.test.ts)', () => {
+  it('one transient write timeout is retried and the tick still lands (no lost fetch work)', async () => {
+    const db = fakeDb({ writeFailures: 1 }); // 1 failure, then succeeds — within the 2-retry budget
+    const stats = await convergencePanel(ctx(db), { now: NOW, retrySleep: async () => {} });
+    expect(stats.snapshotId).toBe(7);
+    expect(db.writes.filter((w) => w === 'record_convergence_panel')).toHaveLength(2); // 1 failed + 1 landed
+    // the fetch phase's own work was NOT re-done or discarded by the write retry.
+    expect(db.fetchedCities.sort()).toEqual([...CITIES].sort());
+  });
+
+  it('a write that fails on every attempt exhausts the 2 retries and the job throws (fails loudly, no swallow)', async () => {
+    const db = fakeDb({ writeFailures: Infinity });
+    await expect(convergencePanel(ctx(db), { now: NOW, retrySleep: async () => {} })).rejects.toThrow(
+      'upstream request timeout',
+    );
+    expect(db.writes.filter((w) => w === 'record_convergence_panel')).toHaveLength(3); // 1 initial + 2 retries, then gives up
   });
 });

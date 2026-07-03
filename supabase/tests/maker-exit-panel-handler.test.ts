@@ -8,7 +8,7 @@
  * parallelizes; (3) an exhausted fetch budget degrades to a PARTIAL view — remaining cities are skipped and
  * counted, and the snapshot still lands (a partial snapshot beats a dead tick).
  */
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { makerExitPanel } from '../functions/maker-exit-panel/handler.ts';
 import type { DbPort } from '../functions/_shared/db.ts';
 import type { JobCtx } from '../functions/_shared/runJob.ts';
@@ -20,6 +20,10 @@ type CityBehavior = 'ok' | 'hang' | number; // number = resolve after N ms
 interface FakeDbOpts {
   cities: string[];
   behavior?: (city: string) => CityBehavior;
+  /** how many leading calls to record_maker_exit_panel throw before one succeeds; Infinity = always fails. */
+  writeFailures?: number;
+  /** record_bot_gate_snapshot never resolves — the step-4 bookkeeping timeout must bound it. */
+  gateSnapshotHangs?: boolean;
 }
 
 interface FakeDb {
@@ -34,6 +38,7 @@ const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
 function fakeDb(opts: FakeDbOpts): FakeDb {
   const state: FakeDb = { port: null as unknown as DbPort, fetchedCities: [], maxInFlight: 0, writes: [] };
   let inFlight = 0;
+  let writeAttempts = 0;
   state.port = {
     async rpc<T>(fn: string, args: Record<string, unknown>): Promise<T[]> {
       if (fn === 'convergence_capture_inputs') {
@@ -51,7 +56,16 @@ function fakeDb(opts: FakeDbOpts): FakeDb {
         }
       }
       state.writes.push(fn);
-      if (fn === 'record_maker_exit_panel') return [{ record_maker_exit_panel: 7 }] as T[];
+      if (fn === 'record_maker_exit_panel') {
+        if (writeAttempts < (opts.writeFailures ?? 0)) {
+          writeAttempts++;
+          throw new Error('upstream request timeout');
+        }
+        return [{ record_maker_exit_panel: 7 }] as T[];
+      }
+      if (fn === 'record_bot_gate_snapshot' && opts.gateSnapshotHangs) {
+        return await new Promise<never>(() => {}); // never resolves — the bookkeeping timeout must fire
+      }
       return [];
     },
     async getConfigRows() {
@@ -91,15 +105,29 @@ describe('maker-exit-panel per-city fetch pool', () => {
   });
 
   it('an exhausted budget skips remaining cities into cityErrors and still writes a partial snapshot', async () => {
-    const cities = Array.from({ length: 6 }, (_, i) => `c${i}`);
-    const db = fakeDb({ cities, behavior: () => 30 });
-    // budget 0ms: the first wave (claimed at elapsed≈0) proceeds; every later claim sees elapsed≥30ms → skipped.
-    const stats = await makerExitPanel(ctx(db), { now: NOW, fetchConcurrency: 2, fetchBudgetMs: 0 });
-    expect(db.fetchedCities.length).toBe(2);
-    expect(stats.budgetSkipped).toBe(4);
-    expect(stats.cityErrors).toBe(4); // skipped cities surface through the count the page already shows
-    expect(db.writes).toContain('record_maker_exit_panel'); // partial view beats a dead tick
-    expect(db.writes).toContain('record_bot_gate_snapshot');
+    // FAKE TIMERS (2026-07-03, WS-5): this test previously raced real wall-clock Date.now() against a
+    // real setTimeout-based city latency — under machine load the scheduling jitter between "the first
+    // wave's synchronous budget check" and "the actual elapsed ms" could let an extra city slip through
+    // or drop (observed flake: "expected 1 to be 2"). Fake timers freeze Date.now() at exactly
+    // fetchStarted until explicitly advanced, so the fetchBudgetMs:0 boundary is decided by the SAME
+    // clock the test controls — deterministic regardless of host speed.
+    vi.useFakeTimers();
+    try {
+      const cities = Array.from({ length: 6 }, (_, i) => `c${i}`);
+      const db = fakeDb({ cities, behavior: () => 30 });
+      // budget 0ms: the first wave (claimed at elapsed≡0, frozen by the fake clock) proceeds; every later
+      // claim (after the 30ms fake-timer advance below) sees elapsed≥30ms → skipped.
+      const statsPromise = makerExitPanel(ctx(db), { now: NOW, fetchConcurrency: 2, fetchBudgetMs: 0 });
+      await vi.advanceTimersByTimeAsync(100); // fires every in-flight 30ms city sleep + drains the fallout
+      const stats = await statsPromise;
+      expect(db.fetchedCities.length).toBe(2);
+      expect(stats.budgetSkipped).toBe(4);
+      expect(stats.cityErrors).toBe(4); // skipped cities surface through the count the page already shows
+      expect(db.writes).toContain('record_maker_exit_panel'); // partial view beats a dead tick
+      expect(db.writes).toContain('record_bot_gate_snapshot');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('the healthy path fetches every city exactly once with zero errors', async () => {
@@ -112,5 +140,49 @@ describe('maker-exit-panel per-city fetch pool', () => {
     expect(db.writes).toEqual(
       expect.arrayContaining(['record_maker_exit_panel', 'record_bot_gate_snapshot', 'record_bot_tick']),
     );
+  });
+});
+
+describe('maker-exit-panel terminal-write retry (WS-5) — wiring, not the retry logic itself (see _shared/retry.test.ts)', () => {
+  it('one transient write timeout is retried and the tick still lands (no lost fetch work)', async () => {
+    const cities = ['a', 'b', 'c'];
+    const db = fakeDb({ cities, writeFailures: 1 }); // 1 failure, then succeeds — within the 2-retry budget
+    const stats = await makerExitPanel(ctx(db), { now: NOW, retrySleep: async () => {} });
+    expect(stats.snapshotId).toBe(7);
+    expect(db.writes.filter((w) => w === 'record_maker_exit_panel')).toHaveLength(2); // 1 failed + 1 landed
+    // the fetch phase's own work was NOT re-done or discarded by the write retry.
+    expect(db.fetchedCities.sort()).toEqual(cities);
+  });
+
+  it('a write that fails on every attempt exhausts the 2 retries and the job throws (fails loudly, no swallow)', async () => {
+    const cities = ['a', 'b'];
+    const db = fakeDb({ cities, writeFailures: Infinity });
+    await expect(makerExitPanel(ctx(db), { now: NOW, retrySleep: async () => {} })).rejects.toThrow(
+      'upstream request timeout',
+    );
+    expect(db.writes.filter((w) => w === 'record_maker_exit_panel')).toHaveLength(3); // 1 initial + 2 retries, then gives up
+  });
+
+  it('a HUNG step-4 bookkeeping write is bounded by its timeout — the tick still completes, warning logged, no retry', async () => {
+    // the review-fix wiring: record_bot_gate_snapshot / record_bot_tick were raw unbounded awaits inside the
+    // step-4 try/catch — a pooler-stall hang there would run the isolate toward the ~400s wall even though
+    // the snapshot had already landed. Bounded at bookkeepingTimeoutMs, a hang degrades EXACTLY like any
+    // other step-4 failure: non-fatal log, job completes 'ok', and NO retry (a duplicate would pollute the
+    // never-pruned §9R-E gate history).
+    const cities = ['a', 'b'];
+    const db = fakeDb({ cities, gateSnapshotHangs: true });
+    const logged: string[] = [];
+    const loggingCtx: JobCtx = {
+      db: db.port,
+      config: { jobWallLimitSec: 150 } as JobCtx['config'],
+      log: (msg) => logged.push(msg),
+      startedAt: NOW,
+    };
+    const stats = await makerExitPanel(loggingCtx, { now: NOW, bookkeepingTimeoutMs: 50 });
+    expect(stats.snapshotId).toBe(7); // the terminal snapshot landed before step 4 — the tick is 'ok'
+    expect(logged.some((m) => m.includes('gate-snapshot / tick write failed (non-fatal)'))).toBe(true);
+    expect(db.writes.filter((w) => w === 'record_bot_gate_snapshot')).toHaveLength(1); // bounded, NOT retried
+    // the hang in the FIRST bookkeeping write skips the second — the same degrade path as any step-4 throw.
+    expect(db.writes).not.toContain('record_bot_tick');
   });
 });

@@ -22,6 +22,7 @@
  * smaller/empty view, never a failed job; the per-city fetch-error count is surfaced in the view.
  */
 import type { JobCtx, JobStats } from '../_shared/runJob.ts';
+import { retryWrite, withTimeout } from '../_shared/retry.ts';
 import {
   BOT_DEFAULTS,
   buildMakerExitView,
@@ -47,26 +48,45 @@ const FETCH_CONCURRENCY = 5;
 const CITY_TIMEOUT_MS = 30_000;
 const FETCH_BUDGET_MS = 240_000;
 
+/**
+ * terminal-write retry tuning (WS-5, 2026-07-03) — see _shared/retry.ts for the idempotency argument. 2
+ * retries / 3s then 8s backoff / a 15s hard per-attempt timeout (the snapshot is "tens of KB" per the 0073
+ * header, so 15s is generous even under pooler jam; a hang past that is exactly the failure class the
+ * incident showed — bound it, don't wait on it). The two step-4 bookkeeping writes get a 10s hard timeout
+ * EACH but NO retry — they are best-effort by design (a timeout degrades exactly like any other step-4
+ * failure: logged non-fatal inside the existing try/catch, never fails the job), and retrying them could
+ * write duplicate rows into the never-pruned §9R-E gate history (bot_gate_snapshot) — unacceptable there,
+ * unlike the pruned-and-latest-read panel table.
+ *
+ * ARITHMETIC — the COMPLETE post-claim chain stays under the ~400s isolate wall with margin to spare:
+ *   fetch phase worst case  = FETCH_BUDGET_MS (240s) + one in-flight city's CITY_TIMEOUT_MS tail (30s) = 270s
+ *   (unchanged by this fix — the budget check only stops NEW claims, the city already in flight when the
+ *   budget trips still runs to its own timeout).
+ *   terminal-write phase worst case = 3 attempts × RECORD_WRITE_TIMEOUT_MS (15s = 45s) + 2 backoffs
+ *   (3s + 8s = 11s) = 56s (every attempt hangs to its own timeout — the true worst case, not the common one).
+ *   step-4 bookkeeping worst case = 2 × BOOKKEEPING_TIMEOUT_MS (10s) = 20s (both writes hang to their bound).
+ *   total = 270s + 56s + 20s = 346s, leaving a ~54s (≈13%) margin under the 400s wall even in the all-hang
+ *   case. (convergence-panel has NO step 4, so its chain is 270s + 56s = 326s / ~74s margin.)
+ */
+const RECORD_WRITE_RETRIES = 2;
+const RECORD_WRITE_BACKOFF_MS = [3_000, 8_000];
+const RECORD_WRITE_TIMEOUT_MS = 15_000;
+const BOOKKEEPING_TIMEOUT_MS = 10_000;
+
 export interface MakerExitPanelDeps {
   now: Date;
   /** test seams — production uses the module defaults above. */
   fetchConcurrency?: number;
   cityTimeoutMs?: number;
   fetchBudgetMs?: number;
+  bookkeepingTimeoutMs?: number;
+  /** test seam for the terminal-write retry backoff — production uses the real setTimeout-based sleep. */
+  retrySleep?: (ms: number) => Promise<void>;
 }
 
 interface CaptureInputs {
   captures: RawCaptureRow[];
   resolutions: RawResolution[];
-}
-
-/** race a promise against a rejection timer (the DbPort has no fetch timeout); always clears the timer. */
-function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const killer = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error(label)), ms);
-  });
-  return Promise.race([p, killer]).finally(() => clearTimeout(timer)) as Promise<T>;
 }
 
 export async function makerExitPanel(ctx: JobCtx, deps: MakerExitPanelDeps): Promise<JobStats> {
@@ -138,43 +158,74 @@ export async function makerExitPanel(ctx: JobCtx, deps: MakerExitPanelDeps): Pro
   //    threaded in so the page can flag when allowlist cities were dropped this tick (a silent gate undercount).
   const view = { ...buildMakerExitView(captures, resolutions, cfg), days: PANEL_DAYS, cityErrors };
 
-  // 3) store the small snapshot.
-  const w = await db.rpc<{ record_maker_exit_panel: number }>('record_maker_exit_panel', { p_view: view });
+  // 3) store the small snapshot — BOUNDED RETRY (WS-5): one transient "upstream request timeout" on this
+  //    single insert must not discard the several minutes of per-city fetch work already done (today's
+  //    incident). Safe to retry: record_maker_exit_panel is a pure insert + prune-to-200 (no upsert, no
+  //    uniqueness constraint), and dash_maker_exit reads only the LATEST row — see _shared/retry.ts for the
+  //    full idempotency argument and the tuning block above for the wall-clock arithmetic.
+  const w = await retryWrite(
+    () => db.rpc<{ record_maker_exit_panel: number }>('record_maker_exit_panel', { p_view: view }),
+    {
+      retries: RECORD_WRITE_RETRIES,
+      delaysMs: RECORD_WRITE_BACKOFF_MS,
+      attemptTimeoutMs: RECORD_WRITE_TIMEOUT_MS,
+      label: 'record_maker_exit_panel',
+      onRetry: (attempt, e) =>
+        log('record_maker_exit_panel write failed — retrying', {
+          attempt: attempt + 1,
+          error: e instanceof Error ? e.message : String(e),
+        }),
+    },
+    deps.retrySleep,
+  );
   const snapshotId = Number(w[0]?.record_maker_exit_panel ?? 0);
 
   // 4) persist the §9R-E verdict (the gate-of-record bot_deadman watches) + a liveness tick. Best-effort — a
-  //    snapshot already landed; never fail the job on the bookkeeping writes.
+  //    snapshot already landed; never fail the job on the bookkeeping writes. Each write is BOUNDED at 10s
+  //    (WS-5 review fix): an unbounded hung call here (the same pooler-stall class as the incident) would run
+  //    the isolate toward the ~400s wall even though the tick's real work is done. NO retry — a timed-out-but-
+  //    landed write retried here would duplicate a row in the never-pruned §9R-E gate history; on timeout this
+  //    degrades exactly like any other step-4 failure (the catch below logs it non-fatally).
+  const bookkeepingTimeoutMs = deps.bookkeepingTimeoutMs ?? BOOKKEEPING_TIMEOUT_MS;
   try {
-    await db.rpc('record_bot_gate_snapshot', {
-      p_payload: {
-        mode: 'paper',
-        source: 'forward',
-        label: view.gate.label,
-        nMarkets: view.gate.nMarkets,
-        nCities: view.gate.nCities,
-        nDistinctDays: view.gate.nDistinctDays,
-        winFrac: view.gate.winFrac,
-        meanNetReturn: view.gate.meanNetReturn,
-        ciLow: view.gate.ciLow,
-        ciHigh: view.gate.ciHigh,
-        zeroSkillPassRate: view.gate.zeroSkillPassRate,
-        reason: view.gate.reason,
-        makerExitFrac: view.assumptions.makerFillRate,
-        realizedRebateUsd: view.assumptions.realizedRebateUsd,
-        totalNetUsd: view.money.realizedPnlUsd,
-        nOpen: view.money.nOpen,
-      },
-    });
-    await db.rpc('record_bot_tick', {
-      p_payload: {
-        mode: 'paper',
-        ran: true,
-        placed: view.money.nEntries,
-        filled: view.money.nEntries,
-        exited: view.money.nRealized,
-        gateReason: view.gate.label,
-      },
-    });
+    await withTimeout(
+      db.rpc('record_bot_gate_snapshot', {
+        p_payload: {
+          mode: 'paper',
+          source: 'forward',
+          label: view.gate.label,
+          nMarkets: view.gate.nMarkets,
+          nCities: view.gate.nCities,
+          nDistinctDays: view.gate.nDistinctDays,
+          winFrac: view.gate.winFrac,
+          meanNetReturn: view.gate.meanNetReturn,
+          ciLow: view.gate.ciLow,
+          ciHigh: view.gate.ciHigh,
+          zeroSkillPassRate: view.gate.zeroSkillPassRate,
+          reason: view.gate.reason,
+          makerExitFrac: view.assumptions.makerFillRate,
+          realizedRebateUsd: view.assumptions.realizedRebateUsd,
+          totalNetUsd: view.money.realizedPnlUsd,
+          nOpen: view.money.nOpen,
+        },
+      }),
+      bookkeepingTimeoutMs,
+      `record_bot_gate_snapshot timed out after ${bookkeepingTimeoutMs}ms`,
+    );
+    await withTimeout(
+      db.rpc('record_bot_tick', {
+        p_payload: {
+          mode: 'paper',
+          ran: true,
+          placed: view.money.nEntries,
+          filled: view.money.nEntries,
+          exited: view.money.nRealized,
+          gateReason: view.gate.label,
+        },
+      }),
+      bookkeepingTimeoutMs,
+      `record_bot_tick timed out after ${bookkeepingTimeoutMs}ms`,
+    );
   } catch (e) {
     log('gate-snapshot / tick write failed (non-fatal)', { error: e instanceof Error ? e.message : String(e) });
   }
