@@ -746,6 +746,14 @@ expected to survive.
 >   ```
 > - Recorded: FINDINGS.md backlog row (item 12) + FASTTRACK cycle ticks C15–C20. Re-open criteria: none needed —
 >   the item is CLOSED as a selection study; the live paper loop is the confirmation instrument.
+> - **↳ ENROLLMENT EXECUTED 2026-07-03 ~22:15 local (operator blanket approval given in-session):** the staged SQL
+>   above applied verbatim (verified: 4 active `city_sim_config` rows) + `pnpm tsx scripts/city-sim.ts` backfill —
+>   ankara 126 bets/121 graded, houston 125/120, both 06-12→07-03, same shape as karachi/singapore. The daily
+>   10:00Z `city-paper-trade` cron picks the new cities up automatically. **Confirmation-clock rule (single-writer
+>   record): the backfilled window overlaps the scan's own TRAIN/TEST data — it is IN-SAMPLE for the two
+>   candidates. Candidate CONFIRMATION reads use `target_date ≥ 2026-07-04` ONLY.** Houston is the sim's first
+>   °F city — 0070's bucketing is unit-agnostic by design; its first forward graded day should be explicitly
+>   checked (the v5 loop carries this).
 
 ## What NOT to do
 
