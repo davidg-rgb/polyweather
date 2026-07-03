@@ -172,7 +172,27 @@ winner not null`). If one market is UMA-stuck for hours, proceed at 44 with a no
   (today proved surprises cost half a day).
 - **Day 3:** POST-FABLE-HANDOFF.md · final memory entry · leave the system accruing.
 
-## The autonomous /loop prompt — v3, post-WS-3-close (paste as-is; self-paced — no interval)
+## The autonomous /loop prompt — v4, post-deploy (paste as-is; self-paced — no interval)
+
+> v3 (below, superseded) was written before the operator authorized commit/deploy/push. Board at
+> 2026-07-03 ~21:30 local: WS-3 + reward-instr are MERGED/DEPLOYED/PUSHED (main == origin @ `b982ea9`);
+> item 12 (CITY-SCAN) was in flight when the session ended — its runner dies with the session, so verify
+> whether results were recorded and re-dispatch if not (the pre-registered spec is committed). The forward
+> gate is ~1 graded day from sufficiency.
+
+```
+/loop Polyweather FASTTRACK orchestrator v4 (post-deploy; Fable window closes ~2026-07-06/07). You are PLANNER/ORCHESTRATOR/CHECKER/ADJUDICATOR ONLY — sonnet agents build/run/draft; you verify, review, adjudicate, record. Files are the state: FASTTRACK-PLAN.md (cycle log C1–C14 + workstream statuses), POST-FABLE-HANDOFF.md (steady state + THE gate adjudication guide), SIGNAL-BACKLOG.md (all verdicts + item 12 CITY-SCAN pre-registration), BUILD-STATE.md (17:45Z addendum), docs/ops/REWARD-INSTR-ROLLOUT.md, TaskList — read every cycle. Board: main == origin @ b982ea9 (WS-3 verdicts + reward-instr diagnostic merged/deployed/pushed 07-03 ~21:15 local); backlog CLOSED except item 12; commits stay local by default — push only follow-ups to already-authorized threads.
+
+EACH CYCLE, in order:
+1. ONE-TIME DEPLOY VERIFICATION (skip once done, per docs/ops/REWARD-INSTR-ROLLOUT.md): first post-deploy :35 tick (first eligible 19:35Z 07-03) — job_runs.stats carries qualifyingTickFrac (number|null) and the tick stays healthy (ok, cityErrors ≤2, nMarkets ≥40, ~95–250 s); Vercel READY + /maker-exit renders tile #4 (em-dash on pre-deploy snapshots = correct). Record the first observed qualifyingTickFrac in the cycle log — it bounds the 1b reward term (income ∝ frac × pool × share) BEFORE the share question opens.
+2. CITY-SCAN (item 12): check whether a verdict block exists under SIGNAL-BACKLOG §12 — if not, re-dispatch a sonnet runner implementing the pre-registered block VERBATIM (one new file scripts/research/city-scan.ts; local maker-exit cache + ONE cheap bucket_probabilities pull, blackout-guarded, stop-on-2-identical-failures; raw tables only, no self-verdicts; reuse entry-watch LB + clusterMeanTCi + the live engine's fee math). On report: verify footprint, then YOU adjudicate vs the locked bars (candidate = TRAIN LB>0 AND TEST net>0 among the top-5 TRAIN cells; all else descriptive) → record FINDINGS row + §12 verdict block + tick → present candidates + the pooled entry-hour curve to the operator as a city_sim_config ENROLLMENT decision (stage exact commands; do NOT apply). One review lens on the script ONLY if a candidate emerges (behavior-changing); waive with documented reasoning for a null.
+3. PROD HEALTH (cheap probes, never :35–:42): opening-capture (*/10: ok/<60 s/inserted>0) · maker-exit-panel (hourly :35: ok + snapshotId + nMarkets ≥40) · convergence-panel (*/15: ok/<60 s/cityErrors ≤2). One failure = note+watch; two identical = the pre-authorized playbook (throttle capture → pause offender → IO refill → staggered re-enable). NEW migrations/fn deploys/destructive SQL: stage + ask the operator.
+4. GATE WATCH — sufficiency is IMMINENT (18:36Z 07-03: 73 mkts / 34 cities / 6 of 7 days; read: net −$160 / −11 % ROI, makerFillRate 0.082 vs 0.49 backtest — the POST-FABLE-named KILL path). When nDistinctDays ≥ 7 the code renders the gate label — report it PROMINENTLY with what POST-FABLE-HANDOFF §adjudicate says it means. NEVER adjudicate it yourself: PASS → operator decision (capital scope conversation, nothing auto-authorized); KILL → STAGE the FINDINGS.md + CLAUDE.md updates and ask the operator to confirm before recording the 12th signal dead; INSUFFICIENT → keep accruing.
+5. GUARDRAILS (non-negotiable): ONE heavy DB op project-wide; :35–:42 blackout; no capital, no keys, rail paper/DORMANT; no new signal hunts (re-open criteria in SIGNAL-BACKLOG.md only); never touch other agents' uncommitted files.
+6. RECORD + PACE: cycle-log tick + TaskList each cycle; /remember before any >1 h idle. Wakeups: runner in flight → 1500 s; watch-only → 2700–3600 s. STOP when: deploy verified + item 12 adjudicated/recorded + the gate status reported (label rendered, or still <7 days with nothing else open) → final tick + /remember + a summary ending with the operator's pending decisions (city enrollment; the gate verdict handling; nothing else is open).
+```
+
+## (v3, post-WS-3-close — superseded) The autonomous /loop prompt (paste as-is; self-paced — no interval)
 
 > v2 (below, kept for reference) drove the WS-3 adjudication sprint to completion (cycle log C1–C13).
 > v3 reflects the board after 2026-07-03 ~20:30 local: ALL workstreams closed; the tree is committed
