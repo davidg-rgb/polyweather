@@ -1,4 +1,12 @@
-# WS-1 rollout — panel data-path structural fix (0077 + panel v5/v7 + retention prune)
+# WS-1 + WS-5 rollout — panel data-path structural fix + ops hardening (0077 + 0078 + hardened handlers + retention prune)
+
+> **2026-07-03 integration note (single combined bundle):** this runbook now also carries WS-5 —
+> migration **0078** (`claim_job_run` janitor: a job's own `running` rows >30 min are swept to `failed`
+> at its next claim — dead-isolate rows self-heal) and the **hardened handlers** (bounded retry on the
+> terminal snapshot write; 10s-bounded, never-retried bookkeeping writes; complete wall arithmetic
+> 346s worst case vs the 400s isolate wall). Both are in the same deploy artifacts as WS-1, so the
+> steps below are unchanged in shape: step 1 applies BOTH migrations, steps 2/4 deploy the hardened
+> handlers. Local commits: `52f115d` (WS-1) + `6c053f1` (WS-5); combined suite 135 files / 1928 green.
 
 > **What this bundle does.** Kills the 2026-07-03 incident class at the root: `opening_captures` is 46 MB heap
 > + ~1.2 GB TOAST (`buckets` jsonb), and every 45-city maker-exit-panel tick detoasted ~1.2 GB (> the instance
@@ -28,26 +36,32 @@ select key, value from config where key in ('bot.tickStaleMin.paper', 'bot.gateS
 
 If these differ, reconcile with BUILD-STATE.md before proceeding — the restore steps below assume them.
 
-## Step 1 — apply migration `0077_capture_read_thinning.sql`
+## Step 1 — apply migrations `0077_capture_read_thinning.sql` + `0078_job_runs_janitor.sql`
 
 ```bash
 npx --no-install supabase db push --project-ref lenysiqxihsmxljvyybt
-# or: MCP apply_migration with the file body
+# or: MCP apply_migration with each file body (0077 first, then 0078 — both plain create-or-replace)
 ```
 
-**Verify** (cheap; the fn body now thins on the 20-min grid and exactly ONE 2-arg overload exists):
+**Verify** (cheap; 0077: the fn body thins on the 20-min grid, exactly ONE 2-arg overload; 0078: the
+claim fn carries the janitor sweep):
 
 ```sql
 select pronargs, prosrc like '%grid_rn%' as thinned
   from pg_proc where proname = 'convergence_capture_inputs' and pronamespace = 'public'::regnamespace;
 -- expect exactly one row: (2, true)
 
+select prosrc like '%30 minutes%' as janitor
+  from pg_proc where proname = 'claim_job_run' and pronamespace = 'public'::regnamespace;
+-- expect: true
+
 -- single-city canary — should return in well under a second and count FEWER captures than before:
 select jsonb_array_length(public.convergence_capture_inputs(21, array['amsterdam'])->'captures');
 ```
 
-**Rollback:** re-apply the 0076 §2 body (`supabase/migrations/0076_capture_read_scaling.sql`, the
-`convergence_capture_inputs` statement + its grants) — same signature, so it is a plain `create or replace`.
+**Rollback:** 0077 → re-apply the 0076 §2 body (`supabase/migrations/0076_capture_read_scaling.sql`, the
+`convergence_capture_inputs` statement + its grants); 0078 → re-apply the 0011 `claim_job_run` body + the
+0034 grants. Same signatures, so both are plain `create or replace`.
 
 ## Step 2 — deploy `maker-exit-panel` (v5)
 
