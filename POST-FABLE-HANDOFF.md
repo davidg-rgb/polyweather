@@ -53,12 +53,20 @@ fetch path) but **realized** counts accrue only as markets resolve — expect su
   the deadmen page on real staleness. The incident playbook that worked twice on 07-03: throttle
   capture, pause panels, let the IO budget refill, re-enable staggered.
 
-## The signal backlog (if new research capacity appears)
+## The signal backlog — CLOSED 2026-07-03 evening (every item adjudicated vs its pre-registered gate)
 
-`SIGNAL-BACKLOG.md` — updated 07-03 with results: 1a answered (partially eligible), **1b + 5 built,
-runs pending on the 844-event cache**, 2–4 pre-registered with the pull staged, 6 queued-cheap,
-**7 + 9 KILLED** (recorded in `FINDINGS.md`), 8 gated on a live PASS, 10 last. The backlog's own
-closing rule stands: none of it outranks letting the forward gate accrue.
+`SIGNAL-BACKLOG.md` carries the full verdict blocks; `FINDINGS.md` the one-row records. Scorecard:
+- **1b reward-stacking — gate-PASS** (ciLow +0.25 %→+2.38 % at the 0.05 share floor, linear in share).
+  THE caveat: pool share is unmeasured. **Follow-on (operator-greenlit 07-03): forward reward-eligibility
+  instrumentation on `/maker-exit` — built + staged, deploy rides the next operator bundle.**
+- **3 disagreement-regime efficiency — NO-PASS** (naive PASS revoked: 3 weather-day clusters, permutation
+  false-PASS 17.3 %). Re-open at ≥10 distinct Q4-carrying weather-days.
+- **KILLs:** 2 (null) · 4 (sign-reversed — market OVERPRICES extreme-day tails) · 5 (basket dilutes) ·
+  6 (well-powered null, n=568/44 cities) · 7 · 9 · 11 (nonlinear-ML residual: correction harmful OOS).
+- **10 — INSUFFICIENT_DATA structural** (10Z/22Z rows begin 06-13; >30 d snapshots are 4/day). Re-open =
+  ≥30 d accrued pairs + a forward ask-capture design.
+- **8 stays gated** on a live forward PASS (capital-sizing refinement, not a signal).
+The closing rule stands: nothing here outranks letting the forward gate accrue.
 
 ## Where everything is
 

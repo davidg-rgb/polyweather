@@ -1,5 +1,17 @@
 # Maker-Exit Simulation — the convergence edge, tested as a MAKER edge
 
+> **⚡ TWO ENGINE-LEVEL REFINEMENTS ADJUDICATED 2026-07-03 evening (WS-3; full records: `SIGNAL-BACKLOG.md` items 1b + 5, `FINDINGS.md` rows).**
+> **(1) Reward-stacking on the resting TP leg — gate-PASS on this same 844-event panel:** adding Polymarket
+> reward-pool income to the pinned config moves full-panel ciLow **+0.25 % → +2.38 %** at even the
+> conservative 0.05 pool-share assumption (+4.48 %/+10.67 %/+20.69 % at 0.10/0.25/0.50 — exactly linear in
+> share; TRAIN+TEST independently PASS from 0.10; pool $67/day derived from real 06-24 per-market rates,
+> spread band 4.5 ¢, one-sided Qtwo/3 partial credit per item 1a). **The pool SHARE is the one unmeasured
+> assumption — a backtest cannot resolve it; forward instrumentation staged (operator-gated deploy).**
+> **(2) Multi-bucket basket entry — KILL:** basket 2/3 (requires chw 1) dilutes the edge (mean 6.81→3.78 %,
+> ciLow +0.25→−3.23 %) and jackknife fragility explodes (LOCO 15/45→45/45, LODO 9/21→21/21); the chw=1
+> single-bucket control shows the widening alone already hurts. **The single-bucket pinned config stays the
+> reference.** Neither result changes the gate of record — the live forward paper loop.
+
 > **✅ TRUE 21-DAY RE-RUN 2026-07-03 ~13:41Z — 07-02 graded 45/45, the intended 21st day joined the panel; the PASS HOLDS, essentially unchanged.**
 > Cache rebuilt post-grading: **844 events / 45 cities / 21 days**. Same pinned `MAKER_EXIT_TUNED` config, rebate 0:
 > realized 393, winFrac 62.8 %, **+6.8 % / +$535, CI [+0.25 %, +11.9 %], zsMC 2.7 % → PASS** (was
