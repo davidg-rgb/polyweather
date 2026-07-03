@@ -6,7 +6,13 @@
  *   - cfgFrom: the SimParams → MakerExitCfg plumbing for the new levers (tpMode/tpAbs/minEntryAgeH).
  */
 import { describe, expect, it } from 'vitest';
-import { wilsonLower, gateCities, CITY_GATE_PRE0613, cfgFrom, DEFAULT_PARAMS } from './sim-maker-exit.ts';
+import { wilsonLower, gateCities, CITY_GATE_PRE0613, cfgFrom, DEFAULT_PARAMS, run, type SimParams } from './sim-maker-exit.ts';
+import {
+  replayMakerExitPanel,
+  replayMakerExitPanelBasket,
+} from '../../packages/core/src/sim/opening-maker-exit-replay.ts';
+import type { EventReplayInput, ReplayTick } from '../../packages/core/src/sim/opening-bracket-replay.ts';
+import type { OpeningBucket } from '../../packages/core/src/sim/opening-convergence.ts';
 
 describe('wilsonLower', () => {
   it('matches the known 95% bound at p=0.5, n=100 (~0.4038)', () => {
@@ -66,5 +72,84 @@ describe('cfgFrom (SimParams → MakerExitCfg plumbing)', () => {
     expect(c.tpMode).toBe('delta');
     expect(c.minEntryAgeH).toBe(0);
     expect(DEFAULT_PARAMS.cityGateLb).toBe(0);
+  });
+
+  it('SIGNAL-BACKLOG #1b: rewardCfg stays unset at the default (rewardPoolUsd=0) — byte-identical', () => {
+    const c = cfgFrom(DEFAULT_PARAMS, ['madrid']);
+    expect(c.rewardCfg).toBeUndefined();
+  });
+  it('SIGNAL-BACKLOG #1b: rewardCfg is built from rewardPoolUsd/rewardMaxSpreadCents/rewardShare once the pool is on', () => {
+    const c = cfgFrom({ ...DEFAULT_PARAMS, rewardPoolUsd: 240, rewardMaxSpreadCents: 4.5, rewardShare: 0.01 }, ['madrid']);
+    expect(c.rewardCfg).toEqual({ dailyPoolUsd: 240, maxSpreadCents: 4.5, myPoolShareIfQualifying: 0.01 });
+  });
+  it('SIGNAL-BACKLOG #5: basketSize stays unset at the default (basketSize=1) — byte-identical', () => {
+    const c = cfgFrom(DEFAULT_PARAMS, ['madrid']);
+    expect(c.basketSize).toBeUndefined();
+  });
+  it('SIGNAL-BACKLOG #5: basketSize is passed through once raised above 1', () => {
+    const c = cfgFrom({ ...DEFAULT_PARAMS, basketSize: 3 }, ['madrid']);
+    expect(c.basketSize).toBe(3);
+  });
+});
+
+// ── run() dispatch — synthetic in-memory fixture, NO DB / NO cache (does not touch out/maker-exit-cache) ──
+describe('run — basket dispatch + reward accrual wiring (SIGNAL-BACKLOG #1b/#5)', () => {
+  const TZ = 'Europe/Amsterdam';
+  const DATE = '2026-06-20';
+  const RESOLVE_MS = new Date('2026-06-21T10:00:00Z').getTime();
+
+  const b = (idx: number, over: Partial<OpeningBucket> = {}): OpeningBucket => ({
+    idx, label: `b${idx}`, loF: null, hiF: null, mid: 0.15, bestAsk: 0.16, execAsk: 0.16, depthUsd: 100,
+    bestBid: 0.14, sellbackUsd: 100, execBid: 0.14, sellbackDepthUsd: 100, houseProb: idx === 1 ? 0.4 : 0.15,
+    tokenYes: `y${idx}`, tokenNo: `n${idx}`, conditionId: `c${idx}`, ...over,
+  });
+  const tick = (iso: string, age: number, center: Partial<OpeningBucket>): ReplayTick => ({
+    capturedAt: iso, hoursSinceListing: age, tz: TZ, targetDate: DATE, buckets: [b(0), b(1, center), b(2)],
+  });
+  const input = (ticks: ReplayTick[]): EventReplayInput => ({
+    eventId: 'E1', city: 'amsterdam', targetDate: DATE, tz: TZ, ticks, resolution: { winnerIdx: 1, gradingMismatch: false },
+  });
+  const soloTicks = (): ReplayTick[] => [
+    tick('2026-06-20T00:00:00Z', 0.1, { execAsk: 0.16, bestAsk: 0.16, execBid: 0.14 }),
+    // mid: 0.405 sits within maxSpreadCents(4.5c) of the exit target (entry 0.16 + tp 0.25 = 0.41) — so the
+    // resting sell qualifies for reward while it waits for the final tick's bid to actually reach it.
+    tick('2026-06-20T00:10:00Z', 0.3, { execAsk: 0.12, bestAsk: 0.12, execBid: 0.11, mid: 0.405 }),
+    tick('2026-06-20T01:00:00Z', 1, { execBid: 0.45, execAsk: 0.46 }),
+  ];
+  const events = [input(soloTicks())];
+  const resolves = new Map<string, number | null>([['E1', RESOLVE_MS]]);
+  const baseParams: SimParams = { ...DEFAULT_PARAMS, tp: 0.25, chw: 0, maxEntry: 0.2, depth: 50, makerWindow: 15 };
+
+  it('basketSize=1 (default) matches calling replayMakerExitPanel directly with the SAME cfgFrom cfg', () => {
+    const out = run(baseParams, events, resolves, false);
+    const cfg = cfgFrom(baseParams, ['amsterdam']);
+    expect(cfg.basketSize).toBeUndefined(); // confirms the byte-identical cfg path
+    const direct = replayMakerExitPanel(events, cfg, resolves);
+    expect(out['nRealized']).toBe(direct.nRealized);
+    expect(out['nExecuted']).toBe(direct.nExecuted);
+    expect(out['totalNetUsd']).toBeCloseTo(direct.totalNetUsd, 9);
+    expect(out['meanNetReturn']).toBeCloseTo(direct.meanNetReturn, 9);
+  });
+
+  it('basketSize>1 dispatches to replayMakerExitPanelBasket with the SAME cfgFrom cfg', () => {
+    const p: SimParams = { ...baseParams, chw: 1, basketSize: 2 };
+    const out = run(p, events, resolves, false);
+    const cfg = cfgFrom(p, ['amsterdam']);
+    expect(cfg.basketSize).toBe(2);
+    const direct = replayMakerExitPanelBasket(events, cfg, resolves);
+    expect(out['nRealized']).toBe(direct.nRealized);
+    expect(out['totalNetUsd']).toBeCloseTo(direct.totalNetUsd, 9);
+  });
+
+  it('turning on the reward pool strictly improves totalNetUsd over the identical fixture with it off', () => {
+    const off = run(baseParams, events, resolves, false);
+    const on = run({ ...baseParams, rewardPoolUsd: 240, rewardMaxSpreadCents: 4.5, rewardShare: 0.02 }, events, resolves, false);
+    expect(on['totalNetUsd'] as number).toBeGreaterThan(off['totalNetUsd'] as number);
+  });
+
+  it('rewardPoolUsd=0 (default) leaves totalNetUsd unchanged — byte-identical', () => {
+    const a = run(baseParams, events, resolves, false);
+    const b2 = run({ ...baseParams, rewardPoolUsd: 0 }, events, resolves, false);
+    expect(a['totalNetUsd']).toBe(b2['totalNetUsd']);
   });
 });

@@ -12,6 +12,9 @@ import { describe, expect, it } from 'vitest';
 import {
   replayMakerExitEvent,
   replayMakerExitPanel,
+  replayMakerExitEventBasket,
+  replayMakerExitPanelBasket,
+  restingSellQmin,
   MAKER_EXIT_DEFAULTS,
   type MakerExitCfg,
 } from '../src/sim/opening-maker-exit-replay.ts';
@@ -284,6 +287,196 @@ describe('minEntryAgeH — the entry-timing lever (2026-07-03)', () => {
     expect(gated.executed).toBe(false);
     const ungated = replayMakerExitEvent(input(ticks), cfg({}), RESOLVE_MS);
     expect(ungated.executed).toBe(true); // the gate off → unknown age is fine (historical behavior)
+  });
+});
+
+describe('restingSellQmin — the docs-verbatim one-sided reward-eligibility formula (SIGNAL-BACKLOG #1b)', () => {
+  it('qualifies (Qmin > 0) for a one-sided rest within band, mid in [0.10, 0.90] (the Qtwo/c discount)', () => {
+    expect(restingSellQmin(0.365, 100, 0.36, 4.5)).toBeGreaterThan(0);
+  });
+
+  it('is ZERO in the strict <0.10 regime even when the rest sits within max_spread of mid (mandatory two-sided)', () => {
+    expect(restingSellQmin(0.085, 100, 0.08, 4.5)).toBe(0);
+  });
+
+  it('is ZERO in the strict >0.90 regime for the same reason', () => {
+    expect(restingSellQmin(0.915, 100, 0.92, 4.5)).toBe(0);
+  });
+
+  it('is ZERO out of band (too far from mid) even in the [0.10, 0.90] regime', () => {
+    expect(restingSellQmin(0.37, 100, 0.15, 4.5)).toBe(0); // 22c away >> the 4.5c max_spread
+  });
+
+  it('is total on junk (non-finite mid/price/shares, non-positive shares)', () => {
+    expect(restingSellQmin(0.3, 100, null, 4.5)).toBe(0);
+    expect(restingSellQmin(NaN, 100, 0.3, 4.5)).toBe(0);
+    expect(restingSellQmin(0.3, 0, 0.3, 4.5)).toBe(0);
+  });
+});
+
+describe('rewardCfg — liquidity-reward accrual on the resting TP sell (SIGNAL-BACKLOG #1b, 2026-07-03)', () => {
+  it('unset (default) accrues ZERO reward — byte-identical to every existing caller', () => {
+    const ticks = [...entryTicks(), tick('2026-06-20T01:00:00Z', 1, { execBid: 0.45, execAsk: 0.46 })];
+    const t = replayMakerExitEvent(input(ticks), cfg({ tpDeltaPp: 0.25 }), RESOLVE_MS);
+    expect(t.rewardUsd).toBe(0);
+  });
+
+  it('accrues income only for the interval the resting sell is actually within band of mid, additively on top of netPnlUsd', () => {
+    const ticks = [
+      ...entryTicks(), // maker-fills on tick index 1 (2026-06-20T00:10:00Z)
+      tick('2026-06-20T00:40:00Z', 0.8, { execBid: 0.20, execAsk: 0.21, mid: 0.20 }), // far from the 0.37 target — not eligible yet
+      tick('2026-06-20T00:50:00Z', 0.95, { execBid: 0.30, execAsk: 0.31, mid: 0.365 }), // mid converged close to target, but bid hasn't reached it — still resting
+      tick('2026-06-20T01:00:00Z', 1, { execBid: 0.37, execAsk: 0.38, mid: 0.365 }), // bid reaches the target — maker TP fires
+    ];
+    const rewardCfg = { dailyPoolUsd: 240, maxSpreadCents: 4.5, myPoolShareIfQualifying: 0.01 };
+    const withReward = replayMakerExitEvent(input(ticks), cfg({ tpMode: 'abs', tpAbsTarget: 0.37 as const, rewardCfg }), RESOLVE_MS);
+    const noReward = replayMakerExitEvent(input(ticks), cfg({ tpMode: 'abs', tpAbsTarget: 0.37 as const }), RESOLVE_MS);
+    expect(withReward.exitKind).toBe('maker_take_profit');
+    // only the LAST 10-minute interval qualifies (eligibility is judged on the PRIOR tick's mid — no look-ahead):
+    // the [00:40→00:50] interval is judged on the 00:40 mid (0.20, 17c away — ineligible); the [00:50→01:00]
+    // interval is judged on the 00:50 mid (0.365, 0.5c away — eligible).
+    const expectedReward = 0.01 * 240 * ((10 / 60) / 24);
+    expect(withReward.rewardUsd).toBeCloseTo(expectedReward, 9);
+    expect(withReward.netPnlUsd).toBeCloseTo(noReward.netPnlUsd + expectedReward, 9);
+  });
+
+  it('accrues ZERO when the resting sell never comes within band (mid stays far away the whole hold)', () => {
+    const ticks = [
+      ...entryTicks(),
+      tick('2026-06-20T00:40:00Z', 0.8, { execBid: 0.20, execAsk: 0.21, mid: 0.20 }),
+      tick('2026-06-20T22:10:00Z', 11, { execBid: 0.20, execAsk: 0.21, mid: 0.20 }), // past resolvesAt−12h → taker time-stop
+    ];
+    const rewardCfg = { dailyPoolUsd: 240, maxSpreadCents: 4.5, myPoolShareIfQualifying: 0.01 };
+    const t = replayMakerExitEvent(input(ticks), cfg({ tpMode: 'abs', tpAbsTarget: 0.37, tstopHoursBeforeResolve: 12, rewardCfg }), RESOLVE_MS);
+    expect(t.exitKind).toBe('taker_time_stop');
+    expect(t.rewardUsd).toBe(0);
+  });
+
+  it('a zero-pool / zero-share config accrues nothing even when the rest is otherwise eligible', () => {
+    const ticks = [
+      ...entryTicks(),
+      tick('2026-06-20T00:50:00Z', 0.95, { execBid: 0.30, execAsk: 0.31, mid: 0.365 }),
+      tick('2026-06-20T01:00:00Z', 1, { execBid: 0.37, execAsk: 0.38, mid: 0.365 }),
+    ];
+    const t = replayMakerExitEvent(
+      input(ticks),
+      cfg({ tpMode: 'abs', tpAbsTarget: 0.37, rewardCfg: { dailyPoolUsd: 0, maxSpreadCents: 4.5, myPoolShareIfQualifying: 0.01 } }),
+      RESOLVE_MS,
+    );
+    expect(t.rewardUsd).toBe(0);
+  });
+});
+
+describe('replayMakerExitEventBasket — SIGNAL-BACKLOG.md #5 (basket entry, variance reduction not a new edge)', () => {
+  // a ladder where BOTH bucket 0 and bucket 1 qualify (bucket 2 never does, as in the default fixture) —
+  // bucket1 stays the argmax (houseProb 0.4 > bucket0's 0.35), so a basketSize:1 request must degenerate
+  // to EXACTLY the single-bucket engine's choice.
+  const b0Base: Partial<OpeningBucket> = { houseProb: 0.35, execAsk: 0.10, bestAsk: 0.10, execBid: 0.09 };
+  const basketLadder = (b1over: Partial<OpeningBucket>, b0over: Partial<OpeningBucket> = {}): OpeningBucket[] => [
+    b(0, { ...b0Base, ...b0over }),
+    b(1, b1over),
+    b(2),
+  ];
+  const basketTick = (iso: string, age: number, b1over: Partial<OpeningBucket>, b0over: Partial<OpeningBucket> = {}): ReplayTick => ({
+    capturedAt: iso, hoursSinceListing: age, tz: TZ, targetDate: DATE, buckets: basketLadder(b1over, b0over),
+  });
+  const twoLegTicks = (): ReplayTick[] => [
+    basketTick('2026-06-20T00:00:00Z', 0.1, { execAsk: 0.16, bestAsk: 0.16, execBid: 0.14 }), // entry decided (both qualify)
+    basketTick('2026-06-20T00:10:00Z', 0.3, { execAsk: 0.12, bestAsk: 0.12, execBid: 0.11 }, { execAsk: 0.08, bestAsk: 0.08, execBid: 0.07 }), // both maker-fill
+    basketTick('2026-06-20T01:00:00Z', 1, { execBid: 0.36, execAsk: 0.37 }, { execBid: 0.36, execAsk: 0.37 }), // both TP (abs target 0.35)
+  ];
+  const basketCfg = (over: Partial<MakerExitCfg> = {}) => cfg({ tpMode: 'abs', tpAbsTarget: 0.35, ...over });
+
+  it('unset/1 degenerates EXACTLY to replayMakerExitEvent (same numbers, one leg)', () => {
+    const ticks = [...entryTicks(), tick('2026-06-20T01:00:00Z', 1, { execBid: 0.45, execAsk: 0.46 })];
+    const solo = replayMakerExitEvent(input(ticks), cfg({ tpDeltaPp: 0.25 }), RESOLVE_MS);
+    const basket = replayMakerExitEventBasket(input(ticks), cfg({ tpDeltaPp: 0.25 }), RESOLVE_MS);
+    expect(basket.executed).toBe(true);
+    expect(basket.legs.length).toBe(1);
+    expect(basket.legs[0]!.basketWeight).toBe(1);
+    expect(basket.nLegsRequested).toBe(1);
+    expect(basket.nLegsFilled).toBe(1);
+    expect(basket.netPnlUsd).toBeCloseTo(solo.netPnlUsd, 9);
+    expect(basket.stakeUsd).toBeCloseTo(solo.stakeUsd, 9);
+    expect(basket.netReturn).toBeCloseTo(solo.netReturn, 9);
+    expect(basket.legs[0]!.exitKind).toBe(solo.exitKind);
+  });
+
+  it('basketSize:2 splits perPositionUsd probability-weighted across both qualifying buckets', () => {
+    const t = replayMakerExitEventBasket(input(twoLegTicks()), basketCfg({ basketSize: 2 }), RESOLVE_MS);
+    expect(t.executed).toBe(true);
+    expect(t.nLegsRequested).toBe(2);
+    expect(t.nLegsFilled).toBe(2);
+    // weights normalize to 1, proportional to modelProb (0.4 vs 0.35)
+    const byBucket = new Map(t.legs.map((l) => [l.bucketIdx, l]));
+    expect(byBucket.get(1)!.basketWeight).toBeCloseTo(0.4 / 0.75, 9);
+    expect(byBucket.get(0)!.basketWeight).toBeCloseTo(0.35 / 0.75, 9);
+    expect(t.legs.reduce((a, l) => a + l.basketWeight, 0)).toBeCloseTo(1, 9);
+    // total stake across legs equals the undivided perPositionUsd (OPENING_DEFAULTS = 20)
+    expect(t.stakeUsd).toBeCloseTo(20, 6);
+    // both legs took profit as makers (0/0.16 -> 0.35, 0/0.10 -> 0.35)
+    expect(byBucket.get(1)!.exitKind).toBe('maker_take_profit');
+    expect(byBucket.get(0)!.exitKind).toBe('maker_take_profit');
+    expect(t.netPnlUsd).toBeCloseTo(t.legs.reduce((a, l) => a + l.netPnlUsd, 0), 9);
+    expect(t.netReturn).toBeCloseTo(t.netPnlUsd / t.stakeUsd, 9);
+  });
+
+  it('requesting more legs than exist caps at the number of qualifying candidates (never pads)', () => {
+    const t = replayMakerExitEventBasket(input(twoLegTicks()), basketCfg({ basketSize: 5 }), RESOLVE_MS);
+    expect(t.nLegsRequested).toBe(2); // only 2 candidates ever qualify in this fixture
+    expect(t.nLegsFilled).toBe(2);
+  });
+
+  it('a leg that never fills is dropped; the OTHER leg still realizes independently', () => {
+    const ticks = [
+      basketTick('2026-06-20T00:00:00Z', 0.1, { execAsk: 0.16, bestAsk: 0.16, execBid: 0.14 }),
+      // bucket 0 goes quote-less (execAsk NaN) for the rest of the series -> never fills; bucket 1 fills normally
+      basketTick('2026-06-20T00:10:00Z', 0.3, { execAsk: 0.12, bestAsk: 0.12, execBid: 0.11 }, { execAsk: NaN, bestAsk: NaN, execBid: NaN }),
+      basketTick('2026-06-20T01:00:00Z', 1, { execBid: 0.36, execAsk: 0.37 }, { execAsk: NaN, bestAsk: NaN, execBid: NaN }),
+    ];
+    const t = replayMakerExitEventBasket(input(ticks), basketCfg({ basketSize: 2 }), RESOLVE_MS);
+    expect(t.nLegsRequested).toBe(2);
+    expect(t.nLegsFilled).toBe(1);
+    expect(t.legs[0]!.bucketIdx).toBe(1); // the bucket-0 leg never filled and is absent
+  });
+
+  it('is total on junk / off-universe', () => {
+    expect(replayMakerExitEventBasket(null as unknown as EventReplayInput, basketCfg({ basketSize: 2 }), RESOLVE_MS).executed).toBe(false);
+    const offCity = input(twoLegTicks());
+    expect(replayMakerExitEventBasket({ ...offCity, city: 'london' }, basketCfg({ basketSize: 2 }), RESOLVE_MS).executed).toBe(false);
+  });
+});
+
+describe('replayMakerExitPanelBasket', () => {
+  it('returns a ledger + the §9R-E verdict + the maker-exit leg fraction', () => {
+    const b0Base: Partial<OpeningBucket> = { houseProb: 0.35, execAsk: 0.10, bestAsk: 0.10, execBid: 0.09 };
+    const winTicks: ReplayTick[] = [
+      { capturedAt: '2026-06-20T00:00:00Z', hoursSinceListing: 0.1, tz: TZ, targetDate: DATE, buckets: [b(0, b0Base), b(1, { execAsk: 0.16, bestAsk: 0.16, execBid: 0.14 }), b(2)] },
+      { capturedAt: '2026-06-20T00:10:00Z', hoursSinceListing: 0.3, tz: TZ, targetDate: DATE, buckets: [b(0, { ...b0Base, execAsk: 0.08, bestAsk: 0.08, execBid: 0.07 }), b(1, { execAsk: 0.12, bestAsk: 0.12, execBid: 0.11 }), b(2)] },
+      { capturedAt: '2026-06-20T01:00:00Z', hoursSinceListing: 1, tz: TZ, targetDate: DATE, buckets: [b(0, { ...b0Base, execBid: 0.36, execAsk: 0.37 }), b(1, { execBid: 0.36, execAsk: 0.37 }), b(2)] },
+    ];
+    const events: EventReplayInput[] = [
+      { ...input(winTicks), eventId: 'A', city: 'amsterdam' },
+      { ...input(winTicks), eventId: 'B', city: 'chengdu' },
+    ];
+    const res = new Map<string, number | null>([['A', RESOLVE_MS], ['B', RESOLVE_MS]]);
+    const panel = replayMakerExitPanelBasket(
+      events,
+      cfg({ tpMode: 'abs', tpAbsTarget: 0.35, basketSize: 2, cities: ['amsterdam', 'chengdu'] }),
+      res,
+    );
+    expect(panel.ledger.length).toBe(2);
+    expect(panel.nRealized).toBe(2);
+    expect(panel.ledger[0]!.nLegsFilled).toBe(2);
+    expect(panel.makerExitFrac).toBe(1); // every leg of every basket took profit as a maker
+    expect(panel.totalNetUsd).toBeGreaterThan(0);
+    expect(panel.verdict.label).toBe('INSUFFICIENT_DATA'); // 2 markets < the ≥40 floor — by design
+  });
+
+  it('is total on an empty panel', () => {
+    const panel = replayMakerExitPanelBasket([], cfg({ basketSize: 2 }), new Map());
+    expect(panel.ledger.length).toBe(0);
+    expect(panel.verdict.label).toBe('INSUFFICIENT_DATA');
   });
 });
 

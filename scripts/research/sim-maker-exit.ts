@@ -19,6 +19,20 @@
  *      pnpm tsx scripts/research/sim-maker-exit.ts --from-cache --tp 0.10 --sl 0.20 --tstop-hours 12 \
  *        --chw 0 --max-entry 0.30 --depth 100 --rebate 0                    # one parameterized run
  *   Emits a one-line `RESULT {json}` to stdout (the optimizer reads it) + out/maker-exit-ledger.csv + .md.
+ *
+ * SIGNAL-BACKLOG.md #1b (reward-stacking, OFF by default): --reward-pool <dailyPoolUsd> turns on
+ * liquidity-reward accrual on the resting TP sell (0 = disabled, byte-identical); --reward-max-spread
+ * <cents> (default 4.5, the weather-market rewards.max_spread) and --reward-share <fraction> (default 0,
+ * the conservative swept-assumption floor — raise only once cross-checked, same convention as --rebate).
+ *   pnpm tsx scripts/research/sim-maker-exit.ts --from-cache --reward-pool 240 --reward-share 0.01 ...
+ *
+ * SIGNAL-BACKLOG.md #5 (basket entry, OFF by default): --basket-size <N> (default 1 = the historical
+ * single-bucket engine) splits perPositionUsd probability-weighted across the top-N candidates by
+ * modelProb and writes out/maker-exit-basket-ledger.csv/.md instead of the single-bucket ledger.
+ *   pnpm tsx scripts/research/sim-maker-exit.ts --from-cache --basket-size 3 ...
+ *
+ * Both levers are sweepable: --sweep "reward-pool:0,50,100,240" / --sweep "reward-share:0,0.005,0.01" /
+ * --sweep "basket-size:1,2,3".
  */
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { gzipSync, gunzipSync } from 'node:zlib';
@@ -31,9 +45,11 @@ import { loadEnv } from '../lib/load-env.ts';
 import { indexArchive, loadPanel, buildSet, splitByDate, type PanelEvent } from './tune-convergence.ts';
 import {
   replayMakerExitPanel,
+  replayMakerExitPanelBasket,
   MAKER_EXIT_DEFAULTS,
   type MakerExitCfg,
   type MakerExitTrade,
+  type MakerExitBasketTrade,
 } from '../../packages/core/src/sim/opening-maker-exit-replay.ts';
 import type { EventReplayInput } from '../../packages/core/src/sim/opening-bracket-replay.ts';
 import { BOT_DEFAULTS, GATE_MIN_MARKETS } from '../../packages/core/src/sim/opening-convergence.ts';
@@ -166,11 +182,24 @@ export interface SimParams {
   gateMetric: 'hit0' | 'hit1';
   /** entry lever: never let the taker fallback chase a book past the entry reservation (false = historical). */
   noChase: boolean;
+  /** SIGNAL-BACKLOG.md #1b: the market's daily USDC liquidity-reward pool. 0 (default) = disabled — cfgFrom
+   *  leaves MakerExitCfg.rewardCfg unset, byte-identical to every run before this lever existed. */
+  rewardPoolUsd: number;
+  /** SIGNAL-BACKLOG.md #1b: rewards.max_spread in CENTS (weather markets: 4.5, per REC-3/MAKER-REBATE-HANDOFF.md). */
+  rewardMaxSpreadCents: number;
+  /** SIGNAL-BACKLOG.md #1b: MY assumed share of the pool once qualifying — a SWEPT assumption (the competition
+   *  denominator is the dominant unknown per reward-farming.ts), default 0 (the conservative floor). */
+  rewardShare: number;
+  /** SIGNAL-BACKLOG.md #5: split entry across the top-N candidates by modelProb (variance reduction, not a
+   *  new edge). 1 (default) = the historical single-bucket engine (replayMakerExitPanel), byte-identical.
+   *  >1 dispatches to the basket engine (replayMakerExitPanelBasket). */
+  basketSize: number;
 }
 export const DEFAULT_PARAMS: SimParams = {
   tp: 0.1, sl: 0.2, tstopHours: 12, chw: 0, maxEntry: 0.3, depth: 100,
   rebate: 0, makerWindow: BOT_DEFAULTS.makerFillWindowMin, perPos: BOT_DEFAULTS.perPositionUsd, feeRate: BOT_DEFAULTS.takerFeeRate,
   tpMode: 'delta', tpAbs: 0.35, minEntryAgeH: 0, cityGateLb: 0, gateMetric: 'hit1', noChase: false,
+  rewardPoolUsd: 0, rewardMaxSpreadCents: 4.5, rewardShare: 0, basketSize: 1,
 };
 
 export function cfgFrom(p: SimParams, cities: string[]): MakerExitCfg {
@@ -180,6 +209,12 @@ export function cfgFrom(p: SimParams, cities: string[]): MakerExitCfg {
     tpDeltaPp: p.tp, slDeltaPp: p.sl, takerFeeRate: p.feeRate, makerFillWindowMin: p.makerWindow,
     makerRebateRate: p.rebate, tstopHoursBeforeResolve: p.tstopHours,
     tpMode: p.tpMode, tpAbsTarget: p.tpAbs, minEntryAgeH: p.minEntryAgeH, noChaseTakerFallback: p.noChase,
+    // #1b: rewardCfg stays unset (byte-identical) unless the pool is actually turned on (rewardPoolUsd > 0).
+    ...(p.rewardPoolUsd > 0
+      ? { rewardCfg: { dailyPoolUsd: p.rewardPoolUsd, maxSpreadCents: p.rewardMaxSpreadCents, myPoolShareIfQualifying: p.rewardShare } }
+      : {}),
+    // #5: basketSize stays unset/1 (byte-identical, replayMakerExitEvent's own path) unless explicitly raised.
+    ...(p.basketSize > 1 ? { basketSize: p.basketSize } : {}),
   };
 }
 
@@ -189,10 +224,10 @@ const usd = (v: number): string => (Number.isFinite(v) ? `${v >= 0 ? '+' : '−'
 /** Write the per-trade ledger (entries + exits) — csv + a readable md sample. */
 function writeLedger(ledger: MakerExitTrade[], p: SimParams): void {
   const realized = ledger.filter((t) => !t.exitKind.startsWith('mtm_'));
-  const header = 'eventId,city,targetDate,entryLabel,entryAt,entryPrice,isMakerEntry,exitAt,exitPrice,exitKind,isMakerExit,feeUsd,rebateUsd,netPnlUsd,netReturn\n';
+  const header = 'eventId,city,targetDate,entryLabel,entryAt,entryPrice,isMakerEntry,exitAt,exitPrice,exitKind,isMakerExit,feeUsd,rebateUsd,rewardUsd,netPnlUsd,netReturn\n';
   const rows = ledger.map((t) =>
     [t.eventId, t.city, t.targetDate, `"${t.entryLabel}"`, t.entryAt, t.entryPrice.toFixed(4), t.isMakerEntry,
-     t.exitAt, t.exitPrice.toFixed(4), t.exitKind, t.isMakerExit, t.feeUsd.toFixed(4), t.rebateUsd.toFixed(4),
+     t.exitAt, t.exitPrice.toFixed(4), t.exitKind, t.isMakerExit, t.feeUsd.toFixed(4), t.rebateUsd.toFixed(4), t.rewardUsd.toFixed(4),
      t.netPnlUsd.toFixed(4), Number.isFinite(t.netReturn) ? t.netReturn.toFixed(4) : ''].join(','),
   );
   writeFileSync(join(OUT_DIR, 'maker-exit-ledger.csv'), header + rows.join('\n') + '\n');
@@ -202,20 +237,50 @@ function writeLedger(ledger: MakerExitTrade[], p: SimParams): void {
     `${t.exitKind.replace('taker_', 'T:').replace('maker_', 'M:').padEnd(16)} sell ${t.exitPrice.toFixed(3)} = ${usd(t.netPnlUsd)} (${pct(t.netReturn)})`,
   );
   const md = [
-    `# maker-exit ledger — tp ${p.tp} sl ${p.sl} tstop ${p.tstopHours}h chw ${p.chw} maxEntry ${p.maxEntry} depth $${p.depth} rebate ${p.rebate}`,
+    `# maker-exit ledger — tp ${p.tp} sl ${p.sl} tstop ${p.tstopHours}h chw ${p.chw} maxEntry ${p.maxEntry} depth $${p.depth} rebate ${p.rebate}` +
+      (p.rewardPoolUsd > 0 ? ` rewardPool $${p.rewardPoolUsd} rewardShare ${p.rewardShare}` : ''),
     `${realized.length} realized trades. First 25:`, '', ...sample,
   ].join('\n');
   writeFileSync(join(OUT_DIR, 'maker-exit-ledger.md'), md + '\n');
 }
 
-export function run(p: SimParams, events: EventReplayInput[], resolves: Map<string, number | null>, writeFiles: boolean): Record<string, unknown> {
-  // the per-city accuracy gate (fitted PRE-panel → OOS here): drop events in cities whose Wilson-LB accuracy
-  // misses the floor. cityGateLb ≤ 0 = no gate (the historical full-universe behavior).
-  const gated = p.cityGateLb > 0 ? new Set(gateCities(CITY_GATE_PRE0613, p.gateMetric, p.cityGateLb)) : null;
-  const scoped = gated ? events.filter((e) => gated.has(e.city)) : events;
-  const cities = [...new Set(scoped.map((e) => e.city))];
-  const panel = replayMakerExitPanel(scoped, cfgFrom(p, cities), resolves);
-  if (writeFiles) writeLedger(panel.ledger, p);
+/** SIGNAL-BACKLOG.md #5 — the basket twin of writeLedger: flattens every basket's legs into one per-leg
+ *  csv (+ an added basketWeight column) and a readable md sample. */
+function writeLedgerBasket(ledger: MakerExitBasketTrade[], p: SimParams): void {
+  const legs = ledger.flatMap((bt) => bt.legs);
+  const realized = legs.filter((t) => !t.exitKind.startsWith('mtm_'));
+  const header = 'eventId,city,targetDate,bucketIdx,basketWeight,entryLabel,entryAt,entryPrice,isMakerEntry,exitAt,exitPrice,exitKind,isMakerExit,feeUsd,rebateUsd,rewardUsd,netPnlUsd,netReturn\n';
+  const rows = legs.map((t) =>
+    [t.eventId, t.city, t.targetDate, t.bucketIdx, t.basketWeight.toFixed(4), `"${t.entryLabel}"`, t.entryAt, t.entryPrice.toFixed(4),
+     t.isMakerEntry, t.exitAt, t.exitPrice.toFixed(4), t.exitKind, t.isMakerExit, t.feeUsd.toFixed(4), t.rebateUsd.toFixed(4),
+     t.rewardUsd.toFixed(4), t.netPnlUsd.toFixed(4), Number.isFinite(t.netReturn) ? t.netReturn.toFixed(4) : ''].join(','),
+  );
+  writeFileSync(join(OUT_DIR, 'maker-exit-basket-ledger.csv'), header + rows.join('\n') + '\n');
+
+  const sample = realized.slice(0, 25).map((t) =>
+    `  ${t.city.padEnd(13)} ${t.targetDate} b${t.bucketIdx} (w${t.basketWeight.toFixed(2)}) ${t.entryLabel.padEnd(7)} buy ${t.entryPrice.toFixed(3)}${t.isMakerEntry ? 'M' : 'T'} → ` +
+    `${t.exitKind.replace('taker_', 'T:').replace('maker_', 'M:').padEnd(16)} sell ${t.exitPrice.toFixed(3)} = ${usd(t.netPnlUsd)} (${pct(t.netReturn)})`,
+  );
+  const md = [
+    `# maker-exit BASKET ledger (basketSize ${p.basketSize}) — tp ${p.tp} sl ${p.sl} tstop ${p.tstopHours}h chw ${p.chw} maxEntry ${p.maxEntry} depth $${p.depth} rebate ${p.rebate}`,
+    `${ledger.length} baskets / ${realized.length} realized legs. First 25 legs:`, '', ...sample,
+  ].join('\n');
+  writeFileSync(join(OUT_DIR, 'maker-exit-basket-ledger.md'), md + '\n');
+}
+
+/** the panel fields run()'s summary reads — MakerExitPanel and MakerExitPanelBasket share this shape
+ *  structurally, so summarize() serves both dispatch branches with no duplicated field-mapping. */
+interface PanelSummaryShape {
+  nRealized: number;
+  nExecuted: number;
+  makerExitFrac: number;
+  winFrac: number;
+  meanNetReturn: number;
+  totalNetUsd: number;
+  verdict: { label: string; ciLow: number; ciHigh: number; zeroSkillPassRate: number };
+}
+
+function summarize(p: SimParams, scoped: EventReplayInput[], cities: string[], panel: PanelSummaryShape): Record<string, unknown> {
   // the optimizer objective: mean realized net return, but only credited when the §9R-E count floor is met
   // (≥40 realized markets) — so it cannot "win" by entering a handful of lucky trades.
   const objective = panel.nRealized >= GATE_MIN_MARKETS ? panel.meanNetReturn : -1;
@@ -237,6 +302,26 @@ export function run(p: SimParams, events: EventReplayInput[], resolves: Map<stri
   };
 }
 
+export function run(p: SimParams, events: EventReplayInput[], resolves: Map<string, number | null>, writeFiles: boolean): Record<string, unknown> {
+  // the per-city accuracy gate (fitted PRE-panel → OOS here): drop events in cities whose Wilson-LB accuracy
+  // misses the floor. cityGateLb ≤ 0 = no gate (the historical full-universe behavior).
+  const gated = p.cityGateLb > 0 ? new Set(gateCities(CITY_GATE_PRE0613, p.gateMetric, p.cityGateLb)) : null;
+  const scoped = gated ? events.filter((e) => gated.has(e.city)) : events;
+  const cities = [...new Set(scoped.map((e) => e.city))];
+  const cfg = cfgFrom(p, cities);
+
+  // SIGNAL-BACKLOG.md #5: basketSize>1 dispatches to the basket engine; ≤1 (the historical default) uses the
+  // pinned single-bucket engine, completely unchanged — byte-identical to every run before this lever existed.
+  if (p.basketSize > 1) {
+    const panel = replayMakerExitPanelBasket(scoped, cfg, resolves);
+    if (writeFiles) writeLedgerBasket(panel.ledger, p);
+    return summarize(p, scoped, cities, panel);
+  }
+  const panel = replayMakerExitPanel(scoped, cfg, resolves);
+  if (writeFiles) writeLedger(panel.ledger, p);
+  return summarize(p, scoped, cities, panel);
+}
+
 // ── CLI ───────────────────────────────────────────────────────────────────────────────────────────────
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const { values } = parseArgs({
@@ -251,6 +336,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       'no-chase': { type: 'boolean' },
       split: { type: 'boolean' },
       sweep: { type: 'string' },
+      // SIGNAL-BACKLOG.md #1b (reward-stacking) + #5 (basket entry) — both default OFF (0 / 1), byte-identical.
+      'reward-pool': { type: 'string' }, 'reward-max-spread': { type: 'string' }, 'reward-share': { type: 'string' },
+      'basket-size': { type: 'string' },
     },
   });
   if (values['build-cache']) {
@@ -270,6 +358,10 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       cityGateLb: num('city-gate-lb', DEFAULT_PARAMS.cityGateLb),
       gateMetric: gateMetricRaw === 'hit0' ? 'hit0' : 'hit1',
       noChase: values['no-chase'] === true,
+      rewardPoolUsd: num('reward-pool', DEFAULT_PARAMS.rewardPoolUsd),
+      rewardMaxSpreadCents: num('reward-max-spread', DEFAULT_PARAMS.rewardMaxSpreadCents),
+      rewardShare: num('reward-share', DEFAULT_PARAMS.rewardShare),
+      basketSize: num('basket-size', DEFAULT_PARAMS.basketSize),
     };
     const { events: allEvents, resolves, meta } = loadCache();
     // --cities: scope the panel (e.g. 'allowlist' = the §9R 10-city TRADABLE set the live forward loop runs on).
@@ -299,6 +391,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
         tp: 'tp', sl: 'sl', 'tstop-hours': 'tstopHours', chw: 'chw', 'max-entry': 'maxEntry',
         depth: 'depth', rebate: 'rebate', 'maker-window': 'makerWindow',
         'tp-abs': 'tpAbs', 'min-entry-age-h': 'minEntryAgeH', 'city-gate-lb': 'cityGateLb',
+        'reward-pool': 'rewardPoolUsd', 'reward-share': 'rewardShare', 'basket-size': 'basketSize',
       };
       const key = KEY[String(param)];
       if (!key || vals.length === 0) { process.stderr.write(`bad --sweep "${sweep}"\n`); process.exit(1); }

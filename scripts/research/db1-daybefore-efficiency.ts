@@ -215,6 +215,26 @@ export class EmosStation {
     return fit ? fit.sigma : null;
   }
 
+  /**
+   * Cross-model disagreement (°C) at decision time: population stddev of the CURRENT windows' bias-
+   * corrected points around their mean — the exact formula l3b-residual-structure.ts uses for its
+   * 'disagreement' feature (reused here, not re-derived, for SIGNAL-BACKLOG.md #3's regime-conditional
+   * efficiency split). Models below sigmaMinN observations are excluded (their bias estimate is unreliable
+   * at decision time, matching blendedMu's own inclusion floor). null when fewer than 2 models qualify
+   * (a single point has no spread).
+   */
+  disagreement(points: { model: string; f: number }[], lead: number): number | null {
+    const corrected: number[] = [];
+    for (const { model, f } of points) {
+      const w = this.get(model, lead);
+      if (w.fs.length < this.cfg.sigmaMinN) continue;
+      corrected.push(correctPoint(f, w.bias ?? 0));
+    }
+    if (corrected.length < 2) return null;
+    const mean = corrected.reduce((a, b) => a + b, 0) / corrected.length;
+    return Math.sqrt(corrected.reduce((a, b) => a + (b - mean) ** 2, 0) / corrected.length);
+  }
+
   /** Fold a day's truth: per-model EMA bias + window, and the blended residual store for σ. */
   fold(points: { model: string; f: number }[], lead: number, obsC: number): void {
     // record blended residual BEFORE updating windows (so σ reflects info available at decision time

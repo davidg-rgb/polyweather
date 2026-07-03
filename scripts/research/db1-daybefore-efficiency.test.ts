@@ -5,8 +5,10 @@ import {
   brierSharperP,
   marketImpliedProbs,
   CHEAP_LONGSHOT_MAX_ASK,
+  EmosStation,
   type BucketView,
 } from './db1-daybefore-efficiency.ts';
+import { parseConfigRows } from '../../packages/core/src/index.ts';
 
 describe('brierSharperP — sign convention (review fix [9]: small p ⇒ OURS sharper)', () => {
   it('returns a SMALL p when ours is unambiguously sharper (lower Brier)', () => {
@@ -132,5 +134,44 @@ describe('marketImpliedProbs — day-before asks renormalized to a distribution'
       { bucketIdx: 1, calibratedP: 0, ask: 0.4, isWinner: true },
     ];
     expect(marketImpliedProbs(v2, 1)).not.toBeNull();
+  });
+});
+
+describe('EmosStation.disagreement — the cross-model spread feature (SIGNAL-BACKLOG.md #3, reused from l3b)', () => {
+  const cfg = parseConfigRows([]); // defaults: sigmaMinN=8, biasAlpha=0.15, sigmaWindowDays=30
+
+  it('is null until at least 2 models clear sigmaMinN trailing observations', () => {
+    const s = new EmosStation(cfg);
+    // fold only 7 days (< sigmaMinN=8) for two models — neither qualifies yet
+    for (let i = 0; i < 7; i++) s.fold([{ model: 'a', f: 20 }, { model: 'b', f: 21 }], 1, 20);
+    expect(s.disagreement([{ model: 'a', f: 20 }, { model: 'b', f: 21 }], 1)).toBeNull();
+  });
+
+  it('is null with only ONE qualifying model (no spread to measure)', () => {
+    const s = new EmosStation(cfg);
+    for (let i = 0; i < 10; i++) s.fold([{ model: 'a', f: 20 }], 1, 20);
+    expect(s.disagreement([{ model: 'a', f: 20 }], 1)).toBeNull();
+  });
+
+  it('is 0 when every qualifying model agrees exactly (no disagreement)', () => {
+    const s = new EmosStation(cfg);
+    for (let i = 0; i < 10; i++) s.fold([{ model: 'a', f: 20 }, { model: 'b', f: 20 }], 1, 20);
+    expect(s.disagreement([{ model: 'a', f: 20 }, { model: 'b', f: 20 }], 1)).toBeCloseTo(0, 9);
+  });
+
+  it('grows with the spread of the CORRECTED points (bias-adjusted, not raw)', () => {
+    const s = new EmosStation(cfg);
+    // model 'a' consistently reads +2 hot, 'b' reads true — both converge to ~0 bias-corrected residual,
+    // but a fresh disagreement CALL with a wide raw split should still show a non-trivial corrected spread.
+    for (let i = 0; i < 10; i++) s.fold([{ model: 'a', f: 22 }, { model: 'b', f: 20 }], 1, 20);
+    const tight = s.disagreement([{ model: 'a', f: 22 }, { model: 'b', f: 20 }], 1)!;
+    const wide = s.disagreement([{ model: 'a', f: 30 }, { model: 'b', f: 20 }], 1)!;
+    expect(wide).toBeGreaterThan(tight);
+  });
+
+  it('is per-lead (a model with only lead-2 history does not qualify at lead-1)', () => {
+    const s = new EmosStation(cfg);
+    for (let i = 0; i < 10; i++) s.fold([{ model: 'a', f: 20 }, { model: 'b', f: 20 }], 2, 20);
+    expect(s.disagreement([{ model: 'a', f: 20 }, { model: 'b', f: 20 }], 1)).toBeNull();
   });
 });
