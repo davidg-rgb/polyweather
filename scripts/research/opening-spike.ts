@@ -599,18 +599,49 @@ export async function loadCfg(db: Db): Promise<BotConfig> {
 }
 
 /** The per-event capture HEAD over the look-back window (the first SPIKE_CAP_PER_EVENT captures/event — enough to
- *  cover the ≤1h flat-open window the spike scores; the converged tail is never read, and the full series would
- *  aggregate >1 GB of jsonb at 45-city scale, past Postgres's field cap — migration 0068). bot_spike_series
- *  returns a jsonb OBJECT { rows: [...] } (never a top-level array — the 0044 port-misread trap); read .rows.
- *  Every event still appears (its earliest captures), so seededCoverage's denominator + every distinct
- *  target_date are preserved. Empty on no rows. */
+ *  cover the ≤1h flat-open window the spike scores; the converged tail is never read). Same rows the 0068
+ *  bot_spike_series RPC returns, but read in TWO STAGES over direct SQL (2026-07-03): the RPC's single-shot CTE
+ *  materializes oc.* — including the ~3.4 KB TOASTed `buckets` jsonb — BEFORE its row_number filter, so the
+ *  window sort shuffles ~1.2 GB at the 45-city scale; on the small prod instance the statement ran for many
+ *  minutes, saturated the pooler, and twice died server-side while the client hung on the dead socket. Here the
+ *  window function ranks SLIM columns only (id/event_id/captured_at — no detoast), then the fat rows are fetched
+ *  by primary key in bounded chunks, each sub-second and retryable (script-db's transient-retry wraps every
+ *  chunk). Row shape is identical (each row built with jsonb_build_object exactly like the RPC, so timestamps /
+ *  numerics / buckets serialize the same). Every event still appears (its earliest captures), so seededCoverage's
+ *  denominator + every distinct target_date are preserved. Empty on no rows. */
 export async function loadSeries(db: Db, days: number): Promise<RawCaptureRow[]> {
-  const out = await db.query<{ series: { rows: RawCaptureRow[] } | null }>('select public.bot_spike_series($1, $2) as series', [
-    Math.max(1, Math.floor(days)),
-    SPIKE_CAP_PER_EVENT,
-  ]);
-  const series = out[0]?.series?.rows;
-  return Array.isArray(series) ? series : [];
+  // stage 1 — the capped per-event head ids, ranked over slim columns (no buckets detoast in the sort).
+  const heads = await db.query<{ id: string }>(
+    `select id from (
+       select id, row_number() over (partition by event_id order by captured_at) as rn
+       from public.opening_captures
+       where captured_at >= now() - make_interval(days => $1)
+     ) x where rn <= $2
+     order by id`,
+    [Math.max(1, Math.floor(days)), SPIKE_CAP_PER_EVENT],
+  );
+
+  // stage 2 — the fat rows for those ids, in bounded chunks (each ~sub-second; a dropped connection retries
+  // just the chunk, never the whole read).
+  const CHUNK = 2000;
+  const out: RawCaptureRow[] = [];
+  for (let i = 0; i < heads.length; i += CHUNK) {
+    const ids = heads.slice(i, i + CHUNK).map((r) => r.id);
+    const rows = await db.query<{ row: RawCaptureRow }>(
+      `select jsonb_build_object(
+         'eventId', event_id, 'capturedAt', captured_at, 'city', city, 'targetDate', target_date,
+         'tzName', tz_name, 'createdAtGamma', created_at_gamma, 'resolvesAt', resolves_at,
+         'hoursSinceListing', hours_since_listing, 'peakMid', peak_mid, 'isFlatOpen', is_flat_open,
+         'houseSeeded', house_seeded, 'buckets', buckets, 'evVol24h', ev_vol24h, 'negRisk', neg_risk
+       ) as row
+       from public.opening_captures
+       where id = any($1::bigint[])
+       order by event_id, captured_at`,
+      [ids],
+    );
+    for (const r of rows) if (r?.row) out.push(r.row);
+  }
+  return out;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
@@ -707,7 +738,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const db = makeScriptDb();
   try {
     process.stderr.write(
-      `opening-spike · ${new Date().toISOString()} · reading bot_capture_series(${days}) — read-only; places NOTHING, writes NOTHING\n`,
+      `opening-spike · ${new Date().toISOString()} · reading capped capture heads (${days}d, slim-window + chunked fetch) — read-only; places NOTHING, writes NOTHING\n`,
     );
     const cfg = await loadCfg(db);
     const series = await loadSeries(db, days);

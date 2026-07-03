@@ -27,7 +27,10 @@ rebate, across enormous breadth — and is **non-followable and non-replicable**
 > pre-informed (**0 of 147** flat at first sight), so the lever has pivoted OFF the dead flat-open buy and ONTO
 > a hold-to-resolution / bracket variant — whose entry rule reduces to the forecast-vs-market bet already
 > falsified 7× (negative prior; verdict from `opening-resolution-score.ts` ~2026-07-06). The efficiency verdict
-> stands for everything tested; this is the single remaining thing not yet resolved.
+> stands for everything tested; this is the single remaining thing not yet resolved. **Update 2026-07-03: the
+> Phase-0.5 spike gate formally adjudicated the flat-open entry — NO-GO (0/325 seeded events, Wilson CI
+> [0%, 1%]); the surviving form is solely the maker-exit variant under the live forward paper loop, whose
+> corrected-archive backtest PASSes marginally (see the 2026-07-03 note below the table).**
 
 | Signal tested | Can we beat the market with it? | Verdict |
 |---|---|---|
@@ -232,6 +235,29 @@ genuinely out-of-market information.
 > tp 0.12 / sl 0.20 / tstop 18h / chw 0 / depth $150 / makerWindow 30 (the maker ENTRY also fills at the 30-min
 > window, recovering the entry spread). NOT a GO — three assumptions (the maker-fill model, the rebate tier, the
 > 17-day extent) resolve only forward; it earns a **live forward test**, not capital. Rail DORMANT. **`MAKER-EXIT-SIM.md`.**
+
+> **↳ NEW 2026-07-03 — TWO adjudications land the same night: the Phase-0.5 gate formally KILLS the flat-open
+> entry (NO-GO, 0/325), while the corrected archive flips the maker-exit backtest to a (marginal) PASS.**
+> (1) **The Phase-0.5 spike — the pre-registered hard gate on the ORIGINAL thesis — ran on 8 distinct seeded
+> target dates (328 events, 12,587 capped captures) and returned NO-GO: 0/325 seeded events (Wilson 95% CI
+> [0%, 1%]; bar 50%) were still flat-open with cheap executable center depth when the first usable
+> `house_gaussian` existed.** Seed coverage was 99% — R-13 (signal availability) was NOT the blocker; the market
+> structure is: books list EMPTY (no quotes at +0.02–0.11h), and by the time quotes populate the peak is already
+> >18% (pre-informed, as the 06-28 capture showed on 147 markets — now formalized by the frozen gate at n=325).
+> **The original "buy the ≤1h flat open" execution stack (Phases 2–6 as spec'd) is dead and will not be built.**
+> (2) The on-disk archive predated the 06-30 canonical-sort fix → re-pulled (1,108 events) + every verdict
+> regenerated on the corrected **819-event / 45-city / 20-day** panel: the SAME pinned maker-exit config now
+> **PASSES the frozen §9R-E backtest gate** — +6.7% / +$515, CI [+0.3%, +12.0%], winFrac 62.8%, zsMC 3.2%
+> (misalignment had been UNDERSTATING the edge; taker side stays KILL). Overnight robustness work: an
+> LOCO/LODO jackknife shows the PASS is real but **marginal** (mean +6.1% survives every single exclusion;
+> 16/45 city- and 8/20 date-exclusions tip ciLow just under 0), the new OPT-IN day-block tightening in
+> `openingVerdict` PASSES with a stronger low bound (day-clustered CI [+2.4%, +12.6%]), and the ledger
+> decomposition shows the whole edge is the maker-TP leg (+$1,543 on 187 fills, 100% win, vs −$1,028 taker-exit
+> drag) — so everything hinges on the LIVE maker-fill rate (backtest 49.0% vs an early live read of 0.30).
+> **Net: the 12th signal's surviving form is exactly ONE thing — the maker-exit variant entering at the first
+> ENTERABLE tick (not the flat open), measured by the live forward paper loop (`/maker-exit`, the gate of
+> record). Backtest ≠ GO; no capital before a frozen forward paper PASS.** Rail DORMANT; boundary intact.
+> **`MAKER-EXIT-SIM.md`** (banner + jackknife + decomposition), **`BUILD-STATE.md`** (overnight log).
 
 ---
 
