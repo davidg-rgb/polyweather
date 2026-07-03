@@ -221,6 +221,11 @@ export interface OpeningVerdict {
   ciLow: number;
   ciHigh: number;
   zeroSkillPassRate: number;
+  /** the DAY-BLOCK sign-flip MC pass-rate — present ONLY when VerdictOpts.dayBlockNull is set (opt-in). */
+  zeroSkillPassRateDayBlock?: number;
+  /** the DAY-clustered 95% CI on mean net-return — present ONLY when VerdictOpts.dayBlockNull is set. */
+  dayBlockCiLow?: number;
+  dayBlockCiHigh?: number;
   reason: string;
 }
 
@@ -233,6 +238,20 @@ export interface VerdictOpts {
   trials?: number;
   /** the deterministic shuffle salt (no Math.random — index-seeded LCG). */
   seedSalt?: number;
+  /**
+   * OPT-IN TIGHTENING (the 2026-06-28 documented Phase-2 capital requirement): the frozen gate clusters on
+   * CITY only, but the panel's cities are climatically clustered — same-day weather correlation makes
+   * same-DAY results co-move across cities, overstating the effective df. When set, a PASS additionally
+   * requires BOTH (a) the DAY-clustered 95% CI on mean net-return to exclude 0 (days as the independent
+   * unit — this is what catches profit concentrated in one lucky day, which a fixed-bar sign-flip alone
+   * cannot see), and (b) the DAY-BLOCK sign-flip MC (every market sharing a target date flips together,
+   * judged against a day-clustered bar — flip unit == cluster unit, F28) to clear ZERO_SKILL_MAX_PASS.
+   * Strictly a tightening: it can turn a PASS into a KILL, never the reverse; unset ⇒ byte-identical to
+   * the frozen §9R-E gate. The day-block no-flip floor recurs at ~2^(−nDistinctDays); the ≥7-date
+   * sufficiency bar already floors that at ~0.0078 < 0.05, so the tightened gate stays structurally
+   * passable (the CORE-1 trap does not recur).
+   */
+  dayBlockNull?: boolean;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
@@ -324,10 +343,13 @@ function drawUnit(t: number, i: number, salt: number): number {
 }
 
 /** The clustered-by-city mean-return 95% t-CI over a panel (the crossVenueVerdict idiom). */
-function clusteredCi(rows: OpeningMarketResult[]): { cityMeans: number[]; mean: number; ciLow: number; ciHigh: number } {
-  const cities = [...new Set(rows.map((r) => r.city))];
-  const cityMeans = cities.map((c) => {
-    const cr = rows.filter((r) => r.city === c);
+function clusteredCiBy(
+  rows: OpeningMarketResult[],
+  keyOf: (r: OpeningMarketResult) => string,
+): { cityMeans: number[]; mean: number; ciLow: number; ciHigh: number } {
+  const keys = [...new Set(rows.map(keyOf))];
+  const cityMeans = keys.map((k) => {
+    const cr = rows.filter((r) => keyOf(r) === k);
     return cr.reduce((a, r) => a + r.netReturn, 0) / cr.length;
   });
   const C = cityMeans.length;
@@ -338,13 +360,25 @@ function clusteredCi(rows: OpeningMarketResult[]): { cityMeans: number[]; mean: 
   return { cityMeans, mean, ciLow: mean - t * se, ciHigh: mean + t * se };
 }
 
-/** The frozen PASS predicate, shared by openingVerdict + zeroSkillPassRate so both test the SAME bar. */
-function passesBar(rows: OpeningMarketResult[], minWinFrac: number): boolean {
+/** the frozen §9R-E CI — CITY clusters (this wrapper pins the historical behavior byte-for-byte). */
+function clusteredCi(rows: OpeningMarketResult[]): { cityMeans: number[]; mean: number; ciLow: number; ciHigh: number } {
+  return clusteredCiBy(rows, (r) => r.city);
+}
+
+/**
+ * The PASS predicate shared by openingVerdict + the sign-flip MCs, clustered on keyOf. The flip unit and the
+ * CI-cluster unit MUST match (F28): under a DAY-BLOCK flip a common day shock produces ZERO cross-city
+ * variance, so a city-clustered CI would degenerate to a point mass and pass ~half of all flip vectors —
+ * inflating the day null toward 0.5 and making the opt-in tightening structurally un-passable (CORE-1 in
+ * reverse). Day flips are therefore judged with a day-clustered CI, city flips with the frozen city CI.
+ */
+function passesBarBy(rows: OpeningMarketResult[], keyOf: (r: OpeningMarketResult) => string, minWinFrac: number): boolean {
   if (rows.length === 0) return false;
   const winFrac = rows.filter((r) => r.netPnlUsd > 0).length / rows.length;
-  const { ciLow } = clusteredCi(rows);
+  const { ciLow } = clusteredCiBy(rows, keyOf);
   return winFrac >= minWinFrac && ciLow > 0;
 }
+
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 // 1 · isFlatOpen — the uninformed-window gate (F-OC-02 / §16-D)
@@ -574,26 +608,48 @@ export function openingVerdict(panel: OpeningMarketResult[], opts: VerdictOpts =
   const winFrac = rows.filter((r) => r.netPnlUsd > 0).length / nMarkets;
   const { mean, ciLow, ciHigh } = clusteredCi(rows);
   const zsp = zeroSkillPassRate(rows, opts.trials ?? 1000, opts.seedSalt ?? 0, minWinFrac);
+  // the OPT-IN day-block tightening (see VerdictOpts.dayBlockNull) — computed alongside so KILL panels report it too.
+  const dayCi = opts.dayBlockNull ? clusteredCiBy(rows, (r) => r.targetDate) : undefined;
+  const zspDay = opts.dayBlockNull
+    ? zeroSkillPassRateBy(rows, (r) => r.targetDate, opts.trials ?? 1000, opts.seedSalt ?? 0, minWinFrac)
+    : undefined;
+  const dayBlock =
+    dayCi === undefined || zspDay === undefined
+      ? {}
+      : { zeroSkillPassRateDayBlock: zspDay, dayBlockCiLow: dayCi.ciLow, dayBlockCiHigh: dayCi.ciHigh };
+  const dayBlockClears = dayCi === undefined || zspDay === undefined || (dayCi.ciLow > 0 && zspDay < ZERO_SKILL_MAX_PASS);
 
   const stat =
     `winFrac ${pct(winFrac)} (bar ${pct(minWinFrac)}); city-clustered mean net-return ${pct(mean)} ` +
     `95% CI [${pct(ciLow)}, ${pct(ciHigh)}] (t, ${nCities} cities — for C<15 the cluster-preserving ` +
-    `sign-flip MC is the binding calibration, F28); zero-skill MC pass-rate ${pct(zsp)} (bar < ${pct(ZERO_SKILL_MAX_PASS)})`;
+    `sign-flip MC is the binding calibration, F28); zero-skill MC pass-rate ${pct(zsp)} (bar < ${pct(ZERO_SKILL_MAX_PASS)})` +
+    (dayCi === undefined || zspDay === undefined
+      ? ''
+      : `; DAY-BLOCK tightening (opt-in): day-clustered CI [${pct(dayCi.ciLow)}, ${pct(dayCi.ciHigh)}] over ` +
+        `${nDistinctDays} day clusters, day-flip MC pass-rate ${pct(zspDay)} (same bar)`);
 
-  if (winFrac >= minWinFrac && ciLow > 0 && zsp < ZERO_SKILL_MAX_PASS) {
+  if (winFrac >= minWinFrac && ciLow > 0 && zsp < ZERO_SKILL_MAX_PASS && dayBlockClears) {
     return {
       label: 'PASS', nMarkets, nCities, nDistinctDays, winFrac, meanNetReturn: mean, ciLow, ciHigh, zeroSkillPassRate: zsp,
+      ...dayBlock,
       reason:
         `PASS — ${nMarkets} scored paper markets: ${stat}. A standing, executable opening-convergence edge net ` +
         `of fees + measured slippage. The §9R-E gate clears — eligible for the small-real step (operator funds the ` +
         `dedicated wallet; the first ~10 live fills are post-fill reviewed). The maker rebate stays a MEASURED input, never assumed.`,
     };
   }
+  const dayBlockBinds = !dayBlockClears && winFrac >= minWinFrac && ciLow > 0 && zsp < ZERO_SKILL_MAX_PASS;
   return {
     label: 'KILL', nMarkets, nCities, nDistinctDays, winFrac, meanNetReturn: mean, ciLow, ciHigh, zeroSkillPassRate: zsp,
+    ...dayBlock,
     reason:
-      `KILL — ${nMarkets} scored paper markets: ${stat}. The opening-convergence edge does NOT clear the frozen ` +
-      `net-profit bar at executable depth net of costs (the same discipline that closed the other eleven signals). ` +
+      `KILL — ${nMarkets} scored paper markets: ${stat}. ` +
+      (dayBlockBinds
+        ? `The DAY-BLOCK tightening is the binding failure — with days as the independent unit the evidence does ` +
+          `not stand (same-day cross-city correlation / day concentration explains the panel; the city-clustered ` +
+          `df overstated independence — the exact risk the opt-in tightening exists to catch). `
+        : `The opening-convergence edge does NOT clear the frozen net-profit bar at executable depth net of costs ` +
+          `(the same discipline that closed the other eleven signals). `) +
       `Rail returns DORMANT; update FINDINGS.md.`,
   };
 }
@@ -608,24 +664,41 @@ export function zeroSkillPassRate(
   seedSalt: number,
   minWinFrac: number = GATE_MIN_WIN_FRAC,
 ): number {
+  // the frozen §9R-E null: CITY clusters (unchanged — this wrapper pins the historical behavior byte-for-byte).
+  return zeroSkillPassRateBy(panel, (r) => r.city, trials, seedSalt, minWinFrac);
+}
+
+/**
+ * The sign-flip MC generalized over an arbitrary cluster key. keyOf = (r) => r.city IS the frozen gate;
+ * keyOf = (r) => r.targetDate is the opt-in DAY-BLOCK tightening (VerdictOpts.dayBlockNull) — same-day
+ * results across cities flip together, so cross-city same-day weather correlation cannot masquerade as
+ * independent evidence. Deterministic (index-seeded hash, no Math.random); fails closed on <2 clusters.
+ */
+export function zeroSkillPassRateBy(
+  panel: OpeningMarketResult[],
+  keyOf: (r: OpeningMarketResult) => string,
+  trials: number,
+  seedSalt: number,
+  minWinFrac: number = GATE_MIN_WIN_FRAC,
+): number {
   const rows = (Array.isArray(panel) ? panel : []).filter(
     (r) => r && r.executed === true && Number.isFinite(r.netReturn) && Number.isFinite(r.netPnlUsd),
   );
-  const cities = [...new Set(rows.map((r) => r.city))];
-  if (cities.length < 2) return 1; // <2 clusters ⇒ no calibration possible; fail closed
+  const keys = [...new Set(rows.map(keyOf))];
+  if (keys.length < 2) return 1; // <2 clusters ⇒ no calibration possible; fail closed
 
-  const cityIdx = new Map(cities.map((c, i) => [c, i]));
+  const keyIdx = new Map(keys.map((k, i) => [k, i]));
   const nTrials = Math.max(1, trials);
   let pass = 0;
   for (let t = 0; t < nTrials; t++) {
-    // a Rademacher (±1) weight PER CITY — cluster-preserving (the whole cluster flips together, F28),
-    // each city drawn INDEPENDENTLY (a decorrelated hash, not one LCG step over an arithmetic seed).
-    const sign = cities.map((_c, i) => (drawUnit(t, i, seedSalt) < 0.5 ? -1 : 1));
+    // a Rademacher (±1) weight PER CLUSTER — cluster-preserving (the whole cluster flips together, F28),
+    // each cluster drawn INDEPENDENTLY (a decorrelated hash, not one LCG step over an arithmetic seed).
+    const sign = keys.map((_k, i) => (drawUnit(t, i, seedSalt) < 0.5 ? -1 : 1));
     const flipped = rows.map((r) => {
-      const s = sign[cityIdx.get(r.city)!]!;
+      const s = sign[keyIdx.get(keyOf(r))!]!;
       return { ...r, netReturn: r.netReturn * s, netPnlUsd: r.netPnlUsd * s };
     });
-    if (passesBar(flipped, minWinFrac)) pass++;
+    if (passesBarBy(flipped, keyOf, minWinFrac)) pass++;
   }
   return pass / nTrials;
 }

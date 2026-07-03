@@ -29,6 +29,26 @@
 > the live capture currently seeds the raw consensus, which selects 21 pp worse — Finding 2, re-confirmed on
 > ~2 100 events).
 
+> **🔬 JACKKNIFE ROBUSTNESS (2026-07-03 overnight, `scripts/research/jackknife-maker-exit.ts`) — the PASS is
+> REAL but MARGINAL: point estimate robust, significance fragile at n=382.** Leave-one-out over the corrected
+> panel at the pinned config (rebate 0):
+>
+> - **LOCO (45 runs):** 16 held-out cities flip PASS→KILL — but in EVERY flip the mean stays +5.2…+6.0 % and
+>   ciLow is only just below 0 (worst: shenzhen, mean +5.2 %, CI [−0.5 %, +10.9 %]). No single city carries the
+>   edge; the flips are thin-margin arithmetic on a ciLow of +0.3 %.
+> - **LODO (20 runs):** 8 held-out dates flip (worst: 2026-06-15, mean +4.7 %, CI [−1.1 %, +10.5 %]). Same shape.
+> - **The DAY-BLOCK tightening PASSES — and is *stronger* than the city gate:** day-clustered CI
+>   **[+2.4 %, +12.6 %]**, day-flip MC 3.3 %. The edge is spread across days, NOT one lucky day or a same-day
+>   common shock — the specific risk the 2026-06-28 review flagged (city-only clustering overstating df) does
+>   NOT explain this panel. (`openingVerdict` now carries the tightening as OPT-IN `VerdictOpts.dayBlockNull` —
+>   frozen-gate-safe: unset ⇒ byte-identical; set ⇒ PASS additionally requires the day-clustered CI to exclude 0
+>   AND the day-block sign-flip MC to clear — a Phase-2 capital requirement, live before any real money.)
+>
+> Read: the +6 % point estimate survives every single-exclusion; the CI-excludes-0 criterion does not (24/65
+> exclusions tip it). This neither strengthens nor weakens the standing discipline — it QUANTIFIES why the
+> backtest alone is not a GO: the panel needs more days, which the live forward loop accrues daily. Full tables:
+> `scripts/research/out/jackknife-maker-exit.md`.
+
 > **⚠ CORRECTION (2026-06-30, code review) — RESOLVED 2026-07-03, see the banner above.** The maker-rebate credit in `opening-maker-exit-replay.ts` was
 > computed as `rebateRate · takerFeePerShare(p, **1**) · shares` — it dropped the fee-rate factor, so it credited
 > the **full taker-fee magnitude** instead of a fraction of it (the `reward-farming.ts`/`reward-inventory.ts`

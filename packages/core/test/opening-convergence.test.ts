@@ -35,6 +35,7 @@ import {
   seedBiasCorrect,
   selectEntries,
   zeroSkillPassRate,
+  zeroSkillPassRateBy,
 } from '../src/sim/opening-convergence.ts';
 import { takerFeePerShare } from '../src/fees.ts';
 import { localHourInstant } from '../src/time.ts';
@@ -479,6 +480,82 @@ describe('openingVerdict — the frozen §9R-E net-profit gate', () => {
   it('is total: an empty / junk panel → INSUFFICIENT_DATA, no throw', () => {
     expect(openingVerdict([]).label).toBe('INSUFFICIENT_DATA');
     expect(openingVerdict(null as unknown as OpeningMarketResult[]).label).toBe('INSUFFICIENT_DATA');
+  });
+});
+
+// ── 5b · the OPT-IN day-block tightening (VerdictOpts.dayBlockNull) ────────────────────────────────────
+
+describe('openingVerdict — the OPT-IN day-block tightening (frozen-gate-safe)', () => {
+  it('UNSET ⇒ byte-identical to the frozen gate: no day-block fields, no day-block prose', () => {
+    const v = openingVerdict(mkPanel(CITIES(12), DAYS(7), () => 0.02));
+    expect(v.label).toBe('PASS');
+    expect('zeroSkillPassRateDayBlock' in v).toBe(false);
+    expect('dayBlockCiLow' in v).toBe(false);
+    expect(v.reason).not.toContain('DAY-BLOCK');
+  });
+
+  it('a genuinely day-diverse positive panel STAYS PASS under the tightening (structurally passable)', () => {
+    // constant positive return: day means all +0.02 → day-clustered ciLow > 0; only the no-flip vector
+    // clears the day bar → zspDay ≈ 2^−7 ≈ 0.0078 < 0.05 (the ≥7-date sufficiency bar floors it passable).
+    const v = openingVerdict(mkPanel(CITIES(12), DAYS(7), () => 0.02), { dayBlockNull: true });
+    expect(v.label).toBe('PASS');
+    expect(v.zeroSkillPassRateDayBlock).toBeDefined();
+    expect(v.zeroSkillPassRateDayBlock!).toBeLessThan(0.05);
+    expect(v.dayBlockCiLow!).toBeGreaterThan(0);
+    expect(v.reason).toContain('DAY-BLOCK');
+  });
+
+  it('CATCHES one-day profit concentration: the frozen gate PASSES, the tightened gate KILLs on the day CI', () => {
+    // day 0 carries +0.20, the other six days +0.005 — every market wins, every CITY is identical
+    // (city-clustered variance 0 ⇒ city ciLow = mean > 0, city zsp ≈ 2^−12) → the frozen gate PASSES.
+    // But with DAYS as the independent unit the evidence is one lucky day: day-clustered CI straddles 0.
+    const rr = (_ci: number, di: number): number => (di === 0 ? 0.2 : 0.005);
+    const frozen = openingVerdict(mkPanel(CITIES(12), DAYS(7), rr));
+    expect(frozen.label).toBe('PASS'); // the exact false-comfort the tightening exists to remove
+    const tightened = openingVerdict(mkPanel(CITIES(12), DAYS(7), rr), { dayBlockNull: true });
+    expect(tightened.label).toBe('KILL');
+    expect(tightened.dayBlockCiLow!).toBeLessThan(0);
+    expect(tightened.reason).toContain('DAY-BLOCK tightening is the binding failure');
+  });
+
+  it('CATCHES a same-day common shock with mixed-sign days (day CI straddles 0 despite a positive mean)', () => {
+    // returns depend ONLY on the day (a common cross-city shock): 4 days +0.06, 3 days −0.02. Every city is
+    // identical → the city-clustered CI is a point mass at +2.57% and the frozen gate PASSES; the day-clustered
+    // CI over [0.06×4, −0.02×3] straddles 0 → the tightening KILLs.
+    const rr = (_ci: number, di: number): number => (di < 4 ? 0.06 : -0.02);
+    const frozen = openingVerdict(mkPanel(CITIES(12), DAYS(7), rr));
+    expect(frozen.label).toBe('PASS');
+    const tightened = openingVerdict(mkPanel(CITIES(12), DAYS(7), rr), { dayBlockNull: true });
+    expect(tightened.label).toBe('KILL');
+    expect(tightened.dayBlockCiLow!).toBeLessThan(0);
+  });
+
+  it('NEVER rescues: a frozen-gate KILL stays KILL with the tightening on', () => {
+    const rr = (ci: number): number => (ci % 2 === 0 ? 0.05 : -0.05); // the noisy zero-mean panel
+    expect(openingVerdict(mkPanel(CITIES(8), DAYS(7), rr)).label).toBe('KILL');
+    expect(openingVerdict(mkPanel(CITIES(8), DAYS(7), rr), { dayBlockNull: true }).label).toBe('KILL');
+  });
+});
+
+describe('zeroSkillPassRateBy — the generalized cluster key', () => {
+  const panel = (cities: string[], days: string[]): OpeningMarketResult[] =>
+    cities.flatMap((c) =>
+      days.map((d) => ({ city: c, targetDate: d, netReturn: 0.02, netPnlUsd: 0.4, stakeUsd: 20, executed: true })),
+    );
+
+  it('city-keyed delegation IS the frozen zeroSkillPassRate (byte-identical)', () => {
+    const p = panel(CITIES(6), DAYS(7));
+    expect(zeroSkillPassRateBy(p, (r) => r.city, 500, 1234)).toBe(zeroSkillPassRate(p, 500, 1234));
+  });
+
+  it('fails closed (returns 1) with fewer than 2 clusters under the chosen key', () => {
+    expect(zeroSkillPassRateBy(panel(CITIES(6), ['2026-06-10']), (r) => r.targetDate, 500, 0)).toBe(1);
+  });
+
+  it('is deterministic per salt under a day key', () => {
+    const p = panel(CITIES(6), DAYS(7));
+    const a = zeroSkillPassRateBy(p, (r) => r.targetDate, 500, 42);
+    expect(zeroSkillPassRateBy(p, (r) => r.targetDate, 500, 42)).toBe(a);
   });
 });
 

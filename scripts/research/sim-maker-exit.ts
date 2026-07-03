@@ -81,7 +81,7 @@ async function buildCache(): Promise<{ n: number; cities: number; days: number }
   }
 }
 
-function loadCache(): { events: EventReplayInput[]; resolves: Map<string, number | null>; meta: string } {
+export function loadCache(): { events: EventReplayInput[]; resolves: Map<string, number | null>; meta: string } {
   if (!existsSync(CACHE_PATH)) throw new Error(`no cache at ${CACHE_PATH} — run with --build-cache first`);
   const cache = JSON.parse(gunzipSync(readFileSync(CACHE_PATH)).toString('utf8')) as Cache;
   return {
