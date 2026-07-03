@@ -14,6 +14,10 @@
  *      handoff §1) — the realized MAKER-FILL RATE (assumption #1, the §12 adverse-selection read), the realized
  *      REBATE at the configured tier (assumption #2), and the DAYS / cities / markets accrued (assumption #3).
  *   5. the §9R-E gate progress toward a verdict (≥40 markets / ≥6 cities / ≥7 days, clustered CI, zero-skill MC).
+ *   4b. the v2 "WHY zero" pool-context extension (SIGNAL-BACKLOG #1 follow-on, 2026-07-03/04) — when
+ *      qualifyingTickFrac reads 0/low, decomposes the resting TP sell's disqualification into distance-from-mid,
+ *      price-band membership, and min_size failure, plus a one-line dominantDisqualifier read. ADDITIVE ONLY —
+ *      the §9R-E gate math (item 5) is untouched by this extension.
  *
  * NOTHING here is a live trade or a capital decision — it is the forward PAPER measurement made legible; the
  * §9R-E gate still governs any GO and stays the capital backstop. Pure + total: junk → empty sections, never
@@ -24,7 +28,12 @@ import { GATE_MIN_MARKETS, GATE_MIN_CITIES, GATE_MIN_DISTINCT_DAYS } from './ope
 import type { OpeningLabel } from './opening-convergence.ts';
 import { buildEvents, type RawCaptureRow, type Resolution } from './opening-bracket-ingest.ts';
 import type { RawResolution } from './opening-convergence-view.ts';
-import { replayMakerExitPanel, type MakerExitCfg, type MakerExitTrade } from './opening-maker-exit-replay.ts';
+import {
+  replayMakerExitPanel,
+  type MakerExitCfg,
+  type MakerExitTrade,
+  type MakerExitDisqualifierStats,
+} from './opening-maker-exit-replay.ts';
 
 export type MakerExitKind =
   | 'maker_take_profit'
@@ -115,6 +124,15 @@ export interface MakerExitAssumptions {
   /** the raw numerator/denominator behind qualifyingTickFrac (so a reader sees the sample size, not just the ratio). */
   nQualifyingRestingTicks: number;
   nRestingTicks: number;
+  /** #4b — v2 "WHY zero" pool-context extension (SIGNAL-BACKLOG #1 follow-on, 2026-07-03): decomposes a
+   *  disqualified resting tick into WHY — too far from mid (PRICE-BAND), stake below the venue's min_size
+   *  floor (SIZE), or neither (the residual is the strict two-sided mid-regime rule, which this diagnostic
+   *  does not decompose further — see MakerExitDisqualifierStats' docstring). Straight passthrough from the
+   *  panel; same tick-weighted / never-fabricated / pool-SHARE-agnostic conventions as qualifyingTickFrac. */
+  meanDistFromMidPp: number;
+  fracWithinAdvertisedBand: number;
+  fracFailsMinSize: number;
+  dominantDisqualifier: MakerExitDisqualifierStats['dominantDisqualifier'];
 }
 
 /** The §9R-E gate progress toward a verdict — straight from openingVerdict over the realized maker-exit ledger. */
@@ -292,6 +310,10 @@ export function buildMakerExitView(
     qualifyingTickFrac: panel.qualifyingTickFrac, // #4 — the reward-eligibility tick diagnostic
     nQualifyingRestingTicks: panel.nQualifyingRestingTicks,
     nRestingTicks: panel.nRestingTicks,
+    meanDistFromMidPp: panel.meanDistFromMidPp, // #4b — the v2 "WHY zero" pool-context extension
+    fracWithinAdvertisedBand: panel.fracWithinAdvertisedBand,
+    fracFailsMinSize: panel.fracFailsMinSize,
+    dominantDisqualifier: panel.dominantDisqualifier,
   };
 
   // ── gate progress: ALL counts + the label/reason come straight from the ONE openingVerdict over the realized

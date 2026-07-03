@@ -145,6 +145,15 @@ describe('maker-exit-panel per-city fetch pool', () => {
     expect('qualifyingTickFrac' in stats).toBe(true);
     expect(Number.isNaN(stats.qualifyingTickFrac as number)).toBe(true);
   });
+
+  it('SIGNAL-BACKLOG #1 follow-on v2 (2026-07-04) — the "WHY zero" dominantDisqualifier flows into the stats payload', async () => {
+    const cities = ['a', 'b'];
+    const db = fakeDb({ cities });
+    const stats = await makerExitPanel(ctx(db), { now: NOW });
+    expect('dominantDisqualifier' in stats).toBe(true);
+    // no realized trades in this fake fixture (empty captures) → zero resting ticks accrued → the honest 'none'.
+    expect(stats.dominantDisqualifier).toBe('none');
+  });
 });
 
 describe('maker-exit-panel terminal-write retry (WS-5) — wiring, not the retry logic itself (see _shared/retry.test.ts)', () => {

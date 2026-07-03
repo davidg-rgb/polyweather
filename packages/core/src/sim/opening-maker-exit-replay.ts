@@ -186,6 +186,27 @@ export interface MakerExitTrade {
    *  (restingSellQmin > 0 — the exact 1b eligibility formula; the max-spread band is cfg.rewardCfg's when a
    *  pool is configured for this run, else the REC-3 weather-universal 4.5c default). */
   qualifyingRestingTicks: number;
+  // ── reward-ELIGIBILITY POOL-CONTEXT diagnostic v2 ("WHY zero", SIGNAL-BACKLOG #1 follow-on, 2026-07-03) —
+  // decomposes a disqualified tick into WHY: is our rest too far from mid (the PRICE-BAND half of the docs
+  // formula), is our stake below the program's min_size floor (the SIZE half), or neither (the residual is the
+  // strict two-sided mid-regime rule, mid<0.10 or >0.90 — restingSellQmin's own docstring; this diagnostic does
+  // not decompose that third case further, see dominantDisqualifier's 'none' semantics on MakerExitPanel). Same
+  // tick-weighted, no-look-ahead, pool-SHARE-agnostic convention as restingTicks/qualifyingRestingTicks above. ──
+  /** Σ |exitLimit − priorMid| × 100 (cents/pp) over resting ticks whose prior-tick mid was known — the
+   *  numerator behind MakerExitPanel's meanDistFromMidPp. 0 when no resting tick ever had a known mid
+   *  (never fabricated — restingMidKnownTicks is the honest denominator, not restingTicks). */
+  restingDistFromMidSumPp: number;
+  /** of restingTicks, how many had a KNOWN prior-tick mid — the denominator for the mean-distance + band
+   *  fraction (a tick with a missing mid contributes to neither, per the "never fabricate" rule). */
+  restingMidKnownTicks: number;
+  /** of restingMidKnownTicks, how many sat within the market's advertised max_spread of mid (the PRICE-BAND
+   *  half of the eligibility formula ONLY — independent of the mid-regime half that restingSellQmin also
+   *  checks, so this can be 100% while qualifyingRestingTicks is still 0). */
+  restingWithinBandTicks: number;
+  /** restingTicks if our stake's shares sit below the program's min_size floor
+   *  (REWARD_ELIGIBILITY_MIN_SIZE_SHARES — a trade-level constant, so this is always 0 or the full
+   *  restingTicks, never a partial count), else 0. */
+  restingFailsMinSizeTicks: number;
 }
 
 const NOT_EXECUTED = (eventId: string, city: string, targetDate: string, reason: string): MakerExitTrade => ({
@@ -195,6 +216,7 @@ const NOT_EXECUTED = (eventId: string, city: string, targetDate: string, reason:
   bucketIdx: -1, entryTickIndex: -1, exitTickIndex: -1, makerFillLatencyTicks: null,
   observedEntrySpread: NaN, observedExitSpread: NaN, rebateRateUsed: 0,
   restingTicks: 0, qualifyingRestingTicks: 0,
+  restingDistFromMidSumPp: 0, restingMidKnownTicks: 0, restingWithinBandTicks: 0, restingFailsMinSizeTicks: 0,
 });
 
 /** Polymarket's published resting-order reward band for the weather universe (rewards.max_spread, in CENTS) —
@@ -205,6 +227,15 @@ const NOT_EXECUTED = (eventId: string, city: string, targetDate: string, reason:
  *  own dollar accrual. A real, documented venue parameter — NOT an assumption (unlike myPoolShareIfQualifying /
  *  dailyPoolUsd, which stay explicit unknowns SIGNAL-BACKLOG.md #1's follow-on deliberately does not invent). */
 export const REWARD_ELIGIBILITY_MAX_SPREAD_CENTS = 4.5;
+
+/** Polymarket's published resting-order reward min_size for the weather universe (rewards.min_size, in SHARES)
+ *  — the same REC-3-observed default (MAKER-REBATE-HANDOFF.md §9: "min_size 50 … all active/accepting")
+ *  reward-probe.ts's own buildProbePlan already falls back to (`m.minSize > 0 ? m.minSize : 50`). Used ONLY as
+ *  the v2 "WHY zero" diagnostic's fallback floor (SIGNAL-BACKLOG #1 follow-on) — a real, documented venue
+ *  parameter, NOT an assumption (unlike myPoolShareIfQualifying/dailyPoolUsd). A per-market market_rewards join
+ *  was deliberately NOT added here (REWARD-INSTR-ROLLOUT.md: "conditionId↔eventId plumbing disproportionate") —
+ *  this constant is the SAME weather-universal-default idiom already used for the max-spread band above. */
+export const REWARD_ELIGIBILITY_MIN_SIZE_SHARES = 50;
 
 /**
  * Reward-eligible qualification of a resting SELL at `restPrice` for `shares`, at the market's `mid`
@@ -336,11 +367,17 @@ function runMakerExitLeg(
   let rewardAcc = 0; // accrued liquidity-reward income on the resting SELL (0 forever when cfg.rewardCfg is unset)
   let restingTicksCount = 0; // SIGNAL-BACKLOG #1 follow-on — ticks the resting sell was live (always counted)
   let qualifyingRestingCount = 0; // of those, how many prior-tick mids put it in the reward-qualifying band
+  let distFromMidSumPp = 0; // v2 "WHY zero" diagnostic — Σ distance-from-mid over ticks with a known prior mid
+  let midKnownTicksCount = 0; // of restingTicksCount, how many had a known prior-tick mid (the honest denominator)
+  let withinBandTicksCount = 0; // of midKnownTicksCount, how many sat within the price band (regardless of regime)
   let prevMs = entryFillMs; // the resting sell starts accruing from the moment it began resting
   // the eligibility band: cfg.rewardCfg's configured spread when a $ pool is being swept (byte-identical to the
   // pre-existing accrual math below), else the REC-3 weather-universal default — so the diagnostic still runs
   // when cfg.rewardCfg is unset (today's live paper loop).
   const eligibilityMaxSpreadCents = cfg.rewardCfg?.maxSpreadCents ?? REWARD_ELIGIBILITY_MAX_SPREAD_CENTS;
+  // v2 min-size floor (SIGNAL-BACKLOG #1 follow-on) — a TRADE-LEVEL constant (shares never change while a
+  // position rests), so it is evaluated once here rather than re-checked per tick.
+  const sizeFailsMinSize = shares < REWARD_ELIGIBILITY_MIN_SIZE_SHARES;
   // j is hoisted so the post-loop diagnostic catch-up below can see where the walk stopped: ticks.length when
   // the loop exhausted normally, or the break tick (the no-bid time-stop) — the ONE early exit that does not
   // `return settle(...)` from inside the loop.
@@ -355,8 +392,17 @@ function runMakerExitLeg(
     // agnostic: does the PRIOR tick's mid put the resting sell in the qualifying band (no look-ahead into tick
     // j)? Independent of whether a $ pool is configured — it never assumes a dollar amount or a competition share.
     restingTicksCount++;
-    const qDiag = restingSellQmin(exitLimit, shares, midAt(ticks[j - 1]!, bucketIdx), eligibilityMaxSpreadCents);
+    const midPrev = midAt(ticks[j - 1]!, bucketIdx);
+    const qDiag = restingSellQmin(exitLimit, shares, midPrev, eligibilityMaxSpreadCents);
     if (qDiag > 0) qualifyingRestingCount++;
+    // v2 "WHY zero" pool-context diagnostic — decompose the PRICE-BAND half independently of the qDiag verdict
+    // (which also folds in the mid-regime rule), so a reader can see "in-band but still 0" as a distinct signal.
+    if (fin(midPrev)) {
+      midKnownTicksCount++;
+      const distPp = Math.abs(exitLimit - midPrev) * 100;
+      distFromMidSumPp += distPp;
+      if (distPp <= eligibilityMaxSpreadCents) withinBandTicksCount++;
+    }
 
     // reward $ accrual for the interval the resting sell just finished being live (SIGNAL-BACKLOG #1b) — only
     // when cfg.rewardCfg is configured (the dollar accrual stays opt-in). qDiag above reuses the SAME formula
@@ -369,19 +415,19 @@ function runMakerExitLeg(
 
     // (a) MAKER take-profit: a buyer lifts the resting sell — fill AT the limit, $0 fee + rebate.
     if (fin(bid) && bid >= exitLimit) {
-      return settle(exitLimit, 'maker_take_profit', true, rebate(exitLimit), 0, j, rewardAcc, restingTicksCount, qualifyingRestingCount);
+      return settle(exitLimit, 'maker_take_profit', true, rebate(exitLimit), 0, j, rewardAcc, restingTicksCount, qualifyingRestingCount, distFromMidSumPp, midKnownTicksCount, withinBandTicksCount);
     }
     // (b) TAKER stop-loss: cut the loss by crossing into the bid (cannot rest above a falling market — §12).
     if (fin(bid) && bid <= slStop) {
       const fee = takerFeePerShare(bid, cfg.takerFeeRate) * shares;
-      return settle(bid, 'taker_stop_loss', false, 0, fee, j, rewardAcc, restingTicksCount, qualifyingRestingCount);
+      return settle(bid, 'taker_stop_loss', false, 0, fee, j, rewardAcc, restingTicksCount, qualifyingRestingCount, distFromMidSumPp, midKnownTicksCount, withinBandTicksCount);
     }
     // (c) HARD time-stop (resolvesAt − N h): flatten as a taker at the realizable bid (or the last seen bid).
     if (nowMs >= timeStopMs) {
       const px = fin(bid) ? bid : lastBid;
       if (px != null) {
         const fee = takerFeePerShare(px, cfg.takerFeeRate) * shares;
-        return settle(px, 'taker_time_stop', false, 0, fee, j, rewardAcc, restingTicksCount, qualifyingRestingCount);
+        return settle(px, 'taker_time_stop', false, 0, fee, j, rewardAcc, restingTicksCount, qualifyingRestingCount, distFromMidSumPp, midKnownTicksCount, withinBandTicksCount);
       }
       break; // no bid to flatten into → settle below
     }
@@ -398,20 +444,28 @@ function runMakerExitLeg(
   // stays byte-identical.
   for (let k = j + 1; k <= endIdx; k++) {
     restingTicksCount++;
-    const q = restingSellQmin(exitLimit, shares, midAt(ticks[k - 1]!, bucketIdx), eligibilityMaxSpreadCents);
+    const midPrev = midAt(ticks[k - 1]!, bucketIdx);
+    const q = restingSellQmin(exitLimit, shares, midPrev, eligibilityMaxSpreadCents);
     if (q > 0) qualifyingRestingCount++;
+    if (fin(midPrev)) {
+      midKnownTicksCount++;
+      const distPp = Math.abs(exitLimit - midPrev) * 100;
+      distFromMidSumPp += distPp;
+      if (distPp <= eligibilityMaxSpreadCents) withinBandTicksCount++;
+    }
   }
   if (input.resolution && !input.resolution.gradingMismatch && input.resolution.winnerIdx != null) {
     const won = input.resolution.winnerIdx === bucketIdx;
-    return settle(won ? 1 : 0, `resolution_settle:${won ? 'win' : 'lose'}`, false, 0, 0, endIdx, rewardAcc, restingTicksCount, qualifyingRestingCount); // redeem — no taker fee
+    return settle(won ? 1 : 0, `resolution_settle:${won ? 'win' : 'lose'}`, false, 0, 0, endIdx, rewardAcc, restingTicksCount, qualifyingRestingCount, distFromMidSumPp, midKnownTicksCount, withinBandTicksCount); // redeem — no taker fee
   }
-  return settle(fin(lastBid) ? lastBid : 0, 'mtm_unresolved', false, 0, 0, endIdx, rewardAcc, restingTicksCount, qualifyingRestingCount);
+  return settle(fin(lastBid) ? lastBid : 0, 'mtm_unresolved', false, 0, 0, endIdx, rewardAcc, restingTicksCount, qualifyingRestingCount, distFromMidSumPp, midKnownTicksCount, withinBandTicksCount);
 
   // exitIdx = the tick the exit fired at (the loop index, or the series end for a settle/mtm) — the measurement
   // anchor: it dates the exit (exitAt), measures the maker-fill latency, and reads the realized exit-side spread.
   function settle(
     exitPrice: number, exitKind: string, isMakerExit: boolean, exitRebate: number, exitFee: number, exitIdx: number,
     rewardUsd: number = 0, restingTicks: number = 0, qualifyingRestingTicks: number = 0,
+    restingDistFromMidSumPp: number = 0, restingMidKnownTicks: number = 0, restingWithinBandTicks: number = 0,
   ): MakerExitTrade {
     const feeUsd = entryFee + exitFee;
     const rebateUsd = entryRebate + exitRebate;
@@ -425,6 +479,8 @@ function runMakerExitLeg(
       makerFillLatencyTicks: isMakerExit ? safeExitIdx - fillIdx : null,
       observedEntrySpread, observedExitSpread: spreadAt(ticks[safeExitIdx]!, bucketIdx), rebateRateUsed,
       restingTicks, qualifyingRestingTicks,
+      restingDistFromMidSumPp, restingMidKnownTicks, restingWithinBandTicks,
+      restingFailsMinSizeTicks: sizeFailsMinSize ? restingTicks : 0,
     };
   }
 }
@@ -617,7 +673,56 @@ export function replayMakerExitEventBasket(
 // 2 · replayMakerExitPanel — run every event, return the §9R-E verdict + the per-trade ledger
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 
-export interface MakerExitPanel {
+/** The v2 "WHY zero" pool-context extension's panel-level output (SIGNAL-BACKLOG #1 follow-on, 2026-07-03) —
+ *  shared shape between replayMakerExitPanel and replayMakerExitPanelBasket. */
+export interface MakerExitDisqualifierStats {
+  /** mean |exitLimit − priorMid| in cents/pp, over resting ticks whose prior-tick mid was known. NaN when no
+   *  resting tick ever had a known mid (never fabricated). */
+  meanDistFromMidPp: number;
+  /** of resting ticks with a KNOWN prior-tick mid, the fraction that sat within the market's advertised
+   *  max_spread of mid — the PRICE-BAND half of the eligibility formula ONLY (independent of the mid-regime
+   *  half restingSellQmin also checks — this can read 100% while qualifyingTickFrac still reads 0%). NaN when
+   *  no resting tick ever had a known mid. */
+  fracWithinAdvertisedBand: number;
+  /** the fraction of resting ticks whose trade-level stake sat below REWARD_ELIGIBILITY_MIN_SIZE_SHARES. NaN
+   *  when zero resting ticks have accrued yet. */
+  fracFailsMinSize: number;
+  /** a one-line STRICT-MAJORITY-FAILS read of which half of the eligibility formula is disqualifying most
+   *  ticks. The rule, symmetric on both axes (lens-A fix, 2026-07-04): an axis "fails" iff its FAILING
+   *  fraction STRICTLY exceeds 0.5 — band fails when (1 − fracWithinAdvertisedBand) > 0.5, size fails when
+   *  fracFailsMinSize > 0.5; an exact 50/50 tie on either axis resolves to NOT-failing.
+   *  'band' = a strict majority of ticks out of the price band, size not majority-failing; 'size' = a strict
+   *  majority under min_size, band not majority-failing; 'both' = both strictly majority-failing; 'none' =
+   *  neither axis is a strict-majority blocker — either zero data accrued yet, OR (the informative case) both
+   *  halves mostly PASS yet qualifyingTickFrac is still low/zero, meaning the residual cause is the strict
+   *  two-sided MID-REGIME rule (mid<0.10 or >0.90 — a one-sided quote scores zero there regardless of
+   *  band/size; restingSellQmin's own docstring) — this diagnostic does not decompose that third case further,
+   *  so 'none' is the honest signal to look there next. */
+  dominantDisqualifier: 'band' | 'size' | 'both' | 'none';
+}
+
+/** Pure aggregator: turn the summed tick-level accumulators into the v2 disqualifier read (the symmetric
+ *  STRICT-majority-fails rule documented on dominantDisqualifier above; NaN-safe — an unmeasurable axis never
+ *  counts as failing; 'none' when there are zero resting ticks to attribute at all). */
+function disqualifierStatsOf(
+  distSumPp: number, midKnownTicks: number, withinBandTicks: number, failsMinSizeTicks: number, restingTicks: number,
+): MakerExitDisqualifierStats {
+  const meanDistFromMidPp = midKnownTicks > 0 ? distSumPp / midKnownTicks : NaN;
+  const fracWithinAdvertisedBand = midKnownTicks > 0 ? withinBandTicks / midKnownTicks : NaN;
+  const fracFailsMinSize = restingTicks > 0 ? failsMinSizeTicks / restingTicks : NaN;
+  let dominantDisqualifier: MakerExitDisqualifierStats['dominantDisqualifier'] = 'none';
+  if (restingTicks > 0) {
+    // symmetric strict-majority-fails on both axes (lens-A fix): the FAILING fraction must STRICTLY exceed
+    // 0.5; an exact 0.5 tie is NOT-failing on either axis (the prior `>= 0.5` on size was asymmetric with
+    // the band's tie-resolves-to-passing behavior).
+    const bandMostlyFails = Number.isFinite(fracWithinAdvertisedBand) && 1 - fracWithinAdvertisedBand > 0.5;
+    const sizeMostlyFails = Number.isFinite(fracFailsMinSize) && fracFailsMinSize > 0.5;
+    dominantDisqualifier = bandMostlyFails && sizeMostlyFails ? 'both' : bandMostlyFails ? 'band' : sizeMostlyFails ? 'size' : 'none';
+  }
+  return { meanDistFromMidPp, fracWithinAdvertisedBand, fracFailsMinSize, dominantDisqualifier };
+}
+
+export interface MakerExitPanel extends MakerExitDisqualifierStats {
   /** every executed trade (the ledger). */
   ledger: MakerExitTrade[];
   /** the frozen §9R-E verdict over the REALIZED (non-mtm) trades. */
@@ -659,6 +764,10 @@ export function replayMakerExitPanel(
   let realized = 0;
   let restingTicksTotal = 0;
   let qualifyingRestingTotal = 0;
+  let distFromMidSumTotal = 0;
+  let midKnownTicksTotal = 0;
+  let withinBandTicksTotal = 0;
+  let failsMinSizeTicksTotal = 0;
   for (const e of evs) {
     if (e.resolution?.gradingMismatch) continue; // ambiguous payout — out of scoring entirely
     const t = replayMakerExitEvent(e, cfg, resolvesByEvent.get(e.eventId) ?? null);
@@ -669,6 +778,10 @@ export function replayMakerExitPanel(
       if (t.isMakerExit) makerExits++;
       restingTicksTotal += t.restingTicks;
       qualifyingRestingTotal += t.qualifyingRestingTicks;
+      distFromMidSumTotal += t.restingDistFromMidSumPp;
+      midKnownTicksTotal += t.restingMidKnownTicks;
+      withinBandTicksTotal += t.restingWithinBandTicks;
+      failsMinSizeTicksTotal += t.restingFailsMinSizeTicks;
       panel.push({ city: e.city, targetDate: e.targetDate, netPnlUsd: t.netPnlUsd, stakeUsd: t.stakeUsd, netReturn: t.netReturn, executed: true });
     }
   }
@@ -686,6 +799,7 @@ export function replayMakerExitPanel(
     qualifyingTickFrac: restingTicksTotal > 0 ? qualifyingRestingTotal / restingTicksTotal : NaN,
     nQualifyingRestingTicks: qualifyingRestingTotal,
     nRestingTicks: restingTicksTotal,
+    ...disqualifierStatsOf(distFromMidSumTotal, midKnownTicksTotal, withinBandTicksTotal, failsMinSizeTicksTotal, restingTicksTotal),
   };
 }
 
@@ -693,7 +807,7 @@ export function replayMakerExitPanel(
 // 2b · replayMakerExitPanelBasket — the basket twin of replayMakerExitPanel (SIGNAL-BACKLOG.md #5)
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 
-export interface MakerExitPanelBasket {
+export interface MakerExitPanelBasket extends MakerExitDisqualifierStats {
   ledger: MakerExitBasketTrade[];
   /** the frozen §9R-E verdict over FULLY-REALIZED baskets only (any leg still mtm_unresolved excludes the
    *  whole basket — never certify partial-mark net profit, the same discipline as the single-bucket panel). */
@@ -730,6 +844,10 @@ export function replayMakerExitPanelBasket(
   let realized = 0;
   let restingTicksTotal = 0;
   let qualifyingRestingTotal = 0;
+  let distFromMidSumTotal = 0;
+  let midKnownTicksTotal = 0;
+  let withinBandTicksTotal = 0;
+  let failsMinSizeTicksTotal = 0;
   for (const e of evs) {
     if (e.resolution?.gradingMismatch) continue;
     const t = replayMakerExitEventBasket(e, cfg, resolvesByEvent.get(e.eventId) ?? null);
@@ -742,6 +860,10 @@ export function replayMakerExitPanelBasket(
       makerExitLegs += t.legs.filter((l) => l.isMakerExit).length;
       restingTicksTotal += t.legs.reduce((a, l) => a + l.restingTicks, 0);
       qualifyingRestingTotal += t.legs.reduce((a, l) => a + l.qualifyingRestingTicks, 0);
+      distFromMidSumTotal += t.legs.reduce((a, l) => a + l.restingDistFromMidSumPp, 0);
+      midKnownTicksTotal += t.legs.reduce((a, l) => a + l.restingMidKnownTicks, 0);
+      withinBandTicksTotal += t.legs.reduce((a, l) => a + l.restingWithinBandTicks, 0);
+      failsMinSizeTicksTotal += t.legs.reduce((a, l) => a + l.restingFailsMinSizeTicks, 0);
       panel.push({ city: e.city, targetDate: e.targetDate, netPnlUsd: t.netPnlUsd, stakeUsd: t.stakeUsd, netReturn: t.netReturn, executed: true });
     }
   }
@@ -758,5 +880,6 @@ export function replayMakerExitPanelBasket(
     qualifyingTickFrac: restingTicksTotal > 0 ? qualifyingRestingTotal / restingTicksTotal : NaN,
     nQualifyingRestingTicks: qualifyingRestingTotal,
     nRestingTicks: restingTicksTotal,
+    ...disqualifierStatsOf(distFromMidSumTotal, midKnownTicksTotal, withinBandTicksTotal, failsMinSizeTicksTotal, restingTicksTotal),
   };
 }

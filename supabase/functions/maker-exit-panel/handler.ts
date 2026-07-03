@@ -241,6 +241,7 @@ export async function makerExitPanel(ctx: JobCtx, deps: MakerExitPanelDeps): Pro
     makerFillRate: view.assumptions.makerFillRate,
     realizedRebateUsd: view.assumptions.realizedRebateUsd,
     qualifyingTickFrac: view.assumptions.qualifyingTickFrac,
+    dominantDisqualifier: view.assumptions.dominantDisqualifier, // v2 "WHY zero" pool-context extension
     label: view.gate.label,
     snapshotId,
   };

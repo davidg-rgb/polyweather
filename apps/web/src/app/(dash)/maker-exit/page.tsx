@@ -135,6 +135,13 @@ function AssumptionTiles({ view }: { view: MakerExitView }): ReactElement {
           of {a.nRestingTicks ?? 0} resting ticks in Polymarket&apos;s reward band ({a.nQualifyingRestingTicks ?? 0} qualifying)
           — the pool $ / competition share stays an explicit unknown, never assumed here
         </div>
+        <div className="sub" style={{ marginTop: '0.15rem' }}>
+          WHY: {Number.isFinite(a.meanDistFromMidPp) ? `${a.meanDistFromMidPp.toFixed(1)}pp from mid` : '—'} ·{' '}
+          {Number.isFinite(a.fracWithinAdvertisedBand) ? fmtPct(a.fracWithinAdvertisedBand, 0) : '—'} in-band ·{' '}
+          {Number.isFinite(a.fracFailsMinSize) ? fmtPct(a.fracFailsMinSize, 0) : '—'} fail min-size · dominant:{' '}
+          <strong>{a.dominantDisqualifier ?? '—'}</strong>{' '}
+          <span className="muted">(vs 4.5¢ default band · 50-share min)</span>
+        </div>
       </div>
       <div className="tile">
         <div className="cap">Observed spread</div>

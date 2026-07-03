@@ -98,4 +98,32 @@ describe('buildMakerExitView', () => {
     expect(view.assumptions.nRestingTicks).toBe(0);
     expect(view.assumptions.nQualifyingRestingTicks).toBe(0);
   });
+
+  it('#4b — wires the v2 "WHY zero" pool-context extension straight through from the panel (SIGNAL-BACKLOG #1 follow-on v2, 2026-07-04)', () => {
+    const captures = [
+      ...winningEvent('A', 'amsterdam', 'Europe/Amsterdam'),
+      ...winningEvent('B', 'chengdu', 'Asia/Shanghai'),
+    ];
+    const view = buildMakerExitView(captures, [], makerExitCfg(BOT_DEFAULTS.cities));
+    const a = view.assumptions;
+    // straight passthrough — never a re-derivation, so it can never disagree with the engine's own panel output.
+    expect(Number.isFinite(a.meanDistFromMidPp) || Number.isNaN(a.meanDistFromMidPp)).toBe(true); // always one or the other, never undefined
+    expect(['band', 'size', 'both', 'none']).toContain(a.dominantDisqualifier);
+    if (Number.isFinite(a.fracWithinAdvertisedBand)) {
+      expect(a.fracWithinAdvertisedBand).toBeGreaterThanOrEqual(0);
+      expect(a.fracWithinAdvertisedBand).toBeLessThanOrEqual(1);
+    }
+    if (Number.isFinite(a.fracFailsMinSize)) {
+      expect(a.fracFailsMinSize).toBeGreaterThanOrEqual(0);
+      expect(a.fracFailsMinSize).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it('#4b is NaN/none on junk / empty input — never fabricated', () => {
+    const view = buildMakerExitView([], [] as RawResolution[], makerExitCfg(BOT_DEFAULTS.cities));
+    expect(Number.isNaN(view.assumptions.meanDistFromMidPp)).toBe(true);
+    expect(Number.isNaN(view.assumptions.fracWithinAdvertisedBand)).toBe(true);
+    expect(Number.isNaN(view.assumptions.fracFailsMinSize)).toBe(true);
+    expect(view.assumptions.dominantDisqualifier).toBe('none');
+  });
 });

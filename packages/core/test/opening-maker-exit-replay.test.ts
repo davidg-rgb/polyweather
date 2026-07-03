@@ -437,6 +437,120 @@ describe('restingTicks / qualifyingRestingTicks — the reward-ELIGIBILITY tick 
   });
 });
 
+describe('restingDistFromMidSumPp / restingMidKnownTicks / restingWithinBandTicks — the v2 "WHY zero" price-band diagnostic (SIGNAL-BACKLOG #1 follow-on v2, 2026-07-04)', () => {
+  // the EXACT shared fixture from the restingTicks/qualifyingRestingTicks describe above: 3 resting ticks whose
+  // prior mids are 0.15 (default, 22c from the 0.37 target), 0.20 (17c), 0.365 (0.5c) — only the last is in-band.
+  const ticks = () => [
+    ...entryTicks(),
+    tick('2026-06-20T00:40:00Z', 0.8, { execBid: 0.20, execAsk: 0.21, mid: 0.20 }),
+    tick('2026-06-20T00:50:00Z', 0.95, { execBid: 0.30, execAsk: 0.31, mid: 0.365 }),
+    tick('2026-06-20T01:00:00Z', 1, { execBid: 0.37, execAsk: 0.38, mid: 0.365 }),
+  ];
+
+  it('decomposes the fixture into Σ39.5pp distance / 3 known mids / 1 within band (matches qualifyingRestingTicks here since mid never leaves [0.10,0.90])', () => {
+    const t = replayMakerExitEvent(input(ticks()), cfg({ tpMode: 'abs', tpAbsTarget: 0.37 }), RESOLVE_MS);
+    expect(t.exitKind).toBe('maker_take_profit');
+    expect(t.restingTicks).toBe(3);
+    expect(t.qualifyingRestingTicks).toBe(1);
+    // 22.0 + 17.0 + 0.5 — hand-computed from the fixture's prior-tick mids vs the 0.37 target.
+    expect(t.restingDistFromMidSumPp).toBeCloseTo(39.5, 9);
+    expect(t.restingMidKnownTicks).toBe(3); // every prior-tick mid in this fixture is a real number
+    expect(t.restingWithinBandTicks).toBe(1); // only the last tick (0.5c) sits within the 4.5c default band
+  });
+
+  it('a missing prior-tick mid is excluded from BOTH the distance sum and the known-ticks denominator (never fabricated)', () => {
+    // the tick at 00:40 has mid:NaN — that tick's OWN mid is read as the PRIOR mid by the NEXT iteration
+    // (00:50), so IT is the one that goes unpriced; 00:40 itself still prices off 00:10's (entryTicks') default
+    // mid 0.15, and 01:00 (the TP tick) still prices off 00:50's 0.365. The resting walk must still count
+    // restingTicks for all 3 iterations while excluding only the one iteration with an unknown prior mid.
+    const noMidTicks = [
+      ...entryTicks(),
+      tick('2026-06-20T00:40:00Z', 0.8, { execBid: 0.20, execAsk: 0.21, mid: NaN }), // mid unknown this tick
+      tick('2026-06-20T00:50:00Z', 0.95, { execBid: 0.30, execAsk: 0.31, mid: 0.365 }),
+      tick('2026-06-20T01:00:00Z', 1, { execBid: 0.37, execAsk: 0.38, mid: 0.365 }),
+    ];
+    const t = replayMakerExitEvent(input(noMidTicks), cfg({ tpMode: 'abs', tpAbsTarget: 0.37 }), RESOLVE_MS);
+    expect(t.exitKind).toBe('maker_take_profit');
+    expect(t.restingTicks).toBe(3); // still counts every resting tick
+    expect(t.restingMidKnownTicks).toBe(2); // the 00:50 iteration's prior mid (00:40's NaN) is the one excluded
+    // 22.0 (00:40, priced off 00:10's default 0.15) + 0.5 (01:00, priced off 00:50's 0.365) — the 00:50
+    // iteration (priced off 00:40's NaN) contributes NOTHING, not a fabricated 0.
+    expect(t.restingDistFromMidSumPp).toBeCloseTo(22.5, 9);
+    expect(t.restingWithinBandTicks).toBe(1); // only the 01:00 iteration (0.5c) is in-band
+    expect(t.qualifyingRestingTicks).toBe(1); // matches — the same tick that qualifies is the one in-band
+  });
+
+  it('is 0/0/0/0 on a not-executed trade and on junk', () => {
+    const noRunway = replayMakerExitEvent(
+      input([...entryTicks(), tick('2026-06-20T01:00:00Z', 1, { execBid: 0.45, execAsk: 0.46 })]),
+      cfg({ tpDeltaPp: 0.25, tstopHoursBeforeResolve: 34 }),
+      RESOLVE_MS,
+    );
+    expect(noRunway.executed).toBe(false);
+    expect(noRunway.restingDistFromMidSumPp).toBe(0);
+    expect(noRunway.restingMidKnownTicks).toBe(0);
+    expect(noRunway.restingWithinBandTicks).toBe(0);
+    expect(noRunway.restingFailsMinSizeTicks).toBe(0);
+    const junk = replayMakerExitEvent(null as unknown as EventReplayInput, cfg(), RESOLVE_MS);
+    expect(junk.restingDistFromMidSumPp).toBe(0);
+    expect(junk.restingMidKnownTicks).toBe(0);
+    expect(junk.restingWithinBandTicks).toBe(0);
+    expect(junk.restingFailsMinSizeTicks).toBe(0);
+  });
+});
+
+describe('restingFailsMinSizeTicks — the min-size half of the v2 WHY-zero diagnostic (SIGNAL-BACKLOG #1 follow-on v2, 2026-07-04)', () => {
+  const ticks = () => [
+    ...entryTicks(),
+    tick('2026-06-20T00:40:00Z', 0.8, { execBid: 0.20, execAsk: 0.21, mid: 0.20 }),
+    tick('2026-06-20T00:50:00Z', 0.95, { execBid: 0.30, execAsk: 0.31, mid: 0.365 }),
+    tick('2026-06-20T01:00:00Z', 1, { execBid: 0.37, execAsk: 0.38, mid: 0.365 }),
+  ];
+
+  it('the default $20 stake at the 0.16 entry rests comfortably above the 50-share floor — ZERO ticks fail min size', () => {
+    const t = replayMakerExitEvent(input(ticks()), cfg({ tpMode: 'abs', tpAbsTarget: 0.37 }), RESOLVE_MS);
+    const shares = t.stakeUsd / t.entryPrice;
+    expect(shares).toBeGreaterThanOrEqual(50);
+    expect(t.restingFailsMinSizeTicks).toBe(0);
+  });
+
+  it('a tiny stake under the 50-share floor fails min size on EVERY resting tick (binary per trade, not partial)', () => {
+    const t = replayMakerExitEvent(input(ticks()), cfg({ tpMode: 'abs', tpAbsTarget: 0.37, perPositionUsd: 1 }), RESOLVE_MS);
+    const shares = t.stakeUsd / t.entryPrice;
+    expect(shares).toBeLessThan(50);
+    expect(t.restingFailsMinSizeTicks).toBe(t.restingTicks);
+    expect(t.restingTicks).toBe(3);
+  });
+});
+
+describe('the mid-REGIME case — price band passes but qualifying still reads ZERO (the live "0/1,732" hypothesis, SIGNAL-BACKLOG #1 follow-on v2, 2026-07-04)', () => {
+  // a genuinely cheap ladder (entry fills maker at 0.03, the resting sell targets 0.06) — every resting tick's
+  // mid stays UNDER 0.10 (the strict two-sided regime restingSellQmin's own docstring names: "a one-sided quote
+  // earns ZERO" there) even though the resting sell sits well WITHIN the 4.5c band of that low mid. This is
+  // reward-farming.ts's own documented explanation for why MOST weather buckets (cheap longshots) never qualify.
+  const cheapTicks = (): ReplayTick[] => [
+    tick('2026-06-20T00:00:00Z', 0.1, { execAsk: 0.03, bestAsk: 0.03, execBid: 0.02, mid: 0.025 }), // selectEntries enters here (makerLimit → 0.03)
+    tick('2026-06-20T00:10:00Z', 0.3, { execAsk: 0.025, bestAsk: 0.025, execBid: 0.02, mid: 0.022 }), // ask runs through the maker limit → fill @ 0.03
+    tick('2026-06-20T00:40:00Z', 0.8, { execBid: 0.04, execAsk: 0.05, mid: 0.058 }), // resting: 0.06 target, mid 0.058 → 0.2c away, in-band, regime<0.10
+    tick('2026-06-20T00:50:00Z', 0.95, { execBid: 0.04, execAsk: 0.05, mid: 0.059 }), // still holds — never reaches the 0.06 TP
+  ];
+
+  it('restingWithinBandTicks reads 100% while qualifyingRestingTicks reads ZERO — the price band is NOT the disqualifier here', () => {
+    const t = replayMakerExitEvent(input(cheapTicks()), cfg({ tpMode: 'abs', tpAbsTarget: 0.06 }), RESOLVE_MS);
+    expect(t.executed).toBe(true);
+    expect(t.entryPrice).toBeCloseTo(0.03, 9); // the maker resting ceiling (makerLimit), not the live re-walked ask
+    // the bid (0.04) never reaches the 0.06 TP limit — the position holds to series end and settles at
+    // resolution (winner=1, matching the entered bucket) — exitPrice 1 is the redemption payout, not a TP fill.
+    expect(t.exitKind).toBe('resolution_settle:win');
+    expect(t.exitPrice).toBe(1);
+    expect(t.restingTicks).toBe(2);
+    expect(t.qualifyingRestingTicks).toBe(0); // the strict <0.10 regime zeroes it every tick
+    expect(t.restingMidKnownTicks).toBe(2);
+    expect(t.restingWithinBandTicks).toBe(2); // BOTH ticks sit within 4.5c of their (low) mid — band is NOT the problem
+    expect(t.restingFailsMinSizeTicks).toBe(0); // the default $20 stake at 0.03 is comfortably >50 shares — size is NOT the problem either
+  });
+});
+
 describe('the no-bid time-stop break path — the diagnostic catch-up (review lens A fix, 2026-07-03)', () => {
   // entry fills at idx 1 (00:10). At idx 2 (22:10) the time-stop (resolvesAt−12h = 22:00Z) has passed but the
   // bucket has NO bid — and none was seen since the fill — so the walk `break`s instead of returning, and the
@@ -676,5 +790,197 @@ describe('replayMakerExitPanel', () => {
     expect(panel.nRestingTicks).toBe(0);
     expect(panel.nQualifyingRestingTicks).toBe(0);
     expect(Number.isNaN(panel.qualifyingTickFrac)).toBe(true);
+  });
+});
+
+describe('replayMakerExitPanel — the v2 "WHY zero" disqualifier aggregate (meanDistFromMidPp / fracWithinAdvertisedBand / fracFailsMinSize / dominantDisqualifier, SIGNAL-BACKLOG #1 follow-on v2, 2026-07-04)', () => {
+  const bandFixtureTicks = () => [
+    ...entryTicks(),
+    tick('2026-06-20T00:40:00Z', 0.8, { execBid: 0.20, execAsk: 0.21, mid: 0.20 }),
+    tick('2026-06-20T00:50:00Z', 0.95, { execBid: 0.30, execAsk: 0.31, mid: 0.365 }),
+    tick('2026-06-20T01:00:00Z', 1, { execBid: 0.37, execAsk: 0.38, mid: 0.365 }),
+  ];
+  const cheapRegimeTicks = (): ReplayTick[] => [
+    tick('2026-06-20T00:00:00Z', 0.1, { execAsk: 0.03, bestAsk: 0.03, execBid: 0.02, mid: 0.025 }),
+    tick('2026-06-20T00:10:00Z', 0.3, { execAsk: 0.025, bestAsk: 0.025, execBid: 0.02, mid: 0.022 }),
+    tick('2026-06-20T00:40:00Z', 0.8, { execBid: 0.04, execAsk: 0.05, mid: 0.058 }),
+    tick('2026-06-20T00:50:00Z', 0.95, { execBid: 0.04, execAsk: 0.05, mid: 0.059 }),
+  ];
+
+  it("'band' dominant: mostly out-of-band, size comfortably OK (qualifyingTickFrac still low)", () => {
+    const events: EventReplayInput[] = [{ ...input(bandFixtureTicks()), eventId: 'A', city: 'amsterdam' }];
+    const panel = replayMakerExitPanel(events, cfg({ tpMode: 'abs', tpAbsTarget: 0.37, cities: ['amsterdam'] }), new Map([['A', RESOLVE_MS]]));
+    expect(panel.nRestingTicks).toBe(3);
+    expect(panel.meanDistFromMidPp).toBeCloseTo(39.5 / 3, 9);
+    expect(panel.fracWithinAdvertisedBand).toBeCloseTo(1 / 3, 9);
+    expect(panel.fracFailsMinSize).toBe(0);
+    expect(panel.dominantDisqualifier).toBe('band');
+  });
+
+  it("'size' dominant: comfortably in-band, but the stake fails min_size", () => {
+    const events: EventReplayInput[] = [{ ...input(cheapRegimeTicks()), eventId: 'A', city: 'amsterdam' }];
+    const panel = replayMakerExitPanel(
+      events,
+      cfg({ tpMode: 'abs', tpAbsTarget: 0.06, perPositionUsd: 1, cities: ['amsterdam'] }),
+      new Map([['A', RESOLVE_MS]]),
+    );
+    expect(panel.fracWithinAdvertisedBand).toBe(1);
+    expect(panel.fracFailsMinSize).toBe(1);
+    expect(panel.dominantDisqualifier).toBe('size');
+  });
+
+  it("'both' dominant: mostly out-of-band AND the stake fails min_size", () => {
+    const events: EventReplayInput[] = [{ ...input(bandFixtureTicks()), eventId: 'A', city: 'amsterdam' }];
+    const panel = replayMakerExitPanel(
+      events,
+      cfg({ tpMode: 'abs', tpAbsTarget: 0.37, perPositionUsd: 1, cities: ['amsterdam'] }),
+      new Map([['A', RESOLVE_MS]]),
+    );
+    expect(panel.fracWithinAdvertisedBand).toBeCloseTo(1 / 3, 9);
+    expect(panel.fracFailsMinSize).toBe(1);
+    expect(panel.dominantDisqualifier).toBe('both');
+  });
+
+  it("'none': band + size both mostly PASS yet qualifyingTickFrac is still 0 — the mid-regime residual (the live hypothesis)", () => {
+    const events: EventReplayInput[] = [{ ...input(cheapRegimeTicks()), eventId: 'A', city: 'amsterdam' }];
+    const panel = replayMakerExitPanel(events, cfg({ tpMode: 'abs', tpAbsTarget: 0.06, cities: ['amsterdam'] }), new Map([['A', RESOLVE_MS]]));
+    expect(panel.qualifyingTickFrac).toBe(0);
+    expect(panel.fracWithinAdvertisedBand).toBe(1);
+    expect(panel.fracFailsMinSize).toBe(0);
+    expect(panel.dominantDisqualifier).toBe('none');
+  });
+
+  it("'none' + every stat NaN when zero resting ticks have accrued (insufficient data, not a fabricated verdict)", () => {
+    const panel = replayMakerExitPanel([], cfg(), new Map());
+    expect(panel.nRestingTicks).toBe(0);
+    expect(Number.isNaN(panel.meanDistFromMidPp)).toBe(true);
+    expect(Number.isNaN(panel.fracWithinAdvertisedBand)).toBe(true);
+    expect(Number.isNaN(panel.fracFailsMinSize)).toBe(true);
+    expect(panel.dominantDisqualifier).toBe('none');
+  });
+
+  it('is TICK-WEIGHTED across the panel (sums the raw accumulators, not a simple mean of two trades own fractions)', () => {
+    // both events replayed under the SAME shared cfg the panel call below uses (tpAbsTarget 0.37) — the panel's
+    // totals must equal the exact sum of the two single-trade results (the aggregation contract, not a
+    // re-derivation of the per-trade math already pinned by the tests above).
+    const sharedCfg = cfg({ tpMode: 'abs', tpAbsTarget: 0.37, cities: ['amsterdam', 'chengdu'] });
+    const tA = replayMakerExitEvent({ ...input(bandFixtureTicks()), eventId: 'A', city: 'amsterdam' }, sharedCfg, RESOLVE_MS);
+    const tB = replayMakerExitEvent({ ...input(cheapRegimeTicks()), eventId: 'B', city: 'chengdu' }, sharedCfg, RESOLVE_MS);
+    const expectedDistSum = tA.restingDistFromMidSumPp + tB.restingDistFromMidSumPp;
+    const expectedMidKnown = tA.restingMidKnownTicks + tB.restingMidKnownTicks;
+    const expectedWithinBand = tA.restingWithinBandTicks + tB.restingWithinBandTicks;
+    const panel = replayMakerExitPanel(
+      [
+        { ...input(bandFixtureTicks()), eventId: 'A', city: 'amsterdam' },
+        { ...input(cheapRegimeTicks()), eventId: 'B', city: 'chengdu' },
+      ],
+      sharedCfg,
+      new Map([['A', RESOLVE_MS], ['B', RESOLVE_MS]]),
+    );
+    expect(panel.nRestingTicks).toBe(tA.restingTicks + tB.restingTicks);
+    expect(panel.meanDistFromMidPp).toBeCloseTo(expectedDistSum / expectedMidKnown, 9);
+    expect(panel.fracWithinAdvertisedBand).toBeCloseTo(expectedWithinBand / expectedMidKnown, 9);
+  });
+});
+
+describe('dominantDisqualifier tie-breaks — the symmetric STRICT-majority-fails rule (lens-A fix, 2026-07-04)', () => {
+  // an exact 50/50 tie on EITHER axis must resolve to NOT-failing: an axis "fails" only when its failing
+  // fraction STRICTLY exceeds 0.5 — band fails iff (1 − fracWithinAdvertisedBand) > 0.5, size fails iff
+  // fracFailsMinSize > 0.5. The pre-fix rule was asymmetric (band tie → not-failing, size tie → failing).
+
+  it('BAND axis at exactly 0.5: fracWithinAdvertisedBand = 1/2 → band NOT failing → dominant "none"', () => {
+    // 2 resting ticks: j=2's prior mid is the fill tick's default 0.15 (22c from the 0.37 target — OUT),
+    // j=3's prior mid is 00:40's 0.365 (0.5c — IN) and the bid reaches the target there → TP fires. Exactly
+    // half the mid-known resting ticks sit in-band; size passes at the default $20 stake (125 shares ≥ 50).
+    const ticks = [
+      ...entryTicks(),
+      tick('2026-06-20T00:40:00Z', 0.8, { execBid: 0.30, execAsk: 0.31, mid: 0.365 }),
+      tick('2026-06-20T00:50:00Z', 0.95, { execBid: 0.37, execAsk: 0.38 }),
+    ];
+    const panel = replayMakerExitPanel(
+      [{ ...input(ticks), eventId: 'A', city: 'amsterdam' }],
+      cfg({ tpMode: 'abs', tpAbsTarget: 0.37, cities: ['amsterdam'] }),
+      new Map([['A', RESOLVE_MS]]),
+    );
+    expect(panel.nRestingTicks).toBe(2);
+    expect(panel.fracWithinAdvertisedBand).toBe(0.5); // the exact boundary
+    expect(panel.fracFailsMinSize).toBe(0);
+    expect(panel.dominantDisqualifier).toBe('none'); // 1 − 0.5 = 0.5, NOT > 0.5 → band not failing
+  });
+
+  it('SIZE axis at exactly 0.5: fracFailsMinSize = 3/6 → size NOT failing → dominant "none" (the pre-fix ">=" rule would have said "size")', () => {
+    // Two events under ONE shared cfg (perPositionUsd $6). shares = $6 / entryPrice, and min_size fails at
+    // the TRADE level (binary), so the panel mixes: event A fills maker at 0.16 → 37.5 shares < 50 (FAILS);
+    // event B fills maker at 0.10 → 60 shares ≥ 50 (passes). Both rest exactly 3 ticks before the same 0.37
+    // TP → fracFailsMinSize = 3/6 = 0.5 exactly. Band: per event the priors are 0.15 (out) / 0.365 (in) /
+    // 0.365 (in) → panel fracWithinAdvertisedBand = 4/6, failing fraction 1/3 NOT > 0.5 → band not failing.
+    const restTail = [
+      tick('2026-06-20T00:40:00Z', 0.8, { execBid: 0.30, execAsk: 0.31, mid: 0.365 }),
+      tick('2026-06-20T00:50:00Z', 0.95, { execBid: 0.30, execAsk: 0.31, mid: 0.365 }),
+      tick('2026-06-20T01:00:00Z', 1, { execBid: 0.37, execAsk: 0.38 }),
+    ];
+    const ticksA = [...entryTicks(), ...restTail]; // fills maker at 0.16
+    const ticksB = [
+      tick('2026-06-20T00:00:00Z', 0.1, { execAsk: 0.10, bestAsk: 0.10, execBid: 0.09 }),
+      tick('2026-06-20T00:10:00Z', 0.3, { execAsk: 0.08, bestAsk: 0.08, execBid: 0.07 }), // runs through → fill @ 0.10
+      ...restTail,
+    ];
+    const panel = replayMakerExitPanel(
+      [
+        { ...input(ticksA), eventId: 'A', city: 'amsterdam' },
+        { ...input(ticksB), eventId: 'B', city: 'chengdu' },
+      ],
+      cfg({ tpMode: 'abs', tpAbsTarget: 0.37, perPositionUsd: 6, cities: ['amsterdam', 'chengdu'] }),
+      new Map([['A', RESOLVE_MS], ['B', RESOLVE_MS]]),
+    );
+    expect(panel.nRealized).toBe(2);
+    // pin the construction: A fails min size (37.5 shares), B passes (60), equal 3-tick resting windows.
+    const byId = new Map(panel.ledger.map((t) => [t.eventId, t]));
+    expect(byId.get('A')!.restingFailsMinSizeTicks).toBe(3);
+    expect(byId.get('B')!.restingFailsMinSizeTicks).toBe(0);
+    expect(byId.get('A')!.restingTicks).toBe(3);
+    expect(byId.get('B')!.restingTicks).toBe(3);
+    expect(panel.fracFailsMinSize).toBe(0.5); // the exact boundary
+    expect(panel.fracWithinAdvertisedBand).toBeCloseTo(4 / 6, 9);
+    expect(panel.dominantDisqualifier).toBe('none'); // 0.5 NOT > 0.5 → size not failing (pre-fix: 'size')
+  });
+});
+
+describe('replayMakerExitPanelBasket — the v2 disqualifier aggregate mirrors the single-bucket panel (SIGNAL-BACKLOG #1 follow-on v2, 2026-07-04)', () => {
+  it('carries the same meanDistFromMidPp / fracWithinAdvertisedBand / fracFailsMinSize / dominantDisqualifier shape, summed across every leg of every fully-realized basket', () => {
+    const b0Base: Partial<OpeningBucket> = { houseProb: 0.35, execAsk: 0.10, bestAsk: 0.10, execBid: 0.09 };
+    const winTicks: ReplayTick[] = [
+      { capturedAt: '2026-06-20T00:00:00Z', hoursSinceListing: 0.1, tz: TZ, targetDate: DATE, buckets: [b(0, b0Base), b(1, { execAsk: 0.16, bestAsk: 0.16, execBid: 0.14 }), b(2)] },
+      { capturedAt: '2026-06-20T00:10:00Z', hoursSinceListing: 0.3, tz: TZ, targetDate: DATE, buckets: [b(0, { ...b0Base, execAsk: 0.08, bestAsk: 0.08, execBid: 0.07 }), b(1, { execAsk: 0.12, bestAsk: 0.12, execBid: 0.11 }), b(2)] },
+      { capturedAt: '2026-06-20T01:00:00Z', hoursSinceListing: 1, tz: TZ, targetDate: DATE, buckets: [b(0, { ...b0Base, execBid: 0.36, execAsk: 0.37 }), b(1, { execBid: 0.36, execAsk: 0.37 }), b(2)] },
+    ];
+    const events: EventReplayInput[] = [
+      { ...input(winTicks), eventId: 'A', city: 'amsterdam' },
+      { ...input(winTicks), eventId: 'B', city: 'chengdu' },
+    ];
+    const res = new Map<string, number | null>([['A', RESOLVE_MS], ['B', RESOLVE_MS]]);
+    const panel = replayMakerExitPanelBasket(
+      events,
+      cfg({ tpMode: 'abs', tpAbsTarget: 0.35, basketSize: 2, cities: ['amsterdam', 'chengdu'] }),
+      res,
+    );
+    // every field is present + internally consistent (basket isn't the live path — this pins the wiring, not a
+    // hand-derived number): the fraction fields are either NaN or within [0,1], and the aggregation matches a
+    // manual sum over every leg of every fully-realized basket in the ledger.
+    const manualDistSum = panel.ledger.reduce((a, t) => a + t.legs.reduce((la, l) => la + l.restingDistFromMidSumPp, 0), 0);
+    const manualMidKnown = panel.ledger.reduce((a, t) => a + t.legs.reduce((la, l) => la + l.restingMidKnownTicks, 0), 0);
+    expect(panel.meanDistFromMidPp).toBeCloseTo(manualMidKnown > 0 ? manualDistSum / manualMidKnown : NaN, 9);
+    expect(['band', 'size', 'both', 'none']).toContain(panel.dominantDisqualifier);
+    if (Number.isFinite(panel.fracWithinAdvertisedBand)) {
+      expect(panel.fracWithinAdvertisedBand).toBeGreaterThanOrEqual(0);
+      expect(panel.fracWithinAdvertisedBand).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it("'none' + NaN on an empty panel", () => {
+    const panel = replayMakerExitPanelBasket([], cfg({ basketSize: 2 }), new Map());
+    expect(panel.dominantDisqualifier).toBe('none');
+    expect(Number.isNaN(panel.meanDistFromMidPp)).toBe(true);
+    expect(Number.isNaN(panel.fracFailsMinSize)).toBe(true);
   });
 });
