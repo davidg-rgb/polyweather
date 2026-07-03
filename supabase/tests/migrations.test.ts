@@ -272,6 +272,12 @@ describe('migrations 0001–0010', () => {
       // of singapore/karachi to a 30-day window — no table/RPC-signature/cron change (cron count stays 29).
       // CITY-SIM.md §3.
       '0075_city_sim_run_window.sql',
+      // 0076 = capture read-path scaling part 2: bot_spike_series + convergence_capture_inputs re-bodied to
+      // rank SLIM columns (id/event_id/captured_at) and join the TOASTed `buckets` back by PK only for the
+      // retained rows — the 0068/0073 bodies detoasted the whole window through the sort (the ~1.2 GB spike
+      // read that died server-side + the ~3-8 s/city that pushed the maker-exit-panel tick past the isolate
+      // wall, 2026-07-03). Signatures/contracts/grants byte-identical; no table/cron change (count stays 29).
+      '0076_capture_read_scaling.sql',
     ]);
   });
 });
