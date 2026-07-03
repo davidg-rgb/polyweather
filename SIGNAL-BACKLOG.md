@@ -692,6 +692,61 @@ expected to survive.
 >   measurement, the Karachi path). NO capital implication; the §9R boundary unchanged. INSUFFICIENT-style
 >   humility mandatory: ~13/8 TRAIN/TEST days → wide CIs; the scan SELECTS, the live loop CONFIRMS.
 
+> **✅ VERDICT (2026-07-03 ~21:55 local / 19:55Z — orchestrator adjudication vs the locked bars above): TWO
+> ENROLLMENT CANDIDATES — ankara/14h + houston/14h. Pooled result NEGATIVE at every entry hour — the
+> mechanism-A pooled-efficiency prior is re-confirmed; what survives is thin per-city heterogeneity.
+> Analytics SELECTION only, NO capital implication; enrollment into `city_sim_config` is an OPERATOR decision.**
+>
+> - **Run record:** `scripts/research/city-scan.ts` on the 844-event / 45-city / 21-day maker-exit cache ⋈ ONE
+>   10,909-row `bucket_probabilities` pull (point-in-time non-seeded house_gaussian, strictly-before recovery);
+>   9,284 cells = 7,262 bets + 2,022 skips (ask>0.95: 1,851 · resolved: 131 · no-tick: 40); 95.9 % of bets used a
+>   genuine pre-entry DB build. Executed **twice independently, bit-identical**, + one adversarial review lens;
+>   whole-repo typecheck clean both runs.
+> - **The locked bar (TRAIN LB>0 AND TEST net>0 among the top-5 TRAIN cells):**
+>   **ankara/14h** — TRAIN LB +3.6 pp (n=11) → TEST **+$44.88** (75.0 % win, day-clustered CI [−28.1, +64.4] pp);
+>   **houston/14h** — TRAIN LB +3.1 pp (n=11) → TEST **+$12.04** (85.7 %, [−25.6, +47.4] pp).
+>   Failed: munich/16h (TEST −$30.86), buenos-aires/14h (TEST −$6.77), helsinki/15h (TRAIN LB −0.1 pp).
+>   **Every TEST CI straddles 0 at n=7–8** — per the pre-registration's own humility clause, the scan SELECTS,
+>   the live paper loop CONFIRMS.
+> - **Pooled (descriptive):** ROI negative at every arm hour (best −11.4 pp @14h → −101.9 pp @19h; the 16h–19h
+>   collapse is largely the locked bet rule — a FIXED forecast-mode bucket, not the live sim's floor-lifted
+>   temperature — spec-compliant artifact, flagged). Winners' mean entry ask 0.539 vs losers' 0.241; higher
+>   forecast confidence → monotonically better ROI, never pooled-positive. Notably the three live/known
+>   references (karachi, singapore, amsterdam) do NOT clear TRAIN LB>0 in this window.
+> - **Review record (2 runs + 1 lens; 3 findings, all adjudicated, none change the candidate set):**
+>   (1) `rankTrainCells` lacks entry-watch's own `minGraded=10` eligibility floor — a LATENT defect (an n=1 cell
+>   gets a degenerate zero-width CI and could top the ranking); **non-binding here** — all top-5 cells n=10–11,
+>   `eligible:true`. Harden before any re-use.
+>   (2) `MAX_ENTRY_ASK 0.95` is NOT in the live city-sim path (live only requires a non-null ask) — a deviation
+>   from the "mirrors live" docstring; binds almost entirely at late arms (3 skips @9h → 500 @19h); candidate
+>   cells nearly untouched (2/0/1/0/1 skips total).
+>   (3) **The frozen-seed fallback is look-ahead BY CONSTRUCTION** — fallback fires ⇔ no build precedes the entry
+>   tick, and the frozen seed IS the event's first-ever build ⇒ every fallback bet used a forecast made after bet
+>   time. Empirically CONFIRMED 296/296 (zero `latestBuildBefore` anomalies; retention can't have truncated the
+>   window). **Scope measured: 100 % TRAIN-confined (TEST: ZERO fallback bets — the holdout is clean);** ≤1 bet
+>   per cell; 3 of the top-5 cells touched (munich/16h, houston/14h, buenos-aires/14h) and in each the removed
+>   bet was a LOSER — TRAIN LB rises without it (munich +6.9→+9.3, houston +3.1→+4.5, b-aires +2.7→+4.2 pp);
+>   ankara + helsinki untouched. **Candidate set insensitive.** Residual: a fully fallback-free re-RANKING could
+>   in principle alter marginal top-5 membership; deliberately NOT re-run post-hoc (selection-drift discipline).
+> - **Staged enrollment (OPERATOR DECISION — mirrors the 0070 seed idiom + 0075 day-cap; do NOT apply without
+>   deciding). Note: houston would be the FIRST °F city in the sim (0070's bucketing is unit-agnostic by design —
+>   watch its first graded day); `forecast_max_hour` 14 = the scan's best arm, adjustable.**
+>   ```sql
+>   insert into public.city_sim_config (city_id, slug, icao, tz, arm_hours, forecast_max_hour, stake_usd, active, active_until)
+>   select c.id, c.slug, v.icao, v.tz, v.arm_hours, v.fmh, 10, true, date '2026-07-31'
+>   from (values
+>     ('ankara',  'LTAC', 'Europe/Istanbul', array[11,12,13,14,15,16]::smallint[], 14::smallint),
+>     ('houston', 'KHOU', 'America/Chicago', array[11,12,13,14,15,16]::smallint[], 14::smallint)
+>   ) as v(slug, icao, tz, arm_hours, fmh)
+>   join public.cities c on c.slug = v.slug
+>   on conflict (city_id) do nothing;
+>   -- verify: select slug, icao, arm_hours, forecast_max_hour, active, active_until from city_sim_config order by slug;
+>   -- then seed/backfill: pnpm tsx scripts/city-sim.ts   (run OFF the :35–:42 window)
+>   -- rollback: delete from public.city_sim_config where slug in ('ankara','houston');
+>   ```
+> - Recorded: FINDINGS.md backlog row (item 12) + FASTTRACK cycle ticks C15–C20. Re-open criteria: none needed —
+>   the item is CLOSED as a selection study; the live paper loop is the confirmation instrument.
+
 ## What NOT to do
 
 Don't build items 5–10 before items 1–4 resolve — 1–4 are all read-only analysis over data that
