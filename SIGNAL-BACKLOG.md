@@ -755,6 +755,46 @@ expected to survive.
 >   °F city — 0070's bucketing is unit-agnostic by design; its first forward graded day should be explicitly
 >   checked (the v5 loop carries this).
 
+> - **Data appendix (added 2026-07-04 ~00:30 local — the full pooled tables from the two bit-identical
+>   independent runs, previously only summarized above; source: the runner reports recorded in FASTTRACK
+>   C16/C17. These are the LEGACY-mode numbers, i.e. exactly the recorded verdict's data.)**
+>
+>   Pooled arm-hour curve (all 45 cities, TRAIN+TEST, descriptive):
+>
+>   | arm | n | net | ROI | winRate | meanAsk | day-clustered ROI CI |
+>   |---|---|---|---|---|---|---|
+>   | 9h | 828 | −$1147.82 | −13.9pp | 36.5% | 0.386 | [−23.8, +4.7] |
+>   | 10h | 828 | −$1125.98 | −13.6pp | 37.0% | 0.389 | [−23.4, +8.3] |
+>   | 11h | 822 | −$1065.90 | −13.0pp | 37.3% | 0.389 | [−23.9, −1.5] |
+>   | 12h | 815 | −$1299.13 | −15.9pp | 38.0% | 0.399 | [−26.0, −4.6] |
+>   | 13h | 802 | −$1116.98 | −13.9pp | 38.5% | 0.394 | [−26.3, −1.6] |
+>   | 14h | 742 | −$843.89 | −11.4pp | 38.8% | 0.381 | [−24.5, +4.5] |
+>   | 15h | 672 | −$1713.85 | −25.5pp | 35.1% | 0.339 | [−45.5, +0.8] |
+>   | 16h | 557 | −$2513.81 | −45.1pp | 29.4% | 0.294 | [−54.3, −33.7] |
+>   | 17h | 470 | −$3228.25 | −68.7pp | 19.1% | 0.221 | [−79.1, −55.6] |
+>   | 18h | 399 | −$3653.32 | −91.6pp | 8.5% | 0.132 | [−96.2, −87.7] |
+>   | 19h | 327 | −$3333.21 | −101.9pp | 1.5% | 0.062 | [−104.6, −99.8] |
+>
+>   Confidence terciles (mode-bucket probability of the distribution actually used):
+>
+>   | tercile | confRange | n | net | ROI | winRate |
+>   |---|---|---|---|---|---|
+>   | low | [0.169, 0.382] | 2,424 | −$9,177.01 | −37.9pp | 25.5% |
+>   | mid | [0.382, 0.497] | 2,419 | −$6,487.46 | −26.8pp | 31.3% |
+>   | high | [0.498, 1.000] | 2,419 | −$5,377.66 | −22.2pp | 40.4% |
+>
+>   Winner/loser entry ask (pooled): winners mean 0.539 (n = 2,351) vs losers mean 0.241 (n = 4,911).
+>
+>   Top-5 TRAIN cells, complete per-cell record (TRAIN n / net / LB → TEST n / net / winRate / day-clustered CI):
+>
+>   | cell | TRAIN n | TRAIN net | TRAIN LB | TEST n | TEST net | TEST win | TEST day-CI (pp) |
+>   |---|---|---|---|---|---|---|---|
+>   | munich/16h | 10 | +$42.24 | +6.9pp | 8 | −$30.86 | 50.0% | [−32.4, +23.6] |
+>   | ankara/14h | 11 | +$78.82 | +3.6pp | 8 | +$44.88 | 75.0% | [−28.1, +64.4] |
+>   | houston/14h | 11 | +$29.32 | +3.1pp | 7 | +$12.04 | 85.7% | [−25.6, +47.4] |
+>   | buenos-aires/14h | 10 | +$13.25 | +2.7pp | 8 | −$6.77 | 62.5% | [−9.4, +37.9] |
+>   | helsinki/15h | 11 | +$88.00 | −0.1pp | 7 | +$44.23 | 57.1% | [−16.0, +59.6] |
+
 ## What NOT to do
 
 Don't build items 5–10 before items 1–4 resolve — 1–4 are all read-only analysis over data that
