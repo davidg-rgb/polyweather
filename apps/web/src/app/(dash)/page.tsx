@@ -1,13 +1,18 @@
 /**
  * / — analytics overview (the product headline since the 2026-06-15 pivot): how good is our calibrated
- * forecast, and can it beat the market? Leads with the house-vs-market skill summary and the measured
- * market-efficiency verdict (composes the existing dash_calibration + dash_events_list RPCs — no new RPC).
- * The trading machinery is dormant, so the operational chrome (mode / halts / jobs from dash_today_overview)
- * is preserved but DEMOTED to a footer strip; the bet ledger lives behind /bets.
+ * forecast, and can it beat the market? Leads with the house-vs-market skill summary, then the twelve-ways
+ * market-efficiency verdict hero (the frozen SIGNAL_HERO figures → the /signals flagship explorer), then the
+ * detailed "can you beat these markets?" proof (composes the existing dash_calibration + dash_events_list
+ * RPCs — no new RPC). The trading machinery is dormant, so the operational chrome (mode / halts / jobs from
+ * dash_today_overview) is preserved but DEMOTED to a footer strip; the bet ledger lives behind /bets.
  *
- * Styled in the shared ".ams-dash" Terminal-Glass idiom (the same surface as /efficiency, /amsterdam,
- * /sharps, …) so the product's front door matches the rest of the analytics suite.
+ * The twelve-ways hero imports its numbers from the committed core/sim/signals-findings.ts asset (SIGNAL_HERO
+ * — copied verbatim from FINDINGS.md, golden-value tested) so the count never drifts from the record.
+ *
+ * Styled in the shared ".ams-dash" Terminal-Glass idiom (the same surface as /efficiency, /signals,
+ * /amsterdam, /sharps, …) so the product's front door matches the rest of the analytics suite.
  */
+import { SIGNAL_HERO } from '@weather-edge/core';
 import type { ReactElement } from 'react';
 import { JobHealthTable } from '../../components/JobHealthTable.tsx';
 import { ReliabilityDiagram } from '../../components/ReliabilityDiagram.tsx';
@@ -73,6 +78,46 @@ export default async function OverviewPage(): Promise<ReactElement> {
           <div className="big">{fmtProb(skill.meanEce)}</div>
           <div className="sub">predicted vs realized gap</div>
         </div>
+      </div>
+
+      {/* ── the twelve-ways verdict hero (→ the /signals flagship explorer) ──────────────────────────── */}
+      <h2>
+        The market measured efficient — {SIGNAL_HERO.measuredWays} ways{' '}
+        <span className="chip soft">{SIGNAL_HERO.investigationStatus}</span>
+      </h2>
+      <div className="panel">
+        <p className="muted" style={{ marginTop: 0 }}>
+          One question drove the whole R&amp;D program — <em>is there a tradable edge here?</em> — and the answer is a
+          falsified <strong>no</strong>: {SIGNAL_HERO.signalsFalsified} orthogonal signals, the executable-depth
+          hardening sweep, and the flat-open NO-GO. The one edge that demonstrably exists in this universe is an
+          external sharp&apos;s pure microstructure — <strong>non-replicable</strong> from where we sit.
+        </p>
+        <div className="strip">
+          <div className="tile">
+            <div className="cap">Ways efficient</div>
+            <div className="big sky">{SIGNAL_HERO.measuredWays}</div>
+            <div className="sub">distinct falsified mechanisms</div>
+          </div>
+          <div className="tile">
+            <div className="cap">Orthogonal signals</div>
+            <div className="big">{SIGNAL_HERO.signalsFalsified}</div>
+            <div className="sub">each rejected with large-sample evidence</div>
+          </div>
+          <div className="tile">
+            <div className="cap">Signal rows on file</div>
+            <div className="big">{SIGNAL_HERO.totalRows}</div>
+            <div className="sub">the full browsable record</div>
+          </div>
+        </div>
+        <p className="small" style={{ marginBottom: 0 }}>
+          <strong>
+            <a href="/signals">Explore the verdict — every signal, falsified →</a>
+          </strong>{' '}
+          <span className="muted">
+            each lever, its verdict, the one load-bearing number, and the wall it died on. Source:{' '}
+            <span className="mono">{SIGNAL_HERO.sourceDoc}</span>.
+          </span>
+        </p>
       </div>
 
       {/* ── the verdict ──────────────────────────────────────────────────────────────────────────────── */}

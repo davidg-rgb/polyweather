@@ -1,9 +1,12 @@
 /**
  * / (overview) render smoke test — the front door is a server component composing three RPC loaders.
  * Renders the whole tree to static markup with the loaders mocked, proving it never throws and the
- * key skill/verdict/coverage content reaches the DOM after the .ams-dash Terminal-Glass restyle.
+ * key skill/verdict/coverage content reaches the DOM after the .ams-dash Terminal-Glass restyle —
+ * including the twelve-ways verdict hero (SIGNAL_HERO figures + the /signals flagship link), asserted
+ * against the imported asset so the hero can never drift from the record.
  * Emits a standalone preview (markup + globals.css) when OVERVIEW_PREVIEW_OUT is set.
  */
+import { SIGNAL_HERO } from '@weather-edge/core';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
@@ -35,6 +38,16 @@ describe('/ overview page renders (Terminal-Glass restyle)', () => {
     expect(html).toContain('Forecast skill vs. the market');
     expect(html).toContain('champion: house_gaussian');
     expect(html).toContain('market efficient — measured'); // verdict chip (market sharper in the fixture)
+    // the twelve-ways verdict hero — numbers imported from the SIGNAL_HERO asset (never re-typed) + the /signals link
+    expect(html).toContain('The market measured efficient');
+    expect(html).toContain(`${SIGNAL_HERO.measuredWays} ways`); // 12
+    expect(html).toContain(SIGNAL_HERO.investigationStatus); // CLOSED · analytics retained · rail DORMANT
+    expect(html).toContain(`>${SIGNAL_HERO.signalsFalsified}<`); // 10 orthogonal signals tile value
+    expect(html).toContain(`>${SIGNAL_HERO.totalRows}<`); // signal rows on file tile value
+    expect(html).toContain('Ways efficient');
+    expect(html).toContain('href="/signals"'); // the flagship explorer link
+    expect(html).toContain('Explore the verdict');
+
     expect(html).toContain('Can you beat these markets?');
     expect(html).toContain('the verdict page'); // /efficiency link
     expect(html).toContain('Champion reliability');
