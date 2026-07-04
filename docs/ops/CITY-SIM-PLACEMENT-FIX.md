@@ -1,6 +1,13 @@
 # city-paper-trade placement fix — the 0081 top-level-array port trap (0081 + handler + entrypoint)
 
-> **Staged DARK (built 2026-07-04, not applied/deployed).** Migration **0081** + the `city-paper-trade`
+> **✅ DEPLOYED 2026-07-04 ~19:27Z (operator go, in-session):** migration **0081 APPLIED** via MCP
+> `apply_migration` + **`city-paper-trade` REDEPLOYED** via the authed CLI + smoke PASS
+> (`jsonb_typeof` = object, `->'rows'` = array of **4** configs: ankara/houston/karachi/singapore).
+> Remaining: **§3 gap-fill for target 2026-07-04 at ≥22:00Z** (`pnpm tsx scripts/city-sim.ts
+> --from 2026-07-04 --to 2026-07-04`) + the §4 verification at the next 10:00Z tick
+> (`stats.cities:4, placed>0`).
+>
+> ~~Staged DARK (built 2026-07-04, not applied/deployed).~~ Migration **0081** + the `city-paper-trade`
 > handler/entrypoint fix. Restores daily bet PLACEMENT on `/paper-trade`, which has silently placed **zero**
 > bets via cron since migration 0070 shipped. Rail stays DORMANT — this is the analytics paper-trade, not
 > trading; Claude never places a real trade or touches keys.
