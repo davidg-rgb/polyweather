@@ -296,6 +296,12 @@ describe('migrations 0001–0010', () => {
       // service_role-only grant is re-asserted per the 0046/0047 re-body idiom (same contract, stated
       // explicitly). No table/cron change (count stays 29).
       '0078_job_runs_janitor.sql',
+      // 0079 = the /maker-exit "assumptions over time" read (gate-day instrumentation): dash_maker_exit_history
+      // (operator read, added to WEB_AUTHENTICATED below) returns the last p_limit maker_exit_panel snapshots'
+      // assumption scalars ascending (oldest→newest) so the page can draw small-multiple sparklines above tile #4.
+      // Read-only + additive — no new table/cron/write path, dash_maker_exit + the §9R-E gate math untouched
+      // (cron count stays 29). Honest nulls: NaN assumptions round-trip as null POINTS (no fabricated zeros).
+      '0079_maker_exit_assumptions_history.sql',
     ]);
   });
 });
@@ -762,6 +768,7 @@ describe('0034: internal-RPC lockdown — anon/authenticated revoked except the 
     'dash_convergence',  // 0069: /convergence opening-convergence forward-paper overview operator read
     'dash_city_sim',  // 0070: /paper-trade multi-city paper-trade head-to-head operator read
     'dash_maker_exit',  // 0073: /maker-exit forward maker-exit paper loop operator read
+    'dash_maker_exit_history',  // 0079: /maker-exit assumptions-over-time sparkline read (gate-day instrumentation)
     'go_live_gate_inputs',
     'operator_halt', 'operator_resume', 'operator_update_config', 'operator_verify_station',
     'operator_set_champion', 'operator_skip_bet', 'operator_manual_bet',

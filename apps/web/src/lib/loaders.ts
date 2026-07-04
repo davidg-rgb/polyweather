@@ -1872,3 +1872,51 @@ export async function getMakerExit(db: WebDb): Promise<MakerExitFeed | null> {
   if (!v) return null;
   return { generatedAt: v.generatedAt ?? null, view: v.view ?? null, gateSnapshot: v.gateSnapshot ?? null };
 }
+
+/**
+ * One maker_exit_panel snapshot's assumption scalars at a point in time (dash_maker_exit_history, 0079). Every
+ * scalar is nullable: a NaN assumption (no realized trades yet / a zero denominator per REWARD-INSTR-ROLLOUT.md)
+ * round-trips as JSON null and MUST stay null here — the sparkline breaks its line at a null, never draws a zero.
+ */
+export interface MakerExitHistoryPoint {
+  capturedAt: string;
+  makerFillRate: number | null;
+  meanMakerFillLatencyTicks: number | null;
+  realizedRebateUsd: number | null;
+  rebateRateUsed: number | null;
+  meanObservedEntrySpread: number | null;
+  meanObservedExitSpread: number | null;
+  qualifyingTickFrac: number | null;
+  nQualifyingRestingTicks: number | null;
+  nRestingTicks: number | null;
+  meanDistFromMidPp: number | null;
+  fracWithinAdvertisedBand: number | null;
+  fracFailsMinSize: number | null;
+  dominantDisqualifier: string | null;
+  nMarkets: number | null;
+  nCities: number | null;
+  nDistinctDays: number | null;
+}
+
+export interface MakerExitHistoryFeed {
+  generatedAt: string | null;
+  n: number;
+  points: MakerExitHistoryPoint[];
+}
+
+/**
+ * The /maker-exit "assumptions over time" trend (dash_maker_exit_history, 0079) — the last p_limit maker_exit_panel
+ * snapshots' three measured assumptions (+ the v2 WHY fields) as an ascending (oldest→newest) time series, so the
+ * page can draw small-multiple sparklines above tile #4. STAGE-DARK safe: if the 0079 RPC is not deployed yet the
+ * call throws → we return null → the page renders exactly its current behaviour (no sparklines), never a 500.
+ */
+export async function getMakerExitHistory(db: WebDb, limit = 200): Promise<MakerExitHistoryFeed | null> {
+  let v: MakerExitHistoryFeed | null;
+  try {
+    v = await one<MakerExitHistoryFeed>(db, 'dash_maker_exit_history', { p_limit: limit });
+  } catch {
+    return null;
+  }
+  if (!v || !Array.isArray(v.points)) return null;
+  return { generatedAt: v.generatedAt ?? null, n: v.n ?? v.points.length, points: v.points };
+}

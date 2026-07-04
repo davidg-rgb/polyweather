@@ -14,7 +14,8 @@
 import type { ReactElement } from 'react';
 import type { MakerExitEntry, MakerExitPerDay, MakerExitView } from '@weather-edge/core';
 import { EquityChart } from '../../../components/EquityChart.tsx';
-import { getMakerExit } from '../../../lib/loaders.ts';
+import { MakerExitTrend } from '../../../components/MakerExitTrend.tsx';
+import { getMakerExit, getMakerExitHistory } from '../../../lib/loaders.ts';
 import { fmtAgo, fmtDate, fmtDateTime, fmtPct, fmtProb, fmtStockholm, fmtUsd, num } from '../../../lib/format.ts';
 import { serverDb } from '../../../lib/supabase.ts';
 
@@ -285,7 +286,9 @@ function EntriesTable({ rows }: { rows: MakerExitEntry[] }): ReactElement {
 
 export default async function MakerExitPage(): Promise<ReactElement> {
   const db = await serverDb();
-  const feed = await getMakerExit(db);
+  // one round trip per source; the history read is STAGE-DARK (getMakerExitHistory returns null if the 0079 RPC
+  // isn't deployed → the sparkline section renders nothing, i.e. exactly the pre-0079 page).
+  const [feed, history] = await Promise.all([getMakerExit(db), getMakerExitHistory(db)]);
   const view = feed?.view ?? null;
 
   if (!view) {
@@ -338,6 +341,18 @@ export default async function MakerExitPage(): Promise<ReactElement> {
         <span className="mono">opening_captures</span> book. If the maker-fill rate craters (#1, §12 adverse
         selection), the edge dies; if it holds and the CI clears 0 as days accrue (#3), the gate flips.
       </p>
+      {history && history.points.length >= 2 ? (
+        <>
+          <p className="muted small" style={{ marginTop: 0 }}>
+            <strong>Over time</strong> — each measured assumption across the last {history.n} snapshots (~15-min
+            cadence). The <strong>maker-fill rate</strong> carries the <span style={{ color: 'var(--ams-red)' }}>0.30
+            warning</span> and <span style={{ color: 'var(--ams-tertiary)' }}>0.49 backtest</span> reference lines —
+            if it settles at 0.30 the edge inverts; holding near 0.49 keeps it alive. A gap in a line = a snapshot
+            with no realized data (never a zero).
+          </p>
+          <MakerExitTrend history={history} />
+        </>
+      ) : null}
       <AssumptionTiles view={view} />
 
       <h2>Fictive money tracker</h2>
