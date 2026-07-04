@@ -86,7 +86,9 @@ describe('correctPoint (§6.6)', () => {
   it('grep invariant: emos.ts is the ONLY production site subtracting a bias', () => {
     const repoRoot = join(import.meta.dirname, '..', '..', '..');
     const offenders: string[] = [];
-    const skipDirs = new Set(['node_modules', '.git', 'research', 'test', 'tests', '.next', 'dist']);
+    // '.claude' holds live agent worktrees (embedded checkouts of this repo) — scanning them makes
+    // THIS tree's suite fail on OTHER trees' uncommitted state; each worktree's own suite run polices itself.
+    const skipDirs = new Set(['node_modules', '.git', 'research', 'test', 'tests', '.next', 'dist', '.claude']);
     const biasSubtraction = /-\s*[\w.$]*[Bb]ias\w*\b|\b[\w.$]*[Bb]ias\w*\s*-(?!-)/;
 
     const walk = (dir: string): void => {
