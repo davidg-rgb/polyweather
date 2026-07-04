@@ -246,10 +246,16 @@ Covers the case where `n_distinct_days` sits at or drops back below 7 — e.g. a
    during the morning DB outage; re-joins the panel once fetch-actuals/grading catch up"). Check
    whether markets for the missing day have actually **resolved** (their target date has passed) but
    not yet been graded into `bot_gate_snapshot` — that is lag, not loss, and resolves itself on the
-   next tick once grading catches up.
+   next tick once grading catches up. Run `pnpm tsx scripts/ops/grading-lag.ts` (read-only, N5) to
+   list exactly those resolved-but-ungraded markets in the panel window — scoped to `bot.cities` —
+   with the distinct-day impact (`newDaysAtGrading` = how many distinct days would join
+   `n_distinct_days` the moment grading lands; note it is an upper bound — a graded day still needs
+   an engine-entered market to move the gate's count).
 2. **If it is lag:** do nothing beyond noting it in the cycle log — per `FASTTRACK-PLAN.md`'s gate-watch
    instruction, "while n_distinct_days < 7 → report accrual (mkts/cities/days + makerFillRate vs 0.49
-   backtest + realizedRebateUsd) and do nothing."
+   backtest + realizedRebateUsd) and do nothing." (`grading-lag.ts`'s `newDaysAtGrading` is the exact
+   "how many days would join at grading" figure for that accrual log line; a value ≥1 with a matching
+   resolved-but-ungraded listing IS the lag signature.)
 3. **If it is genuine data loss** (a capture gap, a deadman firing, a city dropping out of scope): check
    `job_runs` for the `opening-capture` / `maker-exit-panel` jobs around the gap window for non-`ok`
    statuses or elevated `cityErrors`, and check whether `capture_deadman_check` / `bot_deadman_check`
