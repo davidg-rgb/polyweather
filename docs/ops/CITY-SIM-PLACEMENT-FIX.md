@@ -3,9 +3,10 @@
 > **✅ DEPLOYED 2026-07-04 ~19:27Z (operator go, in-session):** migration **0081 APPLIED** via MCP
 > `apply_migration` + **`city-paper-trade` REDEPLOYED** via the authed CLI + smoke PASS
 > (`jsonb_typeof` = object, `->'rows'` = array of **4** configs: ankara/houston/karachi/singapore).
-> Remaining: **§3 gap-fill for target 2026-07-04 at ≥22:00Z** (`pnpm tsx scripts/city-sim.ts
-> --from 2026-07-04 --to 2026-07-04`) + the §4 verification at the next 10:00Z tick
-> (`stats.cities:4, placed>0`).
+> **✅ §3 GAP-FILL DONE 2026-07-04 22:08Z** (`city-sim.ts --from 2026-07-04 --to 2026-07-04`):
+> **24 bets landed for target 07-04** — KHOU (°F) arms 11–16 · LTAC arms 11–16 · OPKC arms 10–15 ·
+> WSSS arms 10–15, verified per-city via read-only SQL. Remaining: **only the §4 verification** at
+> the 2026-07-05 10:00Z tick (`stats.cities:4, placed>0` at a CRON slot — the end-to-end proof).
 >
 > ~~Staged DARK (built 2026-07-04, not applied/deployed).~~ Migration **0081** + the `city-paper-trade`
 > handler/entrypoint fix. Restores daily bet PLACEMENT on `/paper-trade`, which has silently placed **zero**
