@@ -236,7 +236,9 @@ export class LiveExecutor implements TradeExecutor {
 // `TRADE_MODE=live`. Dry-run RECORDS its intents in the ledger under mode='dry-run' (the shadow
 // harness reads them) but NEVER posts/cancels at the venue; the (mode, intent_key) partial-unique
 // ledger key means a dry-run row can never block a live intent. Every error string that leaves the
-// executor (ledger error column, alert bodies, thrown messages) passes through redactText. Mock-tested
+// executor (ledger error column, alert bodies, thrown messages) passes through redactText. T3-final:
+// a raise from ANY record_* RPC (unknown client_order_id) on the live money path routes to a
+// needs-reconcile CRITICAL via `ledgerWriteOrAlert` — never into the key-freeing branch. Mock-tested
 // from day one exactly like `LiveExecutor`; the wallet key + clob client stay inside this file (§15).
 // A taker FAK exit (`placeTaker`) completes the strategy's stop-loss / time-stop leg.
 // ═══════════════════════════════════════════════════════════════════════════════════════════════════
@@ -475,6 +477,8 @@ export class MakerExecutor {
 
       const cleanRejection = e instanceof ExecutionError && e.code === 'ERR_CLOB_REJECTED';
       if (postAttempted && !cleanRejection) {
+        // (T3-final @ 742018d: ALL FOUR record_* RPCs raise on an unknown client_order_id; a raise
+        // from recordPlaced/recordFill above lands in the orderId-known branch — the alert path.)
         // HIGH-A: postOrder was invoked but no orderId came back and the venue did NOT cleanly
         // reject — a transport throw (lost response after a possible accept) or a shapeless response
         // can hide an ACCEPTED order. Do NOT recordFailed: the row stays at 'intent' (reserved
@@ -492,7 +496,11 @@ export class MakerExecutor {
       }
 
       // Clean venue rejection (or a provably pre-post failure) — no order exists; free the key.
-      await this.ledger.recordFailed(clientOrderId, message);
+      // The free itself goes through ledgerWriteOrAlert: if record_failed RAISES (T3-final unknown-cid
+      // semantics), the key was NOT freed — alert needs-reconcile and propagate, never pretend success.
+      await this.ledgerWriteOrAlert('record_failed (after venue rejection)', clientOrderId, label, () =>
+        this.ledger.recordFailed(clientOrderId, message),
+      );
       await this.deps.notify({
         kind: 'ORDER_FAIL',
         severity: 'CRITICAL',
@@ -505,6 +513,35 @@ export class MakerExecutor {
     }
   }
 
+  /**
+   * T3-FINAL (merged @ 742018d): ALL FOUR record_* RPCs RAISE on an unknown client_order_id
+   * (reconcile-bug surfacing; echoes onto an already-terminal row stay silent). A raise from ANY
+   * record_* call on the live money path routes HERE — a needs-reconcile CRITICAL + rethrow. It must
+   * NEVER be handled by (or routed into) the key-freeing recordFailed branch: a ledger/executor state
+   * mismatch is a reconcile problem, not a licence to free a key.
+   */
+  private async ledgerWriteOrAlert<T>(
+    op: string,
+    clientOrderId: string,
+    label: string,
+    fn: () => Promise<T>,
+  ): Promise<T> {
+    try {
+      return await fn();
+    } catch (e) {
+      const message = redactText(e instanceof Error ? `${e.name}: ${e.message}` : String(e));
+      await this.deps.notify({
+        kind: 'ORDER_NEEDS_RECONCILE',
+        severity: 'CRITICAL',
+        title: `Ledger write failed: ${label}`,
+        body: `${op} raised for row ${clientOrderId}: ${message}\nledger/executor state mismatch — reconcile before any retry`,
+        dedupeKey: `order-reconcile:${clientOrderId}`,
+      });
+      if (e instanceof ExecutionError || e instanceof FillRejected) throw e;
+      throw new ExecutionError('ERR_LEDGER_WRITE', message);
+    }
+  }
+
   /** Cancel one resting order (live only; dry-run/off are no-ops — no real order exists). */
   async cancel(orderId: string, clientOrderId?: string): Promise<CancelResult> {
     if (this.mode !== 'live') {
@@ -512,7 +549,11 @@ export class MakerExecutor {
     }
     const client = await this.deps.client();
     const res = parseCancelResult(await client.cancelOrder({ orderID: orderId }), [orderId]);
-    if (clientOrderId && res.allCanceled) await this.ledger.recordCanceled(clientOrderId);
+    if (clientOrderId && res.allCanceled) {
+      await this.ledgerWriteOrAlert('record_canceled', clientOrderId, orderId, () =>
+        this.ledger.recordCanceled(clientOrderId),
+      );
+    }
     return res;
   }
 
@@ -628,18 +669,27 @@ export class MakerExecutor {
     const matched = poll.sizeMatched;
     const remainder = Math.max(0, originalSize - matched);
 
+    // Every reprice ledger transition goes through ledgerWriteOrAlert (T3-final: record_* raises on an
+    // unknown client_order_id) — a raise ABORTS the reprice before the repost (no key freed = no
+    // double-place) with a needs-reconcile CRITICAL, never a silent skip.
     if (matched >= originalSize && originalSize > 0) {
       // The cancel raced a COMPLETE fill — the intent succeeded; the row stays (terminal-but-blocking).
-      await this.ledger.recordFill(oldClientOrderId, matched, poll.avgPrice ?? oldRow?.price ?? 0, 'filled');
+      await this.ledgerWriteOrAlert('record_fill (reprice, full)', oldClientOrderId, oldOrderId, () =>
+        this.ledger.recordFill(oldClientOrderId, matched, poll.avgPrice ?? oldRow?.price ?? 0, 'filled'),
+      );
       return { cancel, placed: rejected('old order fully filled during reprice — nothing to repost', matched, 0) };
     }
     if (matched > 0) {
       // Book the partial BEFORE freeing so the accounting survives the transition (contract:
       // bot_order_record_canceled preserves size_matched).
-      await this.ledger.recordFill(oldClientOrderId, matched, poll.avgPrice ?? oldRow?.price ?? 0, 'partial');
+      await this.ledgerWriteOrAlert('record_fill (reprice, partial)', oldClientOrderId, oldOrderId, () =>
+        this.ledger.recordFill(oldClientOrderId, matched, poll.avgPrice ?? oldRow?.price ?? 0, 'partial'),
+      );
     }
     // Free the key ONLY now: the venue holds no resting order for this intent (canceled/terminal above).
-    await this.ledger.recordCanceled(oldClientOrderId);
+    await this.ledgerWriteOrAlert('record_canceled (reprice)', oldClientOrderId, oldOrderId, () =>
+      this.ledger.recordCanceled(oldClientOrderId),
+    );
 
     const min = newReq.minOrderSize ?? 0;
     if (remainder <= 0 || (min > 0 && remainder < min)) {

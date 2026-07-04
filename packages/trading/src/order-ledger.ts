@@ -7,6 +7,7 @@
  * table/migration stays entirely in T3's lane. No clob client, no key, no direct SQL here.
  *
  * RPC contract (snake_case, `p_`-prefixed args, jsonb single-row return — the project idiom).
+ * **T3-FINAL — merged to main @ 742018d; the schema below is the shipped one.**
  * MODE-SCOPED (the T3 F4 amendment): rows are keyed by (mode, intent_key); the load-bearing index is
  * PARTIAL-UNIQUE on `(mode, intent_key) WHERE status NOT IN ('canceled','failed')` — a dry-run row can
  * never block a live intent, and vice versa. reserve/find/list take an explicit `p_mode`; the
@@ -15,14 +16,19 @@
  * off-mode early return guarantees it; tested). record_fill's p_size_matched is CUMULATIVE (the schema
  * appends only positive deltas to live_fills; a same-cumulative echo writes nothing).
  *
+ * RAISE semantics (T3-final): ALL FOUR record_* RPCs RAISE on an unknown p_client_order_id
+ * (reconcile-bug surfacing); an echo onto an already-TERMINAL row is a SILENT no-op. The executor
+ * routes any such raise on the live money path to a needs-reconcile CRITICAL (`ledgerWriteOrAlert`) —
+ * never into the key-freeing recordFailed branch.
+ *
  *   bot_order_by_intent(p_intent_key text, p_mode text)           → the OPEN (non-terminal) row for
  *                                                                    (mode, intent_key) | null
  *   bot_order_reserve_intent(p_mode, p_intent_key,                → 'reserved' | 'exists'
  *       p_client_order_id, p_market_id, p_token_id, p_side,          (CONDITIONAL insert guarded by the
  *       p_purpose, p_order_type, p_price, p_size, p_trade_date)       partial-unique index above — the
  *                                                                     never-double-place guarantee)
- *   bot_order_list_dangling(p_mode text)                          → jsonb OBJECT ENVELOPE `{rows:[…]}`
- *                                                                    of rows with status='intent' AND
+ *   bot_order_list_dangling(p_mode text,                          → jsonb OBJECT ENVELOPE `{rows:[…]}`
+ *       p_older_than_min int DEFAULT 5)                             of rows with status='intent' AND
  *                                                                    order_id IS NULL (the startup-
  *                                                                    reconcile input). T3-CONFIRMED
  *                                                                    (round 2): ships as `{rows:[…]}` —
@@ -31,7 +37,20 @@
  *                                                                    Adapter: null/undefined result → []
  *                                                                    (RPC not yet live / SQL NULL);
  *                                                                    non-null-but-shapeless — including
- *                                                                    a bare array (version skew) — RAISES
+ *                                                                    a bare array (version skew) — RAISES.
+ *                                                                    STALENESS CONTRACT: only intents
+ *                                                                    OLDER than p_older_than_min are
+ *                                                                    listed (we call with p_mode only —
+ *                                                                    the missing arg coalesces to the
+ *                                                                    5-min default). A crash-restart
+ *                                                                    within 5 min of a reserve won't see
+ *                                                                    that intent until it ages — SAFE:
+ *                                                                    the key stays reserved (a re-place
+ *                                                                    is 'duplicate', never a double);
+ *                                                                    adjudication is merely delayed, and
+ *                                                                    reconcile is STARTUP-ONLY (LOW-A),
+ *                                                                    so the window mirrors the mid-run
+ *                                                                    just-posted case the ban protects.
  *   bot_order_record_placed(p_client_order_id, p_order_id)        → void  (intent → placed, sets orderId)
  *   bot_order_record_fill(p_client_order_id, p_size_matched,      → void  (placed → partial | filled;
  *       p_avg_price, p_status)                                       size_matched is CUMULATIVE)

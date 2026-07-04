@@ -396,7 +396,7 @@ describe('MakerExecutor.place — maker pricing + mode + idempotency', () => {
     expect(alerts[0]).toMatchObject({ kind: 'ORDER_NEEDS_RECONCILE', severity: 'CRITICAL' });
   });
 
-  it('T3 round-2: a record_fill RAISE (e.g. reconcile bug) after a successful post routes to the needs-reconcile alert path, NEVER the key-freeing recordFailed', async () => {
+  it('T3-final: a record_fill RAISE (e.g. reconcile bug) after a successful post routes to the needs-reconcile alert path, NEVER the key-freeing recordFailed', async () => {
     const client = mockClient({ getOrder: vi.fn(async () => ({ status: 'matched', original_size: '74', size_matched: '74', price: '0.18' })) });
     const { ledger, calls } = mockLedger();
     (ledger.recordFill as Mock).mockRejectedValue(new Error('bot_order_record_fill: no ledger row for cid-fixed'));
@@ -406,6 +406,19 @@ describe('MakerExecutor.place — maker pricing + mode + idempotency', () => {
     await expect(exec.place(req)).rejects.toThrow(ExecutionError);
     expect(calls.some((c) => c.fn === 'recordFailed')).toBe(false);
     expect(alerts[0]).toMatchObject({ kind: 'ORDER_NEEDS_RECONCILE', severity: 'CRITICAL' });
+  });
+
+  it('T3-final: record_failed itself RAISING in the free branch → needs-reconcile alert + ERR_LEDGER_WRITE, never a silent "freed"', async () => {
+    const client = mockClient({ postOrder: vi.fn(async () => ({ success: false, errorMsg: 'invalid order' })) });
+    const { ledger } = mockLedger();
+    (ledger.recordFailed as Mock).mockRejectedValue(new Error('bot_order_record_failed: no ledger row for cid-fixed'));
+    const alerts: TradeAlert[] = [];
+    const exec = new MakerExecutor(deps('live', client, ledger, { notify: async (a: TradeAlert) => (alerts.push(a), true) }));
+
+    await expect(exec.place(req)).rejects.toMatchObject({ code: 'ERR_LEDGER_WRITE' });
+    // The reconcile alert fires; ORDER_FAIL (which implies the key was freed) does NOT.
+    expect(alerts.map((a) => a.kind)).toContain('ORDER_NEEDS_RECONCILE');
+    expect(alerts.map((a) => a.kind)).not.toContain('ORDER_FAIL');
   });
 
   it('HIGH-A: a SHAPELESS post response (no orderID, not an explicit rejection) HOLDS at intent — order state unknown', async () => {
@@ -488,6 +501,17 @@ describe('MakerExecutor lifecycle — cancel / cancel-all / list / poll', () => 
     const exec2 = new MakerExecutor(deps('dry-run', client2, mockLedger().ledger));
     await exec2.cancel('0xORDER');
     expect(client2.cancelOrder).not.toHaveBeenCalled();
+  });
+
+  it('T3-final: record_canceled RAISING during cancel() → needs-reconcile alert + ERR_LEDGER_WRITE (never swallowed)', async () => {
+    const client = mockClient();
+    const { ledger } = mockLedger([row()]);
+    (ledger.recordCanceled as Mock).mockRejectedValue(new Error('bot_order_record_canceled: no ledger row for cid-old'));
+    const alerts: TradeAlert[] = [];
+    const exec = new MakerExecutor(deps('live', client, ledger, { notify: async (a: TradeAlert) => (alerts.push(a), true) }));
+
+    await expect(exec.cancel('0xOLD', 'cid-old')).rejects.toMatchObject({ code: 'ERR_LEDGER_WRITE' });
+    expect(alerts[0]).toMatchObject({ kind: 'ORDER_NEEDS_RECONCILE', severity: 'CRITICAL' });
   });
 
   it('cancelAllForMarket: live → cancelMarketOrders with market + asset_id; dry-run never calls the venue', async () => {
@@ -616,6 +640,18 @@ describe('MakerExecutor.reprice — cancel-then-repost the ledger remainder (MED
     const { ledger } = mockLedger([row({ clientOrderId: 'cid-actual' })]);
     const exec = new MakerExecutor(deps('live', client, ledger));
     await expect(exec.reprice('0xOLD', 'cid-old', req)).rejects.toMatchObject({ code: 'ERR_REPRICE_STATE' });
+  });
+
+  it('T3-final: record_canceled RAISING mid-reprice ABORTS before the repost — alert, throw, NO postOrder', async () => {
+    const client = stateClient({ status: 'canceled', original_size: '74', size_matched: '0', price: '0.18' });
+    const { ledger } = mockLedger([row()]);
+    (ledger.recordCanceled as Mock).mockRejectedValue(new Error('bot_order_record_canceled: no ledger row for cid-old'));
+    const alerts: TradeAlert[] = [];
+    const exec = new MakerExecutor(deps('live', client, ledger, { notify: async (a: TradeAlert) => (alerts.push(a), true) }));
+
+    await expect(exec.reprice('0xOLD', 'cid-old', { ...req, targetPrice: 0.17 })).rejects.toMatchObject({ code: 'ERR_LEDGER_WRITE' });
+    expect(alerts[0]).toMatchObject({ kind: 'ORDER_NEEDS_RECONCILE', severity: 'CRITICAL' });
+    expect(client.postOrder).not.toHaveBeenCalled(); // the key was not freed → no repost, no double
   });
 
   it('dry-run reprice: ledger-only (free old + re-place), venue mutating calls NEVER made', async () => {
