@@ -104,35 +104,47 @@ export type OrderPurpose = 'entry' | 'take_profit' | 'stop_loss' | 'time_stop';
 
 /**
  * The execution posture. `off` = the rail does nothing (returns a no-op result). `dry-run` = build +
- * log the exact (redacted) order payload and return a synthetic accepted result WITHOUT posting.
- * `live` = actually post. Read from the `TRADE_MODE` env var by `resolveTradeMode`, which defaults
- * anything unset/unknown to `dry-run` — NEVER `live` (a live post requires the explicit string).
+ * log the exact (redacted) order payload, RECORD the intent in the ledger under mode='dry-run' (the
+ * shadow harness reads these rows) and return a synthetic accepted result WITHOUT ever posting or
+ * canceling at the venue. `live` = actually post. Read from the `TRADE_MODE` env var by
+ * `resolveTradeMode`, which defaults anything unset/unknown to `dry-run` — NEVER `live` (a live post
+ * requires the explicit string).
  */
 export type TradeMode = 'off' | 'dry-run' | 'live';
 
 /**
  * One order-intent's lifecycle state (mirrors ADR-OC-4/ADR-OC-5). `intent` is the crash-safety
  * anchor — written BEFORE any post; a restart that finds an `intent`/`placed`/`partial`/`filled`
- * row for a key must NEVER re-place. `canceled`/`failed` are terminal and free the key for a reprice.
+ * row for a (mode, key) must NEVER re-place in that mode. `canceled`/`failed` are terminal and free
+ * the key for a reprice.
  */
 export type OrderLedgerStatus = 'intent' | 'placed' | 'partial' | 'filled' | 'canceled' | 'failed';
 
-/** A row of the order-intent ledger (the `bot_orders` table T3 owns). */
+/** A row of the order-intent ledger (the `bot_orders` table T3 owns). Rows are MODE-scoped (F4). */
 export interface OrderLedgerRow {
+  /** the trade mode this row was written under — the ledger key is (mode, intentKey). */
+  mode: TradeMode;
   intentKey: string;
   clientOrderId: string;
   status: OrderLedgerStatus;
-  /** the venue orderID — null until `recordPlaced` (the post→record critical section, ADR-OC-5). */
+  /** the venue orderID — null until `recordPlaced` (the post→record critical section, ADR-OC-5).
+   *  dry-run rows carry a synthetic `dry-run:{clientOrderId}` marker, never a venue id. */
   orderId: string | null;
   side: OrderSide;
   purpose: OrderPurpose;
   price: number;
   size: number;
   sizeMatched: number;
+  /** the token + market the intent targets — required by startup reconcile (heuristic venue match). */
+  tokenId: string;
+  marketId: string;
+  /** row creation time (ISO) when the DB provides it — reconcile recency input; null otherwise. */
+  createdAt: string | null;
 }
 
-/** The write payload for `reserveIntent` (the pre-placement intent reservation). */
+/** The write payload for `reserveIntent` (the pre-placement intent reservation). Mode-scoped (F4). */
 export interface ReserveIntentInput {
+  mode: TradeMode;
   intentKey: string;
   clientOrderId: string;
   marketId: string;
@@ -149,14 +161,18 @@ export interface ReserveIntentInput {
  * The order-intent ledger port — the idempotency + lifecycle surface the maker executor needs and
  * the **T3 lane implements** over its `bot_orders` table. Abstract on purpose: `rpcOrderLedger(db)`
  * binds it to `TradingDb.rpc` (the RPC contract T3 must ship — see order-ledger.ts), and tests fake
- * it directly. The load-bearing invariant: `reserveIntent` is a CONDITIONAL insert guarded by a
- * PARTIAL-UNIQUE index on `intent_key WHERE status NOT IN ('canceled','failed')` — so a retry or a
- * concurrent placer with the same intent gets `'exists'`, never a second live order. `findByIntentKey`
- * returns the single OPEN (non-terminal) row for a key, or null.
+ * it directly. The load-bearing invariant (F4-amended): `reserveIntent` is a CONDITIONAL insert
+ * guarded by a PARTIAL-UNIQUE index on `(mode, intent_key) WHERE status NOT IN ('canceled','failed')`
+ * — so a retry or a concurrent placer with the same intent IN THE SAME MODE gets `'exists'`, never a
+ * second live order, while a dry-run row can never block a later live intent (and vice versa).
+ * `findByIntentKey` returns the single OPEN (non-terminal) row for (mode, key), or null.
+ * `listDanglingIntents` feeds startup reconcile: the non-terminal rows still missing a venue orderId
+ * (status='intent', order_id IS NULL) for the given mode.
  */
 export interface OrderLedger {
-  findByIntentKey(intentKey: string): Promise<OrderLedgerRow | null>;
+  findByIntentKey(intentKey: string, mode: TradeMode): Promise<OrderLedgerRow | null>;
   reserveIntent(input: ReserveIntentInput): Promise<'reserved' | 'exists'>;
+  listDanglingIntents(mode: TradeMode): Promise<OrderLedgerRow[]>;
   recordPlaced(clientOrderId: string, orderId: string): Promise<void>;
   recordFill(
     clientOrderId: string,
@@ -210,6 +226,30 @@ export interface CancelResult {
   allCanceled: boolean;
 }
 
+/** A parsed venue trade/fill row (`getTrades`, research report §5) — the reconcile evidence read. */
+export interface VenueTrade {
+  side: string;
+  price: number;
+  size: number;
+  tokenId: string;
+  status: string;
+}
+
+/**
+ * One startup-reconcile decision per dangling ledger row (`MakerExecutor.reconcileOpenOrders`).
+ * `adopted` = exactly one venue open order matched heuristically → recordPlaced with its orderId.
+ * `freed`   = no open order AND no matching trade → confirmed never posted → key freed (recordFailed).
+ * `held`    = AMBIGUOUS (multiple candidates, or a matching trade that could be our fill) → the row
+ *             stays non-terminal + a WARN alert; a key is NEVER freed on ambiguity.
+ */
+export interface ReconcileOutcome {
+  kind: 'adopted' | 'freed' | 'held';
+  clientOrderId: string;
+  intentKey: string;
+  orderId: string | null;
+  reason: string;
+}
+
 /** A maker order request (GTC/GTD, post_only). `targetPrice` is RE-PRICED to guarantee non-crossing. */
 export interface MakerOrderRequest {
   /** conditionId — the market identity for the idempotency key + cancel-by-market. */
@@ -250,9 +290,9 @@ export interface OrderPlacementResult {
   mode: TradeMode;
   status:
     | 'placed' // live: posted (resting or (partly) matched)
-    | 'dry_run' // dry-run: payload built + logged, not posted
+    | 'dry_run' // dry-run: payload built + logged + ledger row recorded (mode dry-run); venue NOT called
     | 'skipped_off' // off: no-op
-    | 'duplicate' // idempotency: an open intent for this key already exists — NOT re-placed
+    | 'duplicate' // idempotency: an open intent for this (mode, key) already exists — NOT re-placed
     | 'not_makeable' // maker price would cross the book and cannot rest
     | 'rejected'; // pre-flight reject (e.g. reprice remainder too small)
   intentKey: string;

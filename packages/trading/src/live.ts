@@ -15,12 +15,15 @@
 import { ExecutionError, FillRejected } from '@weather-edge/core';
 import {
   makerLimitPrice,
+  matchDanglingIntent,
   orderIntentKey,
   parseCancelResult,
   parseOpenOrders,
   parseOrderBookTop,
   parseOrderFillPoll,
+  parseTrades,
   redactOrderPayload,
+  redactText,
   resolveTradeMode,
   takerLimitPrice,
 } from './order-intent.ts';
@@ -36,6 +39,7 @@ import type {
   OrderLedger,
   OrderPlacementResult,
   OrderType,
+  ReconcileOutcome,
   TakerOrderRequest,
   TradeAlert,
   TradeExecutor,
@@ -74,6 +78,8 @@ export interface ClobClientish {
 export interface MakerClobClientish extends ClobClientish {
   getOrderBook(tokenID: string): Promise<unknown>;
   getOpenOrders(params?: { market?: string; asset_id?: string }): Promise<unknown>;
+  /** our recent trades/fills for a token — reconcile's evidence read (research report §5). */
+  getTrades(params?: { market?: string; asset_id?: string }): Promise<unknown>;
   cancelOrders(payload: { orderIDs: string[] }): Promise<unknown>;
   cancelAll(): Promise<unknown>;
   cancelMarketOrders(payload: { market?: string; asset_id?: string }): Promise<unknown>;
@@ -213,16 +219,23 @@ export class LiveExecutor implements TradeExecutor {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════════════════════════
-// MakerExecutor — the tuned MAKER-EXIT strategy's live order rail (T1).
+// MakerExecutor — the tuned MAKER-EXIT strategy's live order rail (T1, amended per the F4/CRITICAL-1
+// adjudication).
 //
 // Extends the dormant taker rail above with: (1) MAKER placement (resting GTC/GTD, maker-ness enforced
 // BY PRICE — BUY strictly below best ask, SELL strictly above best bid — with the native `post_only`
 // flag passed as defense-in-depth); (2) the order lifecycle (cancel / cancel-all-for-market / list /
-// fill-poll with partial-fill accounting / cancel-then-repost reprice); (3) DB-ledger idempotency (a
-// retry or crash-restart NEVER double-places); (4) a `TRADE_MODE` (off | dry-run | live) that defaults
-// to dry-run and can only reach a real post via the explicit `TRADE_MODE=live`. Mock-tested from day one
-// exactly like `LiveExecutor`; the wallet key + clob client stay inside this file (§15). A taker FAK exit
-// (`placeTaker`) completes the strategy's stop-loss / time-stop leg.
+// fill-poll with partial-fill accounting / cancel-then-repost reprice / startup reconcile); (3)
+// MODE-SCOPED DB-ledger idempotency — a retry or crash-restart NEVER double-places, and a failure
+// AFTER a successful post NEVER frees the intent key: the row stays 'placed' and a needs-reconcile
+// CRITICAL fires (only a provably pre-post failure reaches recordFailed); (4) a `TRADE_MODE`
+// (off | dry-run | live) that defaults to dry-run and can only reach a real post via the explicit
+// `TRADE_MODE=live`. Dry-run RECORDS its intents in the ledger under mode='dry-run' (the shadow
+// harness reads them) but NEVER posts/cancels at the venue; the (mode, intent_key) partial-unique
+// ledger key means a dry-run row can never block a live intent. Every error string that leaves the
+// executor (ledger error column, alert bodies, thrown messages) passes through redactText. Mock-tested
+// from day one exactly like `LiveExecutor`; the wallet key + clob client stay inside this file (§15).
+// A taker FAK exit (`placeTaker`) completes the strategy's stop-loss / time-stop leg.
 // ═══════════════════════════════════════════════════════════════════════════════════════════════════
 
 export interface MakerExecutorDeps {
@@ -234,7 +247,9 @@ export interface MakerExecutorDeps {
   getEnvVar: (name: string) => string | undefined;
   /** The idempotency + lifecycle ledger. Defaults to `rpcOrderLedger(db)` (goes through TradingDb). */
   ledger?: OrderLedger;
-  /** Client-order-id minter — injected for deterministic tests; defaults to `crypto.randomUUID`. */
+  /** Client-order-id minter — injected for deterministic tests; defaults to `crypto.randomUUID`.
+   *  MUST return globally-unique ids, never reused across retries/reprices (T3 round-2: the record_*
+   *  RPCs are keyed by client_order_id alone; a reuse would splice two attempts' lifecycles). */
   newClientOrderId?: () => string;
   /** Structured logger for the dry-run payload + audit; defaults to redacting-console JSON. */
   log?: (entry: Record<string, unknown>) => void;
@@ -263,7 +278,7 @@ export class MakerExecutor {
   /**
    * Post a resting MAKER order for the tuned strategy (entry or take-profit). The limit is re-priced to
    * sit strictly inside the spread (never crosses → never pays taker fees), then posted GTC/GTD with
-   * `post_only`. Idempotent: an OPEN intent for `(market|side|purpose|date)` is never re-placed.
+   * `post_only`. Idempotent per (mode, market|side|purpose|date): an OPEN intent is never re-placed.
    */
   async place(req: MakerOrderRequest): Promise<OrderPlacementResult> {
     const mode = this.mode;
@@ -283,8 +298,9 @@ export class MakerExecutor {
       return { ...base, status: 'skipped_off', clientOrderId: null, orderId: null, limitPrice: null, sizeMatched: 0, reason: 'TRADE_MODE=off' };
     }
 
-    // Idempotency gate #1 — an open intent for this key must NEVER be re-placed (crash-restart safety).
-    const open = await this.ledger.findByIntentKey(intentKey);
+    // Idempotency gate #1 — an open intent for this (mode, key) must NEVER be re-placed (crash-restart
+    // safety). Mode-scoped (F4): a dry-run row never blocks a live intent, and vice versa.
+    const open = await this.ledger.findByIntentKey(intentKey, mode);
     if (open) {
       return { ...base, status: 'duplicate', clientOrderId: open.clientOrderId, orderId: open.orderId, limitPrice: open.price, sizeMatched: open.sizeMatched, reason: `open intent already ${open.status}` };
     }
@@ -307,19 +323,22 @@ export class MakerExecutor {
       { tickSize: tick, negRisk: req.negRisk ?? true },
     );
 
-    // DRY-RUN: build + log the EXACT (redacted) payload, return synthetic accepted — never posts, never
-    // writes the ledger (a simulation leaves no on-book or on-ledger footprint).
-    if (mode === 'dry-run') {
-      this.log({ msg: 'maker.dry_run', intentKey, clientOrderId, tokenId: req.tokenId, side: req.side, purpose: req.purpose, orderType, postOnly: true, price: priced.price, size: req.size, payload: redactOrderPayload(order) });
-      return { ...base, status: 'dry_run', clientOrderId, orderId: null, limitPrice: priced.price, sizeMatched: 0 };
-    }
-
-    // LIVE: reserve the intent BEFORE posting (the crash-safety anchor), then place, then record.
-    const reserved = await this.ledger.reserveIntent({ intentKey, clientOrderId, marketId: req.marketId, tokenId: req.tokenId, side: req.side, purpose: req.purpose, orderType, price: priced.price, size: req.size, tradeDate: req.tradeDate });
+    // Both remaining modes RESERVE the intent (the crash-safety anchor; mode-scoped partial-unique).
+    const reserved = await this.ledger.reserveIntent({ mode, intentKey, clientOrderId, marketId: req.marketId, tokenId: req.tokenId, side: req.side, purpose: req.purpose, orderType, price: priced.price, size: req.size, tradeDate: req.tradeDate });
     if (reserved === 'exists') {
       // Idempotency gate #2 — a concurrent placer won the partial-unique race; do NOT double-place.
       return { ...base, status: 'duplicate', clientOrderId: null, orderId: null, limitPrice: priced.price, sizeMatched: 0, reason: 'intent reserved concurrently' };
     }
+
+    // DRY-RUN (coordination change A): record the intent + a SYNTHETIC placed marker for the shadow
+    // harness, log the EXACT (redacted) payload — the venue is NEVER touched (no postOrder, no cancel).
+    if (mode === 'dry-run') {
+      const syntheticId = `dry-run:${clientOrderId}`;
+      await this.ledger.recordPlaced(clientOrderId, syntheticId);
+      this.log({ msg: 'maker.dry_run', intentKey, clientOrderId, tokenId: req.tokenId, side: req.side, purpose: req.purpose, orderType, postOnly: true, price: priced.price, size: req.size, payload: redactOrderPayload(order) });
+      return { ...base, status: 'dry_run', clientOrderId, orderId: syntheticId, limitPrice: priced.price, sizeMatched: 0 };
+    }
+
     return this.postAndRecord(client, order, clientOrderId, { ...base, clientOrderId, limitPrice: priced.price }, orderType, true, req.size, `${req.marketId} ${req.side} ${req.purpose}`);
   }
 
@@ -337,32 +356,46 @@ export class MakerExecutor {
     if (mode === 'off') {
       return { ...base, status: 'skipped_off', clientOrderId: null, orderId: null, limitPrice: null, sizeMatched: 0, reason: 'TRADE_MODE=off' };
     }
-    const open = await this.ledger.findByIntentKey(intentKey);
+    const open = await this.ledger.findByIntentKey(intentKey, mode);
     if (open) {
       return { ...base, status: 'duplicate', clientOrderId: open.clientOrderId, orderId: open.orderId, limitPrice: open.price, sizeMatched: open.sizeMatched, reason: `open intent already ${open.status}` };
     }
 
+    // LOW-7: read tick + min order size from the live book (like place()) when the caller omits them.
     const client = await this.deps.client();
-    const tick = Number(await client.getTickSize(req.tokenId));
+    const top = parseOrderBookTop(await client.getOrderBook(req.tokenId));
+    const tick = top.tickSize > 0 ? top.tickSize : Number(await client.getTickSize(req.tokenId));
     const price = takerLimitPrice(req.side, req.worstPrice, tick);
-    if (req.minOrderSize != null && req.minOrderSize > 0 && req.size < req.minOrderSize) {
-      throw new ExecutionError('ERR_MIN_SIZE', `size ${req.size} < market min order size ${req.minOrderSize}`);
+    const minSize = req.minOrderSize ?? top.minOrderSize;
+    if (minSize > 0 && req.size < minSize) {
+      throw new ExecutionError('ERR_MIN_SIZE', `size ${req.size} < market min order size ${minSize}`);
     }
     const clientOrderId = this.newId();
     const order = await client.createOrder({ tokenID: req.tokenId, price, size: req.size, side: req.side }, { tickSize: tick, negRisk: req.negRisk ?? true });
 
-    if (mode === 'dry-run') {
-      this.log({ msg: 'taker.dry_run', intentKey, clientOrderId, tokenId: req.tokenId, side: req.side, purpose: req.purpose, orderType: 'FAK', price, size: req.size, payload: redactOrderPayload(order) });
-      return { ...base, status: 'dry_run', clientOrderId, orderId: null, limitPrice: price, sizeMatched: 0 };
-    }
-    const reserved = await this.ledger.reserveIntent({ intentKey, clientOrderId, marketId: req.marketId, tokenId: req.tokenId, side: req.side, purpose: req.purpose, orderType: 'FAK', price, size: req.size, tradeDate: req.tradeDate });
+    const reserved = await this.ledger.reserveIntent({ mode, intentKey, clientOrderId, marketId: req.marketId, tokenId: req.tokenId, side: req.side, purpose: req.purpose, orderType: 'FAK', price, size: req.size, tradeDate: req.tradeDate });
     if (reserved === 'exists') {
       return { ...base, status: 'duplicate', clientOrderId: null, orderId: null, limitPrice: price, sizeMatched: 0, reason: 'intent reserved concurrently' };
+    }
+    if (mode === 'dry-run') {
+      const syntheticId = `dry-run:${clientOrderId}`;
+      await this.ledger.recordPlaced(clientOrderId, syntheticId);
+      this.log({ msg: 'taker.dry_run', intentKey, clientOrderId, tokenId: req.tokenId, side: req.side, purpose: req.purpose, orderType: 'FAK', price, size: req.size, payload: redactOrderPayload(order) });
+      return { ...base, status: 'dry_run', clientOrderId, orderId: syntheticId, limitPrice: price, sizeMatched: 0 };
     }
     return this.postAndRecord(client, order, clientOrderId, { ...base, clientOrderId, limitPrice: price }, 'FAK', false, req.size, `${req.marketId} ${req.side} ${req.purpose}`);
   }
 
-  /** Post + record the fill (shared live tail). NEVER auto-retries on error — no accidental doubles. */
+  /**
+   * Post + record the fill (shared live tail). NEVER auto-retries on error — no accidental doubles.
+   * CRITICAL-1 failure semantics: once `postOrder` has returned an orderId, the venue may hold a live
+   * order — the intent key MUST STAY RESERVED. Any error after that point keeps the row 'placed'
+   * (re-recording best-effort in case the failure WAS the record) and emits a needs-reconcile CRITICAL
+   * naming the resting orderId; `recordFailed` (which frees the key) runs ONLY when orderId is still
+   * undefined — a provably pre-post failure. Residual (documented): a postOrder that THROWS (e.g. a
+   * network timeout after venue accept) also has no orderId and frees the key — that ambiguity is the
+   * reconcile sweep's job to surface, and the venue's heartbeat auto-cancel bounds it.
+   */
   private async postAndRecord(
     client: MakerClobClientish,
     order: unknown,
@@ -382,6 +415,7 @@ export class MakerExecutor {
 
       const poll = parseOrderFillPoll(await client.getOrder(orderId), orderId, requestedSize);
       if (poll.filled) {
+        // p_size_matched is CUMULATIVE (T3 schema appends only positive deltas to live_fills).
         await this.ledger.recordFill(clientOrderId, poll.sizeMatched || requestedSize, poll.avgPrice ?? result.limitPrice ?? 0, 'filled');
       } else if (poll.partial) {
         await this.ledger.recordFill(clientOrderId, poll.sizeMatched, poll.avgPrice ?? result.limitPrice ?? 0, 'partial');
@@ -389,13 +423,39 @@ export class MakerExecutor {
       // resting (maker unmatched): stays 'placed'; the loop repolls / reprices / cancels via the chokepoint.
       return { ...result, status: 'placed', orderId, sizeMatched: poll.sizeMatched };
     } catch (e) {
-      const message = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+      // MEDIUM-4: every string that leaves the executor (ledger error column, alert body, thrown
+      // message) is redacted — a venue/HTTP error can echo auth-header or signature material.
+      const message = redactText(e instanceof Error ? `${e.name}: ${e.message}` : String(e));
+
+      if (orderId !== undefined) {
+        // CRITICAL-1: the post SUCCEEDED — a live order may rest at the venue. NEVER recordFailed
+        // (freeing the key would let a retry double-place). Keep the row 'placed': recordPlaced
+        // normally already ran; re-run it best-effort in case the failure WAS the record write.
+        // T3 round-2 note: a record_* RPC RAISES on a client_order_id with no ledger row (reconcile-bug
+        // surfacing) — such a raise lands HERE, on the alert path, never in the key-freeing branch below.
+        try {
+          await this.ledger.recordPlaced(clientOrderId, orderId);
+        } catch {
+          /* the needs-reconcile alert below still fires; reconcile adopts the order on restart */
+        }
+        await this.deps.notify({
+          kind: 'ORDER_NEEDS_RECONCILE',
+          severity: 'CRITICAL',
+          title: `Live order needs reconcile: ${label}`,
+          body: `post succeeded (order ${orderId}) but the post-place flow failed: ${message}\nrow ${clientOrderId} kept 'placed' — verify fill state on Polymarket before any retry`,
+          dedupeKey: `order-reconcile:${clientOrderId}`,
+        });
+        if (e instanceof ExecutionError || e instanceof FillRejected) throw e;
+        throw new ExecutionError('ERR_CLOB', message);
+      }
+
+      // True pre-post failure (no orderId ever returned) — the only branch that frees the key.
       await this.ledger.recordFailed(clientOrderId, message);
       await this.deps.notify({
         kind: 'ORDER_FAIL',
         severity: 'CRITICAL',
         title: `Live order failed: ${label}`,
-        body: `${message}${orderId ? `\norder ${orderId} may be resting — verify on Polymarket` : ''}`,
+        body: message,
         dedupeKey: `order-fail:${clientOrderId}`,
       });
       if (e instanceof ExecutionError || e instanceof FillRejected) throw e;
@@ -442,30 +502,178 @@ export class MakerExecutor {
 
   /**
    * Reprice a resting maker order: cancel-then-repost the UNFILLED REMAINDER (no atomic amend exists —
-   * research report §3). Never assumes the cancel succeeded — a cancel that races a fill (`not_canceled`)
-   * recomputes the remainder from `size_matched`; if nothing (or below min) remains, it does NOT repost
-   * (guards the §3 double-position hazard). The repost reuses the same intent key (freed by the cancel).
+   * research report §3). MEDIUM-5/LOW-6 semantics:
+   *
+   *   1. `oldClientOrderId` is REQUIRED — the old ledger row is the source of truth for the ORIGINAL
+   *      size; the remainder is `originalSize − poll.sizeMatched` (cumulative), never `newReq.size`
+   *      arithmetic. A `newReq.size` that disagrees with the open row's size is rejected (ERR_REPRICE_SIZE).
+   *   2. The old order's post-cancel state is ALWAYS polled — a cancel can race a fill both ways
+   *      (`allCanceled` with a prior partial, or `not_canceled` because it just filled).
+   *   3. If the cancel failed AND the order is still open at the venue (e.g. rate-limited cancel), the
+   *      reprice ABORTS with no ledger change — freeing/reposting beside a live resting order would
+   *      double-place.
+   *   4. Crash-safety ordering (why free-then-place is safe): fills are recorded, THEN the old row is
+   *      freed (recordCanceled — preserves size_matched), THEN the remainder is placed. At every crash
+   *      point at most ONE live resting order exists for the intent: before the venue cancel there is
+   *      only the old order; between cancel and recordCanceled the venue holds NO resting order and the
+   *      key is still blocked (a re-place returns 'duplicate'; a follow-up reprice re-runs the
+   *      transition idempotently); between recordCanceled and place() the key is free but the venue is
+   *      empty — a crash-restart place() creates exactly one new order. The double-place shape
+   *      (place-before-free) is unreachable: reserveIntent would return 'exists'.
+   *
+   * Non-live: dry-run frees the old dry-run row + re-places (ledger-only, venue untouched); off is a no-op.
    */
   async reprice(
     oldOrderId: string,
-    oldClientOrderId: string | undefined,
+    oldClientOrderId: string,
     newReq: MakerOrderRequest,
   ): Promise<{ cancel: CancelResult; placed: OrderPlacementResult }> {
-    const cancel = await this.cancel(oldOrderId, oldClientOrderId);
-    let size = newReq.size;
-    if (!cancel.allCanceled) {
-      // The cancel raced a fill — recompute the remainder from the live order state before reposting.
-      const poll = await this.pollFill(oldOrderId, newReq.size);
-      size = Math.max(0, newReq.size - poll.sizeMatched);
-      const min = newReq.minOrderSize ?? 0;
-      if (size <= 0 || size < min) {
-        const intentKey = orderIntentKey(newReq);
-        return {
-          cancel,
-          placed: { mode: this.mode, status: 'rejected', intentKey, clientOrderId: null, orderId: null, side: newReq.side, purpose: newReq.purpose, orderType: newReq.orderType ?? 'GTC', postOnly: true, limitPrice: null, size, sizeMatched: poll.sizeMatched, reason: 'reprice remainder below min after racing fill' },
-        };
+    const mode = this.mode;
+    const intentKey = orderIntentKey(newReq);
+    const rejected = (reason: string, sizeMatched = 0, size = 0): OrderPlacementResult => ({
+      mode,
+      status: 'rejected',
+      intentKey,
+      clientOrderId: null,
+      orderId: null,
+      side: newReq.side,
+      purpose: newReq.purpose,
+      orderType: newReq.orderType ?? 'GTC',
+      postOnly: true,
+      limitPrice: null,
+      size,
+      sizeMatched,
+      reason,
+    });
+    const syntheticCancel: CancelResult = { requested: [oldOrderId], canceled: [oldOrderId], notCanceled: {}, allCanceled: true };
+
+    if (mode === 'off') {
+      return { cancel: syntheticCancel, placed: rejected('TRADE_MODE=off') };
+    }
+    if (mode === 'dry-run') {
+      // Ledger-only mirror of the live transition: free the old dry-run row, re-place (records anew).
+      await this.ledger.recordCanceled(oldClientOrderId);
+      return { cancel: syntheticCancel, placed: await this.place(newReq) };
+    }
+
+    // LOW-6: the OPEN ledger row is the source of truth for the original size.
+    const oldRow = await this.ledger.findByIntentKey(intentKey, 'live');
+    if (oldRow && oldRow.clientOrderId !== oldClientOrderId) {
+      throw new ExecutionError(
+        'ERR_REPRICE_STATE',
+        `open intent row for ${intentKey} is ${oldRow.clientOrderId}, not the given ${oldClientOrderId}`,
+      );
+    }
+    if (oldRow && Math.abs(newReq.size - oldRow.size) > 1e-6) {
+      throw new ExecutionError(
+        'ERR_REPRICE_SIZE',
+        `newReq.size ${newReq.size} != original ledger size ${oldRow.size} — reprice must carry the original intent size`,
+      );
+    }
+    const originalSize = oldRow?.size ?? newReq.size;
+
+    const client = await this.deps.client();
+    const cancel = parseCancelResult(await client.cancelOrder({ orderID: oldOrderId }), [oldOrderId]);
+    // ALWAYS poll the post-cancel state — a cancel can race a fill in both directions.
+    const poll = parseOrderFillPoll(await client.getOrder(oldOrderId), oldOrderId, originalSize);
+
+    const stillOpen = !poll.filled && ['live', 'delayed'].includes(poll.status.toLowerCase());
+    if (!cancel.allCanceled && stillOpen) {
+      // Cancel failed and the order still rests — do NOT free the key or repost (double-place hazard).
+      return { cancel, placed: rejected('cancel failed and the order is still live — reprice aborted', poll.sizeMatched, 0) };
+    }
+
+    const matched = poll.sizeMatched;
+    const remainder = Math.max(0, originalSize - matched);
+
+    if (matched >= originalSize && originalSize > 0) {
+      // The cancel raced a COMPLETE fill — the intent succeeded; the row stays (terminal-but-blocking).
+      await this.ledger.recordFill(oldClientOrderId, matched, poll.avgPrice ?? oldRow?.price ?? 0, 'filled');
+      return { cancel, placed: rejected('old order fully filled during reprice — nothing to repost', matched, 0) };
+    }
+    if (matched > 0) {
+      // Book the partial BEFORE freeing so the accounting survives the transition (contract:
+      // bot_order_record_canceled preserves size_matched).
+      await this.ledger.recordFill(oldClientOrderId, matched, poll.avgPrice ?? oldRow?.price ?? 0, 'partial');
+    }
+    // Free the key ONLY now: the venue holds no resting order for this intent (canceled/terminal above).
+    await this.ledger.recordCanceled(oldClientOrderId);
+
+    const min = newReq.minOrderSize ?? 0;
+    if (remainder <= 0 || (min > 0 && remainder < min)) {
+      return { cancel, placed: rejected(`reprice remainder ${remainder} below min ${min} — not reposted`, matched, remainder) };
+    }
+    return { cancel, placed: await this.place({ ...newReq, size: remainder }) };
+  }
+
+  /**
+   * HIGH-2 — the startup reconcile sweep (T2 calls this BEFORE its first tick; research report §5,
+   * ADR-OC-5). For every non-terminal ledger row still missing a venue orderId (a crash hit between
+   * postOrder and recordPlaced), decide:
+   *
+   *   adopt — exactly ONE venue open order matches HEURISTICALLY (side exact, price within one tick,
+   *           original size exact — there is NO server-side client-order-id on the CLOB, so identity
+   *           can only be inferred from what we know we sent) → recordPlaced(venue orderId).
+   *   freed — NO open order matches AND the token's recent trades show no same-side fill at our price
+   *           → confirmed never posted → the key is freed (recordFailed).
+   *   held  — ANY ambiguity (multiple candidates, or a matching trade that could be our fill, or the
+   *           evidence reads themselves fail) → the row stays non-terminal + a WARN alert. A key is
+   *           NEVER freed on ambiguity.
+   *
+   * Non-live modes return [] without touching the venue (dry-run rows carry synthetic orderIds and are
+   * never dangling in this sense).
+   */
+  async reconcileOpenOrders(): Promise<ReconcileOutcome[]> {
+    if (this.mode !== 'live') return [];
+    const rows = await this.ledger.listDanglingIntents('live');
+    if (rows.length === 0) return [];
+    const client = await this.deps.client();
+    const out: ReconcileOutcome[] = [];
+
+    for (const row of rows) {
+      const held = async (reason: string): Promise<void> => {
+        await this.deps.notify({
+          kind: 'RECONCILE_AMBIGUOUS',
+          severity: 'WARN',
+          title: `Reconcile held: ${row.intentKey}`,
+          body: `dangling intent ${row.clientOrderId} (${row.side} ${row.size} @ ${row.price}) — ${redactText(reason)}\nrow kept non-terminal; resolve manually before re-placing`,
+          dedupeKey: `reconcile-held:${row.clientOrderId}`,
+        });
+        out.push({ kind: 'held', clientOrderId: row.clientOrderId, intentKey: row.intentKey, orderId: null, reason });
+      };
+
+      try {
+        const open = parseOpenOrders(await client.getOpenOrders({ asset_id: row.tokenId }));
+        const tick = Number(await client.getTickSize(row.tokenId)) || 0.01;
+        const match = matchDanglingIntent(row, open, tick);
+
+        if (match.kind === 'adopt') {
+          await this.ledger.recordPlaced(row.clientOrderId, match.orderId);
+          out.push({ kind: 'adopted', clientOrderId: row.clientOrderId, intentKey: row.intentKey, orderId: match.orderId, reason: 'exactly one venue open order matched (side/price/size)' });
+          continue;
+        }
+        if (match.kind === 'ambiguous') {
+          await held(`${match.candidateIds.length} venue open orders match — cannot identify ours (no client-order-id on the CLOB)`);
+          continue;
+        }
+        // No open order — check recent trades before concluding "never posted": the order could have
+        // posted AND filled (or filled-then-expired) without ever resting long enough to list.
+        const trades = parseTrades(await client.getTrades({ asset_id: row.tokenId }));
+        const tradeHit = trades.some(
+          (t) => t.side.toUpperCase() === row.side && Math.abs(t.price - row.price) <= tick + 1e-9,
+        );
+        if (tradeHit) {
+          await held('no open order, but a recent same-side trade at our price could be our fill');
+          continue;
+        }
+        await this.ledger.recordFailed(row.clientOrderId, 'reconcile: confirmed never posted (no open order, no matching trade)');
+        out.push({ kind: 'freed', clientOrderId: row.clientOrderId, intentKey: row.intentKey, orderId: null, reason: 'no venue evidence the order exists' });
+      } catch (e) {
+        // An evidence read failed — freeing on missing evidence is exactly the mistake the ambiguity
+        // rule forbids. Hold + alert.
+        await held(`evidence read failed: ${e instanceof Error ? e.message : String(e)}`);
       }
     }
-    return { cancel, placed: await this.place({ ...newReq, size }) };
+    return out;
   }
 }

@@ -1,24 +1,40 @@
 /**
  * order-ledger — binds the abstract `OrderLedger` port (types.ts) to the `TradingDb.rpc` seam.
  *
- * This is the CONTRACT the T3 lane must ship as `bot_orders` + these six RPCs. The maker executor
+ * This is the CONTRACT the T3 lane must ship as `bot_orders` + these seven RPCs. The maker executor
  * only ever sees the `OrderLedger` interface (injected, faked in tests); `rpcOrderLedger(db)` is the
  * production binding — the DB write "goes through the existing TradingDb port" (T1 brief) while the
  * table/migration stays entirely in T3's lane. No clob client, no key, no direct SQL here.
  *
- * RPC contract (snake_case, `p_`-prefixed args, jsonb single-row return — the project idiom):
- *   bot_order_by_intent(p_intent_key text)                       → the OPEN (non-terminal) row | null
- *   bot_order_reserve_intent(p_intent_key, p_client_order_id,     → 'reserved' | 'exists'
- *       p_market_id, p_token_id, p_side, p_purpose, p_order_type,   (CONDITIONAL insert; the load-bearing
- *       p_price, p_size, p_trade_date)                              partial-unique index on
- *                                                                   intent_key WHERE status NOT IN
- *                                                                   ('canceled','failed') makes this the
- *                                                                   never-double-place guarantee)
+ * RPC contract (snake_case, `p_`-prefixed args, jsonb single-row return — the project idiom).
+ * MODE-SCOPED (the T3 F4 amendment): rows are keyed by (mode, intent_key); the load-bearing index is
+ * PARTIAL-UNIQUE on `(mode, intent_key) WHERE status NOT IN ('canceled','failed')` — a dry-run row can
+ * never block a live intent, and vice versa. reserve/find/list take an explicit `p_mode`; the
+ * `record_*` RPCs are keyed by the globally-unique `p_client_order_id` and need no mode. The schema's
+ * mode CHECK allows only 'dry-run'|'live' — 'off' must never reach a ledger write (the executor's
+ * off-mode early return guarantees it; tested). record_fill's p_size_matched is CUMULATIVE (the schema
+ * appends only positive deltas to live_fills; a same-cumulative echo writes nothing).
+ *
+ *   bot_order_by_intent(p_intent_key text, p_mode text)           → the OPEN (non-terminal) row for
+ *                                                                    (mode, intent_key) | null
+ *   bot_order_reserve_intent(p_mode, p_intent_key,                → 'reserved' | 'exists'
+ *       p_client_order_id, p_market_id, p_token_id, p_side,          (CONDITIONAL insert guarded by the
+ *       p_purpose, p_order_type, p_price, p_size, p_trade_date)       partial-unique index above — the
+ *                                                                     never-double-place guarantee)
+ *   bot_order_list_dangling(p_mode text)                          → jsonb ARRAY of rows with
+ *                                                                    status='intent' AND order_id IS NULL
+ *                                                                    (the startup-reconcile input.
+ *                                                                    ⚠ ADDED BY THE T1 AMENDMENT (HIGH-2)
+ *                                                                    — NOT in T3's final six @ 2c9afef;
+ *                                                                    needs a T3 round-2 add before the
+ *                                                                    live reconcile sweep can run)
  *   bot_order_record_placed(p_client_order_id, p_order_id)        → void  (intent → placed, sets orderId)
- *   bot_order_record_fill(p_client_order_id, p_size_matched,      → void  (placed → partial | filled)
- *       p_avg_price, p_status)
- *   bot_order_record_canceled(p_client_order_id)                 → void  (→ canceled, terminal)
- *   bot_order_record_failed(p_client_order_id, p_error)          → void  (→ failed, terminal; never retried)
+ *   bot_order_record_fill(p_client_order_id, p_size_matched,      → void  (placed → partial | filled;
+ *       p_avg_price, p_status)                                       size_matched is CUMULATIVE)
+ *   bot_order_record_canceled(p_client_order_id)                  → void  (→ canceled, terminal; MUST
+ *                                                                    preserve size_matched — partial-fill
+ *                                                                    accounting survives the transition)
+ *   bot_order_record_failed(p_client_order_id, p_error)           → void  (→ failed, terminal; never retried)
  */
 import type {
   OrderLedger,
@@ -27,6 +43,7 @@ import type {
   OrderSide,
   OrderPurpose,
   ReserveIntentInput,
+  TradeMode,
   TradingDb,
 } from './types.ts';
 
@@ -44,6 +61,7 @@ export function mapLedgerRow(raw: unknown): OrderLedgerRow | null {
   const o = asRecord(raw);
   if (Object.keys(o).length === 0) return null;
   return {
+    mode: String(o['mode'] ?? 'live') as TradeMode,
     intentKey: String(o['intent_key'] ?? o['intentKey'] ?? ''),
     clientOrderId: String(o['client_order_id'] ?? o['clientOrderId'] ?? ''),
     status: String(o['status'] ?? 'intent') as OrderLedgerStatus,
@@ -53,21 +71,29 @@ export function mapLedgerRow(raw: unknown): OrderLedgerRow | null {
     price: num(o['price']),
     size: num(o['size']),
     sizeMatched: num(o['size_matched'] ?? o['sizeMatched']),
+    tokenId: String(o['token_id'] ?? o['tokenId'] ?? ''),
+    marketId: String(o['market_id'] ?? o['marketId'] ?? ''),
+    createdAt:
+      o['created_at'] == null && o['createdAt'] == null
+        ? null
+        : String(o['created_at'] ?? o['createdAt']),
   };
 }
 
 /** The production `OrderLedger`, bound to `TradingDb.rpc`. */
 export function rpcOrderLedger(db: TradingDb): OrderLedger {
   return {
-    async findByIntentKey(intentKey: string): Promise<OrderLedgerRow | null> {
+    async findByIntentKey(intentKey: string, mode: TradeMode): Promise<OrderLedgerRow | null> {
       const [row] = await db.rpc<{ bot_order_by_intent: unknown }>('bot_order_by_intent', {
         p_intent_key: intentKey,
+        p_mode: mode,
       });
       return mapLedgerRow(row?.bot_order_by_intent ?? null);
     },
 
     async reserveIntent(input: ReserveIntentInput): Promise<'reserved' | 'exists'> {
       const [row] = await db.rpc<{ bot_order_reserve_intent: string }>('bot_order_reserve_intent', {
+        p_mode: input.mode,
         p_intent_key: input.intentKey,
         p_client_order_id: input.clientOrderId,
         p_market_id: input.marketId,
@@ -80,6 +106,15 @@ export function rpcOrderLedger(db: TradingDb): OrderLedger {
         p_trade_date: input.tradeDate,
       });
       return row?.bot_order_reserve_intent === 'exists' ? 'exists' : 'reserved';
+    },
+
+    async listDanglingIntents(mode: TradeMode): Promise<OrderLedgerRow[]> {
+      const [row] = await db.rpc<{ bot_order_list_dangling: unknown }>('bot_order_list_dangling', {
+        p_mode: mode,
+      });
+      const arr = row?.bot_order_list_dangling;
+      if (!Array.isArray(arr)) return [];
+      return arr.map(mapLedgerRow).filter((r): r is OrderLedgerRow => r !== null);
     },
 
     async recordPlaced(clientOrderId: string, orderId: string): Promise<void> {
