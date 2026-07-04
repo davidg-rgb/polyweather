@@ -52,8 +52,15 @@ const pct = (v: unknown): string => {
 };
 
 async function activeConfigs(db: ScriptDb): Promise<CityConfig[]> {
-  const r = await db.query<{ v: CityConfig[] }>(`select public.city_sim_active_configs() as v`);
-  return r[0]?.v ?? [];
+  // `select fn() as v` returns the whole jsonb value directly (no PostgREST shape-normalization). Tolerate
+  // BOTH the 0081 `{ rows: [...] }` envelope AND the pre-0081 top-level array (the 0044/0081 port trap) so
+  // the seed is deploy-order-safe against whichever RPC version is live.
+  const r = await db.query<{ v: CityConfig[] | { rows?: CityConfig[] } | null }>(
+    `select public.city_sim_active_configs() as v`,
+  );
+  const v = r[0]?.v;
+  if (Array.isArray(v)) return v;
+  return v?.rows ?? [];
 }
 
 /** Distinct target dates for a city that CAN be simulated: have intraday + at least one snapshot. */

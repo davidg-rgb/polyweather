@@ -3,6 +3,7 @@ import type { PGlite } from '@electric-sql/pglite';
 import { parseConfigRows, planPlacements, planSettlements } from '../../packages/core/src/index.ts';
 import type { GradeInputRow, PlaceInputs } from '../../packages/core/src/index.ts';
 import type { JobCtx } from '../functions/_shared/runJob.ts';
+import type { DbPort } from '../functions/_shared/db.ts';
 import { cityPaperTrade } from '../functions/city-paper-trade/handler.ts';
 import { asRole, freshDb, rows } from './harness.ts';
 import { pglitePort } from './pglite-port.ts';
@@ -443,5 +444,80 @@ describe('city-paper-trade — Houston (KHOU), the first °F city (0070 unit-con
     expect(graded.every((b) => b.winner_idx === 5 && b.actual_native === 99)).toBe(true);
     expect(Number(graded[0]!.pnl_usd)).toBeCloseTo((10 / 0.12) * (1 - 0.12), 4); // won: shares·(1−ask), no fee seeded
     expect(Number(graded[1]!.pnl_usd)).toBeCloseTo(-10, 6); // lost: −stake, no fee seeded
+  });
+});
+
+// =====================================================================================================
+// The 0081 defect, in isolation: PROD (PostgREST) vs the PGlite twin diverge on a TOP-LEVEL jsonb array.
+// The integration tests above run the handler against the PGlite twin, which runs `select * from fn()` and
+// therefore ALWAYS wraps city_sim_active_configs' return into [{ city_sim_active_configs: value }] — so the
+// twin masked the live defect for the whole build. In prod, supabase-js `.rpc()` returns the BARE jsonb, and
+// supabasePort passes a bare ARRAY through UNWRAPPED (assuming a RETURNS TABLE row set). Against the pre-0081
+// RPC (a top-level array) that made cfgRows the configs array itself → cfgRows[0].city_sim_active_configs was
+// undefined → configs=[] → cities:0/placed:0 on EVERY cron tick (prod job_runs 2026-07-03/07-04). This block
+// feeds that exact PostgREST bare-array shape (shape b) through a fake DbPort — no PGlite — to prove the fix.
+describe('city-paper-trade — the 0081 PostgREST bare-array defect (deploy-order safety)', () => {
+  // What the handler reads off each active-config object (handler.ts ActiveConfig).
+  const FAKE_CONFIG = { cityId: 'c-sg', slug: 'singapore', icao: 'WSSS', unit: 'C', tz: 'Asia/Singapore', stakeUsd: 10 };
+  // A minimal but real PlaceInputs that planPlacements will act on: arm 13:00, floor 32.0°C → wuRound 32 →
+  // bucket idx3 (32°C) @0.70 → exactly one placement.
+  const FAKE_PLACE_INPUT: PlaceInputs = {
+    targetDate: '2026-07-04',
+    eventId: 'ev-sg-1',
+    feeRate: 0,
+    ladder: [
+      { bucketIdx: 0, low: null, high: 29 },
+      { bucketIdx: 1, low: 30, high: 30 },
+      { bucketIdx: 2, low: 31, high: 31 },
+      { bucketIdx: 3, low: 32, high: 32 },
+      { bucketIdx: 4, low: 33, high: null },
+    ],
+    labels: { 3: '32°C' },
+    forecastC: null,
+    forecastMaxHour: 12,
+    arms: [{ hour: 13, runMaxC: 32.0, asks: [{ bucketIdx: 3, ask: 0.7 }] }],
+  };
+
+  /** A DbPort that returns EXACTLY what supabasePort hands the handler in prod for the PRE-0081 RPC. */
+  function fakePostgrestPort(): DbPort {
+    return {
+      async rpc<T>(fn: string, args: Record<string, unknown>): Promise<T[]> {
+        switch (fn) {
+          case 'city_sim_active_configs':
+            // shape (b): the pre-0081 RPC's TOP-LEVEL array, passed through UNWRAPPED by supabasePort.
+            return [FAKE_CONFIG] as unknown as T[];
+          case 'city_sim_place_inputs':
+            // a bare jsonb object → supabasePort wraps it as [{ [fn]: value }].
+            return [{ city_sim_place_inputs: FAKE_PLACE_INPUT }] as unknown as T[];
+          case 'city_sim_record':
+            // echo the number of rows the handler asked to persist.
+            return [{ city_sim_record: (args.p_rows as unknown[]).length }] as unknown as T[];
+          case 'city_sim_grade_inputs':
+            return [{ city_sim_grade_inputs: { rows: [] } }] as unknown as T[];
+          default:
+            throw new Error(`fakePostgrestPort: unexpected rpc '${fn}'`);
+        }
+      },
+      async getConfigRows() {
+        return [];
+      },
+    };
+  }
+
+  it('DOCUMENTS the defect: the old read (cfgRows[0]?.city_sim_active_configs) yields [] on the bare-array shape', () => {
+    // This is what the pre-fix handler did. cfgRows IS the configs array, so cfgRows[0] is a config object and
+    // `.city_sim_active_configs` is undefined → `?? []` → configs=[] → the tick placed nothing, every day.
+    const cfgRows = [FAKE_CONFIG];
+    const oldRead = (cfgRows[0] as { city_sim_active_configs?: unknown }).city_sim_active_configs ?? [];
+    expect(oldRead).toEqual([]);
+  });
+
+  it('the FIXED handler places from the bare-array shape (this test FAILS if the read fix is reverted)', async () => {
+    const now = new Date('2026-07-04T10:00:00Z');
+    const ctx: JobCtx = { db: fakePostgrestPort(), config: cfg, log: () => {}, startedAt: now };
+    const stats = await cityPaperTrade(ctx, { now, targetDate: '2026-07-04' });
+    // Pre-fix: cities:0, placed:0 (the live defect). Post-fix: the bare array is read → 1 city, 1 bet placed.
+    expect(stats).toMatchObject({ cities: 1, placed: 1, graded: 0 });
+    expect((stats.placedByCity as Record<string, number>).singapore).toBe(1);
   });
 });

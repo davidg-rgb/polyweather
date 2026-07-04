@@ -308,6 +308,13 @@ describe('migrations 0001–0010', () => {
       // which the web tier cannot reach) → native unit → wuRound → live ladder — so the current-bet box shows
       // today's intended temp before the 10:00 UTC tick places it. No table/cron change (count stays 29).
       '0080_dash_city_forecast.sql',
+      // 0081 = wrap city_sim_active_configs() in { rows: [...] } — it returned a TOP-LEVEL jsonb array (the 0044
+      // port trap, a second instance), which supabasePort misreads as a RETURNS TABLE row set → the daily
+      // city-paper-trade tick's cfgRows[0].city_sim_active_configs was undefined → configs=[] → cities:0/placed:0
+      // on EVERY cron tick (verified in prod job_runs 2026-07-03/07-04). Pure envelope change (the 0075
+      // active_until run-window gate byte-identical); the handler + seed read .rows tolerantly (deploy-order-safe).
+      // No table/cron change (count stays 29). CITY-SIM-PLACEMENT-FIX.md.
+      '0081_city_sim_active_configs_rows_wrap.sql',
     ]);
   });
 });
@@ -948,5 +955,69 @@ describe('pg_cron registrations (§7.22, W11)', () => {
       `select command from cron.job where jobname = 'snapshot-downsample'`,
     );
     expect(j[0]!.command).toBe('select public.ops_downsample()');
+  });
+});
+
+describe('city_sim_active_configs — the 0081 port invariant', () => {
+  // 0081 wraps the active-config read in { rows: [...] } so it stops returning a TOP-LEVEL jsonb array —
+  // the shape supabasePort (functions/_shared/db.ts) silently misreads as a RETURNS TABLE row set, which
+  // zeroed the daily city-paper-trade tick's placements (cities:0/placed:0) in prod. The twin `select * from
+  // fn()` wraps EITHER shape, so this asserts the RPC's OWN return value is an object carrying a rows array.
+  it('returns { rows: [...] } (an object with a rows array), never a top-level array', async () => {
+    const shape = await rows<{ outer: string; inner: string }>(
+      db,
+      `select jsonb_typeof(public.city_sim_active_configs()) as outer,
+              jsonb_typeof(public.city_sim_active_configs()->'rows') as inner`,
+    );
+    expect(shape[0]).toEqual({ outer: 'object', inner: 'array' });
+  });
+});
+
+describe('port invariant tripwire (0081) — no no-arg jsonb RPC returns a TOP-LEVEL array', () => {
+  // The CLASS behind the 0044 + 0081 defects: supabasePort / apps/web port.ts normalize a PostgREST result
+  // by SHAPE — a top-level array is assumed to be a RETURNS TABLE row set and passed through UNWRAPPED, while
+  // a bare object/scalar is wrapped as [{ [fn]: value }]. A jsonb fn that returns a bare `jsonb_agg(...)` array
+  // is therefore read as rows and its `rows[0].<fn>` is undefined → the handler silently sees []. The SETOF
+  // guard above forbids one form of this; this makes the corollary ("no top-level-array jsonb return")
+  // enforceable across the WHOLE surface, so a third instance cannot ship green. Runs on an isolated freshDb
+  // (some fns mutate, e.g. ops_downsample) as the operator (service_role bypasses RLS; the email claim clears
+  // operator_guard) so every fn actually executes. If a NEW fn legitimately errors or must return an array,
+  // do NOT weaken this — handle it explicitly (wrap in { rows: [...] }, or exclude with a documented reason).
+  let tdb: PGlite;
+  beforeAll(async () => {
+    tdb = await freshDb();
+  });
+  afterAll(async () => {
+    await tdb.close();
+  });
+
+  it('every public no-arg RETURNS-jsonb function returns object/scalar/null — never a bare array', async () => {
+    const fns = await rows<{ proname: string }>(
+      tdb,
+      `select p.proname
+       from pg_proc p
+       join pg_namespace n on n.oid = p.pronamespace
+       where n.nspname = 'public'
+         and p.pronargs = 0
+         and p.prorettype = 'pg_catalog.jsonb'::regtype
+         and p.prokind = 'f'
+       order by p.proname`,
+    );
+    // Sanity: the real surface (grade/truth inputs, active_configs, the dash_* reads, deadmen, …) is present.
+    expect(fns.length).toBeGreaterThan(10);
+    expect(fns.map((f) => f.proname)).toContain('city_sim_active_configs');
+
+    const offenders = await asRole(tdb, 'service_role', { email: 'david.geborek@gmail.com' }, async () => {
+      const bad: { fn: string; typ: string | null }[] = [];
+      for (const { proname } of fns) {
+        const [r] = await rows<{ typ: string | null }>(
+          tdb,
+          `select jsonb_typeof(public.${proname}()) as typ`,
+        );
+        if (r?.typ === 'array') bad.push({ fn: proname, typ: r.typ });
+      }
+      return bad;
+    });
+    expect(offenders).toEqual([]);
   });
 });
