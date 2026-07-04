@@ -315,6 +315,14 @@ describe('migrations 0001–0010', () => {
       // active_until run-window gate byte-identical); the handler + seed read .rows tolerantly (deploy-order-safe).
       // No table/cron change (count stays 29). CITY-SIM-PLACEMENT-FIX.md.
       '0081_city_sim_active_configs_rows_wrap.sql',
+      // 0082 = the TRADING ACTIVATION + RISK CONSOLE, staged DARK (not applied to any DB): trade_config (single-row
+      // typed risk/mode surface, seeded mode='off', §9R $25 stake/position CHECK ceiling) + trade_config_audit
+      // (append-only whole-config old/new jsonb via trigger) + trade_gate_override (the explicit interlock escape
+      // hatch) + live_orders/live_fills (the runner's order-intent/fill ledger, intent_key UNIQUE idempotency
+      // backstop) + trade_config_get (service-role read) + trade_config_set (operator-guarded write, authenticated)
+      // + trade_live_preflight (the live-mode INTERLOCK — mode/active_until/stake-cap + forward-paper-PASS-or-override)
+      // + dash_trading (operator read, jsonb-OBJECT, added to WEB_AUTHENTICATED below). No cron/edge fn (count stays 29).
+      '0082_trading_activation.sql',
     ]);
   });
 });
@@ -783,6 +791,8 @@ describe('0034: internal-RPC lockdown — anon/authenticated revoked except the 
     'dash_maker_exit',  // 0073: /maker-exit forward maker-exit paper loop operator read
     'dash_maker_exit_history',  // 0079: /maker-exit assumptions-over-time sparkline read (gate-day instrumentation)
     'dash_city_forecast',  // 0080: /paper-trade pre-placement forecast (current-bet box) operator read
+    'dash_trading',  // 0082: /trading activation + risk console operator read (config + preflight + open orders + today spend)
+    'trade_config_set',  // 0082: operator-guarded trade_config write (self-guards via operator_guard, like every operator_* RPC)
     'go_live_gate_inputs',
     'operator_halt', 'operator_resume', 'operator_update_config', 'operator_verify_station',
     'operator_set_champion', 'operator_skip_bet', 'operator_manual_bet',

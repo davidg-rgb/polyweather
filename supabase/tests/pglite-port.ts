@@ -145,6 +145,15 @@ const FN_ARGS: Record<string, string[]> = {
   bot_capture_series: ['p_days'],
   capture_deadman_check: [],
   bot_deadman_check: [],
+  // 0082 trading activation + risk console RPCs (staged dark).
+  trade_config_get: [],
+  trade_config_set: [
+    'p_mode', 'p_stake_per_buy_usd', 'p_per_position_cap_usd', 'p_per_market_cap_usd',
+    'p_total_concurrent_cap_usd', 'p_daily_loss_kill_usd', 'p_daily_loss_kill_frac',
+    'p_city_allowlist', 'p_active_until', 'p_clear_city_allowlist', 'p_clear_active_until',
+  ],
+  trade_live_preflight: [],
+  dash_trading: [],
 };
 
 export function pglitePort(db: PGlite): DbPort {
