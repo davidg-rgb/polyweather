@@ -8,9 +8,9 @@
  * N1 cases: cross-midnight loss lands in the sell day, open-buys-only day is NOT a loss, profitable round
  * trips — same-day and cross-midnight — are 0) / dry-run isolation (addendum)), the F3 non-operator
  * ERR_FORBIDDEN guards, the seven bot_order_* T1 OrderLedger RPCs (F4 partial-unique reserve semantics,
- * mode-scoped keys, N2 exact marginal notionals, N3 raise-on-unknown/silent-on-terminal, N4 monotonic
- * size_matched, N6 fill-on-intent promotion + late record_placed, the dangling-intent sweep, cancel
- * preserving size_matched), and the packages/trading TS reader.
+ * mode-scoped keys, N2 exact marginal notionals, N3/N7 raise-on-unknown-id across ALL FOUR record_* fns with
+ * silent terminal echoes, N4 monotonic size_matched, N6 fill-on-intent promotion + late record_placed, the
+ * N9 ≥5-min-stale dangling-intent sweep, cancel preserving size_matched), and the packages/trading TS reader.
  */
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import type { PGlite } from '@electric-sql/pglite';
@@ -933,8 +933,10 @@ describe('0082 §9 — the six bot_order_* RPCs (the T1 OrderLedger contract)', 
     );
     expect(shape).toEqual({ outer: 'object', inner: 'array' });
 
+    // p_older_than_min: 0 — these rows were reserved milliseconds ago (the N9 default of 5 min would
+    // correctly hide them; age-0 shows everything, which is what THIS test scopes on).
     const [live] = await port.rpc<{ bot_order_list_dangling: { rows: Record<string, unknown>[] } }>(
-      'bot_order_list_dangling', { p_mode: 'live' },
+      'bot_order_list_dangling', { p_mode: 'live', p_older_than_min: 0 },
     );
     const liveRows = live!.bot_order_list_dangling.rows;
     expect(liveRows.map((r) => r['client_order_id'])).toEqual(['c1']);
@@ -946,7 +948,7 @@ describe('0082 §9 — the six bot_order_* RPCs (the T1 OrderLedger contract)', 
     expect(Number(liveRows[0]!['size_matched'])).toBe(0);
 
     const [dry] = await port.rpc<{ bot_order_list_dangling: { rows: Record<string, unknown>[] } }>(
-      'bot_order_list_dangling', { p_mode: 'dry-run' },
+      'bot_order_list_dangling', { p_mode: 'dry-run', p_older_than_min: 0 },
     );
     expect(dry!.bot_order_list_dangling.rows.map((r) => r['client_order_id'])).toEqual(['c3']);
   });
@@ -956,6 +958,76 @@ describe('0082 §9 — the six bot_order_* RPCs (the T1 OrderLedger contract)', 
       'bot_order_list_dangling', { p_mode: 'live' },
     );
     expect(empty!.bot_order_list_dangling).toEqual({ rows: [] });
+  });
+
+  it('N9: the staleness window — a JUST-RESERVED intent is invisible to the default sweep; a backdated one shows', async () => {
+    await reserve(); // c1/k1, reserved milliseconds ago — inside the normal reserve→post→record window
+    // Default sweep (p_older_than_min omitted → SQL NULL positionally → coalesces to 5): fresh intent hidden.
+    const [fresh] = await port.rpc<{ bot_order_list_dangling: { rows: unknown[] } }>(
+      'bot_order_list_dangling', { p_mode: 'live' },
+    );
+    expect(fresh!.bot_order_list_dangling.rows).toEqual([]);
+    // The same via the SQL default-arg path (T1's (p_mode)-only PostgREST call shape).
+    const [sqlDefault] = await rows<{ n: number }>(
+      db,
+      `select jsonb_array_length(public.bot_order_list_dangling('live')->'rows')::int as n`,
+    );
+    expect(sqlDefault!.n).toBe(0);
+    // Backdate the reservation past the window → the sweep now sees it.
+    await db.exec(
+      `update public.live_orders set created_at = now() - interval '10 minutes' where client_order_id = 'c1'`,
+    );
+    const [stale] = await port.rpc<{ bot_order_list_dangling: { rows: Record<string, unknown>[] } }>(
+      'bot_order_list_dangling', { p_mode: 'live' },
+    );
+    expect(stale!.bot_order_list_dangling.rows.map((r) => r['client_order_id'])).toEqual(['c1']);
+  });
+
+  it('N7: record_placed RAISES on a ghost id; a terminal-row echo stays silent', async () => {
+    await expect(
+      port.rpc('bot_order_record_placed', { p_client_order_id: 'ghost', p_order_id: 'venue-x' }),
+    ).rejects.toThrow(/unknown client_order_id/);
+    await reserve();
+    await port.rpc('bot_order_record_canceled', { p_client_order_id: 'c1' });
+    // Row exists (canceled) → silent no-op: status untouched, order_id NOT stamped.
+    await port.rpc('bot_order_record_placed', { p_client_order_id: 'c1', p_order_id: 'venue-late' });
+    const [o] = await rows<{ status: string; order_id: string | null }>(
+      db,
+      `select status, order_id from public.live_orders where client_order_id = 'c1'`,
+    );
+    expect(o!.status).toBe('canceled');
+    expect(o!.order_id).toBeNull();
+  });
+
+  it('N7: record_canceled RAISES on a ghost id; an already-canceled echo stays silent', async () => {
+    await expect(
+      port.rpc('bot_order_record_canceled', { p_client_order_id: 'ghost' }),
+    ).rejects.toThrow(/unknown client_order_id/);
+    await reserve();
+    await port.rpc('bot_order_record_canceled', { p_client_order_id: 'c1' });
+    // The duplicate cancel echo: row exists, terminal → resolves silently, stays canceled.
+    await port.rpc('bot_order_record_canceled', { p_client_order_id: 'c1' });
+    const [o] = await rows<{ status: string }>(
+      db,
+      `select status from public.live_orders where client_order_id = 'c1'`,
+    );
+    expect(o!.status).toBe('canceled');
+  });
+
+  it('N7: record_failed RAISES on a ghost id; a terminal-row echo stays silent (no reason overwrite)', async () => {
+    await expect(
+      port.rpc('bot_order_record_failed', { p_client_order_id: 'ghost', p_error: 'boom' }),
+    ).rejects.toThrow(/unknown client_order_id/);
+    await reserve();
+    await port.rpc('bot_order_record_canceled', { p_client_order_id: 'c1' });
+    // Row exists (canceled) → silent no-op: status stays canceled, no failure reason lands.
+    await port.rpc('bot_order_record_failed', { p_client_order_id: 'c1', p_error: 'late failure echo' });
+    const [o] = await rows<{ status: string; reason: string | null }>(
+      db,
+      `select status, reason from public.live_orders where client_order_id = 'c1'`,
+    );
+    expect(o!.status).toBe('canceled');
+    expect(o!.reason).toBeNull();
   });
 
   it('F4: record_failed frees the key too and stores the error', async () => {
@@ -990,7 +1062,7 @@ describe('0082 §9 — the six bot_order_* RPCs (the T1 OrderLedger contract)', 
       'public.bot_order_record_fill(text, numeric, numeric, text)',
       'public.bot_order_record_canceled(text)',
       'public.bot_order_record_failed(text, text)',
-      'public.bot_order_list_dangling(text)',
+      'public.bot_order_list_dangling(text, integer)',
     ];
     for (const sig of sigs) {
       const [g] = await rows<{ anon_can: boolean; authd_can: boolean; svc_can: boolean }>(

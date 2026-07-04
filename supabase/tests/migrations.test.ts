@@ -327,8 +327,9 @@ describe('migrations 0001–0010', () => {
       // lossWindowStart) + forward-paper-PASS-or-ACTIVE-override (≤14d); exposure figures for the runner's
       // per-placement caps) + dash_trading (operator read, jsonb-OBJECT; today.lossUsd = the same shared
       // definition) + the seven bot_order_* T1 OrderLedger RPCs (service-role only; N2 exact marginal
-      // notionals in live_fills.fill_notional, N3 raise-on-unknown-id, N4 monotonic size_matched, N6
-      // fill-on-intent promotion, list_dangling {rows:[...]} reconcile sweep).
+      // notionals in live_fills.fill_notional, N3/N7 raise-on-unknown-id across all four record_* fns, N4
+      // monotonic size_matched, N6 fill-on-intent promotion, list_dangling {rows:[...]} reconcile sweep with
+      // the N9 ≥p_older_than_min staleness window, default 5 min).
       // dash_trading/trade_config_set/trade_gate_override_* added to WEB_AUTHENTICATED below. No cron/edge fn
       // (count stays 29).
       '0082_trading_activation.sql',

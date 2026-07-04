@@ -166,7 +166,8 @@ const FN_ARGS: Record<string, string[]> = {
   bot_order_record_fill: ['p_client_order_id', 'p_size_matched', 'p_avg_price', 'p_status'],
   bot_order_record_canceled: ['p_client_order_id'],
   bot_order_record_failed: ['p_client_order_id', 'p_error'],
-  bot_order_list_dangling: ['p_mode'],
+  // N9: an omitted p_older_than_min arrives as SQL NULL positionally — the fn coalesces NULL to its default 5.
+  bot_order_list_dangling: ['p_mode', 'p_older_than_min'],
 };
 
 export function pglitePort(db: PGlite): DbPort {

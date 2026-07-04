@@ -66,9 +66,12 @@
 -- and  todayLossUsd = greatest(0, −Σ realized_delta over SELL fills with filled_at ≥ date_trunc('day', now()))
 --                     + buy-side fees paid inside the window.
 -- The window start (UTC midnight) is surfaced verbatim as checks.lossWindowStart. EXACT for the strategy's
--- one-entry-one-exit shape; APPROXIMATION for re-buys: the basis is the lifetime average cost over ALL prior
--- BUY fills of the position, so a re-entry after a full close averages across the closed lots too (it never
--- hides a realized loss, it can only smear it between lots). ONE shared implementation —
+-- one-entry-one-exit shape; APPROXIMATION for re-buys (N8, stated precisely): the basis is the lifetime
+-- average cost over ALL prior BUY fills of the position, so a re-entry after a prior FULL close mixes the
+-- closed lots into today's basis — after a prior-day PROFITABLE close at a lower cost, today's basis is
+-- understated and today's realized loss can be UNDER-REPORTED (symmetrically, a prior losing close can
+-- over-report). This lives off the strategy's one-market-per-day path (each trade_date is a distinct
+-- market/position); accepted and documented rather than lot-tracked. ONE shared implementation —
 -- public.trade_today_realized_loss() (SECTION 4.5) — is THE definition for BOTH consumers:
 -- trade_live_preflight §5 AND dash_trading.today.lossUsd call it; neither carries its own expression.
 -- openExposureUsd is untouched: it stays cost-basis-of-open (price × size over open BUY rows).
@@ -686,29 +689,33 @@ grant  execute on function public.dash_trading() to service_role, authenticated;
 -- NOT mapped to 'exists' — only the (mode, intent_key) index carries reserve semantics; a client-id collision
 -- is a caller bug, not a benign retry.
 --
--- THE STATE MACHINE (N3/N6):
+-- THE STATE MACHINE (N3/N6/N7). The N3 unknown-id split applies to ALL FOUR record_* fns (N7): a
+-- client_order_id with NO ledger row at all RAISES (an unknown-id echo is a reconcile bug the runner must
+-- see); a row that exists but is out of the fn's from-states (terminal, or filled where filled is immutable)
+-- is a SILENT no-op (at-least-once venue delivery is benign).
 --   reserve_intent   : no open (mode,key) row → insert 'intent' ⇒ 'reserved'   | open row exists ⇒ 'exists'
 --   record_placed    : intent → placed (stamps order_id + placed_at). LATE arrival on placed/partial/filled
 --                      (N6: an instant FOK fill can beat it): stamps order_id if unset, NEVER regresses
---                      status. Terminal/unknown: no-op.
+--                      status. Terminal row: silent no-op. NO row: RAISE (N7).
 --   record_fill      : intent|placed|partial → p_status (partial|filled). N6: fills on 'intent' PROMOTE
 --                      directly (the fill beat record_placed). Δ = p_size_matched − size_matched:
 --                        Δ > 0 ⇒ cumulative update + one live_fills row (N2 marginal notional);
 --                        Δ = 0 ⇒ idempotent status echo, no fill row;
 --                        Δ < 0 ⇒ FULL no-op (N4 — size_matched is strictly monotonic; a shrinking venue echo
 --                                is anomalous and must not regress the ledger).
---                      Row exists but TERMINAL ⇒ SILENT no-op (duplicate echo; at-least-once delivery is
---                      benign). NO row at all for the id ⇒ RAISE (N3 — an unknown-id echo is a reconcile bug;
---                      the runner catches + alerts; it must never be swallowed).
+--                      Row exists but TERMINAL/filled ⇒ SILENT no-op (duplicate echo). NO row ⇒ RAISE (N3).
 --   record_canceled  : intent|placed|partial → canceled (terminal; frees the key; venue 'expired' folds here).
 --                      size_matched and avg_price are PRESERVED — T1's reprice partial-accounting reads them
---                      after the cancel transition. filled is immutable — no-op.
+--                      after the cancel transition. filled is immutable — silent no-op (as is an
+--                      already-canceled echo). NO row: RAISE (N7).
 --   record_failed    : intent|placed|partial → failed + reason (terminal; frees the key; never retried under
---                      the same client_order_id).
---   list_dangling    : the reconcile sweep's read — every (p_mode, status='intent', order_id IS NULL) row,
---                      i.e. intents whose post outcome was never recorded (a crash inside the post→record
---                      critical section). Returns { rows: [...] } — an OBJECT envelope even though the fn has
---                      args: the money path gets NO exceptions to the trap-proof post-0081 shape.
+--                      the same client_order_id). Terminal/filled row: silent no-op. NO row: RAISE (N7).
+--   list_dangling    : the reconcile sweep's read — every (p_mode, status='intent', order_id IS NULL) row
+--                      RESERVED MORE THAN p_older_than_min MINUTES AGO (default 5 — N9: a just-reserved
+--                      intent inside the normal reserve→post→record_placed window can never appear in a
+--                      sweep), i.e. intents whose post outcome was never recorded (a crash inside the
+--                      post→record critical section). Returns { rows: [...] } — an OBJECT envelope even
+--                      though the fn has args: the money path gets NO exceptions to the post-0081 shape.
 -- ══════════════════════════════════════════════════════════════════════════════════════════════════════════
 
 -- findByIntentKey: the single OPEN (non-terminal) row for (mode, key), or SQL null. The partial-unique index
@@ -756,6 +763,7 @@ $$;
 -- recordPlaced: intent → placed, stamps the venue orderID (the post→record critical section, ADR-OC-5).
 -- N6: it may arrive LATE — an instant FOK fill can promote the row past 'placed' first — so on a
 -- placed/partial/filled row it stamps order_id (first writer wins) and placed_at without regressing status.
+-- N7: NO row at all for the id ⇒ RAISE (reconcile bug); terminal row ⇒ silent no-op (dup echo).
 create or replace function public.bot_order_record_placed(p_client_order_id text, p_order_id text)
 returns void
 language plpgsql
@@ -763,6 +771,10 @@ security definer
 set search_path = public
 as $$
 begin
+  if not exists (select 1 from public.live_orders where client_order_id = p_client_order_id) then
+    raise exception 'bot_order_record_placed: unknown client_order_id % — no ledger row (reconcile bug)',
+      p_client_order_id;
+  end if;
   update public.live_orders
      set order_id  = coalesce(order_id, p_order_id),
          placed_at = coalesce(placed_at, now()),
@@ -780,6 +792,9 @@ $$;
 -- monotonic — a shrinking echo never regresses the ledger). Row exists but terminal ⇒ SILENT no-op (duplicate
 -- echo). NO row for the id ⇒ RAISE (N3 — a reconcile bug the runner must see, never swallowed).
 -- fee_usd stays 0 on this path (the maker rail is $0-fee).
+-- N10: a NEGATIVE marginal (an inconsistent venue avg-price echo with Δ > 0) is UNGUARDED by design — the
+-- notionals telescope to avg×cum exactly, so a later consistent echo self-corrects the running sum.
+-- N11: a size-0 fill echo is the Δ = 0 degenerate case (unreachable as a distinct venue event) — no fill row.
 create or replace function public.bot_order_record_fill(
   p_client_order_id text, p_size_matched numeric, p_avg_price numeric, p_status text
 )
@@ -828,6 +843,7 @@ $$;
 -- 'expired' outcome is recorded through THIS path (F9 — expired folds into canceled). A filled order is
 -- immutable — cancel on 'filled' is a no-op. size_matched/avg_price are DELIBERATELY untouched: a canceled
 -- partial keeps its fill accounting (T1's reprice partial-accounting reads it after the cancel transition).
+-- N7: NO row at all for the id ⇒ RAISE (reconcile bug); terminal/filled row ⇒ silent no-op (dup echo).
 create or replace function public.bot_order_record_canceled(p_client_order_id text)
 returns void
 language plpgsql
@@ -835,6 +851,10 @@ security definer
 set search_path = public
 as $$
 begin
+  if not exists (select 1 from public.live_orders where client_order_id = p_client_order_id) then
+    raise exception 'bot_order_record_canceled: unknown client_order_id % — no ledger row (reconcile bug)',
+      p_client_order_id;
+  end if;
   update public.live_orders
      set status = 'canceled'
    where client_order_id = p_client_order_id and status in ('intent', 'placed', 'partial');
@@ -843,6 +863,7 @@ $$;
 
 -- recordFailed: any OPEN pre-filled state → failed (TERMINAL; frees the intent key; never retried under the
 -- same client_order_id). The error lands in `reason`.
+-- N7: NO row at all for the id ⇒ RAISE (reconcile bug); terminal/filled row ⇒ silent no-op (dup echo).
 create or replace function public.bot_order_record_failed(p_client_order_id text, p_error text)
 returns void
 language plpgsql
@@ -850,6 +871,10 @@ security definer
 set search_path = public
 as $$
 begin
+  if not exists (select 1 from public.live_orders where client_order_id = p_client_order_id) then
+    raise exception 'bot_order_record_failed: unknown client_order_id % — no ledger row (reconcile bug)',
+      p_client_order_id;
+  end if;
   update public.live_orders
      set status = 'failed', reason = p_error
    where client_order_id = p_client_order_id and status in ('intent', 'placed', 'partial');
@@ -861,7 +886,12 @@ $$;
 -- holds a live order. Mode-scoped (F4). Returns { rows: [...] } (OBJECT envelope — the post-0081 idiom; the
 -- money path gets no exceptions even on an args-taking fn), each row the same to_jsonb(live_orders) shape as
 -- bot_order_by_intent.
-create or replace function public.bot_order_list_dangling(p_mode text)
+-- N9 STALENESS CONTRACT: only intents RESERVED (created_at) more than p_older_than_min minutes ago are
+-- returned (default 5) — a just-reserved intent inside the normal reserve→post→record_placed window can
+-- never appear in a sweep, so the sweeper needs no client-side freshness filter. T1's existing (p_mode)-only
+-- call keeps working via the DEFAULT; a NULL arg (positional callers like the twin port) coalesces to the
+-- same default. Pass 0 to see everything dangling regardless of age.
+create or replace function public.bot_order_list_dangling(p_mode text, p_older_than_min integer default 5)
 returns jsonb
 language sql
 stable
@@ -872,7 +902,8 @@ as $$
   from public.live_orders o
   where o.mode = p_mode
     and o.status = 'intent'
-    and o.order_id is null;
+    and o.order_id is null
+    and o.created_at < now() - (coalesce(p_older_than_min, 5) * interval '1 minute');
 $$;
 
 -- grants: the runner (service_role) is the SOLE caller of the ledger RPCs.
@@ -890,5 +921,5 @@ revoke all on function public.bot_order_record_canceled(text) from public, anon,
 grant  execute on function public.bot_order_record_canceled(text) to service_role;
 revoke all on function public.bot_order_record_failed(text, text) from public, anon, authenticated;
 grant  execute on function public.bot_order_record_failed(text, text) to service_role;
-revoke all on function public.bot_order_list_dangling(text) from public, anon, authenticated;
-grant  execute on function public.bot_order_list_dangling(text) to service_role;
+revoke all on function public.bot_order_list_dangling(text, integer) from public, anon, authenticated;
+grant  execute on function public.bot_order_list_dangling(text, integer) to service_role;
