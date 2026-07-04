@@ -8,9 +8,8 @@
  * This module is READ-ONLY: it never places a trade or touches a key. The §9R $25 stake/position ceiling is a
  * DB CHECK (the source of truth); STAKE_CEILING_USD mirrors it for callers that want to reason about it in code.
  */
-import type { TradingDb } from './types.ts';
-
-export type TradeMode = 'off' | 'dry-run' | 'live';
+import type { TradeMode, TradingDb } from './types.ts';
+export type { TradeMode } from './types.ts';
 
 /** The §9R hard ceiling, mirrored from the trade_config CHECK (stake_per_buy_usd ≤ 25 AND per_position_cap ≤ 25). */
 export const STAKE_CEILING_USD = 25;
