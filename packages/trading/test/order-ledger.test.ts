@@ -79,15 +79,34 @@ describe('rpcOrderLedger — the mode-scoped RPC contract for T3', () => {
     expect(await rpcOrderLedger(db2).reserveIntent({ mode: 'dry-run', intentKey: 'k', clientOrderId: 'c', marketId: 'm', tokenId: 't', side: 'BUY', purpose: 'entry', orderType: 'GTC', price: 0.1, size: 5, tradeDate: 'd' })).toBe('exists');
   });
 
-  it('listDanglingIntents → bot_order_list_dangling(p_mode) → mapped rows; non-array → []', async () => {
-    const { db, calls } = mockDb({ bot_order_list_dangling: [{ ...dbRow, status: 'intent', order_id: null }] });
+  it('listDanglingIntents → bot_order_list_dangling(p_mode) → unwraps the {rows:[…]} OBJECT ENVELOPE (post-0081 idiom)', async () => {
+    const { db, calls } = mockDb({ bot_order_list_dangling: { rows: [{ ...dbRow, status: 'intent', order_id: null }] } });
     const out = await rpcOrderLedger(db).listDanglingIntents('live');
     expect(calls[0]).toEqual({ fn: 'bot_order_list_dangling', args: { p_mode: 'live' } });
     expect(out).toHaveLength(1);
     expect(out[0]).toMatchObject({ status: 'intent', orderId: null, tokenId: 'tokA' });
 
-    const { db: db2 } = mockDb({ bot_order_list_dangling: null });
-    expect(await rpcOrderLedger(db2).listDanglingIntents('live')).toEqual([]);
+    // {rows:[]} is a legitimate empty sweep
+    const { db: dbEmpty } = mockDb({ bot_order_list_dangling: { rows: [] } });
+    expect(await rpcOrderLedger(dbEmpty).listDanglingIntents('live')).toEqual([]);
+  });
+
+  it('listDanglingIntents: [] ONLY on null/undefined result (RPC not yet live); non-null-but-shapeless RAISES — incl. a bare array (version skew)', async () => {
+    const { db: dbNull } = mockDb({ bot_order_list_dangling: null });
+    expect(await rpcOrderLedger(dbNull).listDanglingIntents('live')).toEqual([]);
+
+    const { db: dbMissing } = mockDb(); // RPC returns no row at all
+    expect(await rpcOrderLedger(dbMissing).listDanglingIntents('live')).toEqual([]);
+
+    // a bare array is the PRE-envelope shape — treating it as [] would silently skip reconcile
+    const { db: dbBare } = mockDb({ bot_order_list_dangling: [{ ...dbRow, status: 'intent', order_id: null }] });
+    await expect(rpcOrderLedger(dbBare).listDanglingIntents('live')).rejects.toMatchObject({ code: 'ERR_LEDGER_SHAPE' });
+
+    const { db: dbJunkRows } = mockDb({ bot_order_list_dangling: { rows: 'junk' } });
+    await expect(rpcOrderLedger(dbJunkRows).listDanglingIntents('live')).rejects.toMatchObject({ code: 'ERR_LEDGER_SHAPE' });
+
+    const { db: dbString } = mockDb({ bot_order_list_dangling: 'garbage' });
+    await expect(rpcOrderLedger(dbString).listDanglingIntents('live')).rejects.toMatchObject({ code: 'ERR_LEDGER_SHAPE' });
   });
 
   it('record{Placed,Fill,Canceled,Failed} map to their RPCs with p_ args and NO mode (client_order_id is unambiguous)', async () => {

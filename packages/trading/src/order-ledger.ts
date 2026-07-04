@@ -21,21 +21,27 @@
  *       p_client_order_id, p_market_id, p_token_id, p_side,          (CONDITIONAL insert guarded by the
  *       p_purpose, p_order_type, p_price, p_size, p_trade_date)       partial-unique index above — the
  *                                                                     never-double-place guarantee)
- *   bot_order_list_dangling(p_mode text)                          → jsonb ARRAY of rows with
- *                                                                    status='intent' AND order_id IS NULL
- *                                                                    (the startup-reconcile input.
- *                                                                    ⚠ ADDED BY THE T1 AMENDMENT (HIGH-2)
- *                                                                    — NOT in T3's final six @ 2c9afef;
- *                                                                    needs a T3 round-2 add before the
- *                                                                    live reconcile sweep can run)
+ *   bot_order_list_dangling(p_mode text)                          → jsonb OBJECT ENVELOPE `{rows:[…]}`
+ *                                                                    of rows with status='intent' AND
+ *                                                                    order_id IS NULL (the startup-
+ *                                                                    reconcile input). T3-CONFIRMED
+ *                                                                    (round 2): ships as `{rows:[…]}` —
+ *                                                                    the post-0081 idiom, NO top-level
+ *                                                                    jsonb arrays on the money path.
+ *                                                                    Adapter: null/undefined result → []
+ *                                                                    (RPC not yet live / SQL NULL);
+ *                                                                    non-null-but-shapeless — including
+ *                                                                    a bare array (version skew) — RAISES
  *   bot_order_record_placed(p_client_order_id, p_order_id)        → void  (intent → placed, sets orderId)
  *   bot_order_record_fill(p_client_order_id, p_size_matched,      → void  (placed → partial | filled;
  *       p_avg_price, p_status)                                       size_matched is CUMULATIVE)
- *   bot_order_record_canceled(p_client_order_id)                  → void  (→ canceled, terminal; MUST
- *                                                                    preserve size_matched — partial-fill
+ *   bot_order_record_canceled(p_client_order_id)                  → void  (→ canceled, terminal;
+ *                                                                    T3-CONFIRMED it preserves
+ *                                                                    size_matched — partial-fill
  *                                                                    accounting survives the transition)
  *   bot_order_record_failed(p_client_order_id, p_error)           → void  (→ failed, terminal; never retried)
  */
+import { ExecutionError } from '@weather-edge/core';
 import type {
   OrderLedger,
   OrderLedgerRow,
@@ -112,9 +118,21 @@ export function rpcOrderLedger(db: TradingDb): OrderLedger {
       const [row] = await db.rpc<{ bot_order_list_dangling: unknown }>('bot_order_list_dangling', {
         p_mode: mode,
       });
-      const arr = row?.bot_order_list_dangling;
-      if (!Array.isArray(arr)) return [];
-      return arr.map(mapLedgerRow).filter((r): r is OrderLedgerRow => r !== null);
+      const res = row?.bot_order_list_dangling;
+      // null/undefined = the RPC isn't live yet (or returned SQL NULL) — reconcile degrades to a no-op.
+      if (res == null) return [];
+      // T3 ships an OBJECT ENVELOPE {rows:[…]} (post-0081 idiom: no top-level jsonb arrays on the
+      // money path). Anything non-null that isn't that shape — including a bare array (version skew
+      // between adapter and RPC) — RAISES per the MEDIUM-3 posture: the reconcile input must never
+      // silently coerce to [] (an empty sweep would look like "nothing dangling" and skip reconcile).
+      const rows = (res as { rows?: unknown }).rows;
+      if (!Array.isArray(rows)) {
+        throw new ExecutionError(
+          'ERR_LEDGER_SHAPE',
+          `bot_order_list_dangling returned a shapeless result (expected {rows:[…]}): ${JSON.stringify(res).slice(0, 80)}`,
+        );
+      }
+      return rows.map(mapLedgerRow).filter((r): r is OrderLedgerRow => r !== null);
     },
 
     async recordPlaced(clientOrderId: string, orderId: string): Promise<void> {
