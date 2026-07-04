@@ -47,8 +47,10 @@ describe('DashNav — shared compact dash nav', () => {
     expect(hrefs).toContain('/rewards');
   });
 
-  it('excludes /signals until lane N1 merges (greppable INCLUDE_SIGNALS toggle)', () => {
-    expect(DASH_NAV.map(([h]) => h)).not.toContain('/signals');
-    expect(html).not.toContain('href="/signals"');
+  it('includes /signals (lane N1 merged — INCLUDE_SIGNALS on, placed after /efficiency)', () => {
+    const hrefs = DASH_NAV.map(([h]) => h);
+    expect(hrefs).toContain('/signals');
+    expect(hrefs.indexOf('/signals')).toBe(hrefs.indexOf('/efficiency') + 1);
+    expect(html).toContain('href="/signals"');
   });
 });

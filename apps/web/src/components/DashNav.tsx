@@ -13,11 +13,10 @@ import Link from 'next/link';
 import type { ReactElement } from 'react';
 
 // ── /signals TOGGLE ────────────────────────────────────────────────────────────────────────────────
-// Lane N1 builds the /signals route in parallel and may not have merged into this tree yet. INCLUDE_SIGNALS
-// is the single, greppable switch: the integrator flips it to `true` once app/(dash)/signals/page.tsx exists.
-// Default `false` because the /signals route does NOT exist in this worktree (a dead nav link is not
-// acceptable). Grep for INCLUDE_SIGNALS to find the one place to change.
-const INCLUDE_SIGNALS = false;
+// Flipped to `true` at N1 integration (2026-07-04): app/(dash)/signals/page.tsx exists — the verdict-explorer
+// flagship, placed right after /efficiency. Kept as a greppable switch (INCLUDE_SIGNALS) in case the route
+// is ever pulled from nav.
+const INCLUDE_SIGNALS = true;
 
 /**
  * The shared route list — [href, label]. Order: the two canonical Terminal-Glass reference pages first
@@ -29,6 +28,7 @@ const INCLUDE_SIGNALS = false;
 export const DASH_NAV: ReadonlyArray<readonly [string, string]> = [
   ['/', 'overview'], // the analytics front door — forecast skill vs. market (reference idiom)
   ['/efficiency', 'efficiency'], // THE VERDICT — the falsified-lever proof (reference idiom)
+  ...(INCLUDE_SIGNALS ? ([['/signals', 'signals']] as const) : []), // the verdict explorer — flagship (N1)
   ['/convergence', 'convergence'], // the 12th signal — opening-convergence forward-paper (dash_convergence)
   ['/maker-exit', 'maker-exit'], // the maker-exit variant — first +EV config (dash_maker_exit)
   ['/amsterdam', 'amsterdam'], // the one-accurate-city paper-trade head-to-head
@@ -37,7 +37,6 @@ export const DASH_NAV: ReadonlyArray<readonly [string, string]> = [
   ['/sharps', 'sharps'], // SPORTS-sharps roster + fingerprints (9th signal DORMANT)
   ['/rewards', 'rewards'], // funded-weather liquidity-reward pool tracker (dash_market_rewards)
   ['/whaletracker', 'whales'], // ≥$100k Polymarket whale-trade tracker (whale-watch feed)
-  ...(INCLUDE_SIGNALS ? ([['/signals', 'signals']] as const) : []),
 ] as const;
 
 export function DashNav({ email }: { email: string }): ReactElement {
