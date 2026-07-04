@@ -4,45 +4,22 @@
  * (requireOperator redirects to /login otherwise). A route group keeps
  * /login outside the guard at unchanged URLs.
  */
-import Link from 'next/link';
 import type { ReactElement, ReactNode } from 'react';
+import { DashNav } from '../../components/DashNav.tsx';
 import { requireOperator } from '../../lib/supabase.ts';
 
 export const dynamic = 'force-dynamic';
 
-// Nav trimmed to the active surfaces (2026-06-29): the opening-convergence paper play + the four kept analytics
-// pages. The rest (overview, verdict, replica, rewards, events, calibration, system, bets, admin) are HIDDEN from
-// nav but their routes are intentionally kept reachable by direct URL (non-destructive — operator's call).
-const NAV = [
-  ['/convergence', 'convergence'], // the 12th signal — opening-convergence forward-paper overview (dash_convergence, 0069)
-  ['/maker-exit', 'maker-exit'], // the maker-exit variant forward-paper loop — the first +EV config (dash_maker_exit, 0073)
-  ['/amsterdam', 'amsterdam'], // the one-accurate-city paper-trade head-to-head (analytics deliverable)
-  ['/paper-trade', 'paper-trade'], // the multi-city generalization — Singapore + Karachi (dash_city_sim, 0070)
-  ['/whaletracker', 'whales'], // ≥$100k Polymarket whale-trade tracker (analytics; whale-watch feed, 0055)
-  ['/data', 'accuracy'], // forecast accuracy by market — best/worst stations + the Brier gap (dash_data, 0065)
-  ['/sharps', 'sharps'], // SPORTS-sharps roster + fingerprints (analytics; 9th signal DORMANT)
-] as const;
+// The nav is now the shared, compact <DashNav> (components/DashNav.tsx) — one component, rendered once here,
+// so every (dash) island page carries the same bar covering all ten active analytics surfaces (N6 sweep,
+// 2026-07-04). The route list + the /signals toggle live in DashNav (grep INCLUDE_SIGNALS). Data fetching is
+// unchanged: this layout still owns requireOperator() and passes the email into the nav as a prop.
 
 export default async function DashLayout({ children }: { children: ReactNode }): Promise<ReactElement> {
   const email = await requireOperator();
   return (
     <div className="shell">
-      <nav className="topnav">
-        <Link href="/" className="brand">
-          ⛅ Weather Edge
-        </Link>
-        {NAV.map(([href, label]) => (
-          <Link key={href} href={href}>
-            {label}
-          </Link>
-        ))}
-        <span className="session">
-          <span>{email}</span>
-          <form action="/auth/signout" method="post">
-            <button type="submit">sign out</button>
-          </form>
-        </span>
-      </nav>
+      <DashNav email={email} />
       <main>{children}</main>
     </div>
   );
