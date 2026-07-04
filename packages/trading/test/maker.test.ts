@@ -309,15 +309,53 @@ describe('MakerExecutor.place — maker pricing + mode + idempotency', () => {
     expect(client.createOrder).not.toHaveBeenCalled();
   });
 
-  it('pre-post failure (postOrder rejects, no orderId): recordFailed + ORDER_FAIL CRITICAL, NEVER retried', async () => {
-    const client = mockClient({ postOrder: vi.fn(async () => Promise.reject(new Error('clob 503'))) });
-    const { ledger, calls } = mockLedger();
+  it('HIGH-A (a): postOrder transport-throws (lost response) → row HELD at intent, NO recordFailed, needs-reconcile CRITICAL names the intent, retry is duplicate, the reconcile sweep sees the row', async () => {
+    const client = mockClient({ postOrder: vi.fn(async () => Promise.reject(new Error('ECONNRESET clob 503; bearer: tok_abcdef123456'))) });
+    const { ledger, calls, rows } = mockLedger();
     const alerts: TradeAlert[] = [];
     const exec = new MakerExecutor(deps('live', client, ledger, { notify: async (a: TradeAlert) => (alerts.push(a), true) }));
 
     await expect(exec.place(req)).rejects.toThrow(ExecutionError);
     expect(client.postOrder).toHaveBeenCalledTimes(1);
+    // The venue MAY hold the order — the key must NOT be freed.
+    expect(calls.some((c) => c.fn === 'recordFailed')).toBe(false);
+    expect(rows.get('cid-fixed')).toMatchObject({ status: 'intent', orderId: null });
+    expect(alerts[0]).toMatchObject({ kind: 'ORDER_NEEDS_RECONCILE', severity: 'CRITICAL' });
+    expect(alerts[0]!.body).toContain(KEY); // names the intent
+    expect(alerts[0]!.body).not.toContain('tok_abcdef123456'); // redacted (MEDIUM-4)
+    // A retried place() is a duplicate — the reserved intent still blocks the key.
+    const r2 = await exec.place(req);
+    expect(r2.status).toBe('duplicate');
+    expect(client.postOrder).toHaveBeenCalledTimes(1);
+    // And the reconcile sweep's input INCLUDES the row (status='intent', orderId null).
+    const dangling = await ledger.listDanglingIntents('live');
+    expect(dangling.map((d) => d.clientOrderId)).toContain('cid-fixed');
+  });
+
+  it('HIGH-A (b): a throw BEFORE any venue interaction (book read rejects) leaves ZERO ledger writes — the key is never held', async () => {
+    const failing = mockClient({ getOrderBook: vi.fn(async () => Promise.reject(new Error('gateway timeout'))) });
+    const { ledger, calls } = mockLedger();
+    const exec = new MakerExecutor(deps('live', failing, ledger));
+
+    await expect(exec.place(req)).rejects.toThrow();
+    expect(calls.filter((c) => c.fn !== 'findByIntentKey')).toEqual([]); // no reserve, no record*
+
+    // ...and a subsequent attempt with a healthy client succeeds — nothing was left blocking the key.
+    const healthy = mockClient();
+    const exec2 = new MakerExecutor(deps('live', healthy, ledger));
+    const r = await exec2.place(req);
+    expect(r.status).toBe('placed');
+  });
+
+  it('HIGH-A (c): a CLEAN venue rejection (success=false — processed, refused, no order created) frees the key: recordFailed + ORDER_FAIL', async () => {
+    const client = mockClient({ postOrder: vi.fn(async () => ({ success: false, errorMsg: 'not enough balance / allowance' })) });
+    const { ledger, calls, rows } = mockLedger();
+    const alerts: TradeAlert[] = [];
+    const exec = new MakerExecutor(deps('live', client, ledger, { notify: async (a: TradeAlert) => (alerts.push(a), true) }));
+
+    await expect(exec.place(req)).rejects.toMatchObject({ code: 'ERR_CLOB_REJECTED' });
     expect(calls.some((c) => c.fn === 'recordFailed')).toBe(true);
+    expect(rows.get('cid-fixed')!.status).toBe('failed');
     expect(alerts[0]).toMatchObject({ kind: 'ORDER_FAIL', severity: 'CRITICAL' });
   });
 
@@ -370,17 +408,20 @@ describe('MakerExecutor.place — maker pricing + mode + idempotency', () => {
     expect(alerts[0]).toMatchObject({ kind: 'ORDER_NEEDS_RECONCILE', severity: 'CRITICAL' });
   });
 
-  it('postOrder returning no orderID is a pre-post failure (recordFailed, thrown)', async () => {
+  it('HIGH-A: a SHAPELESS post response (no orderID, not an explicit rejection) HOLDS at intent — order state unknown', async () => {
     const client = mockClient({ postOrder: vi.fn(async () => ({ success: true })) });
-    const { ledger, calls } = mockLedger();
-    const exec = new MakerExecutor(deps('live', client, ledger));
+    const { ledger, calls, rows } = mockLedger();
+    const alerts: TradeAlert[] = [];
+    const exec = new MakerExecutor(deps('live', client, ledger, { notify: async (a: TradeAlert) => (alerts.push(a), true) }));
     await expect(exec.place(req)).rejects.toMatchObject({ code: 'ERR_CLOB_POST' });
-    expect(calls.some((c) => c.fn === 'recordFailed')).toBe(true);
+    expect(calls.some((c) => c.fn === 'recordFailed')).toBe(false);
+    expect(rows.get('cid-fixed')!.status).toBe('intent');
+    expect(alerts[0]).toMatchObject({ kind: 'ORDER_NEEDS_RECONCILE', severity: 'CRITICAL' });
   });
 
-  it('MEDIUM-4: authent-shaped material in a venue error is redacted from the ledger arg, the alert body, AND the thrown message', async () => {
+  it('MEDIUM-4: authent-shaped material in a venue rejection is redacted from the ledger arg, the alert body, AND the thrown message', async () => {
     const client = mockClient({
-      postOrder: vi.fn(async () => Promise.reject(new Error('403 POLY_PASSPHRASE: hunter2secret42; signature=0xabcdef1234567890abcdef'))),
+      postOrder: vi.fn(async () => ({ success: false, errorMsg: '403 POLY_PASSPHRASE: hunter2secret42; signature=0xabcdef1234567890abcdef' })),
     });
     const { ledger, calls } = mockLedger();
     const alerts: TradeAlert[] = [];
@@ -681,5 +722,21 @@ describe('MakerExecutor.reconcileOpenOrders — the startup sweep (HIGH-2)', () 
     expect(out[0]).toMatchObject({ kind: 'held' });
     expect(rows.get('cid-dangling')!.status).toBe('intent');
     expect(calls.some((c) => c.fn === 'recordFailed')).toBe(false);
+  });
+
+  it('LOW-B: ReconcileOutcome.reason is redacted at the STRUCT (not just the alert) — T2 may log/persist it', async () => {
+    const client = mockClient({
+      getOpenOrders: vi.fn(async () => Promise.reject(new Error('401 POLY_PASSPHRASE: hunter2secret42'))),
+    });
+    const { ledger } = mockLedger([dangling()]);
+    const alerts: TradeAlert[] = [];
+    const exec = new MakerExecutor(deps('live', client, ledger, { notify: async (a: TradeAlert) => (alerts.push(a), true) }));
+
+    const out = await exec.reconcileOpenOrders();
+
+    expect(out[0]!.kind).toBe('held');
+    expect(out[0]!.reason).not.toContain('hunter2secret42');
+    expect(out[0]!.reason).toContain('REDACTED');
+    expect(alerts[0]!.body).not.toContain('hunter2secret42');
   });
 });

@@ -53,12 +53,15 @@ export interface ClobClientish {
     args: { tokenID: string; price: number; size: number; side: 'BUY' | 'SELL' },
     options: { tickSize: number; negRisk: boolean },
   ): Promise<unknown>;
-  /** `postOnly` is the native 3rd positional bool (GTC/GTD-only) — research report §9.2. */
+  /** `postOnly` is the native 3rd positional bool (GTC/GTD-only) — research report §9.2.
+   *  The response's `success`/`errorMsg` fields distinguish a CLEAN VENUE REJECTION (success=false,
+   *  request processed, no order created → safe to free the intent) from a transport throw or a
+   *  shapeless response (order state UNKNOWN → the intent must be held for reconcile — HIGH-A). */
   postOrder(
     order: unknown,
     orderType: OrderType,
     postOnly?: boolean,
-  ): Promise<{ orderID?: string; success?: boolean }>;
+  ): Promise<{ orderID?: string; success?: boolean; errorMsg?: string }>;
   getOrder(orderID: string): Promise<{
     status?: string;
     price?: string | number;
@@ -388,13 +391,22 @@ export class MakerExecutor {
 
   /**
    * Post + record the fill (shared live tail). NEVER auto-retries on error — no accidental doubles.
-   * CRITICAL-1 failure semantics: once `postOrder` has returned an orderId, the venue may hold a live
-   * order — the intent key MUST STAY RESERVED. Any error after that point keeps the row 'placed'
-   * (re-recording best-effort in case the failure WAS the record) and emits a needs-reconcile CRITICAL
-   * naming the resting orderId; `recordFailed` (which frees the key) runs ONLY when orderId is still
-   * undefined — a provably pre-post failure. Residual (documented): a postOrder that THROWS (e.g. a
-   * network timeout after venue accept) also has no orderId and frees the key — that ambiguity is the
-   * reconcile sweep's job to surface, and the venue's heartbeat auto-cancel bounds it.
+   * Failure semantics (CRITICAL-1 + HIGH-A), by where the failure lands:
+   *
+   *   - AFTER an orderId is known (recordPlaced / fill-poll / recordFill failed): the row stays
+   *     'placed' (best-effort re-record in case the failure WAS the record write) + a needs-reconcile
+   *     CRITICAL naming the resting orderId. recordFailed NEVER runs here.
+   *   - postOrder invoked but NO decisive response (a transport THROW, or a response with no orderID
+   *     that is not a clean rejection): the venue MAY have accepted the order and the response was
+   *     lost — freeing the key would let a retry double-place. The row is LEFT AT 'intent' (it was
+   *     reserved pre-call; recordPlaced never ran) + a needs-reconcile CRITICAL naming the intent.
+   *     The startup reconcile sweep lists EXACTLY these rows (status='intent', order_id IS NULL) and
+   *     adopts-or-frees them against venue evidence — that sweep, not a heartbeat, is the mechanism.
+   *   - CLEAN VENUE REJECTION (a response with success=false: the venue processed the request and
+   *     refused it — no order was created): recordFailed frees the key (ERR_CLOB_REJECTED).
+   *   - Throws BEFORE any venue interaction (book/tick/pricing/min-size/sign in place()/placeTaker())
+   *     never reach this method — they occur before reserveIntent, so no ledger row exists and no key
+   *     is ever held; the error simply propagates.
    */
   private async postAndRecord(
     client: MakerClobClientish,
@@ -407,10 +419,22 @@ export class MakerExecutor {
     label: string,
   ): Promise<OrderPlacementResult> {
     let orderId: string | undefined;
+    let postAttempted = false;
     try {
+      postAttempted = true;
       const posted = await client.postOrder(order, orderType, postOnly);
       orderId = posted?.orderID;
-      if (!orderId) throw new ExecutionError('ERR_CLOB_POST', 'postOrder returned no orderID');
+      if (!orderId) {
+        if (posted?.success === false) {
+          // The venue processed the request and REFUSED it — no order exists; safe to free.
+          throw new ExecutionError(
+            'ERR_CLOB_REJECTED',
+            redactText(`venue rejected the order: ${posted.errorMsg ?? 'no errorMsg in response'}`),
+          );
+        }
+        // A response arrived but carries no orderID and no explicit rejection — order state UNKNOWN.
+        throw new ExecutionError('ERR_CLOB_POST', 'postOrder returned no orderID (shapeless response — order state unknown)');
+      }
       await this.ledger.recordPlaced(clientOrderId, orderId);
 
       const poll = parseOrderFillPoll(await client.getOrder(orderId), orderId, requestedSize);
@@ -449,7 +473,25 @@ export class MakerExecutor {
         throw new ExecutionError('ERR_CLOB', message);
       }
 
-      // True pre-post failure (no orderId ever returned) — the only branch that frees the key.
+      const cleanRejection = e instanceof ExecutionError && e.code === 'ERR_CLOB_REJECTED';
+      if (postAttempted && !cleanRejection) {
+        // HIGH-A: postOrder was invoked but no orderId came back and the venue did NOT cleanly
+        // reject — a transport throw (lost response after a possible accept) or a shapeless response
+        // can hide an ACCEPTED order. Do NOT recordFailed: the row stays at 'intent' (reserved
+        // pre-call), which is exactly what the startup reconcile sweep lists and adjudicates against
+        // venue evidence (adopt-or-free). Freeing here would let a retry double-place.
+        await this.deps.notify({
+          kind: 'ORDER_NEEDS_RECONCILE',
+          severity: 'CRITICAL',
+          title: `Order state unknown after post attempt: ${label}`,
+          body: `postOrder failed without a decisive response: ${message}\nintent ${result.intentKey} (row ${clientOrderId}) LEFT RESERVED at 'intent' — run the startup reconcile sweep before any retry`,
+          dedupeKey: `order-reconcile:${clientOrderId}`,
+        });
+        if (e instanceof ExecutionError || e instanceof FillRejected) throw e;
+        throw new ExecutionError('ERR_CLOB', message);
+      }
+
+      // Clean venue rejection (or a provably pre-post failure) — no order exists; free the key.
       await this.ledger.recordFailed(clientOrderId, message);
       await this.deps.notify({
         kind: 'ORDER_FAIL',
@@ -620,8 +662,17 @@ export class MakerExecutor {
    *           evidence reads themselves fail) → the row stays non-terminal + a WARN alert. A key is
    *           NEVER freed on ambiguity.
    *
+   * ⚠ T2 CONTRACT (LOW-A): the FREE path is valid ONLY as a STARTUP-AFTER-DOWNTIME sweep — call this
+   * BEFORE the first tick, before any websocket heartbeat starts. The "no open order + no trade ⇒
+   * never posted" inference assumes (a) the venue's heartbeat auto-cancel has already cleared any
+   * order the crashed process left resting, and (b) `getOpenOrders` is authoritative for the current
+   * book. Invoking this MID-RUN while the bot is heartbeating and placing is FORBIDDEN: a just-posted
+   * order (in the post→record window) has a dangling 'intent' row and could be wrongly freed →
+   * double-place on the next tick.
+   *
    * Non-live modes return [] without touching the venue (dry-run rows carry synthetic orderIds and are
-   * never dangling in this sense).
+   * never dangling in this sense). Outcome `reason` strings are redacted at the source (LOW-B) — T2
+   * may log or persist them.
    */
   async reconcileOpenOrders(): Promise<ReconcileOutcome[]> {
     if (this.mode !== 'live') return [];
@@ -631,12 +682,14 @@ export class MakerExecutor {
     const out: ReconcileOutcome[] = [];
 
     for (const row of rows) {
-      const held = async (reason: string): Promise<void> => {
+      const held = async (rawReason: string): Promise<void> => {
+        // LOW-B: redact at the STRUCT, not just the alert — T2 may log/persist outcome.reason.
+        const reason = redactText(rawReason);
         await this.deps.notify({
           kind: 'RECONCILE_AMBIGUOUS',
           severity: 'WARN',
           title: `Reconcile held: ${row.intentKey}`,
-          body: `dangling intent ${row.clientOrderId} (${row.side} ${row.size} @ ${row.price}) — ${redactText(reason)}\nrow kept non-terminal; resolve manually before re-placing`,
+          body: `dangling intent ${row.clientOrderId} (${row.side} ${row.size} @ ${row.price}) — ${reason}\nrow kept non-terminal; resolve manually before re-placing`,
           dedupeKey: `reconcile-held:${row.clientOrderId}`,
         });
         out.push({ kind: 'held', clientOrderId: row.clientOrderId, intentKey: row.intentKey, orderId: null, reason });

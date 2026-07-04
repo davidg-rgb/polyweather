@@ -5,7 +5,7 @@
  * jsonb single-row returns, and the snake_case→camelCase row mapping. Faked db.rpc (mockDb idiom).
  */
 import { describe, expect, it } from 'vitest';
-import { mapLedgerRow, rpcOrderLedger, type TradingDb } from '../src/index.ts';
+import { danglingEnvelopeReady, mapLedgerRow, rpcOrderLedger, type TradingDb } from '../src/index.ts';
 
 function mockDb(returns: Record<string, unknown> = {}) {
   const calls: { fn: string; args: Record<string, unknown> }[] = [];
@@ -123,6 +123,23 @@ describe('rpcOrderLedger — the mode-scoped RPC contract for T3', () => {
       { fn: 'bot_order_record_failed', args: { p_client_order_id: 'cid', p_error: 'boom' } },
     ]);
     for (const c of calls) expect(Object.keys(c.args)).not.toContain('p_mode');
+  });
+});
+
+describe('danglingEnvelopeReady — the LOW-D boot probe (WARN when reconcile would silently no-op)', () => {
+  it('true for a well-formed envelope — including a legitimately-empty {rows:[]}', async () => {
+    const { db } = mockDb({ bot_order_list_dangling: { rows: [] } });
+    expect(await danglingEnvelopeReady(db, 'live')).toBe(true);
+    const { db: db2 } = mockDb({ bot_order_list_dangling: { rows: [{ ...dbRow, status: 'intent', order_id: null }] } });
+    expect(await danglingEnvelopeReady(db2, 'live')).toBe(true);
+  });
+  it('false for absent/NULL/malformed (incl. bare array) and for a throwing RPC — never throws itself', async () => {
+    expect(await danglingEnvelopeReady(mockDb({ bot_order_list_dangling: null }).db, 'live')).toBe(false);
+    expect(await danglingEnvelopeReady(mockDb().db, 'live')).toBe(false); // RPC absent
+    expect(await danglingEnvelopeReady(mockDb({ bot_order_list_dangling: [] }).db, 'live')).toBe(false); // bare array
+    expect(await danglingEnvelopeReady(mockDb({ bot_order_list_dangling: { rows: 'junk' } }).db, 'live')).toBe(false);
+    const throwing: TradingDb = { rpc: async () => { throw new Error('function bot_order_list_dangling does not exist'); }, getConfigRows: async () => [] };
+    expect(await danglingEnvelopeReady(throwing, 'live')).toBe(false);
   });
 });
 

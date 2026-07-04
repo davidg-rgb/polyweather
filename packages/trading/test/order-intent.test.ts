@@ -253,4 +253,18 @@ describe('redaction — never surfaces signing/auth material (MEDIUM-4)', () => 
     expect(clean).toContain('order 0xORDER1');
     expect(clean).toContain('price 0.27');
   });
+
+  it('LOW-C: space-separated label forms and 64-hex blobs are stripped', () => {
+    const key32 = '0x' + 'cd'.repeat(32); // 64 hex chars — a 32-byte private-key/hash shape
+    const dirty = `boot failed: api key: abcdef123456 then private key: ${key32} at step 3`;
+    const clean = redactText(dirty);
+    expect(clean).not.toContain('abcdef123456');
+    expect(clean).not.toContain(key32);
+    expect(clean).toContain('REDACTED');
+    expect(clean).toContain('boot failed');
+    expect(clean).toContain('at step 3');
+    // below the 64-hex floor an address-length hex survives (it is not key material)
+    const addr = '0x' + 'ef'.repeat(20); // 40 hex chars — an address
+    expect(redactText(`funder ${addr}`)).toContain(addr);
+  });
 });

@@ -40,6 +40,18 @@
  *                                                                    size_matched — partial-fill
  *                                                                    accounting survives the transition)
  *   bot_order_record_failed(p_client_order_id, p_error)           → void  (→ failed, terminal; never retried)
+ *
+ * ⚠ T2 CONTRACT (LOW-A): the reconcile FREE path ("no open order + no matching trade ⇒ never posted
+ * ⇒ recordFailed") is valid ONLY as a STARTUP-AFTER-DOWNTIME sweep — the venue's heartbeat
+ * auto-cancel has cleared any pre-crash resting orders, and `getOpenOrders` is assumed authoritative.
+ * Invoking `reconcileOpenOrders` MID-RUN while the bot is heartbeating/placing is FORBIDDEN — a
+ * just-posted order still inside the post→record window has a dangling 'intent' row and could be
+ * wrongly freed (→ double-place on the next tick).
+ *
+ * OPS (LOW-D): at boot, BEFORE the first reconcile, T2 calls `danglingEnvelopeReady(db, 'live')`
+ * once — it distinguishes "RPC absent / SQL NULL" (→ WARN: reconcile is inert, the migration is not
+ * applied) from a legitimately-empty `{rows:[]}` sweep. `listDanglingIntents` alone cannot tell the
+ * two apart (both yield []).
  */
 import { ExecutionError } from '@weather-edge/core';
 import type {
@@ -164,4 +176,23 @@ export function rpcOrderLedger(db: TradingDb): OrderLedger {
       await db.rpc('bot_order_record_failed', { p_client_order_id: clientOrderId, p_error: error });
     },
   };
+}
+
+/**
+ * LOW-D — the one-time boot probe: does `bot_order_list_dangling` return a WELL-FORMED `{rows:[…]}`
+ * envelope? `true` = the RPC is live (an empty `{rows:[]}` is a legitimately-empty sweep). `false` =
+ * absent/NULL/malformed — the reconcile sweep would silently no-op, so T2 must WARN once at boot
+ * (the migration is missing or version-skewed). Cheap: one RPC call, never throws.
+ */
+export async function danglingEnvelopeReady(db: TradingDb, mode: TradeMode): Promise<boolean> {
+  try {
+    const [row] = await db.rpc<{ bot_order_list_dangling: unknown }>('bot_order_list_dangling', {
+      p_mode: mode,
+    });
+    const res = row?.bot_order_list_dangling;
+    if (res == null) return false;
+    return Array.isArray((res as { rows?: unknown }).rows);
+  } catch {
+    return false; // the RPC itself is absent/erroring — same WARN
+  }
 }

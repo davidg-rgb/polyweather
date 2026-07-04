@@ -319,10 +319,12 @@ export function redactOrderPayload(payload: unknown): unknown {
 // MEDIUM-4 — free-text redaction for error strings that leave the executor (ledger error column,
 // Slack alert bodies, thrown ExecutionError messages). A venue/HTTP error can echo request material:
 // the L2 auth headers (POLY_API_KEY / POLY_PASSPHRASE / POLY_SIGNATURE), generic `signature=…` /
-// `secret: …` key-values, or a raw EIP-712 signature blob (a long hex string).
+// `secret: …` key-values, or a raw signature/key hex blob.
+// LOW-C: labels also match SPACE-separated forms ("api key: …", "private key: 0x…"); the hex-blob
+// floor is 64 chars (a 32-byte value — private keys and hashes, not only the 65-byte EIP-712 sig).
 const HEADER_SECRET_RE = /(POLY[-_](?:API[-_]?KEY|PASSPHRASE|SIGNATURE|SECRET|ADDRESS))["']?\s*[:=]?\s*["']?[A-Za-z0-9+/_.=-]{6,}/gi;
-const KV_SECRET_RE = /\b(signature|secret|passphrase|api[-_]?key|private[-_]?key|authorization|bearer)\b["']?\s*[:=]\s*["']?[^\s"',;}]{6,}/gi;
-const LONG_HEX_RE = /0x[0-9a-fA-F]{80,}/g;
+const KV_SECRET_RE = /\b(signature|secret|passphrase|api[-_ ]?key|private[-_ ]?key|authorization|bearer)\b["']?\s*[:=]\s*["']?[^\s"',;}]{6,}/gi;
+const LONG_HEX_RE = /0x[0-9a-fA-F]{64,}/g;
 
 /**
  * Redact authent-shaped material from a free-text string BEFORE it is persisted, alerted, or thrown.
