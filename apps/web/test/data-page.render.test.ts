@@ -5,6 +5,7 @@
  * + the by-horizon table + both charts reach the DOM, and (c) the graceful-empty path renders. It also
  * optionally writes the rendered HTML (globals.css inlined) to the scratchpad for an unauthenticated eyeball.
  */
+import { SELECTOR_DIAGNOSTIC_META } from '@weather-edge/core';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
@@ -80,6 +81,14 @@ describe('/data page renders', () => {
     expect(html).not.toContain('about 78%');
     expect(html).toContain('Forecast ↔ outcome pairs');
     expect(html).toContain('2026-03-28');
+
+    // model use by use-case (D7) — values coupled to the imported source-accuracy asset, never re-typed
+    expect(html).toContain('Model use by use-case');
+    expect(html).toContain('Seed-quality check');
+    expect(html).toContain(`${SELECTOR_DIAGNOSTIC_META.nEvents}`); // the 708-event detail table label
+    expect(html).toContain(`${SELECTOR_DIAGNOSTIC_META.bannerNEvents}-event panel`); // regenerated corroboration
+    expect(html).toContain(`${SELECTOR_DIAGNOSTIC_META.bannerChw1Calibrated}%`);
+    expect(html).toContain('the rail stays DORMANT, live config unchanged.'); // alignment note rendered as gated
 
     const out = process.env.DATA_PREVIEW_OUT;
     if (out) {

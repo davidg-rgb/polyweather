@@ -9,6 +9,16 @@
  * daily forecast-vs-market Brier gap. Composes ONE RPC (dash_data, 0065). Read-only analytics; trading DORMANT.
  */
 import type { ReactElement } from 'react';
+import {
+  FORECAST_USE_CASES,
+  PER_CITY_HIGHLIGHTS,
+  PER_CITY_OVERRIDE_NOTE,
+  SELECTOR_DIAGNOSTIC,
+  SELECTOR_DIAGNOSTIC_META,
+  SOURCE_ACCURACY_BY_LEAD,
+  SOURCE_ACCURACY_CAVEATS,
+  SOURCE_ACCURACY_META,
+} from '@weather-edge/core';
 import { BarChart } from '../../../components/BarChart.tsx';
 import { LineChart } from '../../../components/LineChart.tsx';
 import { fmtDate, fmtPct, num } from '../../../lib/format.ts';
@@ -113,6 +123,13 @@ export default async function DataPage(): Promise<ReactElement> {
   const brierMkt = brierSeries.map((p) => num(p.brierMarket));
 
   const leadStation = num(meta.leadStation) ?? 1;
+
+  // Static "model use by use-case" record (core/sim/source-accuracy-findings) — the 2026-07-03 per-city
+  // source-accuracy verdict, copied from MAKER-EXIT-SIM.md / CONVERGENCE-TUNING.md / CITY-SIM.md §7. Not a
+  // live feed — a golden-tested committed asset. Illustrative-extreme city names for the prose line below.
+  const bestHighlight = PER_CITY_HIGHLIGHTS.find((h) => h.kind === 'best');
+  const worstHighlight = PER_CITY_HIGHLIGHTS.find((h) => h.kind === 'worst');
+  const bestCityNames = (bestHighlight?.cities ?? []).map((c) => c.replace(/-/g, ' ')).join(', ');
 
   // The scored-distribution row is derived from the live window (meta.firstDay→lastDay) — the house probability
   // vectors this page scores start mid-June (house dists are never seeded for past target_dates), NOT mid-May.
@@ -353,6 +370,154 @@ export default async function DataPage(): Promise<ReactElement> {
             <strong>This is a short, summery sample.</strong> The numbers below firm up as live capture accrues —
             treat them as indicative, especially the per-station ranks (~10 day-before observations each).
           </li>
+        </ul>
+      </div>
+
+      {/* ── model use by use-case (static: source-accuracy-findings) ─────────────────────────────────────── */}
+      <h2>
+        Model use by use-case{' '}
+        <span className="chip soft">~{num(SOURCE_ACCURACY_META.nEventsApprox)} events</span>{' '}
+        <span className="chip soft">
+          {SOURCE_ACCURACY_META.nCities} cities · leads 0/1/2
+        </span>
+      </h2>
+      <p className="muted small">
+        Which weather source should each job use? Answered {SOURCE_ACCURACY_META.recordedAt} on{' '}
+        {SOURCE_ACCURACY_META.panel}, scored on the {SOURCE_ACCURACY_META.metric}. Headline: the{' '}
+        <strong>calibrated house blend dominates every individual source at every lead</strong> — yet the two
+        consumers of a forecast want <em>different</em> sources, because they bet on different things.
+      </p>
+      <div className="panel">
+        <table>
+          <thead>
+            <tr>
+              <th>source</th>
+              {SOURCE_ACCURACY_META.leads.map((l) => (
+                <th key={l} className="num">
+                  {LEAD_LABEL[l] ?? `lead ${l}`}
+                </th>
+              ))}
+              <th>live seed</th>
+            </tr>
+          </thead>
+          <tbody>
+            {SOURCE_ACCURACY_BY_LEAD.map((r) => {
+              const best = r.source === 'calibrated-blend';
+              return (
+                <tr
+                  key={r.source}
+                  style={best ? { boxShadow: 'inset 3px 0 0 var(--ams-green, #38d39f)' } : undefined}
+                >
+                  <td>
+                    <strong>{r.label}</strong>
+                  </td>
+                  {SOURCE_ACCURACY_META.leads.map((l, i) => (
+                    <td key={l} className={`num ${best ? 'pos' : ''}`}>
+                      {r.approx ? '~' : ''}
+                      {r.hitWithin1ByLead[i]}%
+                    </td>
+                  ))}
+                  <td className="small muted mono">{r.systemName}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+        <p className="muted small" style={{ marginTop: '0.5rem' }}>
+          Bracket rate = mode within ±1° of the resolved daily high. No per-city single-model override survives
+          scrutiny — the {PER_CITY_OVERRIDE_NOTE.nCitiesBeatingBlend} cities where one model beats the blend by
+          &gt;{PER_CITY_OVERRIDE_NOTE.minMarginPp}pp are best-of-{PER_CITY_OVERRIDE_NOTE.selectionPoolPerCity}{' '}
+          picks at n≈{PER_CITY_OVERRIDE_NOTE.nPerCityApprox}. Per-city accuracy still varies enormously:{' '}
+          {bestCityNames} bracket ≥{bestHighlight?.bracketPct ?? '—'}% at 1 day out, amsterdam only{' '}
+          {worstHighlight?.bracketPct ?? '—'}%.
+        </p>
+      </div>
+
+      <div
+        className="grid cols-2"
+        style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '0.75rem' }}
+      >
+        {FORECAST_USE_CASES.map((u) => (
+          <div key={u.key} className="panel" style={{ margin: 0 }}>
+            <div className="cap" style={{ marginBottom: '0.35rem' }}>
+              {u.title} <span className="chip soft">{u.seedName}</span>
+            </div>
+            <div className="small" style={{ lineHeight: 1.6 }}>
+              <div>
+                <strong>Consumer:</strong> {u.consumer}
+              </div>
+              <div>
+                <strong>Horizon:</strong> {u.horizon}
+              </div>
+              <div>
+                <strong>Wants:</strong> {u.wants}
+              </div>
+            </div>
+            <p className="muted small" style={{ marginTop: '0.4rem' }}>
+              {u.rationale}
+            </p>
+          </div>
+        ))}
+      </div>
+
+      <div className="panel">
+        <div className="cap" style={{ marginBottom: '0.35rem' }}>
+          Seed-quality check — does the forecast bracket the eventual winner? ({SELECTOR_DIAGNOSTIC_META.nEvents}{' '}
+          events)
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>seed</th>
+              <th className="num">mode only</th>
+              <th className="num">mode ±1</th>
+              <th className="num">mode ±2</th>
+            </tr>
+          </thead>
+          <tbody>
+            {SELECTOR_DIAGNOSTIC.map((r) => {
+              const cal = r.bias === 'calibrated';
+              return (
+                <tr
+                  key={r.selector}
+                  style={cal ? { boxShadow: 'inset 3px 0 0 var(--ams-green, #38d39f)' } : undefined}
+                >
+                  <td>
+                    <strong>{r.label}</strong> <span className="muted small mono">{r.selector}</span>
+                  </td>
+                  {[0, 1, 2].map((w) => (
+                    <td key={w} className={`num ${cal ? 'pos' : ''}`}>
+                      {r.bracketByChw[w]}%
+                    </td>
+                  ))}
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+        <p className="muted small" style={{ marginTop: '0.5rem' }}>
+          Corroborated on the regenerated {SELECTOR_DIAGNOSTIC_META.bannerNEvents}-event panel (the canonical
+          banner run): mode ±1 bracketing {SELECTOR_DIAGNOSTIC_META.bannerChw1Calibrated}% (calibrated) vs{' '}
+          {SELECTOR_DIAGNOSTIC_META.bannerChw1Raw}% (raw) — and on the ~2,100-event DB panel at lead 1,{' '}
+          {SELECTOR_DIAGNOSTIC_META.dbPanelLead1Calibrated}% vs {SELECTOR_DIAGNOSTIC_META.dbPanelLead1Raw}%. The{' '}
+          {SELECTOR_DIAGNOSTIC_META.nEvents}-event table above is the full-width detail from the earlier run; the
+          conclusion — calibrated out-selects raw at every width — holds in both.
+        </p>
+        <p className="muted small" style={{ marginTop: '0.5rem' }}>
+          {SELECTOR_DIAGNOSTIC_META.alignmentNote}
+        </p>
+      </div>
+
+      <div className="panel">
+        <div className="cap" style={{ marginBottom: '0.4rem' }}>
+          Caveats
+        </div>
+        <ul style={{ margin: 0, paddingLeft: '1.1rem', lineHeight: 1.7 }}>
+          {SOURCE_ACCURACY_CAVEATS.map((c) => (
+            <li key={c.slice(0, 24)} className="small muted">
+              {c}
+            </li>
+          ))}
         </ul>
       </div>
 
