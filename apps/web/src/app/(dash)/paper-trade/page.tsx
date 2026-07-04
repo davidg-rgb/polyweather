@@ -19,6 +19,8 @@ import {
   CITY_SCAN_POOLED_CURVE,
   CITY_SCAN_TOP5_TRAIN_CELLS,
   type CityScanCandidate,
+  cityFloorConfidenceAt,
+  getCityClimatology,
   localHourInstant,
 } from '@weather-edge/core';
 import { EquityChart, type EquitySeries } from '../../../components/EquityChart.tsx';
@@ -99,6 +101,15 @@ function CityPanel({ city }: { city: CitySimCity }): ReactElement {
   const watch = city.entryWatch;
   const watchUi = WATCH_UI[watch.confidence] ?? WATCH_UI.insufficient!;
 
+  // ERA5 ~20-yr climatology (display-only; core/sim/city-climatology). Peak hour + P(daily max already
+  // reached) per arm — surfaced NEXT TO the entry-watch recommendation. Touches no sim/bet/entry-watch math.
+  const clim = getCityClimatology(city.slug);
+  const climFloorAtRec = watch.recommendedHour != null ? cityFloorConfidenceAt(city.slug, watch.recommendedHour) : null;
+  const climFloorPct = (h: number): string => {
+    const f = cityFloorConfidenceAt(city.slug, h);
+    return f == null ? '—' : fmtPct(f, 0);
+  };
+
   const series: EquitySeries[] = city.armHours
     .filter((h) => city.chart.byHour[h])
     .map((h, i) => ({
@@ -135,6 +146,27 @@ function CityPanel({ city }: { city: CitySimCity }): ReactElement {
           <div className="big" style={{ color: watchUi.color }}>{watch.recommendedHour != null ? `${watch.recommendedHour}:00` : '—'}</div>
           <div className="sub">watcher · {watchUi.badge}</div>
         </div>
+        <div
+          className="tile"
+          title={
+            clim
+              ? `ERA5 ${clim.fromYear}–${clim.toYear} hourly climatology (${clim.icao}, ${clim.nDays} days): when the daily max is typically reached, and P(it's already in) at the recommended entry hour.`
+              : 'No ERA5 climatology for this city.'
+          }
+        >
+          <div className="cap">Climatology ⓘ</div>
+          <div className="big sky">
+            {clim ? `${clim.medianPeakHour}:00` : '—'}
+            <span className="muted" style={{ fontSize: '0.9rem' }}> peak</span>
+          </div>
+          <div className="sub">
+            {clim
+              ? climFloorAtRec != null
+                ? `floor ${fmtPct(climFloorAtRec, 0)} @ ${watch.recommendedHour}:00`
+                : `ERA5 ${clim.fromYear}–${clim.toYear}`
+              : 'no ERA5 data'}
+          </div>
+        </div>
         <div className="tile">
           <div className="cap">Coverage</div>
           <div className="big">{nDays}<span className="muted" style={{ fontSize: '0.9rem' }}> days</span></div>
@@ -159,7 +191,9 @@ function CityPanel({ city }: { city: CitySimCity }): ReactElement {
         <table>
           <thead>
             <tr>
-              <th>arm</th><th>bets</th><th>graded</th><th>hit rate</th><th>avg ask</th>
+              <th>arm</th>
+              <th title="ERA5 ~20-yr climatology: P(the daily max is already reached by this local hour) — the floor confidence at each arm">clim floor</th>
+              <th>bets</th><th>graded</th><th>hit rate</th><th>avg ask</th>
               <th>net P&amp;L</th><th>ROI</th><th>edge (won−ask)</th>
             </tr>
           </thead>
@@ -174,6 +208,7 @@ function CityPanel({ city }: { city: CitySimCity }): ReactElement {
                   <td style={{ color: armColor(a.hour), fontWeight: 700 }}>
                     {a.hour}:00{a.isLeader ? ' 🥇' : ''}{a.recommended ? ' ⭐' : ''}
                   </td>
+                  <td className="muted" title="ERA5 P(daily max already reached by this hour)">{climFloorPct(a.hour)}</td>
                   <td>{num(a.nBets) ?? 0}</td>
                   <td>{ng}</td>
                   <td>{hit == null ? '—' : `${fmtPct(hit, 0)}${ng > 0 ? ` (${fmtPct(a.hitCiLo, 0)}–${fmtPct(a.hitCiHi, 0)})` : ''}`}</td>

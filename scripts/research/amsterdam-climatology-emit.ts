@@ -23,8 +23,12 @@ export interface DayPeakLike {
   byLocalHour: Map<number, number>; // local hour -> tenths°C observed
 }
 
-/** Local hours we store per-hour decision stats for (the candidate evaluation/lock window). */
-const DECISION_HOURS = [10, 11, 12, 13, 14, 15, 16, 17, 18, 19];
+/**
+ * Local hours we store per-hour decision stats for (the candidate evaluation/lock window). Exported so the
+ * 45-city ERA5 climatology (scripts/research/city-climatology-emit.ts) reuses the SAME lock-hour window and
+ * decision math rather than re-deriving it.
+ */
+export const DECISION_HOURS = [10, 11, 12, 13, 14, 15, 16, 17, 18, 19];
 /** A hot-day sub-climatology is only emitted when at least this many ≥25°C days exist for the month. */
 const HOT_MIN_DAYS = 30;
 /** °C threshold defining a "hot day" — boundaries are most in play here, and the peak runs later. */
@@ -43,7 +47,7 @@ function p90(xs: number[]): number {
   const i = Math.min(s.length - 1, Math.max(0, Math.ceil(0.9 * s.length) - 1));
   return s[i] ?? 0;
 }
-function median(xs: number[]): number {
+export function median(xs: number[]): number {
   if (xs.length === 0) return 0;
   const s = [...xs].sort((a, b) => a - b);
   return s[Math.floor((s.length - 1) / 2)] ?? 0;
@@ -77,7 +81,7 @@ function forwardUpsideC(byLocalHour: Map<number, number>, h: number): number | n
   return Math.max(0, (fwdMax - runMax) / 10);
 }
 
-interface HourDecisionStat {
+export interface HourDecisionStat {
   hour: number;
   peakedPct: number;
   leUpside05: number;
@@ -87,7 +91,7 @@ interface HourDecisionStat {
   n: number;
 }
 
-function decisionStats(days: DayPeakLike[]): HourDecisionStat[] {
+export function decisionStats(days: DayPeakLike[]): HourDecisionStat[] {
   return DECISION_HOURS.map((h) => {
     // peakedPct is UNCONDITIONAL: P(max reached by h) over ALL period days (peakLocalHour is always known),
     // divided by the constant days.length — so it is monotone non-decreasing in h by construction and matches
@@ -115,7 +119,7 @@ function decisionStats(days: DayPeakLike[]): HourDecisionStat[] {
   });
 }
 
-function peakHistogram(days: DayPeakLike[]): number[] {
+export function peakHistogram(days: DayPeakLike[]): number[] {
   const counts = new Array<number>(24).fill(0);
   for (const d of days) counts[d.peakLocalHour] = (counts[d.peakLocalHour] ?? 0) + 1;
   return counts.map((c) => r3(days.length ? c / days.length : 0));

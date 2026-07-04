@@ -170,6 +170,12 @@ describe('/paper-trade page renders — 45-City Scan section + current-bet box',
     // the °F unit-ordering fix: the city header renders °F, never F°
     expect(html).toContain('°F ·');
     expect(html).not.toContain('F° ·');
+
+    // ERA5 climatology wiring (D5): both cities are in the committed catalog (KHOU/WSSS), so the per-city
+    // Climatology tile (peak hour) + the arm table's "clim floor" column reach the DOM — display-only.
+    expect(html).toContain('Climatology');
+    expect(html).toContain('clim floor');
+    expect(html).toContain(' peak'); // the tile's "HH:00 peak" suffix
   });
 
   it('current-bet box: pre-tick, headlines TODAY’s intended forecast center from dash_city_forecast (0079)', async () => {
