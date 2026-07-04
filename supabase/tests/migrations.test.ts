@@ -315,6 +315,24 @@ describe('migrations 0001–0010', () => {
       // active_until run-window gate byte-identical); the handler + seed read .rows tolerantly (deploy-order-safe).
       // No table/cron change (count stays 29). CITY-SIM-PLACEMENT-FIX.md.
       '0081_city_sim_active_configs_rows_wrap.sql',
+      // 0082 = the TRADING ACTIVATION + RISK CONSOLE, staged DARK (not applied to any DB): trade_config (single-row
+      // typed risk/mode surface, seeded mode='off', §9R $25 stake/position CHECK ceiling) + trade_config_audit
+      // (append-only ENFORCED — no role holds UPDATE/DELETE; whole-config old/new jsonb via trigger) +
+      // trade_gate_override (the EXPIRING interlock escape hatch: expires_at NOT NULL, guarded set/clear RPCs) +
+      // live_orders/live_fills (the runner's order-intent/fill ledger; PARTIAL-UNIQUE (mode,intent_key) over
+      // non-terminal rows = the reserve-intent guarantee; dry-run rows recorded but excluded from all money
+      // figures) + trade_config_get (service-role read) + trade_config_set (operator-guarded write, active_until
+      // ≤60d) + trade_live_preflight (the live-mode INTERLOCK — mode/window/stake-cap + the N1 daily-loss kill
+      // over trade_today_realized_loss(), the ONE shared realized-at-sell-time loss definition (window named as
+      // lossWindowStart) + forward-paper-PASS-or-ACTIVE-override (≤14d); exposure figures for the runner's
+      // per-placement caps) + dash_trading (operator read, jsonb-OBJECT; today.lossUsd = the same shared
+      // definition) + the seven bot_order_* T1 OrderLedger RPCs (service-role only; N2 exact marginal
+      // notionals in live_fills.fill_notional, N3/N7 raise-on-unknown-id across all four record_* fns, N4
+      // monotonic size_matched, N6 fill-on-intent promotion, list_dangling {rows:[...]} reconcile sweep with
+      // the N9 ≥p_older_than_min staleness window, default 5 min).
+      // dash_trading/trade_config_set/trade_gate_override_* added to WEB_AUTHENTICATED below. No cron/edge fn
+      // (count stays 29).
+      '0082_trading_activation.sql',
     ]);
   });
 });
@@ -783,6 +801,10 @@ describe('0034: internal-RPC lockdown — anon/authenticated revoked except the 
     'dash_maker_exit',  // 0073: /maker-exit forward maker-exit paper loop operator read
     'dash_maker_exit_history',  // 0079: /maker-exit assumptions-over-time sparkline read (gate-day instrumentation)
     'dash_city_forecast',  // 0080: /paper-trade pre-placement forecast (current-bet box) operator read
+    'dash_trading',  // 0082: /trading activation + risk console operator read (config + preflight + open orders + today spend)
+    'trade_config_set',  // 0082: operator-guarded trade_config write (self-guards via operator_guard, like every operator_* RPC)
+    'trade_gate_override_set',  // 0082 F1: operator-guarded EXPIRING interlock override write (self-guards)
+    'trade_gate_override_clear',  // 0082 F1: operator-guarded override clear (expires active rows in place; self-guards)
     'go_live_gate_inputs',
     'operator_halt', 'operator_resume', 'operator_update_config', 'operator_verify_station',
     'operator_set_champion', 'operator_skip_bet', 'operator_manual_bet',
