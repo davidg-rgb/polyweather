@@ -14,8 +14,14 @@ forward paper loop is the gate of record** — it accrues real-book evidence dai
 `opening-capture` (`*/10`) → `maker-exit-panel` (hourly `:35`) → `/maker-exit` + `bot_gate_snapshot`.
 
 **Sufficiency bars (frozen):** ≥40 realized markets · ≥6 cities · ≥7 distinct target days. As of
-2026-07-03 15:20Z the panel sees 43–58 markets *in scope* per tick (the 0077 fix unlocked the starved
-fetch path) but **realized** counts accrue only as markets resolve — expect sufficiency ~2026-07-08→12.
+2026-07-04 18:36Z (snap 209): **INSUFFICIENT — 73 markets / 34 cities / 6 of 7 days** (net −$160.05,
+makerFillRate 0.082 vs 0.49 backtest, rebate $0). **Day-count mechanism (C31 correction): `n_distinct_days`
+counts SETTLED-ENTRY target dates, not graded target-dates** — day 7 = the first 07-05-targeted position
+ENTERING and SETTLING (TP/SL fill or time-stop). All 45 07-05 events listed 07-03 evening but none had
+entered through 07-04 (July-4-thin books vs the $150 depth floor) → expect the label ~2026-07-05.
+When it renders, `docs/ops/GATE-DAY-PLAYBOOK.md` pre-drafts every response (KILL = pre-authorized to
+record · PASS = stage the §9R decision doc only · INSUFFICIENT-regression = package 3 via
+`scripts/ops/grading-lag.ts`).
 
 ## How to adjudicate (any model can do this)
 
@@ -41,6 +47,27 @@ fetch path) but **realized** counts accrue only as markets resolve — expect su
 | `bot.tickStaleMin.paper` | `'180'` | Matches the hourly cadence (3×) — deadman pages the operator on real gate staleness |
 | `bot.consensusSource` | `calibrated` | The validated seed (73.9 % vs 52.8 % selector) |
 | Slack | paused except WHALE_TRADE + deadman kinds | Deadmen page correctly (proven 07-03) |
+
+## What changed 2026-07-03 night → 07-04 day (all pushed; cycle log C28–C42 in FASTTRACK-PLAN.md)
+
+- **Migrations 0079 (`dash_maker_exit_history`) + 0080 (`dash_city_forecast`) APPLIED live 07-04 08:10Z**
+  (operator blanket approval C32) — the /maker-exit assumption sparklines + /paper-trade intended-bet
+  tiles are live for the operator session. Read-only SECURITY DEFINER dash RPCs; no fn redeploys.
+- **New/updated surfaces:** `/signals` (the twelve-ways verdict explorer, static asset + live gate row) ·
+  home `/` twelve-ways hero · `/data` "Model use by use-case" panel · `/paper-trade` 45-city-scan section,
+  operator current-bet box, intended-bet tile, and the D5 climatology tile + per-arm clim-floor column ·
+  `/maker-exit` assumptions sparklines · shared DashNav (re-adds /, /efficiency, /rewards) · public README.
+- **D5 ERA5 climatology:** `packages/core/src/sim/city-climatology.ts` (45 cities × 20 y, committed asset;
+  regen via `scripts/research/city-peak-hour.ts --emit`, fetch-free from the gitignored 180 MB cache at
+  `scripts/.cache/era5/`). Display-only — zero sim/bet/entry-watch changes.
+- **⚠ PENDING OPERATOR BUNDLE — `docs/ops/CITY-SIM-PLACEMENT-FIX.md`:** the city-paper-trade cron has
+  NEVER placed a bet (the 0044 top-level-array port trap in `city_sim_active_configs()`; grading was fine,
+  backfills masked it). Code fixed + **migration `0081` staged dark** (`9717461`). Bundle: apply 0081 →
+  redeploy `city-paper-trade` → gap-fill target 07-04 → verify the next 10:00Z tick shows `cities:4,
+  placed>0`.
+- **Staged recommendation (not urgent):** offset the convergence cron to `2,17,32,47 * * * *` — its two
+  07-04 degraded ticks (5 cityErrors, 14 mkts) both landed on :00/:30 opening-capture collision points.
+- Suite is now **151 files / 2308 tests**; `main == origin` (everything above is pushed; Vercel deployed).
 
 ## Maintenance that becomes due later
 
@@ -74,5 +101,6 @@ The closing rule stands: nothing here outranks letting the forward gate accrue.
   (outcome block) · canonical ops log: `BUILD-STATE.md` (Active Phase, 07-03 addenda)
 - Verdict docs: `FINDINGS.md` (start here) · `MAKER-EXIT-SIM.md` (the surviving lever) ·
   `CONVERGENCE-TUNING.md` / `FLUCTUATION-TAKER.md` (the taker KILLs)
-- Local commits not pushed as of writing: `52f115d` (WS-1) · `6c053f1` (WS-5) · `c0892ec` (runbook) —
-  plus the parallel agent's uncommitted signal-backlog work in the main tree. Push is the operator's call.
+- ~~Local commits not pushed as of writing~~ **superseded 07-04: everything is committed AND pushed;
+  `main == origin`.** The only staged-dark item is migration `0081` + the `city-paper-trade` redeploy
+  (the CITY-SIM-PLACEMENT-FIX bundle above) — operator-gated.
