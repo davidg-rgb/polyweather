@@ -30,9 +30,9 @@
 -- bot_gate_snapshot.source's own CHECK comment is "the capital gate reads forward only (F2-r10)", and a backtest
 -- PASS must never unlock capital. A test proves a source='backtest' PASS does NOT satisfy the interlock.
 --
--- THE T1 ORDER-LEDGER CONTRACT (packages/trading order-ledger.ts, T1 commit 683e7ff): the six bot_order_* RPCs
--- below implement the `OrderLedger` port over live_orders/live_fills (T1's doc calls the table `bot_orders`;
--- the RPC names abstract the table away). Lifecycle: intent → placed → partial → filled, with canceled/failed
+-- THE T1 ORDER-LEDGER CONTRACT (packages/trading order-ledger.ts, T1 commit 683e7ff): the seven bot_order_*
+-- RPCs below implement the `OrderLedger` port + the reconcile sweep over live_orders/live_fills (T1's doc
+-- calls the table `bot_orders`; the RPC names abstract the table away). Lifecycle: intent → placed → partial → filled, with canceled/failed
 -- TERMINAL. The load-bearing idempotency guarantee (F4) is the PARTIAL-UNIQUE index
 --   unique (mode, intent_key) WHERE status NOT IN ('canceled','failed')
 -- — bot_order_reserve_intent is a CONDITIONAL insert against it ('reserved' | 'exists'): a retry or a
@@ -55,6 +55,30 @@
 -- ≥ daily_loss_kill_frac × total_concurrent_cap_usd — the FRACTION'S BASIS IS total_concurrent_cap_usd (the
 -- bot's deployable-bankroll ceiling; this surface has no separate bot-bankroll config, so the concurrent cap is
 -- the honest denominator).
+--
+-- THE DAILY-LOSS DEFINITION (N1 — REALIZED P&L ATTRIBUTED AT SELL TIME; one shared implementation): the naive
+-- within-day net-fill-cashflow measure (buys+fees−sells over today's fills, clamped) has two proven failure
+-- modes — a cross-midnight losing round-trip is NEVER captured in any single day (the buy lands in D, the sell
+-- in D+1, and D+1's clamp hides it), and an ordinary buy-heavy healthy day counts its full open cost as
+-- "loss". The definition is therefore REALIZED P&L at SELL time: a position is (mode, market_id, token_id);
+-- BUY fills accumulate cost (exact marginal notionals — N2 below); each SELL fill realizes
+--   realized_delta = its proceeds − (average cost basis at that fill's time × size sold) − its attributed fee
+-- and  todayLossUsd = greatest(0, −Σ realized_delta over SELL fills with filled_at ≥ date_trunc('day', now()))
+--                     + buy-side fees paid inside the window.
+-- The window start (UTC midnight) is surfaced verbatim as checks.lossWindowStart. EXACT for the strategy's
+-- one-entry-one-exit shape; APPROXIMATION for re-buys: the basis is the lifetime average cost over ALL prior
+-- BUY fills of the position, so a re-entry after a full close averages across the closed lots too (it never
+-- hides a realized loss, it can only smear it between lots). ONE shared implementation —
+-- public.trade_today_realized_loss() (SECTION 4.5) — is THE definition for BOTH consumers:
+-- trade_live_preflight §5 AND dash_trading.today.lossUsd call it; neither carries its own expression.
+-- openExposureUsd is untouched: it stays cost-basis-of-open (price × size over open BUY rows).
+--
+-- FILL-CASH EXACTNESS (N2): live_fills carries fill_notional = the MARGINAL notional of each delta,
+--   marginal = (p_avg_price × p_size_matched) − (prev_avg × prev_size),
+-- so Σ fill_notional over a position's fills IS the true cash, bit-exact in numeric. fill_price =
+-- round(marginal/delta, 6) is stored for display only — marginal/delta is a non-terminating decimal in general
+-- (the lens's own example: 0.98/3), so NO finite-precision fill_price can make Σ(fill_price × fill_size)
+-- exact; every money aggregation here reads fill_notional, never fill_price × fill_size.
 --
 -- AUDIT NOTE (F7): trade_config_audit.changed_by records the EFFECTIVE ROLE at write time (current_user — e.g.
 -- 'service_role' for direct writes, the definer-function owner for operator RPC writes), not a person.
@@ -175,7 +199,9 @@ grant select on public.trade_gate_override to anon, authenticated;
 grant all    on public.trade_gate_override to service_role;
 
 -- F1: the guarded override write — SECURITY DEFINER + operator_guard, same idiom as trade_config_set.
--- Rejects a non-future expiry (an already-expired override is a no-op wearing a reason).
+-- Rejects a non-future expiry (an already-expired override is a no-op wearing a reason) AND caps the horizon
+-- at 14 days (F1-residual): a gate bypass is short-lived by construction — a longer one is a standing policy
+-- change, which belongs to the gate itself, not an override row.
 create or replace function public.trade_gate_override_set(p_reason text, p_expires_at timestamptz, p_note text default null)
 returns jsonb
 language plpgsql
@@ -190,6 +216,9 @@ begin
   end if;
   if p_expires_at is null or p_expires_at <= now() then
     raise exception 'trade_gate_override_set: expires_at must be in the future';
+  end if;
+  if p_expires_at > now() + interval '14 days' then
+    raise exception 'trade_gate_override_set: expires_at more than 14 days out — an override is short-lived by construction';
   end if;
   insert into public.trade_gate_override (reason, note, expires_at)
   values (p_reason, p_note, p_expires_at)
@@ -270,13 +299,14 @@ create or replace trigger trg_live_orders_updated_at
   for each row execute function public.set_updated_at();
 
 create table if not exists public.live_fills (
-  id         uuid primary key default gen_random_uuid(),
-  order_id   uuid not null references public.live_orders(id),
-  fill_price numeric(8,6)  not null,                             -- the cumulative avg price at record time (see record_fill)
-  fill_size  numeric(14,4) not null,                             -- the DELTA matched since the previous record_fill
-  fee_usd    numeric(10,4) not null default 0,                   -- 0 via record_fill (maker $0 fee); taker fees land here later
-  filled_at  timestamptz   not null default now(),
-  created_at timestamptz   not null default now()
+  id            uuid primary key default gen_random_uuid(),
+  order_id      uuid not null references public.live_orders(id),
+  fill_price    numeric(8,6)  not null,                          -- DISPLAY: round(marginal/delta, 6) — see N2 header
+  fill_size     numeric(14,4) not null,                          -- the DELTA matched since the previous record_fill
+  fill_notional numeric(14,6) not null,                          -- N2: the EXACT marginal cash of this delta — Σ = true cash
+  fee_usd       numeric(10,4) not null default 0,                -- 0 via record_fill (maker $0 fee); taker fees land here later
+  filled_at     timestamptz   not null default now(),
+  created_at    timestamptz   not null default now()
 );
 create index if not exists live_fills_order_idx  on public.live_fills (order_id);
 create index if not exists live_fills_filled_idx on public.live_fills (filled_at desc);
@@ -294,6 +324,54 @@ create policy operator_read on public.live_fills
   for select to authenticated using (public.is_operator());
 grant select on public.live_fills to anon, authenticated;
 grant all    on public.live_fills to service_role;
+
+-- ══════════════════════════════════════════════════════════════════════════════════════════════════════════
+-- SECTION 4.5 · trade_today_realized_loss() — the ONE shared daily-loss implementation (N1)
+-- The definition in the header, verbatim: realized P&L attributed at SELL time over LIVE fills; loss window =
+-- SELL fills with filled_at ≥ date_trunc('day', now()) (UTC midnight), plus buy-side fees paid in the window.
+-- Basis = lifetime average cost of the position's BUY fills up to the sell's fill time (exact marginal
+-- notionals — N2). BOTH consumers call this; there is deliberately no second expression anywhere.
+-- ══════════════════════════════════════════════════════════════════════════════════════════════════════════
+create or replace function public.trade_today_realized_loss()
+returns numeric
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  with buys as (
+    select o.market_id, o.token_id, f.fill_notional, f.fill_size, f.fee_usd, f.filled_at
+    from public.live_fills f
+    join public.live_orders o on o.id = f.order_id
+    where o.mode = 'live' and o.side = 'BUY'
+  ),
+  today_sells as (
+    select o.market_id, o.token_id, f.fill_notional, f.fill_size, f.fee_usd, f.filled_at
+    from public.live_fills f
+    join public.live_orders o on o.id = f.order_id
+    where o.mode = 'live' and o.side = 'SELL'
+      and f.filled_at >= date_trunc('day', now())
+  ),
+  realized as (
+    -- per SELL fill: proceeds − (avg cost basis at that time × size sold) − its attributed fee.
+    -- A naked sell (no prior buys — outside the strategy shape) gets basis 0: pure proceeds, never a
+    -- fabricated loss.
+    select s.fill_notional
+           - coalesce((
+               select sum(b.fill_notional) / nullif(sum(b.fill_size), 0)
+               from buys b
+               where b.market_id = s.market_id and b.token_id = s.token_id
+                 and b.filled_at <= s.filled_at
+             ), 0) * s.fill_size
+           - s.fee_usd as delta
+    from today_sells s
+  )
+  select greatest(0, -coalesce((select sum(delta) from realized), 0))
+       + coalesce((select sum(fee_usd) from buys where filled_at >= date_trunc('day', now())), 0);
+$$;
+
+revoke all on function public.trade_today_realized_loss() from public, anon, authenticated;
+grant  execute on function public.trade_today_realized_loss() to service_role;
 
 -- ══════════════════════════════════════════════════════════════════════════════════════════════════════════
 -- SECTION 5 · trade_config_get() — the runner-facing service-role read (object envelope, tripwire-compliant)
@@ -385,11 +463,12 @@ grant execute on function public.trade_config_set(
 --   (3) stake_per_buy_usd <= per_position_cap_usd
 --   (4) gate: the latest mode='paper' source='forward' bot_gate_snapshot has label='PASS'  OR  an ACTIVE
 --       (expires_at > now()) trade_gate_override row exists (F1)
---   (5) F2 daily-loss kill: today's realized LIVE loss < daily_loss_kill_usd AND
+--   (5) F2/N1 daily-loss kill: today's realized LIVE loss (trade_today_realized_loss(), the SHARED N1
+--       definition — realized P&L at SELL time + buy fees, window = UTC midnight) < daily_loss_kill_usd AND
 --       < daily_loss_kill_frac × total_concurrent_cap_usd (the documented basis — see header)
 -- checks additionally carries the open LIVE buy-side exposure (total + per-market) for the runner's
--- per-placement cap enforcement (the F2 contract in the header). ALL money figures filter mode='live':
--- dry-run rows are recorded in the ledger but never count (addendum).
+-- per-placement cap enforcement (the F2 contract in the header) and lossWindowStart (the N1 window start,
+-- named explicitly). ALL money figures filter mode='live': dry-run rows are recorded but never count.
 -- ══════════════════════════════════════════════════════════════════════════════════════════════════════════
 create or replace function public.trade_live_preflight()
 returns jsonb
@@ -464,15 +543,8 @@ begin
       'no PASS forward paper gate (bot_gate_snapshot mode=paper/source=forward) and no ACTIVE trade_gate_override row'::text;
   end if;
 
-  -- (5) F2 daily-loss kill — today's realized LIVE loss (buys + fees − sells, clamped ≥ 0; dry-run never counts).
-  select greatest(0,
-           coalesce(sum(f.fill_price * f.fill_size) filter (where o.side = 'BUY'),  0)
-         + coalesce(sum(f.fee_usd), 0)
-         - coalesce(sum(f.fill_price * f.fill_size) filter (where o.side = 'SELL'), 0))
-    into v_today_loss
-  from public.live_fills f
-  join public.live_orders o on o.id = f.order_id
-  where o.mode = 'live' and f.filled_at >= date_trunc('day', now());
+  -- (5) F2/N1 daily-loss kill — the SHARED realized-at-sell-time definition (SECTION 4.5; dry-run never counts).
+  v_today_loss := public.trade_today_realized_loss();
 
   v_kill_basis := v_cfg.daily_loss_kill_frac * v_cfg.total_concurrent_cap_usd;
   if v_today_loss >= v_cfg.daily_loss_kill_usd then
@@ -517,6 +589,7 @@ begin
       'overrideReason',            v_override_reason,
       'overrideExpiresAt',         v_override_expires,
       'todayLossUsd',              v_today_loss,
+      'lossWindowStart',           date_trunc('day', now()),
       'dailyLossKillUsd',          v_cfg.daily_loss_kill_usd,
       'dailyLossKillFracBasisUsd', v_kill_basis,
       'openExposureUsd',           v_open_expo,
@@ -559,18 +632,18 @@ begin
       where o.mode = 'live' and o.side = 'BUY' and o.status in ('intent', 'placed', 'partial')
     ),
     'today', (
-      -- today's realized LIVE cash flow from fills: buys deploy capital, sells return it, fees always cost.
+      -- today's LIVE cash flow from fills (informational: buys deploy capital, sells return it, fees cost),
+      -- all on N2 exact notionals. lossUsd is NOT derived from this cashflow — it is THE shared N1
+      -- realized-at-sell-time definition (trade_today_realized_loss), identical to preflight §5 by construction.
       select jsonb_build_object(
-        'buyUsd',  coalesce(sum(f.fill_price * f.fill_size) filter (where o.side = 'BUY'),  0),
-        'sellUsd', coalesce(sum(f.fill_price * f.fill_size) filter (where o.side = 'SELL'), 0),
+        'buyUsd',  coalesce(sum(f.fill_notional) filter (where o.side = 'BUY'),  0),
+        'sellUsd', coalesce(sum(f.fill_notional) filter (where o.side = 'SELL'), 0),
         'feeUsd',  coalesce(sum(f.fee_usd), 0),
-        'netUsd',  coalesce(sum(f.fill_price * f.fill_size) filter (where o.side = 'SELL'), 0)
-                 - coalesce(sum(f.fill_price * f.fill_size) filter (where o.side = 'BUY'),  0)
+        'netUsd',  coalesce(sum(f.fill_notional) filter (where o.side = 'SELL'), 0)
+                 - coalesce(sum(f.fill_notional) filter (where o.side = 'BUY'),  0)
                  - coalesce(sum(f.fee_usd), 0),
-        'lossUsd', greatest(0,
-                     coalesce(sum(f.fill_price * f.fill_size) filter (where o.side = 'BUY'),  0)
-                   + coalesce(sum(f.fee_usd), 0)
-                   - coalesce(sum(f.fill_price * f.fill_size) filter (where o.side = 'SELL'), 0)),
+        'lossUsd', public.trade_today_realized_loss(),
+        'lossWindowStart', date_trunc('day', now()),
         'nFills',  count(f.id)
       )
       from public.live_fills f
@@ -602,10 +675,40 @@ revoke all on function public.dash_trading() from public, anon, authenticated;
 grant  execute on function public.dash_trading() to service_role, authenticated;
 
 -- ══════════════════════════════════════════════════════════════════════════════════════════════════════════
--- SECTION 9 · the six bot_order_* RPCs — the T1 OrderLedger contract (service-role ONLY; the runner is the
--- sole caller). Args are T1's documented contract verbatim EXCEPT by_intent + reserve_intent take an explicit
--- p_mode (F4 — dry-run and live are distinct intents); T1's rpcOrderLedger binding adds the mode arg (flagged
--- in the lane report — the RPC side is the schema truth).
+-- SECTION 9 · the seven bot_order_* RPCs — the T1 OrderLedger contract + the reconcile sweep (service-role
+-- ONLY; the runner is the sole caller). Args are T1's documented contract verbatim EXCEPT by_intent +
+-- reserve_intent take an explicit p_mode (F4 — dry-run and live are distinct intents); T1's rpcOrderLedger
+-- binding adds the mode arg (flagged in the lane report — the RPC side is the schema truth).
+-- bot_order_list_dangling is the seventh (coordinator addendum): T1's reconcile sweep reads it.
+--
+-- CLIENT_ORDER_ID CONTRACT (N5): client_order_id must be GLOBALLY UNIQUE and NEVER REUSED (T1 generates a
+-- fresh id per attempt). A collision on its partial-unique index RAISES unique_violation and is deliberately
+-- NOT mapped to 'exists' — only the (mode, intent_key) index carries reserve semantics; a client-id collision
+-- is a caller bug, not a benign retry.
+--
+-- THE STATE MACHINE (N3/N6):
+--   reserve_intent   : no open (mode,key) row → insert 'intent' ⇒ 'reserved'   | open row exists ⇒ 'exists'
+--   record_placed    : intent → placed (stamps order_id + placed_at). LATE arrival on placed/partial/filled
+--                      (N6: an instant FOK fill can beat it): stamps order_id if unset, NEVER regresses
+--                      status. Terminal/unknown: no-op.
+--   record_fill      : intent|placed|partial → p_status (partial|filled). N6: fills on 'intent' PROMOTE
+--                      directly (the fill beat record_placed). Δ = p_size_matched − size_matched:
+--                        Δ > 0 ⇒ cumulative update + one live_fills row (N2 marginal notional);
+--                        Δ = 0 ⇒ idempotent status echo, no fill row;
+--                        Δ < 0 ⇒ FULL no-op (N4 — size_matched is strictly monotonic; a shrinking venue echo
+--                                is anomalous and must not regress the ledger).
+--                      Row exists but TERMINAL ⇒ SILENT no-op (duplicate echo; at-least-once delivery is
+--                      benign). NO row at all for the id ⇒ RAISE (N3 — an unknown-id echo is a reconcile bug;
+--                      the runner catches + alerts; it must never be swallowed).
+--   record_canceled  : intent|placed|partial → canceled (terminal; frees the key; venue 'expired' folds here).
+--                      size_matched and avg_price are PRESERVED — T1's reprice partial-accounting reads them
+--                      after the cancel transition. filled is immutable — no-op.
+--   record_failed    : intent|placed|partial → failed + reason (terminal; frees the key; never retried under
+--                      the same client_order_id).
+--   list_dangling    : the reconcile sweep's read — every (p_mode, status='intent', order_id IS NULL) row,
+--                      i.e. intents whose post outcome was never recorded (a crash inside the post→record
+--                      critical section). Returns { rows: [...] } — an OBJECT envelope even though the fn has
+--                      args: the money path gets NO exceptions to the trap-proof post-0081 shape.
 -- ══════════════════════════════════════════════════════════════════════════════════════════════════════════
 
 -- findByIntentKey: the single OPEN (non-terminal) row for (mode, key), or SQL null. The partial-unique index
@@ -651,6 +754,8 @@ end;
 $$;
 
 -- recordPlaced: intent → placed, stamps the venue orderID (the post→record critical section, ADR-OC-5).
+-- N6: it may arrive LATE — an instant FOK fill can promote the row past 'placed' first — so on a
+-- placed/partial/filled row it stamps order_id (first writer wins) and placed_at without regressing status.
 create or replace function public.bot_order_record_placed(p_client_order_id text, p_order_id text)
 returns void
 language plpgsql
@@ -659,15 +764,22 @@ set search_path = public
 as $$
 begin
   update public.live_orders
-     set order_id = p_order_id, status = 'placed', placed_at = now()
-   where client_order_id = p_client_order_id and status = 'intent';
+     set order_id  = coalesce(order_id, p_order_id),
+         placed_at = coalesce(placed_at, now()),
+         status    = case when status = 'intent' then 'placed' else status end
+   where client_order_id = p_client_order_id
+     and status in ('intent', 'placed', 'partial', 'filled');
 end;
 $$;
 
--- recordFill: placed|partial → partial | filled. p_size_matched is CUMULATIVE (mirrors the venue's
--- size_matched); the positive DELTA since the previous record is appended to live_fills at the cumulative
--- average price (fill_price is that average — an approximation across mixed-price partials; fee_usd stays 0 on
--- this path, the maker rail is $0-fee). Idempotent: a repeat with the same cumulative size writes no fill row.
+-- recordFill: intent|placed|partial → partial | filled (N6: a fill on 'intent' promotes directly — an instant
+-- FOK fill can beat record_placed). p_size_matched is CUMULATIVE (mirrors the venue's size_matched); the
+-- positive DELTA is appended to live_fills carrying the EXACT marginal notional (N2):
+--   marginal = (p_avg_price × p_size_matched) − (prev_avg × prev_size); fill_price = round(marginal/Δ, 6).
+-- Δ = 0 ⇒ idempotent echo (status update only, no fill row). Δ < 0 ⇒ FULL no-op (N4: size_matched is strictly
+-- monotonic — a shrinking echo never regresses the ledger). Row exists but terminal ⇒ SILENT no-op (duplicate
+-- echo). NO row for the id ⇒ RAISE (N3 — a reconcile bug the runner must see, never swallowed).
+-- fee_usd stays 0 on this path (the maker rail is $0-fee).
 create or replace function public.bot_order_record_fill(
   p_client_order_id text, p_size_matched numeric, p_avg_price numeric, p_status text
 )
@@ -677,32 +789,45 @@ security definer
 set search_path = public
 as $$
 declare
-  v_row   public.live_orders;
-  v_delta numeric;
+  v_row      public.live_orders;
+  v_delta    numeric;
+  v_marginal numeric;
 begin
   if p_status not in ('filled', 'partial') then
     raise exception 'bot_order_record_fill: p_status must be filled|partial, got %', p_status;
   end if;
+  -- N3: split the silent no-op — an id with NO row at all is a reconcile bug and must raise.
+  if not exists (select 1 from public.live_orders where client_order_id = p_client_order_id) then
+    raise exception 'bot_order_record_fill: unknown client_order_id % — no ledger row (reconcile bug)',
+      p_client_order_id;
+  end if;
   select * into v_row from public.live_orders
-   where client_order_id = p_client_order_id and status in ('placed', 'partial')
+   where client_order_id = p_client_order_id and status in ('intent', 'placed', 'partial')
    limit 1;
   if not found then
-    return;  -- unknown / already-terminal id — a late venue echo is a no-op, never an error
+    return;  -- the row is TERMINAL (or filled) — a duplicate venue echo; at-least-once delivery is benign
   end if;
   v_delta := p_size_matched - coalesce(v_row.size_matched, 0);
+  if v_delta < 0 then
+    return;  -- N4: cumulative size_matched is strictly monotonic — ignore a shrinking echo wholesale
+  end if;
   update public.live_orders
      set size_matched = p_size_matched, avg_price = p_avg_price, status = p_status
    where id = v_row.id;
   if v_delta > 0 then
-    insert into public.live_fills (order_id, fill_price, fill_size)
-    values (v_row.id, p_avg_price, v_delta);
+    -- N2: the marginal notional is the exact cash of this delta; fill_price is display-only.
+    v_marginal := (p_avg_price * p_size_matched)
+                - (coalesce(v_row.avg_price, 0) * coalesce(v_row.size_matched, 0));
+    insert into public.live_fills (order_id, fill_price, fill_size, fill_notional)
+    values (v_row.id, round(v_marginal / v_delta, 6), v_delta, v_marginal);
   end if;
 end;
 $$;
 
 -- recordCanceled: any OPEN pre-filled state → canceled (TERMINAL; frees the intent key). The venue's
 -- 'expired' outcome is recorded through THIS path (F9 — expired folds into canceled). A filled order is
--- immutable — cancel on 'filled' is a no-op.
+-- immutable — cancel on 'filled' is a no-op. size_matched/avg_price are DELIBERATELY untouched: a canceled
+-- partial keeps its fill accounting (T1's reprice partial-accounting reads it after the cancel transition).
 create or replace function public.bot_order_record_canceled(p_client_order_id text)
 returns void
 language plpgsql
@@ -731,6 +856,25 @@ begin
 end;
 $$;
 
+-- listDangling: the reconcile sweep — intents whose post outcome was never recorded (order_id still null),
+-- i.e. a crash inside the post→record_placed critical section left the ledger not knowing whether the venue
+-- holds a live order. Mode-scoped (F4). Returns { rows: [...] } (OBJECT envelope — the post-0081 idiom; the
+-- money path gets no exceptions even on an args-taking fn), each row the same to_jsonb(live_orders) shape as
+-- bot_order_by_intent.
+create or replace function public.bot_order_list_dangling(p_mode text)
+returns jsonb
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select jsonb_build_object('rows', coalesce(jsonb_agg(to_jsonb(o) order by o.created_at asc), '[]'::jsonb))
+  from public.live_orders o
+  where o.mode = p_mode
+    and o.status = 'intent'
+    and o.order_id is null;
+$$;
+
 -- grants: the runner (service_role) is the SOLE caller of the ledger RPCs.
 revoke all on function public.bot_order_by_intent(text, text) from public, anon, authenticated;
 grant  execute on function public.bot_order_by_intent(text, text) to service_role;
@@ -746,3 +890,5 @@ revoke all on function public.bot_order_record_canceled(text) from public, anon,
 grant  execute on function public.bot_order_record_canceled(text) to service_role;
 revoke all on function public.bot_order_record_failed(text, text) from public, anon, authenticated;
 grant  execute on function public.bot_order_record_failed(text, text) to service_role;
+revoke all on function public.bot_order_list_dangling(text) from public, anon, authenticated;
+grant  execute on function public.bot_order_list_dangling(text) to service_role;

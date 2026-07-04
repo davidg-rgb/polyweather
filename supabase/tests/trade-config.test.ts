@@ -4,9 +4,13 @@
  * ceiling, the F5 60-day run-window cap, the ENFORCED append-only audit (F6 — no role holds UPDATE/DELETE),
  * every RPC's OBJECT-envelope shape (0081 tripwire), the live-mode INTERLOCK across all branches (no-PASS /
  * forward-PASS / backtest-PASS-rejected / EXPIRING override set+clear (F1) / expired window / stake>cap /
- * daily-loss kill absolute+fractional (F2) / dry-run isolation (addendum)), the F3 non-operator ERR_FORBIDDEN
- * guards, the six bot_order_* T1 OrderLedger RPCs (F4 partial-unique reserve semantics, mode-scoped keys,
- * cumulative fills, terminal-frees-key), and the packages/trading TS reader.
+ * daily-loss kill absolute+fractional over the N1 REALIZED-at-sell-time shared definition (the four required
+ * N1 cases: cross-midnight loss lands in the sell day, open-buys-only day is NOT a loss, profitable round
+ * trips — same-day and cross-midnight — are 0) / dry-run isolation (addendum)), the F3 non-operator
+ * ERR_FORBIDDEN guards, the seven bot_order_* T1 OrderLedger RPCs (F4 partial-unique reserve semantics,
+ * mode-scoped keys, N2 exact marginal notionals, N3 raise-on-unknown/silent-on-terminal, N4 monotonic
+ * size_matched, N6 fill-on-intent promotion + late record_placed, the dangling-intent sweep, cancel
+ * preserving size_matched), and the packages/trading TS reader.
  */
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import type { PGlite } from '@electric-sql/pglite';
@@ -72,19 +76,28 @@ async function seedOrder(opts: {
   return r[0]!.id;
 }
 
-/** Insert a live_fills row for an order (today). */
-async function seedFill(orderId: string, price: number, size: number, fee = 0): Promise<void> {
+/** Insert a live_fills row for an order. fill_notional = price × size (the N2 exact-cash column); filledAt
+ * defaults to now() — pass an ISO timestamp to backdate (the N1 cross-midnight tests). */
+async function seedFill(
+  orderId: string, price: number, size: number, fee = 0, filledAt?: string,
+): Promise<void> {
   await rows(
     db,
-    `insert into public.live_fills (order_id, fill_price, fill_size, fee_usd) values ($1, $2, $3, $4)`,
-    [orderId, price, size, fee],
+    `insert into public.live_fills (order_id, fill_price, fill_size, fill_notional, fee_usd, filled_at)
+     values ($1, $2, $3, $4, $5, coalesce($6::timestamptz, now()))`,
+    [orderId, price, size, price * size, fee, filledAt ?? null],
   );
 }
 
-/** A filled order + its fill in one call — the realized-cash-flow seed for the daily-loss tests. */
-async function seedRealized(mode: 'live' | 'dry-run', side: 'BUY' | 'SELL', price: number, size: number): Promise<void> {
+/** Yesterday, same wall-clock — always before today's UTC-midnight loss window. */
+const YESTERDAY = () => new Date(Date.now() - 86_400_000).toISOString();
+
+/** A filled order + its fill in one call — the realized-P&L seed for the daily-loss tests. */
+async function seedRealized(
+  mode: 'live' | 'dry-run', side: 'BUY' | 'SELL', price: number, size: number, filledAt?: string,
+): Promise<void> {
   const id = await seedOrder({ mode, side, status: 'filled', price, size });
-  await seedFill(id, price, size);
+  await seedFill(id, price, size, 0, filledAt);
 }
 
 beforeAll(async () => {
@@ -498,6 +511,19 @@ describe('0082 live-mode INTERLOCK — trade_live_preflight() across every branc
     ).rejects.toThrow(/reason must be non-empty/);
   });
 
+  it('F1-residual: an override may live at most 14 days — 15d rejected, 14d accepted', async () => {
+    await expect(
+      asOperator(() => rows(db, `select public.trade_gate_override_set('too long', now() + interval '15 days')`)),
+    ).rejects.toThrow(/more than 14 days out/);
+    const [r] = await asOperator(() =>
+      rows<{ v: { override: { reason: string } } }>(
+        db,
+        `select public.trade_gate_override_set('two weeks', now() + interval '14 days') as v`,
+      ),
+    );
+    expect(r!.v.override.reason).toBe('two weeks');
+  });
+
   it('an EXPIRED active_until blocks even with a passing gate', async () => {
     await passingGate();
     await asOperator(() =>
@@ -524,29 +550,30 @@ describe('0082 live-mode INTERLOCK — trade_live_preflight() across every branc
     expect(r!.reasons.join(' | ')).toMatch(/exceeds per_position_cap_usd/);
   });
 
-  it('F2: the ABSOLUTE daily-loss kill blocks (buys+fees−sells ≥ daily_loss_kill_usd)', async () => {
+  it('F2/N1: the ABSOLUTE daily-loss kill blocks on a REALIZED same-day losing round trip', async () => {
     await goLive();
     await passingGate();
-    // kill at $5 absolute; frac 1 → basis $100 (out of the way). Buy $10, no sells → loss $10 ≥ $5.
+    // kill at $5 absolute; frac 1 → basis $100 (out of the way). Buy $10 → sell for $5 ⇒ realized −$5.
     await asOperator(() =>
       rows(db, `select public.trade_config_set(p_daily_loss_kill_usd := 5, p_daily_loss_kill_frac := 1)`),
     );
-    await seedRealized('live', 'BUY', 0.5, 20); // $10 deployed
+    await seedRealized('live', 'BUY', 0.5, 20);   // $10 in
+    await seedRealized('live', 'SELL', 0.25, 20); // $5 out ⇒ realized −$5 ≥ kill $5
     const [r] = await preflight();
     expect(r!.ok).toBe(false);
     expect(r!.reasons.join(' | ')).toMatch(/daily-loss kill: .* daily_loss_kill_usd/);
-    expect(Number(r!.checks.todayLossUsd)).toBe(10);
+    expect(Number(r!.checks.todayLossUsd)).toBe(5);
   });
 
-  it('F2: the FRACTIONAL daily-loss kill blocks (loss ≥ frac × total_concurrent_cap_usd)', async () => {
+  it('F2/N1: the FRACTIONAL daily-loss kill blocks (loss ≥ frac × total_concurrent_cap_usd)', async () => {
     await goLive();
     await passingGate();
-    // frac 0.05 × cap $100 = $5 basis; absolute kill $25 stays clear (loss $10 < $25 — §9R caps kill_usd ≤ … no,
-    // kill_usd has no ceiling; 25 chosen so ONLY the fractional branch fires).
+    // frac 0.05 × cap $100 = $5 basis; absolute kill $25 stays clear → ONLY the fractional branch fires.
     await asOperator(() =>
       rows(db, `select public.trade_config_set(p_daily_loss_kill_usd := 25, p_daily_loss_kill_frac := 0.05)`),
     );
-    await seedRealized('live', 'BUY', 0.5, 20); // $10 ≥ $5 basis, < $25 absolute
+    await seedRealized('live', 'BUY', 0.5, 20);   // $10 in
+    await seedRealized('live', 'SELL', 0.25, 20); // realized −$5 ≥ basis $5, < $25 absolute
     const [r] = await preflight();
     expect(r!.ok).toBe(false);
     const joined = r!.reasons.join(' | ');
@@ -555,15 +582,74 @@ describe('0082 live-mode INTERLOCK — trade_live_preflight() across every branc
     expect(Number(r!.checks.dailyLossKillFracBasisUsd)).toBe(5);
   });
 
-  it('F2: sells offset buys — a hedged day does not trip the kill', async () => {
+  it('N1: a small realized loss below both thresholds does not trip (and is measured exactly)', async () => {
     await goLive();
     await passingGate();
     await asOperator(() => rows(db, `select public.trade_config_set(p_daily_loss_kill_usd := 5)`));
-    await seedRealized('live', 'BUY', 0.5, 20);  // −$10
-    await seedRealized('live', 'SELL', 0.4, 20); // +$8 → net loss $2 < $5
+    await seedRealized('live', 'BUY', 0.5, 20);  // $10 in
+    await seedRealized('live', 'SELL', 0.4, 20); // $8 out ⇒ realized −$2 < $5
     const [r] = await preflight();
     expect(r!.ok).toBe(true);
     expect(Number(r!.checks.todayLossUsd)).toBe(2);
+  });
+
+  it('N1 (required 1): a CROSS-MIDNIGHT losing round trip lands in the SELL day — buy $30 in D, sell $20 in D+1 ⇒ D+1 loss $10, kill trips at threshold', async () => {
+    await goLive();
+    await passingGate();
+    await asOperator(() => rows(db, `select public.trade_config_set(p_daily_loss_kill_usd := 10)`));
+    await seedRealized('live', 'BUY', 0.3, 100, YESTERDAY()); // $30 deployed YESTERDAY (day D)
+    await seedRealized('live', 'SELL', 0.2, 100);             // $20 back TODAY (day D+1)
+    const [r] = await preflight();
+    // The old cashflow definition clamped this to 0 in D+1 (sells $20 > buys $0 today) — the falsifier.
+    expect(Number(r!.checks.todayLossUsd)).toBe(10);
+    expect(r!.ok).toBe(false); // 10 ≥ kill 10 — trips exactly at threshold
+    expect(r!.reasons.join(' | ')).toMatch(/daily-loss kill/);
+  });
+
+  it('N1 (required 2): an open-buys-only healthy day is NOT a loss — no kill', async () => {
+    await goLive();
+    await passingGate();
+    await asOperator(() => rows(db, `select public.trade_config_set(p_daily_loss_kill_usd := 5)`));
+    await seedRealized('live', 'BUY', 0.3, 100); // $30 deployed today, nothing sold
+    const [r] = await preflight();
+    // The old cashflow definition read this as a $30 "loss" ≥ kill $5 — the second falsifier.
+    expect(Number(r!.checks.todayLossUsd)).toBe(0);
+    expect(r!.ok).toBe(true);
+  });
+
+  it('N1 (required 3): a same-day PROFITABLE round trip ⇒ loss 0', async () => {
+    await goLive();
+    await passingGate();
+    await asOperator(() => rows(db, `select public.trade_config_set(p_daily_loss_kill_usd := 5)`));
+    await seedRealized('live', 'BUY', 0.3, 100);  // $30 in
+    await seedRealized('live', 'SELL', 0.4, 100); // $40 out ⇒ realized +$10
+    const [r] = await preflight();
+    expect(Number(r!.checks.todayLossUsd)).toBe(0);
+    expect(r!.ok).toBe(true);
+  });
+
+  it('N1 (required 4): a CROSS-MIDNIGHT profitable round trip ⇒ loss 0', async () => {
+    await goLive();
+    await passingGate();
+    await asOperator(() => rows(db, `select public.trade_config_set(p_daily_loss_kill_usd := 5)`));
+    await seedRealized('live', 'BUY', 0.3, 100, YESTERDAY()); // $30 in yesterday
+    await seedRealized('live', 'SELL', 0.4, 100);             // $40 out today ⇒ realized +$10
+    const [r] = await preflight();
+    expect(Number(r!.checks.todayLossUsd)).toBe(0);
+    expect(r!.ok).toBe(true);
+  });
+
+  it('N1: the loss window is NAMED in checks (lossWindowStart = UTC midnight)', async () => {
+    const [r] = await asOperator(() =>
+      rows<{ named: boolean; start: string }>(
+        db,
+        `select (public.trade_live_preflight()->'checks'->>'lossWindowStart')::timestamptz
+                  = date_trunc('day', now()) as named,
+                public.trade_live_preflight()->'checks'->>'lossWindowStart' as start`,
+      ),
+    );
+    expect(r!.start).toBeTruthy();
+    expect(r!.named).toBe(true);
   });
 
   it('ADDENDUM: dry-run fills move NOTHING — no loss, no exposure, preflight stays green', async () => {
@@ -606,11 +692,25 @@ describe('0082 live-mode INTERLOCK — trade_live_preflight() across every branc
       ),
     );
     expect(Number(d!.v.today.buyUsd)).toBe(4);   // the $50 dry-run fill is invisible here
-    expect(Number(d!.v.today.lossUsd)).toBe(4);
+    expect(Number(d!.v.today.lossUsd)).toBe(0);  // N1: an open buy is NOT a loss — dash uses the SHARED definition
     expect(Number(d!.v.today.nFills)).toBe(1);
     expect(d!.v.openOrders).toEqual([]);          // the open dry-run intent is not a live open order
     expect(Number(d!.v.dryRun.openOrders)).toBe(1);
     expect(Number(d!.v.dryRun.total)).toBe(2);
+  });
+
+  it('N1: dash_trading.today.lossUsd is the SAME shared definition as preflight (cross-midnight case)', async () => {
+    await seedRealized('live', 'BUY', 0.3, 100, YESTERDAY()); // $30 in yesterday
+    await seedRealized('live', 'SELL', 0.2, 100);             // $20 out today ⇒ realized −$10
+    const [r] = await asOperator(() =>
+      rows<{ dash_loss: string; pf_loss: string }>(
+        db,
+        `select public.dash_trading()->'today'->>'lossUsd' as dash_loss,
+                public.trade_live_preflight()->'checks'->>'todayLossUsd' as pf_loss`,
+      ),
+    );
+    expect(Number(r!.dash_loss)).toBe(10);
+    expect(Number(r!.dash_loss)).toBe(Number(r!.pf_loss)); // one definition, two consumers
   });
 });
 
@@ -673,7 +773,7 @@ describe('0082 §9 — the six bot_order_* RPCs (the T1 OrderLedger contract)', 
     expect(row!['placed_at']).toBeTruthy();
   });
 
-  it('record_fill: CUMULATIVE size_matched; live_fills receives the deltas; partial → filled', async () => {
+  it('N2: record_fill stores the MARGINAL notional — the lens example 5@0.30 then 8@0.31 sums to 2.48 EXACTLY', async () => {
     await reserve();
     await port.rpc('bot_order_record_placed', { p_client_order_id: 'c1', p_order_id: 'venue-77' });
 
@@ -692,27 +792,102 @@ describe('0082 §9 — the six bot_order_* RPCs (the T1 OrderLedger contract)', 
     expect(Number(row!['size_matched'])).toBe(8);
     expect(Number(row!['avg_price'])).toBeCloseTo(0.31);
 
-    const fills = await rows<{ fill_size: string; fill_price: string }>(
+    const fills = await rows<{ fill_size: string; fill_price: string; fill_notional: string }>(
       db,
-      `select fill_size, fill_price from public.live_fills order by created_at asc, filled_at asc`,
+      `select fill_size, fill_price, fill_notional from public.live_fills order by created_at asc, filled_at asc`,
     );
     expect(fills.map((f) => Number(f.fill_size))).toEqual([5, 3]); // the deltas, not the cumulatives
-    expect(Number(fills[1]!.fill_price)).toBeCloseTo(0.31);
+    // Marginal notionals: 0.30×5 = 1.50, then 0.31×8 − 0.30×5 = 0.98 (the second delta's TRUE cash — the old
+    // cumulative-avg fill_price would have claimed 0.31×3 = 0.93).
+    expect(Number(fills[0]!.fill_notional)).toBe(1.5);
+    expect(Number(fills[1]!.fill_notional)).toBe(0.98);
+    // fill_price is display-only: marginal/delta (0.98/3 ≈ 0.326667 — the second leg filled ABOVE 0.31).
+    expect(Number(fills[1]!.fill_price)).toBeCloseTo(0.326667, 5);
+    // THE lens assertion — the true cash sums EXACTLY (numeric equality in SQL, no float slack):
+    const [exact] = await rows<{ ok: boolean }>(
+      db,
+      `select sum(fill_notional) = 2.48 as ok from public.live_fills`,
+    );
+    expect(exact!.ok).toBe(true);
+    // and why fill_notional (not fill_price × fill_size) carries it: 0.98/3 is non-terminating, so the
+    // price×size sum can only be CLOSE to 2.48 — documented in the migration header.
+    const [approx] = await rows<{ s: string }>(
+      db,
+      `select sum(fill_price * fill_size)::text as s from public.live_fills`,
+    );
+    expect(Number(approx!.s)).toBeCloseTo(2.48, 4);
   });
 
-  it('record_fill rejects a bad status and no-ops on an unknown/terminal id (late venue echo)', async () => {
+  it('N3: record_fill RAISES on an id with NO ledger row (a reconcile bug must never be swallowed)', async () => {
+    await expect(
+      port.rpc('bot_order_record_fill', {
+        p_client_order_id: 'ghost', p_size_matched: 5, p_avg_price: 0.3, p_status: 'partial',
+      }),
+    ).rejects.toThrow(/unknown client_order_id/);
+  });
+
+  it('N3: record_fill is SILENT on a row that exists but is TERMINAL (duplicate venue echo)', async () => {
+    await reserve();
+    await port.rpc('bot_order_record_canceled', { p_client_order_id: 'c1' });
+    // Same id, row exists (canceled) → at-least-once delivery is benign: resolves, writes nothing.
+    await port.rpc('bot_order_record_fill', {
+      p_client_order_id: 'c1', p_size_matched: 5, p_avg_price: 0.3, p_status: 'partial',
+    });
+    const n = await rows<{ n: number }>(db, `select count(*)::int n from public.live_fills`);
+    expect(n[0]!.n).toBe(0);
+    const [o] = await rows<{ status: string }>(db, `select status from public.live_orders where client_order_id = 'c1'`);
+    expect(o!.status).toBe('canceled'); // untouched
+  });
+
+  it('record_fill rejects a bad p_status outright', async () => {
     await reserve();
     await expect(
       port.rpc('bot_order_record_fill', {
         p_client_order_id: 'c1', p_size_matched: 5, p_avg_price: 0.3, p_status: 'canceled',
       }),
     ).rejects.toThrow(/must be filled\|partial/);
-    // Unknown id → silent no-op, no fill row.
+  });
+
+  it('N4: a SHRINKING cumulative echo is a full no-op — size_matched is strictly monotonic', async () => {
+    await reserve();
+    await port.rpc('bot_order_record_placed', { p_client_order_id: 'c1', p_order_id: 'venue-77' });
     await port.rpc('bot_order_record_fill', {
-      p_client_order_id: 'ghost', p_size_matched: 5, p_avg_price: 0.3, p_status: 'partial',
+      p_client_order_id: 'c1', p_size_matched: 5, p_avg_price: 0.3, p_status: 'partial',
     });
+    // Anomalous venue echo claims cumulative 3 < 5 — nothing may move.
+    await port.rpc('bot_order_record_fill', {
+      p_client_order_id: 'c1', p_size_matched: 3, p_avg_price: 0.29, p_status: 'partial',
+    });
+    const row = await byIntent();
+    expect(Number(row!['size_matched'])).toBe(5);            // no regression
+    expect(Number(row!['avg_price'])).toBeCloseTo(0.3);      // untouched
+    expect(row!['status']).toBe('partial');
     const n = await rows<{ n: number }>(db, `select count(*)::int n from public.live_fills`);
-    expect(n[0]!.n).toBe(0);
+    expect(n[0]!.n).toBe(1);                                  // no phantom fill row
+  });
+
+  it('N6: a fill on an INTENT row promotes directly (instant FOK beats record_placed)', async () => {
+    await reserve();
+    await port.rpc('bot_order_record_fill', {
+      p_client_order_id: 'c1', p_size_matched: 10, p_avg_price: 0.3, p_status: 'filled',
+    });
+    const row = await byIntent();
+    expect(row!['status']).toBe('filled');
+    expect(Number(row!['size_matched'])).toBe(10);
+    const fills = await rows<{ fill_notional: string }>(db, `select fill_notional from public.live_fills`);
+    expect(fills.map((f) => Number(f.fill_notional))).toEqual([3]);
+  });
+
+  it('N6: a LATE record_placed never regresses status but still records the venue order_id', async () => {
+    await reserve();
+    await port.rpc('bot_order_record_fill', {
+      p_client_order_id: 'c1', p_size_matched: 10, p_avg_price: 0.3, p_status: 'filled',
+    });
+    await port.rpc('bot_order_record_placed', { p_client_order_id: 'c1', p_order_id: 'venue-late-9' });
+    const row = await byIntent();
+    expect(row!['status']).toBe('filled');           // NOT regressed to 'placed'
+    expect(row!['order_id']).toBe('venue-late-9');   // the venue id still lands
+    expect(row!['placed_at']).toBeTruthy();
   });
 
   it('F4: record_canceled frees the key — a re-reserve succeeds as a NEW row', async () => {
@@ -722,6 +897,65 @@ describe('0082 §9 — the six bot_order_* RPCs (the T1 OrderLedger contract)', 
     expect(await reserve({ p_client_order_id: 'c1-reprice' })).toBe('reserved');
     const n = await rows<{ n: number }>(db, `select count(*)::int n from public.live_orders`);
     expect(n[0]!.n).toBe(2); // the canceled row is kept (history), the new intent is open
+  });
+
+  it('ADDENDUM: record_canceled PRESERVES size_matched (the reprice partial-accounting reads it)', async () => {
+    await reserve();
+    await port.rpc('bot_order_record_placed', { p_client_order_id: 'c1', p_order_id: 'venue-77' });
+    await port.rpc('bot_order_record_fill', {
+      p_client_order_id: 'c1', p_size_matched: 5, p_avg_price: 0.3, p_status: 'partial',
+    });
+    await port.rpc('bot_order_record_canceled', { p_client_order_id: 'c1' });
+    const [o] = await rows<{ status: string; size_matched: string; avg_price: string }>(
+      db,
+      `select status, size_matched, avg_price from public.live_orders where client_order_id = 'c1'`,
+    );
+    expect(o!.status).toBe('canceled');
+    expect(Number(o!.size_matched)).toBe(5);      // preserved through the cancel transition
+    expect(Number(o!.avg_price)).toBeCloseTo(0.3); // basis preserved too
+  });
+
+  it('ADDENDUM: bot_order_list_dangling returns {rows:[...]} of intent+order_id-null rows, mode-scoped', async () => {
+    // c1: live intent, no order_id → DANGLING. c2: live placed (has order_id) → not dangling.
+    // c3: dry-run intent, no order_id → dangling only under p_mode='dry-run'. c4: live canceled → never.
+    await reserve();                                                              // c1/k1 live intent
+    await reserve({ p_intent_key: 'k2', p_client_order_id: 'c2' });
+    await port.rpc('bot_order_record_placed', { p_client_order_id: 'c2', p_order_id: 'venue-2' });
+    await reserve({ p_mode: 'dry-run', p_intent_key: 'k3', p_client_order_id: 'c3' });
+    await reserve({ p_intent_key: 'k4', p_client_order_id: 'c4' });
+    await port.rpc('bot_order_record_canceled', { p_client_order_id: 'c4' });
+
+    // Envelope shape (post-0081 idiom): an OBJECT carrying rows — never a top-level array, args or not.
+    const [shape] = await rows<{ outer: string; inner: string }>(
+      db,
+      `select jsonb_typeof(public.bot_order_list_dangling('live')) as outer,
+              jsonb_typeof(public.bot_order_list_dangling('live')->'rows') as inner`,
+    );
+    expect(shape).toEqual({ outer: 'object', inner: 'array' });
+
+    const [live] = await port.rpc<{ bot_order_list_dangling: { rows: Record<string, unknown>[] } }>(
+      'bot_order_list_dangling', { p_mode: 'live' },
+    );
+    const liveRows = live!.bot_order_list_dangling.rows;
+    expect(liveRows.map((r) => r['client_order_id'])).toEqual(['c1']);
+    // the row shape matches bot_order_by_intent's (same to_jsonb(live_orders) fields)
+    expect(liveRows[0]!['intent_key']).toBe('k1');
+    expect(liveRows[0]!['status']).toBe('intent');
+    expect(liveRows[0]!['order_id']).toBeNull();
+    expect(liveRows[0]!['side']).toBe('BUY');
+    expect(Number(liveRows[0]!['size_matched'])).toBe(0);
+
+    const [dry] = await port.rpc<{ bot_order_list_dangling: { rows: Record<string, unknown>[] } }>(
+      'bot_order_list_dangling', { p_mode: 'dry-run' },
+    );
+    expect(dry!.bot_order_list_dangling.rows.map((r) => r['client_order_id'])).toEqual(['c3']);
+  });
+
+  it('ADDENDUM: bot_order_list_dangling returns {rows:[]} (not null/array) when nothing dangles', async () => {
+    const [empty] = await port.rpc<{ bot_order_list_dangling: { rows: unknown[] } }>(
+      'bot_order_list_dangling', { p_mode: 'live' },
+    );
+    expect(empty!.bot_order_list_dangling).toEqual({ rows: [] });
   });
 
   it('F4: record_failed frees the key too and stores the error', async () => {
@@ -748,7 +982,7 @@ describe('0082 §9 — the six bot_order_* RPCs (the T1 OrderLedger contract)', 
     expect(await reserve({ p_client_order_id: 'c1-again' })).toBe('exists'); // filled HOLDS the key — never re-place
   });
 
-  it('the six RPCs are service-role ONLY (anon + authenticated revoked)', async () => {
+  it('all seven ledger RPCs are service-role ONLY (anon + authenticated revoked)', async () => {
     const sigs = [
       'public.bot_order_by_intent(text, text)',
       'public.bot_order_reserve_intent(text, text, text, text, text, text, text, text, numeric, numeric, date)',
@@ -756,6 +990,7 @@ describe('0082 §9 — the six bot_order_* RPCs (the T1 OrderLedger contract)', 
       'public.bot_order_record_fill(text, numeric, numeric, text)',
       'public.bot_order_record_canceled(text)',
       'public.bot_order_record_failed(text, text)',
+      'public.bot_order_list_dangling(text)',
     ];
     for (const sig of sigs) {
       const [g] = await rows<{ anon_can: boolean; authd_can: boolean; svc_can: boolean }>(
@@ -809,6 +1044,7 @@ describe('0082 packages/trading TS reader (via the PGlite twin port)', () => {
     expect(pf.checks.mode).toBe('off');
     expect(pf.checks.gatePass).toBe(false);
     expect(Number(pf.checks.todayLossUsd)).toBe(0);
+    expect(pf.checks.lossWindowStart).toBeTruthy(); // N1: the loss window is named, typed through
     expect(Number(pf.checks.openExposureUsd)).toBe(0);
     expect(pf.checks.perMarketExposureUsd).toEqual({});
   });

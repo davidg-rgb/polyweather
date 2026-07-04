@@ -40,7 +40,9 @@ export interface TradePreflight {
    *   perMarketExposureUsd[marketId] + stake ≤ perMarketCapUsd
    *   openExposureUsd + stake ≤ totalConcurrentCapUsd
    * The daily-loss kill (todayLossUsd vs dailyLossKillUsd / dailyLossKillFracBasisUsd, the frac basis being
-   * total_concurrent_cap_usd) blocks the preflight itself.
+   * total_concurrent_cap_usd) blocks the preflight itself. todayLossUsd is the N1 SHARED definition —
+   * realized P&L attributed at SELL time (basis = lifetime avg cost of prior BUY fills) plus buy-side fees,
+   * over the window starting at lossWindowStart (UTC midnight) — NOT within-day net cashflow.
    */
   checks: {
     mode: TradeMode;
@@ -54,6 +56,8 @@ export interface TradePreflight {
     overrideReason: string | null;
     overrideExpiresAt: string | null;
     todayLossUsd: number;
+    /** N1: the start of the realized-loss window (UTC midnight), named explicitly. */
+    lossWindowStart: string;
     dailyLossKillUsd: number;
     dailyLossKillFracBasisUsd: number;
     openExposureUsd: number;

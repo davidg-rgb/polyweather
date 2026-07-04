@@ -322,9 +322,13 @@ describe('migrations 0001–0010', () => {
       // live_orders/live_fills (the runner's order-intent/fill ledger; PARTIAL-UNIQUE (mode,intent_key) over
       // non-terminal rows = the reserve-intent guarantee; dry-run rows recorded but excluded from all money
       // figures) + trade_config_get (service-role read) + trade_config_set (operator-guarded write, active_until
-      // ≤60d) + trade_live_preflight (the live-mode INTERLOCK — mode/window/stake-cap/daily-loss-kill +
-      // forward-paper-PASS-or-ACTIVE-override; exposure figures for the runner's per-placement caps) +
-      // dash_trading (operator read, jsonb-OBJECT) + the six bot_order_* T1 OrderLedger RPCs (service-role only).
+      // ≤60d) + trade_live_preflight (the live-mode INTERLOCK — mode/window/stake-cap + the N1 daily-loss kill
+      // over trade_today_realized_loss(), the ONE shared realized-at-sell-time loss definition (window named as
+      // lossWindowStart) + forward-paper-PASS-or-ACTIVE-override (≤14d); exposure figures for the runner's
+      // per-placement caps) + dash_trading (operator read, jsonb-OBJECT; today.lossUsd = the same shared
+      // definition) + the seven bot_order_* T1 OrderLedger RPCs (service-role only; N2 exact marginal
+      // notionals in live_fills.fill_notional, N3 raise-on-unknown-id, N4 monotonic size_matched, N6
+      // fill-on-intent promotion, list_dangling {rows:[...]} reconcile sweep).
       // dash_trading/trade_config_set/trade_gate_override_* added to WEB_AUTHENTICATED below. No cron/edge fn
       // (count stays 29).
       '0082_trading_activation.sql',
