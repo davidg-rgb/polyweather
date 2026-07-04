@@ -39,6 +39,7 @@ describe('/paper-trade page renders — 45-City Scan section + current-bet box',
         cities: [],
         overall: { pnl: 0, nGraded: 0, nWon: 0 },
       }),
+      getCityForecast: async () => null,
     }));
     const { default: PaperTradePage } = await import('../src/app/(dash)/paper-trade/page.tsx');
     const html = renderToStaticMarkup(await PaperTradePage());
@@ -105,7 +106,7 @@ describe('/paper-trade page renders — 45-City Scan section + current-bet box',
 
   it('still renders the scan section when the live dash_city_sim RPC is unavailable', async () => {
     vi.resetModules();
-    vi.doMock('../src/lib/loaders.ts', () => ({ getCitySim: async () => null }));
+    vi.doMock('../src/lib/loaders.ts', () => ({ getCitySim: async () => null, getCityForecast: async () => null }));
     const { default: PaperTradePage } = await import('../src/app/(dash)/paper-trade/page.tsx');
     const html = renderToStaticMarkup(await PaperTradePage());
 
@@ -138,6 +139,8 @@ describe('/paper-trade page renders — 45-City Scan section + current-bet box',
         ],
         overall: { pnl: 0, nGraded: 0, nWon: 0 },
       }),
+      // 0079 absent → the box renders its pre-N2 placed-bet behaviour (ships dark).
+      getCityForecast: async () => null,
     }));
     const { default: PaperTradePage } = await import('../src/app/(dash)/paper-trade/page.tsx');
     const html = renderToStaticMarkup(await PaperTradePage());
@@ -167,5 +170,49 @@ describe('/paper-trade page renders — 45-City Scan section + current-bet box',
     // the °F unit-ordering fix: the city header renders °F, never F°
     expect(html).toContain('°F ·');
     expect(html).not.toContain('F° ·');
+  });
+
+  it('current-bet box: pre-tick, headlines TODAY’s intended forecast center from dash_city_forecast (0079)', async () => {
+    vi.resetModules();
+    vi.doMock('../src/lib/loaders.ts', () => ({
+      getCitySim: async () => ({
+        generatedAt: '2026-07-04T10:00:00Z',
+        cities: [
+          // singapore's latest bet is STALE (2026-06-30) — today's bet not placed yet (pre-tick).
+          cityFixture({
+            slug: 'singapore', displayName: 'Singapore', icao: 'WSSS', unit: 'C', tz: 'Asia/Singapore',
+            armHours: [11, 12, 13, 14],
+            latest: { date: '2026-06-30', byHour: { 11: latestRow(32, '32°C') } },
+          }),
+        ],
+        overall: { pnl: 0, nGraded: 0, nWon: 0 },
+      }),
+      // the pre-placement forecast RPC is live → the box headlines today's intended call, not the stale bet.
+      getCityForecast: async () => ({
+        generatedAt: '2026-07-04T10:00:00Z',
+        cities: [
+          {
+            slug: 'singapore', displayName: 'Singapore', icao: 'WSSS', unit: 'C', tz: 'Asia/Singapore',
+            armHours: [11, 12, 13, 14], forecastMaxHour: 12, targetDate: '2026-07-04', hasMarket: true,
+            capturedAt: '2026-07-04T02:00:00Z', nModels: 3, rawForecastC: 33.2, biasC: 0.1, biasN: 25,
+            biasCorrected: true, forecastC: 33.3, forecastNative: 33.3, predictedNative: 33, label: '33°C',
+            ask: 0.41, alreadyPlacedToday: false,
+          },
+        ],
+      }),
+    }));
+    const { default: PaperTradePage } = await import('../src/app/(dash)/paper-trade/page.tsx');
+    const html = renderToStaticMarkup(await PaperTradePage());
+
+    // the intended pre-tick tile: today's bidding date, the forecast center, its bucket + live ask
+    expect(html).toContain('intended · pre-tick');
+    expect(html).toContain('2026-07-04'); // today's target, NOT the stale 2026-06-30
+    expect(html).toContain('33°C'); // wuRound(33.3) = 33 + the bucket label
+    expect(html).toContain('forecast center (bias corrected)');
+    expect(html).toContain('41%'); // the live ask on that bucket
+    expect(html).toContain('running-max floor may lift');
+    expect(html).toContain('last placed bet 2026-06-30'); // yesterday's bet kept as a footnote
+    // the placed-bet label must NOT appear for this pre-tick city (it's the intended tile)
+    expect(html).not.toContain('bidding now');
   });
 });

@@ -1128,6 +1128,70 @@ export async function getCitySim(db: WebDb): Promise<CitySimView | null> {
   return { generatedAt: v.generatedAt, cities, overall: v.overall };
 }
 
+// --- /paper-trade pre-placement forecast (dash_city_forecast, 0080) --------------------
+
+/**
+ * Today's PRE-PLACEMENT forecast for one enrolled city — the number the sim INTENDS to bet before the daily
+ * 10:00 UTC tick places it. Fields are the bias-corrected lead-1 forecast center (mirror of
+ * city_sim_place_inputs), converted to the city's native unit and wuRounded to the whole-° call, priced
+ * against today's live ladder. jsonb-string-safe numerics (file convention) — the page coerces with num().
+ */
+export interface CityForecast {
+  slug: string;
+  displayName: string;
+  icao: string;
+  unit: string;
+  tz: string;
+  armHours: number[];
+  forecastMaxHour: unknown;
+  /** City-local target day this forecast is for (the day the tick will bet). */
+  targetDate: string | null;
+  hasMarket: boolean;
+  /** Freshest lead-1 capture instant (UTC) — the "as of" freshness stamp. */
+  capturedAt: string | null;
+  nModels: unknown;
+  rawForecastC: unknown;
+  biasC: unknown;
+  biasN: unknown;
+  /** True when ≥20 trailing pairs let the bias correction be trusted; false → forecastC is the raw mean. */
+  biasCorrected: boolean;
+  /** The displayed forecast in °C (bias-corrected when trustworthy, else the raw cross-model mean). */
+  forecastC: unknown;
+  /** The forecast converted to the city's native unit — what predictedNative rounds from. */
+  forecastNative: unknown;
+  /** wuRound(forecastNative) — today's whole-° call the sim intends to bet. */
+  predictedNative: unknown;
+  /** Ladder label for that bucket on today's market, or null (no market / no covering bucket). */
+  label: string | null;
+  /** Latest best-ask on that bucket, or null when no live quote. */
+  ask: unknown;
+  /** Whether the daily tick has already placed today's bet for this city. */
+  alreadyPlacedToday: boolean;
+}
+
+export interface CityForecastView {
+  generatedAt: string;
+  cities: CityForecast[];
+}
+
+/**
+ * Today's pre-placement forecast per enrolled city (dash_city_forecast, 0080) — so the /paper-trade
+ * current-bet box can headline today's INTENDED temperature before the daily tick, instead of lagging on
+ * yesterday's placed bet. Degrades to null (not a thrown 500) if the RPC errors or the page deploys ahead of
+ * the 0080 RPC — the box then falls back to the placed-bet behaviour (ships dark). Same null-tolerant idiom
+ * as getCitySim.
+ */
+export async function getCityForecast(db: WebDb): Promise<CityForecastView | null> {
+  let v: CityForecastView | null;
+  try {
+    v = await one<CityForecastView>(db, 'dash_city_forecast', {});
+  } catch {
+    return null;
+  }
+  if (!v) return null;
+  return { generatedAt: v.generatedAt, cities: v.cities ?? [] };
+}
+
 // --- /calibration --------------------------------------------------------------------
 
 export interface CalibrationScoreRow {

@@ -23,7 +23,13 @@ import {
 } from '@weather-edge/core';
 import { EquityChart, type EquitySeries } from '../../../components/EquityChart.tsx';
 import { fmtDate, fmtDelta, fmtPct, fmtStockholm, fmtUsd, num } from '../../../lib/format.ts';
-import { type CitySimCity, type CitySimView, getCitySim } from '../../../lib/loaders.ts';
+import {
+  type CityForecast,
+  type CitySimCity,
+  type CitySimView,
+  getCityForecast,
+  getCitySim,
+} from '../../../lib/loaders.ts';
 import { serverDb } from '../../../lib/supabase.ts';
 
 export const dynamic = 'force-dynamic';
@@ -260,18 +266,117 @@ function CityPanel({ city }: { city: CitySimCity }): ReactElement {
   );
 }
 
+/** The placed-bet tile body (unchanged pre-N2 rendering): the temps carried on the city's `latest` bets. */
+function PlacedBetTile({ city, isCurrent, date }: { city: CitySimCity; isCurrent: boolean; date: string }): ReactElement {
+  const rows = city.armHours
+    .map((h) => ({ h, r: city.latest.byHour[h] }))
+    .filter((x): x is { h: number; r: NonNullable<CitySimCity['latest']['byHour'][number]> } =>
+      x.r != null && num(x.r.predictedC) != null);
+  const temps = [...new Set(rows.map((x) => num(x.r.predictedC)))];
+  const shared = temps.length === 1 ? temps[0] : null;
+  const firstArm = rows[0]?.h;
+  const lastArm = rows[rows.length - 1]?.h;
+  return (
+    <div className="tile">
+      <div className="tile-head">
+        <span className="cap">
+          {city.displayName} <span className="muted">{city.icao}</span>
+        </span>
+        <span className={`chip ${isCurrent ? 'green' : 'soft'}`}>{isCurrent ? 'bidding now' : 'latest bet'}</span>
+      </div>
+      <div className="sub">
+        bidding date <strong className="mono" style={{ color: 'var(--ams-text)' }}>{fmtDate(date)}</strong>
+        {isCurrent ? '' : ' — today’s bets not placed yet (daily 10:00Z tick)'}
+      </div>
+      {shared != null && firstArm != null && lastArm != null ? (
+        <>
+          <div className="big sky">{shared}°{city.unit}</div>
+          <div className="sub">
+            all arms · {firstArm}:00–{lastArm}:00 local · {stockholmHm(city.tz, date, firstArm)}
+            {firstArm !== lastArm ? `–${stockholmHm(city.tz, date, lastArm)}` : ''}
+          </div>
+        </>
+      ) : rows.length > 0 ? (
+        <div className="sub" style={{ display: 'flex', flexDirection: 'column', gap: '0.15rem' }}>
+          {rows.map(({ h, r }) => (
+            <span key={h} className="mono">
+              {h}:00 local · {stockholmHm(city.tz, date, h)} →{' '}
+              <strong style={{ color: 'var(--ams-secondary)' }}>{num(r.predictedC)}°{city.unit}</strong>
+            </span>
+          ))}
+        </div>
+      ) : (
+        <div className="sub muted">no prediction recorded for this date</div>
+      )}
+    </div>
+  );
+}
+
 /**
- * The current-bet box (operator request 2026-07-04): per active city, the target date currently being bet
- * and the predicted native temperature the sim is betting for it — read straight from the loader's
- * `latest` standing call (dash_city_sim already carries `predicted_native` per arm as `predictedC`; no
- * new RPC, no migration). Before the daily 10:00Z tick fires, the most recent bet date is shown and
- * explicitly labelled as such. Arm hours stay city-LOCAL by design (a 14:00 arm = 14:00 in that city);
- * the Stockholm equivalent is computed per-date via the IANA zones (DST-correct), shown alongside.
+ * The PRE-PLACEMENT tile (N2): before the daily 10:00Z tick, headline TODAY's intended whole-° call from the
+ * live pre-placement forecast (dash_city_forecast, 0080 — the bias-corrected lead-1 forecast center the sim
+ * will bet), not yesterday's placed bet. It's a forecast CENTER, not the bet: the running-max floor can still
+ * lift the actual call at lock, so the tile says so and keeps yesterday's placed date as a footnote.
  */
-function CurrentBetBox({ cities }: { cities: CitySimCity[] }): ReactElement | null {
-  const withLatest = cities.filter((c) => c.latest?.date != null);
-  if (withLatest.length === 0) return null;
+function IntendedBetTile({ city, fc, latestDate }: { city: CitySimCity; fc: CityForecast; latestDate: string | null }): ReactElement {
+  const pred = num(fc.predictedNative);
+  const ask = num(fc.ask);
+  const date = fc.targetDate ?? new Date().toISOString().slice(0, 10);
+  return (
+    <div className="tile">
+      <div className="tile-head">
+        <span className="cap">
+          {city.displayName} <span className="muted">{city.icao}</span>
+        </span>
+        <span className="chip amber">intended · pre-tick</span>
+      </div>
+      <div className="sub">
+        bidding date <strong className="mono" style={{ color: 'var(--ams-text)' }}>{fmtDate(date)}</strong>
+        {' — today’s bet not placed yet (daily 10:00Z tick)'}
+      </div>
+      <div className="big sky">
+        {pred}°{city.unit}
+        {fc.label ? <span className="cap muted" style={{ marginLeft: '0.4rem' }}>{fc.label}</span> : null}
+      </div>
+      <div className="sub">
+        forecast center {fc.biasCorrected ? '(bias corrected)' : '(raw)'}
+        {fc.capturedAt ? ` · as of ${fmtStockholm(fc.capturedAt)}` : ''}
+        {ask != null ? ` · ask ${fmtPct(ask, 0)}` : ''}
+      </div>
+      <div className="sub muted" style={{ fontSize: '0.85rem' }}>
+        the running-max floor may lift the actual call at lock
+        {latestDate ? ` · last placed bet ${fmtDate(latestDate)}` : ''}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The current-bet box (operator request 2026-07-04; completed 2026-07-04 N2): per active city, the target
+ * date currently being bet and the predicted native temperature. Once the daily 10:00Z tick has placed the
+ * day's bets the box reads them from the loader's `latest` standing call (dash_city_sim carries
+ * `predicted_native` per arm as `predictedC`). BEFORE the tick, when the pre-placement forecast RPC
+ * (dash_city_forecast, 0080) is available, it headlines TODAY's intended whole-° call instead of lagging on
+ * yesterday's bet. Arm hours stay city-LOCAL by design; the Stockholm equivalent is computed per-date via
+ * the IANA zones (DST-correct), shown alongside.
+ *
+ * `forecasts` is a null-guarded add-on: when it is null/absent (the 0080 RPC hasn't shipped), the box renders
+ * exactly its pre-N2 placed-bet behaviour — the page ships dark until the migration is applied.
+ */
+function CurrentBetBox({
+  cities,
+  forecasts,
+}: {
+  cities: CitySimCity[];
+  forecasts?: Map<string, CityForecast> | null;
+}): ReactElement | null {
   const todayUtc = new Date().toISOString().slice(0, 10);
+  // Show a city with a placed bet OR a pre-placement forecast to display. With no forecast map this reduces
+  // to the original `latest?.date != null` filter — the box is byte-identical when 0080 is absent.
+  const shown = cities.filter(
+    (c) => c.latest?.date != null || num(forecasts?.get(c.slug)?.predictedNative) != null,
+  );
+  if (shown.length === 0) return null;
 
   return (
     <section className="panel" style={{ marginTop: '1rem' }}>
@@ -282,50 +387,18 @@ function CurrentBetBox({ cities }: { cities: CitySimCity[] }): ReactElement | nu
         </span>
       </div>
       <div className="strip">
-        {withLatest.map((city) => {
-          const date = city.latest.date!;
-          const isCurrent = date >= todayUtc; // target_date is city-local; ≥ UTC-today counts as the live bet
-          const rows = city.armHours
-            .map((h) => ({ h, r: city.latest.byHour[h] }))
-            .filter((x): x is { h: number; r: NonNullable<CitySimCity['latest']['byHour'][number]> } =>
-              x.r != null && num(x.r.predictedC) != null);
-          const temps = [...new Set(rows.map((x) => num(x.r.predictedC)))];
-          const shared = temps.length === 1 ? temps[0] : null;
-          const firstArm = rows[0]?.h;
-          const lastArm = rows[rows.length - 1]?.h;
-          return (
-            <div key={city.slug} className="tile">
-              <div className="tile-head">
-                <span className="cap">
-                  {city.displayName} <span className="muted">{city.icao}</span>
-                </span>
-                <span className={`chip ${isCurrent ? 'green' : 'soft'}`}>{isCurrent ? 'bidding now' : 'latest bet'}</span>
-              </div>
-              <div className="sub">
-                bidding date <strong className="mono" style={{ color: 'var(--ams-text)' }}>{fmtDate(date)}</strong>
-                {isCurrent ? '' : ' — today’s bets not placed yet (daily 10:00Z tick)'}
-              </div>
-              {shared != null && firstArm != null && lastArm != null ? (
-                <>
-                  <div className="big sky">{shared}°{city.unit}</div>
-                  <div className="sub">
-                    all arms · {firstArm}:00–{lastArm}:00 local · {stockholmHm(city.tz, date, firstArm)}
-                    {firstArm !== lastArm ? `–${stockholmHm(city.tz, date, lastArm)}` : ''}
-                  </div>
-                </>
-              ) : rows.length > 0 ? (
-                <div className="sub" style={{ display: 'flex', flexDirection: 'column', gap: '0.15rem' }}>
-                  {rows.map(({ h, r }) => (
-                    <span key={h} className="mono">
-                      {h}:00 local · {stockholmHm(city.tz, date, h)} →{' '}
-                      <strong style={{ color: 'var(--ams-secondary)' }}>{num(r.predictedC)}°{city.unit}</strong>
-                    </span>
-                  ))}
-                </div>
-              ) : (
-                <div className="sub muted">no prediction recorded for this date</div>
-              )}
-            </div>
+        {shown.map((city) => {
+          const fc = forecasts?.get(city.slug) ?? null;
+          const latestDate = city.latest?.date ?? null;
+          const isCurrent = latestDate != null && latestDate >= todayUtc; // ≥ UTC-today counts as the live bet
+          // Pre-tick (today's bet not yet placed) + a forecast center exists → headline today's INTENDED call.
+          const showIntended = !isCurrent && fc != null && num(fc.predictedNative) != null;
+          return showIntended ? (
+            <IntendedBetTile key={city.slug} city={city} fc={fc} latestDate={latestDate} />
+          ) : (
+            // date is non-null here: !showIntended ⇒ either isCurrent (latestDate set) or the city entered
+            // `shown` via its latest bet (latestDate set).
+            <PlacedBetTile key={city.slug} city={city} isCurrent={isCurrent} date={latestDate!} />
           );
         })}
       </div>
@@ -671,7 +744,14 @@ function CityScanSection(): ReactElement {
 }
 
 export default async function PaperTradePage(): Promise<ReactElement> {
-  const view: CitySimView | null = await getCitySim(await serverDb());
+  const db = await serverDb();
+  // The head-to-head (placed bets) + today's pre-placement forecast (N2) in one round of parallel reads.
+  const [view, fcView]: [CitySimView | null, Awaited<ReturnType<typeof getCityForecast>>] = await Promise.all([
+    getCitySim(db),
+    getCityForecast(db),
+  ]);
+  // null-guarded: when the 0080 RPC is absent, forecasts stays null and the box ships its pre-N2 behaviour.
+  const forecasts = fcView ? new Map(fcView.cities.map((c) => [c.slug, c])) : null;
 
   if (!view) {
     return (
@@ -705,7 +785,7 @@ export default async function PaperTradePage(): Promise<ReactElement> {
         </div>
       </div>
 
-      <CurrentBetBox cities={view.cities} />
+      <CurrentBetBox cities={view.cities} forecasts={forecasts} />
 
       {view.cities.length === 0 ? (
         <div className="info-banner">No active cities configured yet — add a city_sim_config row.</div>

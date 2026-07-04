@@ -302,6 +302,12 @@ describe('migrations 0001–0010', () => {
       // Read-only + additive — no new table/cron/write path, dash_maker_exit + the §9R-E gate math untouched
       // (cron count stays 29). Honest nulls: NaN assumptions round-trip as null POINTS (no fabricated zeros).
       '0079_maker_exit_assumptions_history.sql',
+      // 0080 = the /paper-trade PRE-PLACEMENT forecast (NIGHT-BUILD N2): dash_city_forecast (operator read,
+      // jsonb-OBJECT, added to WEB_AUTHENTICATED below) surfaces TODAY's intended whole-° call per enrolled
+      // city — the bias-corrected lead-1 forecast center (mirror of the service-role city_sim_place_inputs,
+      // which the web tier cannot reach) → native unit → wuRound → live ladder — so the current-bet box shows
+      // today's intended temp before the 10:00 UTC tick places it. No table/cron change (count stays 29).
+      '0080_dash_city_forecast.sql',
     ]);
   });
 });
@@ -769,6 +775,7 @@ describe('0034: internal-RPC lockdown — anon/authenticated revoked except the 
     'dash_city_sim',  // 0070: /paper-trade multi-city paper-trade head-to-head operator read
     'dash_maker_exit',  // 0073: /maker-exit forward maker-exit paper loop operator read
     'dash_maker_exit_history',  // 0079: /maker-exit assumptions-over-time sparkline read (gate-day instrumentation)
+    'dash_city_forecast',  // 0080: /paper-trade pre-placement forecast (current-bet box) operator read
     'go_live_gate_inputs',
     'operator_halt', 'operator_resume', 'operator_update_config', 'operator_verify_station',
     'operator_set_champion', 'operator_skip_bet', 'operator_manual_bet',
