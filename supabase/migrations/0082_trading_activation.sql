@@ -1,11 +1,12 @@
 -- 0082_trading_activation.sql — the TRADING ACTIVATION + RISK CONSOLE, staged DARK.
 -- ══════════════════════════════════════════════════════════════════════════════════════════════════════════
 -- STAGED-DARK: this migration is WRITTEN but NOT applied to any database. It creates the config surface, the
--- risk caps, the order/fill ledger, the operator-guarded write path, the read dashboard, and the live-mode
--- INTERLOCK for the opening-convergence bot's eventual autonomous buy/sell rail (CLAUDE.md scoped exception,
--- OPENING-CONVERGENCE-HANDOFF.md §9R). Seeded with mode='off' — nothing here places a trade or touches a key.
--- The runner (T1's lane) writes live_orders/live_fills and calls trade_live_preflight() before ever entering
--- live mode. NO CAPITAL until a frozen paper PASS: the interlock encodes that gate in SQL.
+-- risk caps, the order/fill ledger, the operator-guarded write path, the read dashboard, the live-mode
+-- INTERLOCK, and the T1 order-ledger RPC contract for the opening-convergence bot's eventual autonomous
+-- buy/sell rail (CLAUDE.md scoped exception, OPENING-CONVERGENCE-HANDOFF.md §9R). Seeded with mode='off' —
+-- nothing here places a trade or touches a key. The runner (T1's lane) writes live_orders/live_fills through
+-- the six bot_order_* RPCs and calls trade_live_preflight() before ever entering live mode. NO CAPITAL until a
+-- frozen paper PASS: the interlock encodes that gate in SQL.
 --
 -- TABLE-SHAPE CHOICE (single-row typed table, NOT the key/value `config` idiom) — justified:
 --   1. The §9R HARD CEILING (stake_per_buy_usd ≤ 25 AND per_position_cap_usd ≤ 25) MUST be a CHECK constraint —
@@ -20,15 +21,44 @@
 --   single-row/enumerated-key control tables (bot_bankroll keyed by mode, whale_settings).
 --
 -- 0081 TRIPWIRE COMPLIANCE (CITY-SIM-PLACEMENT-FIX §5): every public no-arg RETURNS-jsonb function here
--- (trade_config_get, trade_live_preflight, dash_trading) returns a jsonb OBJECT envelope ({config:…}/{rows:…}/
--- {ok,reasons,checks,…}) — NEVER a top-level jsonb array — so supabasePort never misreads it as a RETURNS TABLE
--- row set. migrations.test.ts's tripwire enumerates all three and asserts object/scalar, never array.
+-- (trade_config_get, trade_live_preflight, dash_trading, trade_gate_override_clear) returns a jsonb OBJECT
+-- envelope — NEVER a top-level jsonb array — so supabasePort never misreads it as a RETURNS TABLE row set.
+-- migrations.test.ts's tripwire enumerates them all and asserts object/scalar, never array.
 --
 -- LIVE GATE = FORWARD PAPER, NOT BACKTEST (intentional scoping, flagged): the preflight's gate branch reads the
--- latest bot_gate_snapshot with mode='paper' AND source='forward'. The mission text names only mode='paper';
--- source='forward' is added deliberately — bot_gate_snapshot.source's own CHECK comment is "the capital gate
--- reads forward only (F2-r10)", and a backtest PASS must never unlock capital. A test proves a source='backtest'
--- PASS does NOT satisfy the interlock.
+-- latest bot_gate_snapshot with mode='paper' AND source='forward'. source='forward' is deliberate —
+-- bot_gate_snapshot.source's own CHECK comment is "the capital gate reads forward only (F2-r10)", and a backtest
+-- PASS must never unlock capital. A test proves a source='backtest' PASS does NOT satisfy the interlock.
+--
+-- THE T1 ORDER-LEDGER CONTRACT (packages/trading order-ledger.ts, T1 commit 683e7ff): the six bot_order_* RPCs
+-- below implement the `OrderLedger` port over live_orders/live_fills (T1's doc calls the table `bot_orders`;
+-- the RPC names abstract the table away). Lifecycle: intent → placed → partial → filled, with canceled/failed
+-- TERMINAL. The load-bearing idempotency guarantee (F4) is the PARTIAL-UNIQUE index
+--   unique (mode, intent_key) WHERE status NOT IN ('canceled','failed')
+-- — bot_order_reserve_intent is a CONDITIONAL insert against it ('reserved' | 'exists'): a retry or a
+-- concurrent placer with the same (mode, intent) gets 'exists', NEVER a second live order. A canceled/failed
+-- intent FREES its key (re-reservable — the reprice path); dry-run and live are DISTINCT intents by
+-- construction (mode is part of the key). The venue's 'expired' order outcome FOLDS INTO 'canceled' (terminal,
+-- frees the key) — there is deliberately no separate 'expired' status (F9).
+--
+-- DRY-RUN ROWS ARE RECORDED (design decision settled with T1): dry-run intents land in live_orders with
+-- mode='dry-run' (T1's dry-run branch writes the ledger; the shadow-diff harness reads them there). Therefore
+-- EVERY cap/loss/exposure figure in trade_live_preflight() and dash_trading() filters mode='live' — dry-run
+-- rows never count toward caps, losses, or concurrent exposure.
+--
+-- THE RUNNER'S PER-PLACEMENT CAP CONTRACT (F2): trade_live_preflight().checks carries today's realized LIVE
+-- loss plus the current open LIVE buy-side exposure (total + per-market, over status intent/placed/partial —
+-- an unfilled reservation is committed capital) so the runner enforces, from ONE call per placement:
+--   • per-market:        checks.perMarketExposureUsd[marketId] + stake ≤ per_market_cap_usd
+--   • total-concurrent:  checks.openExposureUsd + stake ≤ total_concurrent_cap_usd
+-- The DAILY-LOSS KILL blocks the preflight itself when today's realized live loss ≥ daily_loss_kill_usd OR
+-- ≥ daily_loss_kill_frac × total_concurrent_cap_usd — the FRACTION'S BASIS IS total_concurrent_cap_usd (the
+-- bot's deployable-bankroll ceiling; this surface has no separate bot-bankroll config, so the concurrent cap is
+-- the honest denominator).
+--
+-- AUDIT NOTE (F7): trade_config_audit.changed_by records the EFFECTIVE ROLE at write time (current_user — e.g.
+-- 'service_role' for direct writes, the definer-function owner for operator RPC writes), not a person.
+-- Single-operator project.
 --
 -- No cron, no edge fn: this is schema + RPCs only (cron count stays 29). RLS/grants mirror the 0070 idiom.
 
@@ -73,6 +103,9 @@ grant all    on public.trade_config to service_role;
 
 -- ══════════════════════════════════════════════════════════════════════════════════════════════════════════
 -- SECTION 2 · trade_config_audit — append-only whole-config change trail (old/new jsonb via trigger)
+-- APPEND-ONLY IS ENFORCED (F6): UPDATE/DELETE are granted to NO role — service_role holds SELECT + INSERT only
+-- (INSERT is required for the trigger path when service_role writes trade_config directly; the trigger runs as
+-- the invoking role). changed_by = the effective role, not a person (F7 header note above).
 -- ══════════════════════════════════════════════════════════════════════════════════════════════════════════
 create table if not exists public.trade_config_audit (
   id         bigint generated always as identity primary key,
@@ -84,9 +117,7 @@ create table if not exists public.trade_config_audit (
 create index if not exists trade_config_audit_changed_idx on public.trade_config_audit (changed_at desc);
 
 -- The trigger runs as the writer's effective role (SECURITY INVOKER) so changed_by reflects who wrote:
--- service_role for a direct write, the operator-guarded definer for a trade_config_set() write. Every legal
--- write path can insert (service_role via the grant below; the definer as table owner). Append-only: no update/
--- delete is ever granted — the only write is this trigger.
+-- service_role for a direct write, the operator-guarded definer's owner for a trade_config_set() write.
 create or replace function public.trade_config_audit_capture()
 returns trigger
 language plpgsql
@@ -116,16 +147,21 @@ drop policy if exists operator_read on public.trade_config_audit;
 create policy operator_read on public.trade_config_audit
   for select to authenticated using (public.is_operator());
 grant select on public.trade_config_audit to anon, authenticated;
-grant all    on public.trade_config_audit to service_role;
+-- F6: append-only enforced by grants — SELECT + INSERT only, even for service_role. No role holds UPDATE/DELETE.
+revoke all on public.trade_config_audit from service_role;
+grant select, insert on public.trade_config_audit to service_role;
 
 -- ══════════════════════════════════════════════════════════════════════════════════════════════════════════
--- SECTION 3 · trade_gate_override — the explicit operator escape hatch for the live interlock (append-only)
--- Any row present satisfies the interlock's gate branch (the mission's "an explicit override row exists").
--- reason NOT NULL forces a written justification; created_at orders them; the newest reason surfaces on /trading.
+-- SECTION 3 · trade_gate_override — the explicit, EXPIRING operator escape hatch for the live interlock (F1)
+-- An override satisfies the interlock's gate branch ONLY while expires_at > now(). expires_at is NOT NULL with
+-- NO default — the writer must consciously choose how long the override lives. Rows are never deleted:
+-- trade_gate_override_clear() expires active rows in place (expires_at = now()), keeping the audit trail.
 -- ══════════════════════════════════════════════════════════════════════════════════════════════════════════
 create table if not exists public.trade_gate_override (
   id         bigint generated always as identity primary key,
   reason     text not null,
+  note       text,                                             -- optional scope note (which market/window/why)
+  expires_at timestamptz not null,                             -- NO default: the writer must choose (F1)
   created_at timestamptz not null default now(),
   created_by text not null default current_user
 );
@@ -138,31 +174,96 @@ create policy operator_read on public.trade_gate_override
 grant select on public.trade_gate_override to anon, authenticated;
 grant all    on public.trade_gate_override to service_role;
 
+-- F1: the guarded override write — SECURITY DEFINER + operator_guard, same idiom as trade_config_set.
+-- Rejects a non-future expiry (an already-expired override is a no-op wearing a reason).
+create or replace function public.trade_gate_override_set(p_reason text, p_expires_at timestamptz, p_note text default null)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare v jsonb;
+begin
+  perform public.operator_guard();
+  if p_reason is null or length(trim(p_reason)) = 0 then
+    raise exception 'trade_gate_override_set: reason must be non-empty';
+  end if;
+  if p_expires_at is null or p_expires_at <= now() then
+    raise exception 'trade_gate_override_set: expires_at must be in the future';
+  end if;
+  insert into public.trade_gate_override (reason, note, expires_at)
+  values (p_reason, p_note, p_expires_at)
+  returning jsonb_build_object('override', to_jsonb(trade_gate_override.*)) into v;
+  return v;
+end;
+$$;
+
+-- F1: the guarded clear — expires every ACTIVE override in place (audit trail kept). Object envelope.
+create or replace function public.trade_gate_override_clear()
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare v_n int;
+begin
+  perform public.operator_guard();
+  update public.trade_gate_override set expires_at = now() where expires_at > now();
+  get diagnostics v_n = row_count;
+  return jsonb_build_object('cleared', v_n);
+end;
+$$;
+
+revoke all on function public.trade_gate_override_set(text, timestamptz, text) from public, anon, authenticated;
+grant  execute on function public.trade_gate_override_set(text, timestamptz, text) to service_role, authenticated;
+revoke all on function public.trade_gate_override_clear() from public, anon, authenticated;
+grant  execute on function public.trade_gate_override_clear() to service_role, authenticated;
+
 -- ══════════════════════════════════════════════════════════════════════════════════════════════════════════
--- SECTION 4 · live_orders + live_fills — the order-intent / fill ledger the runner writes (T1's lane owns writes)
+-- SECTION 4 · live_orders + live_fills — the order-intent / fill ledger behind the bot_order_* RPCs
+-- Status lifecycle (F9, aligned with T1's OrderLedgerStatus verbatim): intent → placed → partial → filled;
+-- canceled / failed TERMINAL (single-L 'canceled'; the venue's 'expired' outcome folds into 'canceled').
+-- side/purpose/order_type spellings are T1's exact enums (BUY/SELL; entry/take_profit/stop_loss/time_stop;
+-- GTC/GTD/FOK/FAK). mode ∈ (dry-run, live): an order row never exists at mode 'off' (the rail does nothing).
 -- ══════════════════════════════════════════════════════════════════════════════════════════════════════════
 create table if not exists public.live_orders (
   id              uuid primary key default gen_random_uuid(),
-  intent_key      text not null unique,                          -- THE idempotency backstop: one order per intent
-  client_order_id text,                                          -- client-generated id echoed to the venue
-  event_id        uuid references public.market_events(id),
-  market_id       text,                                          -- poly_market_id / condition id
-  token_id        text,                                          -- the traded token (yes/no)
-  side            text not null check (side in ('buy', 'sell')),
-  purpose         text not null check (purpose in ('entry', 'tp', 'sl', 'timestop')),
-  price           numeric(8,6) not null,                         -- limit price (0..1 share price)
-  size            numeric(14,4) not null,                        -- shares
-  mode            text not null check (mode in ('off', 'dry-run', 'live')),  -- trade_config.mode AT placement
+  intent_key      text not null,                                 -- idempotency key (unique per mode over OPEN rows)
+  client_order_id text not null,                                 -- client-generated id echoed to the venue
+  order_id        text,                                          -- the VENUE orderID — null until record_placed
+  market_id       text not null,                                 -- poly market / condition id
+  token_id        text not null,                                 -- the traded token (yes/no)
+  side            text not null check (side in ('BUY', 'SELL')),
+  purpose         text not null check (purpose in ('entry', 'take_profit', 'stop_loss', 'time_stop')),
+  order_type      text not null check (order_type in ('GTC', 'GTD', 'FOK', 'FAK')),
+  price           numeric(8,6)  not null,                        -- limit price (0..1 share price)
+  size            numeric(14,4) not null,                        -- shares requested
+  size_matched    numeric(14,4) not null default 0,              -- CUMULATIVE shares filled (record_fill)
+  avg_price       numeric(8,6),                                  -- cumulative average fill price (record_fill)
+  trade_date      date not null,                                 -- the market's resolution day (intent-key component)
+  mode            text not null check (mode in ('dry-run', 'live')),  -- posture AT placement (dry-run rows ARE recorded)
   status          text not null default 'intent'
-                    check (status in ('intent', 'submitted', 'open', 'partial', 'filled',
-                                      'cancelled', 'rejected', 'failed')),
-  reason          text,                                          -- rejection / failure detail
+                    check (status in ('intent', 'placed', 'partial', 'filled', 'canceled', 'failed')),
+  reason          text,                                          -- failure detail (record_failed)
   created_at      timestamptz not null default now(),
-  submitted_at    timestamptz,
+  placed_at       timestamptz,
   updated_at      timestamptz not null default now()
 );
+
+-- F4 — THE load-bearing reserve guarantee: at most ONE OPEN (non-terminal) row per (mode, intent_key).
+-- canceled/failed rows fall out of the index → the key is re-reservable (the reprice path); dry-run and live
+-- are distinct intents by construction (mode is in the key).
+create unique index if not exists live_orders_intent_open_key
+  on public.live_orders (mode, intent_key)
+  where status not in ('canceled', 'failed');
+
+-- One OPEN row per client_order_id — the record_* lookups key on it; terminal rows free the id too.
+create unique index if not exists live_orders_client_open_key
+  on public.live_orders (client_order_id)
+  where status not in ('canceled', 'failed');
+
 create index if not exists live_orders_status_idx on public.live_orders (status, created_at desc);
-create index if not exists live_orders_event_idx  on public.live_orders (event_id);
+create index if not exists live_orders_market_idx on public.live_orders (market_id);
 
 create or replace trigger trg_live_orders_updated_at
   before update on public.live_orders
@@ -171,9 +272,9 @@ create or replace trigger trg_live_orders_updated_at
 create table if not exists public.live_fills (
   id         uuid primary key default gen_random_uuid(),
   order_id   uuid not null references public.live_orders(id),
-  fill_price numeric(8,6)  not null,
-  fill_size  numeric(14,4) not null,
-  fee_usd    numeric(10,4) not null default 0,
+  fill_price numeric(8,6)  not null,                             -- the cumulative avg price at record time (see record_fill)
+  fill_size  numeric(14,4) not null,                             -- the DELTA matched since the previous record_fill
+  fee_usd    numeric(10,4) not null default 0,                   -- 0 via record_fill (maker $0 fee); taker fees land here later
   filled_at  timestamptz   not null default now(),
   created_at timestamptz   not null default now()
 );
@@ -217,6 +318,7 @@ grant  execute on function public.trade_config_get() to service_role;
 -- Nullable params: a null leaves the column unchanged. city_allowlist / active_until are nullable columns whose
 -- "clear to null" needs an explicit flag (a null param can't disambiguate "leave" from "clear"). The mode enum,
 -- §9R ceiling, positivity + fraction CHECKs are all enforced by the table — an out-of-range write RAISES.
+-- F5: active_until is capped at 60 days out — a longer run window is a config typo, not a plan.
 -- Returns { config: {…} } (object envelope). Audited automatically by trg_trade_config_audit.
 -- ══════════════════════════════════════════════════════════════════════════════════════════════════════════
 create or replace function public.trade_config_set(
@@ -240,6 +342,12 @@ as $$
 declare v jsonb;
 begin
   perform public.operator_guard();
+
+  -- F5: reject a run window more than 60 days out.
+  if p_active_until is not null and p_active_until > current_date + 60 then
+    raise exception 'trade_config_set: active_until % is more than 60 days out (max %)',
+      p_active_until, current_date + 60;
+  end if;
 
   update public.trade_config set
     mode                     = coalesce(p_mode, mode),
@@ -275,8 +383,13 @@ grant execute on function public.trade_config_set(
 --   (1) trade_config.mode = 'live'
 --   (2) active_until set AND >= current_date (the run-window day-cap has not expired)
 --   (3) stake_per_buy_usd <= per_position_cap_usd
---   (4) gate: the latest mode='paper' source='forward' bot_gate_snapshot has label='PASS'  OR  a
---       trade_gate_override row exists.
+--   (4) gate: the latest mode='paper' source='forward' bot_gate_snapshot has label='PASS'  OR  an ACTIVE
+--       (expires_at > now()) trade_gate_override row exists (F1)
+--   (5) F2 daily-loss kill: today's realized LIVE loss < daily_loss_kill_usd AND
+--       < daily_loss_kill_frac × total_concurrent_cap_usd (the documented basis — see header)
+-- checks additionally carries the open LIVE buy-side exposure (total + per-market) for the runner's
+-- per-placement cap enforcement (the F2 contract in the header). ALL money figures filter mode='live':
+-- dry-run rows are recorded in the ledger but never count (addendum).
 -- ══════════════════════════════════════════════════════════════════════════════════════════════════════════
 create or replace function public.trade_live_preflight()
 returns jsonb
@@ -286,11 +399,16 @@ security definer
 set search_path = public
 as $$
 declare
-  v_cfg             public.trade_config;
-  v_reasons         text[] := '{}';
-  v_gate_pass       boolean;
-  v_override_reason text;
-  v_override        boolean;
+  v_cfg              public.trade_config;
+  v_reasons          text[] := '{}';
+  v_gate_pass        boolean;
+  v_override_reason  text;
+  v_override_expires timestamptz;
+  v_override         boolean;
+  v_today_loss       numeric;
+  v_kill_basis       numeric;
+  v_open_expo        numeric;
+  v_per_market       jsonb;
 begin
   select * into v_cfg from public.trade_config where id = 1;
   if not found then
@@ -324,37 +442,85 @@ begin
     );
   end if;
 
-  -- (4a) the FORWARD paper gate of record (source='forward' — a backtest PASS must NOT unlock capital)
+  -- (4a) the FORWARD paper gate of record (source='forward' — a backtest PASS must NOT unlock capital).
+  -- id desc tiebreak (F8): same-timestamp snapshots resolve to the later insert, deterministically.
   select (label = 'PASS') into v_gate_pass
   from public.bot_gate_snapshot
   where mode = 'paper' and source = 'forward'
-  order by computed_at desc
+  order by computed_at desc, id desc
   limit 1;
   v_gate_pass := coalesce(v_gate_pass, false);
 
-  -- (4b) OR an explicit operator override row
-  select reason into v_override_reason
+  -- (4b) OR an ACTIVE (unexpired) operator override row (F1)
+  select reason, expires_at into v_override_reason, v_override_expires
   from public.trade_gate_override
-  order by created_at desc
+  where expires_at > now()
+  order by created_at desc, id desc
   limit 1;
   v_override := v_override_reason is not null;
 
   if not v_gate_pass and not v_override then
     v_reasons := v_reasons ||
-      'no PASS forward paper gate (bot_gate_snapshot mode=paper/source=forward) and no trade_gate_override row'::text;
+      'no PASS forward paper gate (bot_gate_snapshot mode=paper/source=forward) and no ACTIVE trade_gate_override row'::text;
   end if;
+
+  -- (5) F2 daily-loss kill — today's realized LIVE loss (buys + fees − sells, clamped ≥ 0; dry-run never counts).
+  select greatest(0,
+           coalesce(sum(f.fill_price * f.fill_size) filter (where o.side = 'BUY'),  0)
+         + coalesce(sum(f.fee_usd), 0)
+         - coalesce(sum(f.fill_price * f.fill_size) filter (where o.side = 'SELL'), 0))
+    into v_today_loss
+  from public.live_fills f
+  join public.live_orders o on o.id = f.order_id
+  where o.mode = 'live' and f.filled_at >= date_trunc('day', now());
+
+  v_kill_basis := v_cfg.daily_loss_kill_frac * v_cfg.total_concurrent_cap_usd;
+  if v_today_loss >= v_cfg.daily_loss_kill_usd then
+    v_reasons := v_reasons || format(
+      'daily-loss kill: today''s realized live loss $%s >= daily_loss_kill_usd $%s',
+      v_today_loss, v_cfg.daily_loss_kill_usd
+    );
+  end if;
+  if v_today_loss >= v_kill_basis then
+    v_reasons := v_reasons || format(
+      'daily-loss kill: today''s realized live loss $%s >= daily_loss_kill_frac %s x total_concurrent_cap_usd basis $%s',
+      v_today_loss, v_cfg.daily_loss_kill_frac, v_kill_basis
+    );
+  end if;
+
+  -- open LIVE buy-side exposure — total + per-market (reported, not blocking: the runner enforces the caps
+  -- per placement from these; see the F2 contract in the header). intent/placed/partial all commit capital.
+  select coalesce(sum(price * size), 0) into v_open_expo
+  from public.live_orders
+  where mode = 'live' and side = 'BUY' and status in ('intent', 'placed', 'partial');
+
+  select coalesce(jsonb_object_agg(market_id, expo), '{}'::jsonb) into v_per_market
+  from (
+    select market_id, sum(price * size) as expo
+    from public.live_orders
+    where mode = 'live' and side = 'BUY' and status in ('intent', 'placed', 'partial')
+    group by market_id
+  ) m;
 
   return jsonb_build_object(
     'ok', cardinality(v_reasons) = 0,
     'reasons', to_jsonb(v_reasons),
     'checks', jsonb_build_object(
-      'mode',              v_cfg.mode,
-      'activeUntil',       v_cfg.active_until,
-      'stakePerBuyUsd',    v_cfg.stake_per_buy_usd,
-      'perPositionCapUsd', v_cfg.per_position_cap_usd,
-      'gatePass',          v_gate_pass,
-      'override',          v_override,
-      'overrideReason',    v_override_reason
+      'mode',                      v_cfg.mode,
+      'activeUntil',               v_cfg.active_until,
+      'stakePerBuyUsd',            v_cfg.stake_per_buy_usd,
+      'perPositionCapUsd',         v_cfg.per_position_cap_usd,
+      'perMarketCapUsd',           v_cfg.per_market_cap_usd,
+      'totalConcurrentCapUsd',     v_cfg.total_concurrent_cap_usd,
+      'gatePass',                  v_gate_pass,
+      'override',                  v_override,
+      'overrideReason',            v_override_reason,
+      'overrideExpiresAt',         v_override_expires,
+      'todayLossUsd',              v_today_loss,
+      'dailyLossKillUsd',          v_cfg.daily_loss_kill_usd,
+      'dailyLossKillFracBasisUsd', v_kill_basis,
+      'openExposureUsd',           v_open_expo,
+      'perMarketExposureUsd',      v_per_market
     )
   );
 end;
@@ -365,7 +531,8 @@ grant  execute on function public.trade_live_preflight() to service_role;
 
 -- ══════════════════════════════════════════════════════════════════════════════════════════════════════════
 -- SECTION 8 · dash_trading() — the read-only /trading console (operator-guarded, object envelope)
--- config + interlock verdict + open orders + today's spend/loss. tripwire-compliant (no-arg → object).
+-- config + interlock verdict + open LIVE orders + today's LIVE spend/loss (dry-run rows never count toward any
+-- money figure — addendum) + a cheap dryRun counts section + the recent audit trail. tripwire-compliant.
 -- ══════════════════════════════════════════════════════════════════════════════════════════════════════════
 create or replace function public.dash_trading()
 returns jsonb
@@ -384,31 +551,39 @@ begin
     'openOrders', (
       select coalesce(jsonb_agg(to_jsonb(o) order by o.created_at desc), '[]'::jsonb)
       from public.live_orders o
-      where o.status in ('intent', 'submitted', 'open', 'partial')
+      where o.mode = 'live' and o.status in ('intent', 'placed', 'partial')
     ),
     'openExposureUsd', (
       select coalesce(sum(o.price * o.size), 0)
       from public.live_orders o
-      where o.status in ('submitted', 'open', 'partial')
+      where o.mode = 'live' and o.side = 'BUY' and o.status in ('intent', 'placed', 'partial')
     ),
     'today', (
-      -- today's realized cash flow from fills: buys deploy capital, sells return it, fees always cost.
+      -- today's realized LIVE cash flow from fills: buys deploy capital, sells return it, fees always cost.
       select jsonb_build_object(
-        'buyUsd',  coalesce(sum(f.fill_price * f.fill_size) filter (where o.side = 'buy'),  0),
-        'sellUsd', coalesce(sum(f.fill_price * f.fill_size) filter (where o.side = 'sell'), 0),
+        'buyUsd',  coalesce(sum(f.fill_price * f.fill_size) filter (where o.side = 'BUY'),  0),
+        'sellUsd', coalesce(sum(f.fill_price * f.fill_size) filter (where o.side = 'SELL'), 0),
         'feeUsd',  coalesce(sum(f.fee_usd), 0),
-        'netUsd',  coalesce(sum(f.fill_price * f.fill_size) filter (where o.side = 'sell'), 0)
-                 - coalesce(sum(f.fill_price * f.fill_size) filter (where o.side = 'buy'),  0)
+        'netUsd',  coalesce(sum(f.fill_price * f.fill_size) filter (where o.side = 'SELL'), 0)
+                 - coalesce(sum(f.fill_price * f.fill_size) filter (where o.side = 'BUY'),  0)
                  - coalesce(sum(f.fee_usd), 0),
         'lossUsd', greatest(0,
-                     coalesce(sum(f.fill_price * f.fill_size) filter (where o.side = 'buy'),  0)
+                     coalesce(sum(f.fill_price * f.fill_size) filter (where o.side = 'BUY'),  0)
                    + coalesce(sum(f.fee_usd), 0)
-                   - coalesce(sum(f.fill_price * f.fill_size) filter (where o.side = 'sell'), 0)),
+                   - coalesce(sum(f.fill_price * f.fill_size) filter (where o.side = 'SELL'), 0)),
         'nFills',  count(f.id)
       )
       from public.live_fills f
       join public.live_orders o on o.id = f.order_id
-      where f.filled_at >= date_trunc('day', now())
+      where o.mode = 'live' and f.filled_at >= date_trunc('day', now())
+    ),
+    'dryRun', (
+      -- cheap shadow-rail counts only (the shadow-diff harness reads the rows themselves).
+      select jsonb_build_object(
+        'openOrders', count(*) filter (where status in ('intent', 'placed', 'partial')),
+        'total',      count(*)
+      )
+      from public.live_orders where mode = 'dry-run'
     ),
     'recentAudit', (
       select coalesce(jsonb_agg(to_jsonb(a) order by a.changed_at desc), '[]'::jsonb)
@@ -425,3 +600,149 @@ $$;
 
 revoke all on function public.dash_trading() from public, anon, authenticated;
 grant  execute on function public.dash_trading() to service_role, authenticated;
+
+-- ══════════════════════════════════════════════════════════════════════════════════════════════════════════
+-- SECTION 9 · the six bot_order_* RPCs — the T1 OrderLedger contract (service-role ONLY; the runner is the
+-- sole caller). Args are T1's documented contract verbatim EXCEPT by_intent + reserve_intent take an explicit
+-- p_mode (F4 — dry-run and live are distinct intents); T1's rpcOrderLedger binding adds the mode arg (flagged
+-- in the lane report — the RPC side is the schema truth).
+-- ══════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+-- findByIntentKey: the single OPEN (non-terminal) row for (mode, key), or SQL null. The partial-unique index
+-- guarantees ≤ 1 such row. Snake_case jsonb — T1's mapLedgerRow maps it to the camelCase OrderLedgerRow.
+create or replace function public.bot_order_by_intent(p_intent_key text, p_mode text)
+returns jsonb
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select to_jsonb(o)
+  from public.live_orders o
+  where o.intent_key = p_intent_key
+    and o.mode = p_mode
+    and o.status not in ('canceled', 'failed')
+  limit 1;
+$$;
+
+-- reserveIntent: CONDITIONAL insert against the partial-unique index → 'reserved' | 'exists'. A retry or a
+-- concurrent placer with the same (mode, intent) gets 'exists', never a second live order ("reserved" vs
+-- "exists" semantics per the T1 doc). A canceled/failed key re-reserves cleanly (new row).
+create or replace function public.bot_order_reserve_intent(
+  p_mode text, p_intent_key text, p_client_order_id text, p_market_id text, p_token_id text,
+  p_side text, p_purpose text, p_order_type text, p_price numeric, p_size numeric, p_trade_date date
+)
+returns text
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare v_id uuid;
+begin
+  insert into public.live_orders
+    (mode, intent_key, client_order_id, market_id, token_id, side, purpose, order_type, price, size, trade_date)
+  values
+    (p_mode, p_intent_key, p_client_order_id, p_market_id, p_token_id, p_side, p_purpose, p_order_type,
+     p_price, p_size, p_trade_date)
+  on conflict (mode, intent_key) where status not in ('canceled', 'failed') do nothing
+  returning id into v_id;
+  return case when v_id is null then 'exists' else 'reserved' end;
+end;
+$$;
+
+-- recordPlaced: intent → placed, stamps the venue orderID (the post→record critical section, ADR-OC-5).
+create or replace function public.bot_order_record_placed(p_client_order_id text, p_order_id text)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  update public.live_orders
+     set order_id = p_order_id, status = 'placed', placed_at = now()
+   where client_order_id = p_client_order_id and status = 'intent';
+end;
+$$;
+
+-- recordFill: placed|partial → partial | filled. p_size_matched is CUMULATIVE (mirrors the venue's
+-- size_matched); the positive DELTA since the previous record is appended to live_fills at the cumulative
+-- average price (fill_price is that average — an approximation across mixed-price partials; fee_usd stays 0 on
+-- this path, the maker rail is $0-fee). Idempotent: a repeat with the same cumulative size writes no fill row.
+create or replace function public.bot_order_record_fill(
+  p_client_order_id text, p_size_matched numeric, p_avg_price numeric, p_status text
+)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_row   public.live_orders;
+  v_delta numeric;
+begin
+  if p_status not in ('filled', 'partial') then
+    raise exception 'bot_order_record_fill: p_status must be filled|partial, got %', p_status;
+  end if;
+  select * into v_row from public.live_orders
+   where client_order_id = p_client_order_id and status in ('placed', 'partial')
+   limit 1;
+  if not found then
+    return;  -- unknown / already-terminal id — a late venue echo is a no-op, never an error
+  end if;
+  v_delta := p_size_matched - coalesce(v_row.size_matched, 0);
+  update public.live_orders
+     set size_matched = p_size_matched, avg_price = p_avg_price, status = p_status
+   where id = v_row.id;
+  if v_delta > 0 then
+    insert into public.live_fills (order_id, fill_price, fill_size)
+    values (v_row.id, p_avg_price, v_delta);
+  end if;
+end;
+$$;
+
+-- recordCanceled: any OPEN pre-filled state → canceled (TERMINAL; frees the intent key). The venue's
+-- 'expired' outcome is recorded through THIS path (F9 — expired folds into canceled). A filled order is
+-- immutable — cancel on 'filled' is a no-op.
+create or replace function public.bot_order_record_canceled(p_client_order_id text)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  update public.live_orders
+     set status = 'canceled'
+   where client_order_id = p_client_order_id and status in ('intent', 'placed', 'partial');
+end;
+$$;
+
+-- recordFailed: any OPEN pre-filled state → failed (TERMINAL; frees the intent key; never retried under the
+-- same client_order_id). The error lands in `reason`.
+create or replace function public.bot_order_record_failed(p_client_order_id text, p_error text)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  update public.live_orders
+     set status = 'failed', reason = p_error
+   where client_order_id = p_client_order_id and status in ('intent', 'placed', 'partial');
+end;
+$$;
+
+-- grants: the runner (service_role) is the SOLE caller of the ledger RPCs.
+revoke all on function public.bot_order_by_intent(text, text) from public, anon, authenticated;
+grant  execute on function public.bot_order_by_intent(text, text) to service_role;
+revoke all on function public.bot_order_reserve_intent(text, text, text, text, text, text, text, text, numeric, numeric, date)
+  from public, anon, authenticated;
+grant  execute on function public.bot_order_reserve_intent(text, text, text, text, text, text, text, text, numeric, numeric, date)
+  to service_role;
+revoke all on function public.bot_order_record_placed(text, text) from public, anon, authenticated;
+grant  execute on function public.bot_order_record_placed(text, text) to service_role;
+revoke all on function public.bot_order_record_fill(text, numeric, numeric, text) from public, anon, authenticated;
+grant  execute on function public.bot_order_record_fill(text, numeric, numeric, text) to service_role;
+revoke all on function public.bot_order_record_canceled(text) from public, anon, authenticated;
+grant  execute on function public.bot_order_record_canceled(text) to service_role;
+revoke all on function public.bot_order_record_failed(text, text) from public, anon, authenticated;
+grant  execute on function public.bot_order_record_failed(text, text) to service_role;

@@ -34,14 +34,30 @@ export interface TradePreflight {
   ok: boolean;
   /** every failed condition, verbatim (checklist semantics — never short-circuited). */
   reasons: string[];
+  /**
+   * The F2 per-placement cap contract: EVERY money figure is LIVE-mode only (dry-run ledger rows never
+   * count). The runner enforces, per placement, from this one payload:
+   *   perMarketExposureUsd[marketId] + stake ≤ perMarketCapUsd
+   *   openExposureUsd + stake ≤ totalConcurrentCapUsd
+   * The daily-loss kill (todayLossUsd vs dailyLossKillUsd / dailyLossKillFracBasisUsd, the frac basis being
+   * total_concurrent_cap_usd) blocks the preflight itself.
+   */
   checks: {
     mode: TradeMode;
     activeUntil: string | null;
     stakePerBuyUsd: number;
     perPositionCapUsd: number;
+    perMarketCapUsd: number;
+    totalConcurrentCapUsd: number;
     gatePass: boolean;
     override: boolean;
     overrideReason: string | null;
+    overrideExpiresAt: string | null;
+    todayLossUsd: number;
+    dailyLossKillUsd: number;
+    dailyLossKillFracBasisUsd: number;
+    openExposureUsd: number;
+    perMarketExposureUsd: Record<string, number>;
   };
 }
 

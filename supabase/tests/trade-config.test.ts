@@ -1,9 +1,12 @@
 /**
  * 0082 trading-activation + risk-console twin tests (STAGED DARK — the migration is written, never applied to a
  * live DB; this exercises it in PGlite). Covers: the single-row trade_config surface + seed, the §9R $25 CHECK
- * ceiling, the append-only audit trigger, every RPC's OBJECT-envelope shape (0081 tripwire), the live-mode
- * INTERLOCK across all branches (no-PASS blocks / forward-PASS passes / override passes / backtest-PASS does NOT
- * pass / expired active_until blocks / stake>cap blocks), dash_trading, and the packages/trading TS reader.
+ * ceiling, the F5 60-day run-window cap, the ENFORCED append-only audit (F6 — no role holds UPDATE/DELETE),
+ * every RPC's OBJECT-envelope shape (0081 tripwire), the live-mode INTERLOCK across all branches (no-PASS /
+ * forward-PASS / backtest-PASS-rejected / EXPIRING override set+clear (F1) / expired window / stake>cap /
+ * daily-loss kill absolute+fractional (F2) / dry-run isolation (addendum)), the F3 non-operator ERR_FORBIDDEN
+ * guards, the six bot_order_* T1 OrderLedger RPCs (F4 partial-unique reserve semantics, mode-scoped keys,
+ * cumulative fills, terminal-frees-key), and the packages/trading TS reader.
  */
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import type { PGlite } from '@electric-sql/pglite';
@@ -19,6 +22,10 @@ let port: ReturnType<typeof pglitePort>;
 /** Call an operator-guarded RPC as the single allow-listed operator (service_role + the email claim). */
 const asOperator = <T>(fn: () => Promise<T>) => asRole(db, 'service_role', OPERATOR, fn);
 
+/** Call as an authenticated NON-operator — the F3 negative-guard identity. */
+const asIntruder = <T>(fn: () => Promise<T>) =>
+  asRole(db, 'authenticated', { email: 'intruder@example.com' }, fn);
+
 /** Restore the singleton to a known baseline (mode off, defaults, run window + allowlist cleared). */
 async function resetCfg(): Promise<void> {
   await asOperator(() =>
@@ -31,6 +38,53 @@ async function resetCfg(): Promise<void> {
          p_clear_city_allowlist := true, p_clear_active_until := true)`,
     ),
   );
+}
+
+/** Wipe the order/fill ledger (fills first — FK). */
+async function resetLedger(): Promise<void> {
+  await db.exec(`delete from public.live_fills`);
+  await db.exec(`delete from public.live_orders`);
+}
+
+let seedSeq = 0;
+/** Insert a live_orders row directly (superuser) with a unique key; returns its id. */
+async function seedOrder(opts: {
+  mode: 'live' | 'dry-run';
+  side?: 'BUY' | 'SELL';
+  status?: string;
+  price: number;
+  size: number;
+  marketId?: string;
+}): Promise<string> {
+  seedSeq += 1;
+  const r = await rows<{ id: string }>(
+    db,
+    `insert into public.live_orders
+       (intent_key, client_order_id, market_id, token_id, side, purpose, order_type,
+        price, size, trade_date, mode, status)
+     values ($1, $2, $3, 'tok', $4, 'entry', 'GTC', $5, $6, current_date, $7, $8)
+     returning id`,
+    [
+      `seed-k${seedSeq}`, `seed-c${seedSeq}`, opts.marketId ?? 'mkt-1', opts.side ?? 'BUY',
+      opts.price, opts.size, opts.mode, opts.status ?? 'intent',
+    ],
+  );
+  return r[0]!.id;
+}
+
+/** Insert a live_fills row for an order (today). */
+async function seedFill(orderId: string, price: number, size: number, fee = 0): Promise<void> {
+  await rows(
+    db,
+    `insert into public.live_fills (order_id, fill_price, fill_size, fee_usd) values ($1, $2, $3, $4)`,
+    [orderId, price, size, fee],
+  );
+}
+
+/** A filled order + its fill in one call — the realized-cash-flow seed for the daily-loss tests. */
+async function seedRealized(mode: 'live' | 'dry-run', side: 'BUY' | 'SELL', price: number, size: number): Promise<void> {
+  const id = await seedOrder({ mode, side, status: 'filled', price, size });
+  await seedFill(id, price, size);
 }
 
 beforeAll(async () => {
@@ -79,13 +133,36 @@ describe('0082 schema — single-row trade_config, ledger, RLS', () => {
     ).rejects.toThrow();
   });
 
-  it('live_orders.intent_key is UNIQUE (the idempotency backstop)', async () => {
-    const idx = await rows(
+  it('F4: live_orders has the PARTIAL-UNIQUE (mode, intent_key) over non-terminal rows', async () => {
+    const [idx] = await rows<{ indexdef: string }>(
       db,
-      `select 1 from pg_indexes where schemaname='public' and tablename='live_orders'
-         and indexdef like '%UNIQUE%' and indexdef like '%intent_key%'`,
+      `select indexdef from pg_indexes where schemaname='public' and tablename='live_orders'
+         and indexname = 'live_orders_intent_open_key'`,
     );
-    expect(idx.length).toBe(1);
+    expect(idx).toBeDefined();
+    expect(idx!.indexdef).toContain('UNIQUE');
+    expect(idx!.indexdef).toMatch(/\(mode,\s*intent_key\)/);
+    expect(idx!.indexdef).toContain('WHERE');
+    expect(idx!.indexdef).toMatch(/canceled/);
+    expect(idx!.indexdef).toMatch(/failed/);
+  });
+
+  it('one OPEN row per client_order_id (partial-unique — record_* lookups key on it)', async () => {
+    const [idx] = await rows<{ indexdef: string }>(
+      db,
+      `select indexdef from pg_indexes where schemaname='public' and tablename='live_orders'
+         and indexname = 'live_orders_client_open_key'`,
+    );
+    expect(idx).toBeDefined();
+    expect(idx!.indexdef).toContain('UNIQUE');
+    expect(idx!.indexdef).toContain('WHERE');
+  });
+
+  it('F9: the status enum is T1-aligned — single-L canceled admitted, double-L cancelled rejected', async () => {
+    await seedOrder({ mode: 'live', price: 0.3, size: 10, status: 'canceled' });
+    await expect(seedOrder({ mode: 'live', price: 0.3, size: 10, status: 'cancelled' })).rejects.toThrow(/check/i);
+    await expect(seedOrder({ mode: 'live', price: 0.3, size: 10, status: 'expired' })).rejects.toThrow(/check/i);
+    await resetLedger();
   });
 });
 
@@ -125,9 +202,21 @@ describe('0082 §9R CHECK ceiling — the $25 stake/position cap is code, not co
     const [c] = await rows<{ stake_per_buy_usd: string }>(db, `select stake_per_buy_usd from public.trade_config`);
     expect(Number(c!.stake_per_buy_usd)).toBe(25);
   });
+
+  it('F5: rejects active_until more than 60 days out', async () => {
+    await expect(
+      asOperator(() => rows(db, `select public.trade_config_set(p_active_until := (current_date + 61))`)),
+    ).rejects.toThrow(/more than 60 days out/);
+  });
+
+  it('F5: accepts active_until exactly 60 days out', async () => {
+    await asOperator(() => rows(db, `select public.trade_config_set(p_active_until := (current_date + 60))`));
+    const [c] = await rows<{ active_until: string }>(db, `select active_until from public.trade_config`);
+    expect(c!.active_until).toBeTruthy();
+  });
 });
 
-describe('0082 audit trigger — append-only whole-config old/new jsonb', () => {
+describe('0082 audit — append-only whole-config old/new jsonb (F6: enforced by grants)', () => {
   afterEach(resetCfg);
 
   it('the seed INSERT wrote one audit row (old null, new the row, changed_by set)', async () => {
@@ -155,19 +244,50 @@ describe('0082 audit trigger — append-only whole-config old/new jsonb', () => 
     expect(last!.new_value.mode).toBe('dry-run');
     expect(Number(last!.new_value.stake_per_buy_usd)).toBe(12);
   });
+
+  it('F6: service_role cannot UPDATE or DELETE audit rows (append-only enforced, not just claimed)', async () => {
+    await expect(
+      asRole(db, 'service_role', null, () =>
+        rows(db, `update public.trade_config_audit set changed_by = 'tampered' where true`),
+      ),
+    ).rejects.toThrow(/permission denied/i);
+    await expect(
+      asRole(db, 'service_role', null, () => rows(db, `delete from public.trade_config_audit where true`)),
+    ).rejects.toThrow(/permission denied/i);
+  });
+
+  it('F6/F7: a DIRECT service_role trade_config write still audits (INSERT grant suffices; changed_by = role)', async () => {
+    const before = await rows<{ n: number }>(db, `select count(*)::int n from public.trade_config_audit`);
+    await asRole(db, 'service_role', null, () =>
+      rows(db, `update public.trade_config set daily_loss_kill_usd = 29 where id = 1`),
+    );
+    const after = await rows<{ n: number }>(db, `select count(*)::int n from public.trade_config_audit`);
+    expect(after[0]!.n).toBe(before[0]!.n + 1);
+    const [last] = await rows<{ changed_by: string }>(
+      db,
+      `select changed_by from public.trade_config_audit order by changed_at desc, id desc limit 1`,
+    );
+    // F7: changed_by records the EFFECTIVE ROLE, not a person.
+    expect(last!.changed_by).toBe('service_role');
+  });
 });
 
 describe('0082 RPC envelopes — every no-arg jsonb RPC returns an OBJECT (0081 tripwire)', () => {
-  it('trade_config_get / trade_live_preflight / dash_trading are objects, never top-level arrays', async () => {
+  afterEach(async () => {
+    await db.exec(`delete from public.trade_gate_override`);
+  });
+
+  it('trade_config_get / trade_live_preflight / dash_trading / trade_gate_override_clear are objects', async () => {
     const shapes = await asOperator(() =>
-      rows<{ getk: string; pfk: string; dashk: string }>(
+      rows<{ getk: string; pfk: string; dashk: string; clrk: string }>(
         db,
-        `select jsonb_typeof(public.trade_config_get())    as getk,
-                jsonb_typeof(public.trade_live_preflight()) as pfk,
-                jsonb_typeof(public.dash_trading())         as dashk`,
+        `select jsonb_typeof(public.trade_config_get())         as getk,
+                jsonb_typeof(public.trade_live_preflight())      as pfk,
+                jsonb_typeof(public.dash_trading())              as dashk,
+                jsonb_typeof(public.trade_gate_override_clear()) as clrk`,
       ),
     );
-    expect(shapes[0]).toEqual({ getk: 'object', pfk: 'object', dashk: 'object' });
+    expect(shapes[0]).toEqual({ getk: 'object', pfk: 'object', dashk: 'object', clrk: 'object' });
   });
 
   it('trade_config_get envelopes the row under { config: {…} }', async () => {
@@ -182,17 +302,55 @@ describe('0082 RPC envelopes — every no-arg jsonb RPC returns an OBJECT (0081 
     expect(r!.mode).toBe('off');
   });
 
-  it('dash_trading carries config + preflight + openOrders + today', async () => {
+  it('dash_trading carries config + preflight + openOrders + today + dryRun', async () => {
     const [r] = await asOperator(() =>
       rows<Record<string, boolean>>(
         db,
         `select (public.dash_trading() ? 'config')     as c,
                 (public.dash_trading() ? 'preflight')  as p,
                 (public.dash_trading() ? 'openOrders') as o,
-                (public.dash_trading() ? 'today')      as t`,
+                (public.dash_trading() ? 'today')      as t,
+                (public.dash_trading() ? 'dryRun')     as d`,
       ),
     );
-    expect(r).toEqual({ c: true, p: true, o: true, t: true });
+    expect(r).toEqual({ c: true, p: true, o: true, t: true, d: true });
+  });
+
+  it('trade_gate_override_set returns { override: {…} } with the stored row', async () => {
+    const [r] = await asOperator(() =>
+      rows<{ v: { override: { reason: string; note: string | null } } }>(
+        db,
+        `select public.trade_gate_override_set('shape test', now() + interval '1 hour', 'note-1') as v`,
+      ),
+    );
+    expect(r!.v.override.reason).toBe('shape test');
+    expect(r!.v.override.note).toBe('note-1');
+  });
+});
+
+describe('0082 F3 — authenticated NON-operator gets ERR_FORBIDDEN from every guarded RPC', () => {
+  // These four FAIL if the operator_guard() first-statement is ever deleted: without the guard,
+  // trade_config_set would update, dash_trading would return data, and the override RPCs would write.
+  it('trade_config_set', async () => {
+    await expect(
+      asIntruder(() => rows(db, `select public.trade_config_set(p_mode := 'off')`)),
+    ).rejects.toThrow(/ERR_FORBIDDEN/);
+  });
+
+  it('dash_trading', async () => {
+    await expect(asIntruder(() => rows(db, `select public.dash_trading()`))).rejects.toThrow(/ERR_FORBIDDEN/);
+  });
+
+  it('trade_gate_override_set', async () => {
+    await expect(
+      asIntruder(() => rows(db, `select public.trade_gate_override_set('nope', now() + interval '1 hour')`)),
+    ).rejects.toThrow(/ERR_FORBIDDEN/);
+  });
+
+  it('trade_gate_override_clear', async () => {
+    await expect(asIntruder(() => rows(db, `select public.trade_gate_override_clear()`))).rejects.toThrow(
+      /ERR_FORBIDDEN/,
+    );
   });
 });
 
@@ -208,6 +366,7 @@ describe('0082 live-mode INTERLOCK — trade_live_preflight() across every branc
   afterEach(async () => {
     await db.exec(`delete from public.bot_gate_snapshot`);
     await db.exec(`delete from public.trade_gate_override`);
+    await resetLedger();
     await resetCfg();
   });
 
@@ -272,13 +431,71 @@ describe('0082 live-mode INTERLOCK — trade_live_preflight() across every branc
     expect(r!.checks.gatePass).toBe(false);
   });
 
-  it('an explicit trade_gate_override row clears it even with no gate PASS', async () => {
+  it('F8: same-timestamp snapshots tiebreak on id desc — the later insert wins', async () => {
     await goLive();
-    await db.exec(`insert into public.trade_gate_override (reason) values ('operator forward-tested manually')`);
+    // Same computed_at for both rows: only the id order separates them; the later insert (KILL) must win.
+    await db.exec(
+      `insert into public.bot_gate_snapshot (computed_at, mode, source, label)
+       values (date_trunc('minute', now()), 'paper', 'forward', 'PASS')`,
+    );
+    await db.exec(
+      `insert into public.bot_gate_snapshot (computed_at, mode, source, label)
+       values (date_trunc('minute', now()), 'paper', 'forward', 'KILL')`,
+    );
+    const [r] = await preflight();
+    expect(r!.ok).toBe(false);
+    expect(r!.checks.gatePass).toBe(false);
+  });
+
+  it('F1: an ACTIVE override (via trade_gate_override_set) clears it even with no gate PASS', async () => {
+    await goLive();
+    await asOperator(() =>
+      rows(db, `select public.trade_gate_override_set('operator forward-tested manually', now() + interval '2 hours')`),
+    );
     const [r] = await preflight();
     expect(r!.ok).toBe(true);
     expect(r!.checks.override).toBe(true);
     expect(r!.checks.overrideReason).toBe('operator forward-tested manually');
+    expect(r!.checks.overrideExpiresAt).toBeTruthy();
+  });
+
+  it('F1: an EXPIRED override does NOT unlock', async () => {
+    await goLive();
+    // Direct insert — the RPC (correctly) refuses to write an already-expired override.
+    await db.exec(
+      `insert into public.trade_gate_override (reason, expires_at)
+       values ('stale override', now() - interval '1 minute')`,
+    );
+    const [r] = await preflight();
+    expect(r!.ok).toBe(false);
+    expect(r!.checks.override).toBe(false);
+    expect(r!.reasons.join(' | ')).toMatch(/no ACTIVE trade_gate_override/);
+  });
+
+  it('F1: a CLEARED override does not unlock (clear expires active rows in place)', async () => {
+    await goLive();
+    await asOperator(() =>
+      rows(db, `select public.trade_gate_override_set('to be cleared', now() + interval '2 hours')`),
+    );
+    const [cleared] = await asOperator(() =>
+      rows<{ v: { cleared: number } }>(db, `select public.trade_gate_override_clear() as v`),
+    );
+    expect(cleared!.v.cleared).toBe(1);
+    const [r] = await preflight();
+    expect(r!.ok).toBe(false);
+    expect(r!.checks.override).toBe(false);
+    // The row survives (audit trail) — it is expired, not deleted.
+    const kept = await rows(db, `select 1 from public.trade_gate_override where reason = 'to be cleared'`);
+    expect(kept).toHaveLength(1);
+  });
+
+  it('F1: trade_gate_override_set rejects a past expiry and an empty reason', async () => {
+    await expect(
+      asOperator(() => rows(db, `select public.trade_gate_override_set('late', now() - interval '1 second')`)),
+    ).rejects.toThrow(/expires_at must be in the future/);
+    await expect(
+      asOperator(() => rows(db, `select public.trade_gate_override_set('   ', now() + interval '1 hour')`)),
+    ).rejects.toThrow(/reason must be non-empty/);
   });
 
   it('an EXPIRED active_until blocks even with a passing gate', async () => {
@@ -306,12 +523,259 @@ describe('0082 live-mode INTERLOCK — trade_live_preflight() across every branc
     expect(r!.ok).toBe(false);
     expect(r!.reasons.join(' | ')).toMatch(/exceeds per_position_cap_usd/);
   });
+
+  it('F2: the ABSOLUTE daily-loss kill blocks (buys+fees−sells ≥ daily_loss_kill_usd)', async () => {
+    await goLive();
+    await passingGate();
+    // kill at $5 absolute; frac 1 → basis $100 (out of the way). Buy $10, no sells → loss $10 ≥ $5.
+    await asOperator(() =>
+      rows(db, `select public.trade_config_set(p_daily_loss_kill_usd := 5, p_daily_loss_kill_frac := 1)`),
+    );
+    await seedRealized('live', 'BUY', 0.5, 20); // $10 deployed
+    const [r] = await preflight();
+    expect(r!.ok).toBe(false);
+    expect(r!.reasons.join(' | ')).toMatch(/daily-loss kill: .* daily_loss_kill_usd/);
+    expect(Number(r!.checks.todayLossUsd)).toBe(10);
+  });
+
+  it('F2: the FRACTIONAL daily-loss kill blocks (loss ≥ frac × total_concurrent_cap_usd)', async () => {
+    await goLive();
+    await passingGate();
+    // frac 0.05 × cap $100 = $5 basis; absolute kill $25 stays clear (loss $10 < $25 — §9R caps kill_usd ≤ … no,
+    // kill_usd has no ceiling; 25 chosen so ONLY the fractional branch fires).
+    await asOperator(() =>
+      rows(db, `select public.trade_config_set(p_daily_loss_kill_usd := 25, p_daily_loss_kill_frac := 0.05)`),
+    );
+    await seedRealized('live', 'BUY', 0.5, 20); // $10 ≥ $5 basis, < $25 absolute
+    const [r] = await preflight();
+    expect(r!.ok).toBe(false);
+    const joined = r!.reasons.join(' | ');
+    expect(joined).toMatch(/total_concurrent_cap_usd basis/);
+    expect(joined).not.toMatch(/>= daily_loss_kill_usd/);
+    expect(Number(r!.checks.dailyLossKillFracBasisUsd)).toBe(5);
+  });
+
+  it('F2: sells offset buys — a hedged day does not trip the kill', async () => {
+    await goLive();
+    await passingGate();
+    await asOperator(() => rows(db, `select public.trade_config_set(p_daily_loss_kill_usd := 5)`));
+    await seedRealized('live', 'BUY', 0.5, 20);  // −$10
+    await seedRealized('live', 'SELL', 0.4, 20); // +$8 → net loss $2 < $5
+    const [r] = await preflight();
+    expect(r!.ok).toBe(true);
+    expect(Number(r!.checks.todayLossUsd)).toBe(2);
+  });
+
+  it('ADDENDUM: dry-run fills move NOTHING — no loss, no exposure, preflight stays green', async () => {
+    await goLive();
+    await passingGate();
+    await asOperator(() => rows(db, `select public.trade_config_set(p_daily_loss_kill_usd := 5)`));
+    await seedRealized('dry-run', 'BUY', 0.5, 100);            // $50 dry-run buy — must NOT count
+    await seedOrder({ mode: 'dry-run', price: 0.3, size: 30 }); // $9 open dry-run intent — must NOT count
+    const [r] = await preflight();
+    expect(r!.ok).toBe(true);
+    expect(Number(r!.checks.todayLossUsd)).toBe(0);
+    expect(Number(r!.checks.openExposureUsd)).toBe(0);
+    expect(r!.checks.perMarketExposureUsd).toEqual({});
+  });
+
+  it('F2: open LIVE buy-side exposure is reported, total + per-market (SELL and dry-run excluded)', async () => {
+    await goLive();
+    await passingGate();
+    await seedOrder({ mode: 'live', price: 0.3, size: 20, marketId: 'm1' });                 // $6 open BUY
+    await seedOrder({ mode: 'live', price: 0.2, size: 20, marketId: 'm2', status: 'placed' }); // $4 open BUY
+    await seedOrder({ mode: 'live', side: 'SELL', price: 0.7, size: 10, marketId: 'm1' });   // SELL — excluded
+    await seedOrder({ mode: 'dry-run', price: 0.5, size: 20, marketId: 'm3' });              // dry-run — excluded
+    const [r] = await preflight();
+    expect(r!.ok).toBe(true); // exposure is reported, NOT blocking — the runner enforces the caps per placement
+    expect(Number(r!.checks.openExposureUsd)).toBe(10);
+    const perMkt = r!.checks.perMarketExposureUsd as Record<string, number>;
+    expect(Number(perMkt['m1'])).toBe(6);
+    expect(Number(perMkt['m2'])).toBe(4);
+    expect(perMkt['m3']).toBeUndefined();
+  });
+
+  it('ADDENDUM: dash_trading money figures are LIVE-only; dryRun section counts the shadow rail', async () => {
+    await seedRealized('dry-run', 'BUY', 0.5, 100);             // $50 dry-run fill
+    await seedOrder({ mode: 'dry-run', price: 0.3, size: 30 }); // open dry-run intent
+    await seedRealized('live', 'BUY', 0.5, 8);                  // $4 live fill
+    const [d] = await asOperator(() =>
+      rows<{ v: { today: { buyUsd: number; lossUsd: number; nFills: number }; openOrders: unknown[]; dryRun: { openOrders: number; total: number } } }>(
+        db,
+        `select public.dash_trading() as v`,
+      ),
+    );
+    expect(Number(d!.v.today.buyUsd)).toBe(4);   // the $50 dry-run fill is invisible here
+    expect(Number(d!.v.today.lossUsd)).toBe(4);
+    expect(Number(d!.v.today.nFills)).toBe(1);
+    expect(d!.v.openOrders).toEqual([]);          // the open dry-run intent is not a live open order
+    expect(Number(d!.v.dryRun.openOrders)).toBe(1);
+    expect(Number(d!.v.dryRun.total)).toBe(2);
+  });
+});
+
+describe('0082 §9 — the six bot_order_* RPCs (the T1 OrderLedger contract)', () => {
+  afterEach(resetLedger);
+
+  const reserve = async (over: Record<string, unknown> = {}): Promise<string> => {
+    const [r] = await port.rpc<{ bot_order_reserve_intent: string }>('bot_order_reserve_intent', {
+      p_mode: 'live', p_intent_key: 'k1', p_client_order_id: 'c1', p_market_id: 'm1', p_token_id: 't1',
+      p_side: 'BUY', p_purpose: 'entry', p_order_type: 'GTC', p_price: 0.3, p_size: 10,
+      p_trade_date: '2026-07-05', ...over,
+    });
+    return r!.bot_order_reserve_intent;
+  };
+
+  const byIntent = async (key = 'k1', mode = 'live'): Promise<Record<string, unknown> | null> => {
+    const [r] = await port.rpc<{ bot_order_by_intent: Record<string, unknown> | null }>('bot_order_by_intent', {
+      p_intent_key: key, p_mode: mode,
+    });
+    return r?.bot_order_by_intent ?? null;
+  };
+
+  it('reserve → reserved; a second reserve on the same (mode, intent) → exists (the race semantics)', async () => {
+    expect(await reserve()).toBe('reserved');
+    expect(await reserve({ p_client_order_id: 'c1-retry' })).toBe('exists');
+    const n = await rows<{ n: number }>(db, `select count(*)::int n from public.live_orders`);
+    expect(n[0]!.n).toBe(1); // never a second row for the open intent
+  });
+
+  it('by_intent returns the OPEN snake_case row (mapLedgerRow input shape); other mode → null', async () => {
+    await reserve();
+    const row = await byIntent();
+    expect(row).not.toBeNull();
+    expect(row!['intent_key']).toBe('k1');
+    expect(row!['client_order_id']).toBe('c1');
+    expect(row!['status']).toBe('intent');
+    expect(row!['side']).toBe('BUY');
+    expect(row!['purpose']).toBe('entry');
+    expect(Number(row!['size_matched'])).toBe(0);
+    expect(row!['order_id']).toBeNull();
+    // F4: dry-run and live are distinct intents — the same key in the other mode is empty.
+    expect(await byIntent('k1', 'dry-run')).toBeNull();
+  });
+
+  it('F4: dry-run and live reserve the SAME key independently and coexist', async () => {
+    expect(await reserve()).toBe('reserved');
+    expect(await reserve({ p_mode: 'dry-run', p_client_order_id: 'c1-dry' })).toBe('reserved');
+    const live = await byIntent('k1', 'live');
+    const dry = await byIntent('k1', 'dry-run');
+    expect(live!['mode']).toBe('live');
+    expect(dry!['mode']).toBe('dry-run');
+  });
+
+  it('record_placed: intent → placed, stamps the venue orderID', async () => {
+    await reserve();
+    await port.rpc('bot_order_record_placed', { p_client_order_id: 'c1', p_order_id: 'venue-77' });
+    const row = await byIntent();
+    expect(row!['status']).toBe('placed');
+    expect(row!['order_id']).toBe('venue-77');
+    expect(row!['placed_at']).toBeTruthy();
+  });
+
+  it('record_fill: CUMULATIVE size_matched; live_fills receives the deltas; partial → filled', async () => {
+    await reserve();
+    await port.rpc('bot_order_record_placed', { p_client_order_id: 'c1', p_order_id: 'venue-77' });
+
+    await port.rpc('bot_order_record_fill', {
+      p_client_order_id: 'c1', p_size_matched: 5, p_avg_price: 0.3, p_status: 'partial',
+    });
+    let row = await byIntent();
+    expect(row!['status']).toBe('partial');
+    expect(Number(row!['size_matched'])).toBe(5);
+
+    await port.rpc('bot_order_record_fill', {
+      p_client_order_id: 'c1', p_size_matched: 8, p_avg_price: 0.31, p_status: 'filled',
+    });
+    row = await byIntent();
+    expect(row!['status']).toBe('filled');
+    expect(Number(row!['size_matched'])).toBe(8);
+    expect(Number(row!['avg_price'])).toBeCloseTo(0.31);
+
+    const fills = await rows<{ fill_size: string; fill_price: string }>(
+      db,
+      `select fill_size, fill_price from public.live_fills order by created_at asc, filled_at asc`,
+    );
+    expect(fills.map((f) => Number(f.fill_size))).toEqual([5, 3]); // the deltas, not the cumulatives
+    expect(Number(fills[1]!.fill_price)).toBeCloseTo(0.31);
+  });
+
+  it('record_fill rejects a bad status and no-ops on an unknown/terminal id (late venue echo)', async () => {
+    await reserve();
+    await expect(
+      port.rpc('bot_order_record_fill', {
+        p_client_order_id: 'c1', p_size_matched: 5, p_avg_price: 0.3, p_status: 'canceled',
+      }),
+    ).rejects.toThrow(/must be filled\|partial/);
+    // Unknown id → silent no-op, no fill row.
+    await port.rpc('bot_order_record_fill', {
+      p_client_order_id: 'ghost', p_size_matched: 5, p_avg_price: 0.3, p_status: 'partial',
+    });
+    const n = await rows<{ n: number }>(db, `select count(*)::int n from public.live_fills`);
+    expect(n[0]!.n).toBe(0);
+  });
+
+  it('F4: record_canceled frees the key — a re-reserve succeeds as a NEW row', async () => {
+    await reserve();
+    await port.rpc('bot_order_record_canceled', { p_client_order_id: 'c1' });
+    expect(await byIntent()).toBeNull(); // no OPEN row for the key
+    expect(await reserve({ p_client_order_id: 'c1-reprice' })).toBe('reserved');
+    const n = await rows<{ n: number }>(db, `select count(*)::int n from public.live_orders`);
+    expect(n[0]!.n).toBe(2); // the canceled row is kept (history), the new intent is open
+  });
+
+  it('F4: record_failed frees the key too and stores the error', async () => {
+    await reserve();
+    await port.rpc('bot_order_record_failed', { p_client_order_id: 'c1', p_error: 'venue 500' });
+    const [failed] = await rows<{ status: string; reason: string }>(
+      db,
+      `select status, reason from public.live_orders where client_order_id = 'c1'`,
+    );
+    expect(failed!.status).toBe('failed');
+    expect(failed!.reason).toBe('venue 500');
+    expect(await reserve({ p_client_order_id: 'c1-retry' })).toBe('reserved');
+  });
+
+  it('a FILLED order is immutable — cancel on filled is a no-op and the key stays HELD', async () => {
+    await reserve();
+    await port.rpc('bot_order_record_placed', { p_client_order_id: 'c1', p_order_id: 'venue-77' });
+    await port.rpc('bot_order_record_fill', {
+      p_client_order_id: 'c1', p_size_matched: 10, p_avg_price: 0.3, p_status: 'filled',
+    });
+    await port.rpc('bot_order_record_canceled', { p_client_order_id: 'c1' });
+    const row = await byIntent();
+    expect(row!['status']).toBe('filled'); // not canceled
+    expect(await reserve({ p_client_order_id: 'c1-again' })).toBe('exists'); // filled HOLDS the key — never re-place
+  });
+
+  it('the six RPCs are service-role ONLY (anon + authenticated revoked)', async () => {
+    const sigs = [
+      'public.bot_order_by_intent(text, text)',
+      'public.bot_order_reserve_intent(text, text, text, text, text, text, text, text, numeric, numeric, date)',
+      'public.bot_order_record_placed(text, text)',
+      'public.bot_order_record_fill(text, numeric, numeric, text)',
+      'public.bot_order_record_canceled(text)',
+      'public.bot_order_record_failed(text, text)',
+    ];
+    for (const sig of sigs) {
+      const [g] = await rows<{ anon_can: boolean; authd_can: boolean; svc_can: boolean }>(
+        db,
+        `select has_function_privilege('anon', '${sig}', 'EXECUTE')          as anon_can,
+                has_function_privilege('authenticated', '${sig}', 'EXECUTE') as authd_can,
+                has_function_privilege('service_role', '${sig}', 'EXECUTE')  as svc_can`,
+      );
+      expect(g!.anon_can, `${sig} anon`).toBe(false);
+      expect(g!.authd_can, `${sig} authenticated`).toBe(false);
+      expect(g!.svc_can, `${sig} service_role`).toBe(true);
+    }
+  });
 });
 
 describe('0082 packages/trading TS reader (via the PGlite twin port)', () => {
   afterEach(async () => {
     await db.exec(`delete from public.bot_gate_snapshot`);
     await db.exec(`delete from public.trade_gate_override`);
+    await resetLedger();
     await resetCfg();
   });
 
@@ -338,15 +802,18 @@ describe('0082 packages/trading TS reader (via the PGlite twin port)', () => {
     expect(cfg.activeUntil).toBeTruthy();
   });
 
-  it('preflightLive returns a typed verdict — blocked on the DARK default', async () => {
+  it('preflightLive returns a typed verdict — blocked on the DARK default, zeroed money figures', async () => {
     const pf = await preflightLive(port);
     expect(pf.ok).toBe(false);
     expect(pf.reasons.length).toBeGreaterThan(0);
     expect(pf.checks.mode).toBe('off');
     expect(pf.checks.gatePass).toBe(false);
+    expect(Number(pf.checks.todayLossUsd)).toBe(0);
+    expect(Number(pf.checks.openExposureUsd)).toBe(0);
+    expect(pf.checks.perMarketExposureUsd).toEqual({});
   });
 
-  it('preflightLive.ok flips true once live + fresh window + a forward PASS', async () => {
+  it('preflightLive.ok flips true once live + fresh window + a forward PASS; exposure figures ride along', async () => {
     await db.exec(
       `insert into public.bot_gate_snapshot (computed_at, mode, source, label)
        values (now(), 'paper', 'forward', 'PASS')`,
@@ -354,9 +821,14 @@ describe('0082 packages/trading TS reader (via the PGlite twin port)', () => {
     await asOperator(() =>
       rows(db, `select public.trade_config_set(p_mode := 'live', p_active_until := (current_date + 7))`),
     );
+    await seedOrder({ mode: 'live', price: 0.25, size: 40, marketId: 'm9' }); // $10 open live BUY
     const pf = await preflightLive(port);
     expect(pf.ok).toBe(true);
     expect(pf.reasons).toEqual([]);
     expect(pf.checks.gatePass).toBe(true);
+    expect(Number(pf.checks.openExposureUsd)).toBe(10);
+    expect(Number(pf.checks.perMarketExposureUsd['m9'])).toBe(10);
+    expect(Number(pf.checks.totalConcurrentCapUsd)).toBe(100);
+    expect(Number(pf.checks.perMarketCapUsd)).toBe(40);
   });
 });

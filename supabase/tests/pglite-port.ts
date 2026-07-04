@@ -154,6 +154,18 @@ const FN_ARGS: Record<string, string[]> = {
   ],
   trade_live_preflight: [],
   dash_trading: [],
+  trade_gate_override_set: ['p_reason', 'p_expires_at', 'p_note'],
+  trade_gate_override_clear: [],
+  // 0082 §9 — the T1 OrderLedger contract (order-ledger.ts rpcOrderLedger + explicit p_mode on by_intent/reserve).
+  bot_order_by_intent: ['p_intent_key', 'p_mode'],
+  bot_order_reserve_intent: [
+    'p_mode', 'p_intent_key', 'p_client_order_id', 'p_market_id', 'p_token_id',
+    'p_side', 'p_purpose', 'p_order_type', 'p_price', 'p_size', 'p_trade_date',
+  ],
+  bot_order_record_placed: ['p_client_order_id', 'p_order_id'],
+  bot_order_record_fill: ['p_client_order_id', 'p_size_matched', 'p_avg_price', 'p_status'],
+  bot_order_record_canceled: ['p_client_order_id'],
+  bot_order_record_failed: ['p_client_order_id', 'p_error'],
 };
 
 export function pglitePort(db: PGlite): DbPort {
