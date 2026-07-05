@@ -71,6 +71,13 @@ describe('buildCaptureIndex — conditionId→event Rosetta + center + resolutio
     expect(idx.resolvesByEvent.get('E1')).toBeNull(); // no resolvesAt in the fixture → noon fallback
   });
 
+  it('anchors resolvesByEvent to the first finite resolvesAt (the maker-exit time-stop clock)', () => {
+    const RESOLVES = '2026-07-07T22:00:00.000Z';
+    const rows = evtRows('E1').map((r, i) => (i === 0 ? { ...r, resolvesAt: RESOLVES } : r));
+    const idx = buildCaptureIndex(rows);
+    expect(idx.resolvesByEvent.get('E1')).toBe(Date.parse(RESOLVES));
+  });
+
   it('is total on empty / null-eventId input', () => {
     const idx = buildCaptureIndex([]);
     expect(idx.market.size).toBe(0);
@@ -103,6 +110,32 @@ describe('normalizeLedger — group rows into per-market decisions + reprice cou
     const decs = normalizeLedger([led({ marketId: 'ghost', tokenId: 'g' })], idx);
     expect(decs[0]!.unmapped).toBe(true);
     expect(decs[0]!.eventId).toBeNull();
+  });
+
+  it('L1: a failed-then-retried entry is a RETRY, not a reprice; only canceled predecessors count', () => {
+    const idx = buildCaptureIndex(twoEvents());
+    // failed → placed: retry, not a reprice.
+    const retry = normalizeLedger(
+      [
+        led({ clientOrderId: 'f1', status: 'failed', createdAt: '2026-07-06T08:00:05.000Z' }),
+        led({ clientOrderId: 'f2', status: 'placed', createdAt: '2026-07-06T08:00:40.000Z' }),
+      ],
+      idx,
+    );
+    expect(retry[0]!.nReprices).toBe(0);
+    // canceled → canceled → placed: two genuine reprices.
+    const twice = normalizeLedger(
+      [
+        led({ clientOrderId: 'c1', status: 'canceled', createdAt: '2026-07-06T08:00:05.000Z' }),
+        led({ clientOrderId: 'c2', status: 'canceled', createdAt: '2026-07-06T08:00:35.000Z' }),
+        led({ clientOrderId: 'c3', status: 'placed', createdAt: '2026-07-06T08:01:05.000Z' }),
+      ],
+      idx,
+    );
+    expect(twice[0]!.nReprices).toBe(2);
+    // a trailing kill-cancel with no successor is not a reprice either.
+    const killed = normalizeLedger([led({ clientOrderId: 'k1', status: 'canceled' })], idx);
+    expect(killed[0]!.nReprices).toBe(0);
   });
 });
 
@@ -179,6 +212,104 @@ describe('computeShadowDiff — the diff dimensions, ranking, and summary', () =
     expect(e1.bucketAgree).toBe(false);
     expect(e1.divergenceScore).toBeGreaterThanOrEqual(50);
     expect(e1.notes.some((n) => n.includes('BUCKET DISAGREE'))).toBe(true);
+  });
+});
+
+describe('lens fixes — M1 global normalization, M2 multi-bucket, M3 intent-only suppression, L3 city scope', () => {
+  const fourEventRows = (): RawCaptureRow[] => [...evtRows('E1'), ...evtRows('E2'), ...evtRows('E3'), ...evtRows('E4')];
+  const idx4 = buildCaptureIndex(fourEventRows());
+  const events4 = buildEvents(fourEventRows(), new Map());
+  /** a FILLED A entry (live-shaped ledger row) — makes intentOnly false so price/size actually score. */
+  const filledLed = (eventId: string, size: number, over: Partial<DryRunLedgerRow> = {}): DryRunLedgerRow =>
+    led({
+      clientOrderId: `${eventId}-co`,
+      marketId: `${eventId}-c2`,
+      tokenId: `${eventId}-y2`,
+      price: 0.11,
+      size,
+      sizeMatched: size,
+      status: 'filled',
+      fillNotionalUsd: 0.11 * size,
+      fillSize: size,
+      ...over,
+    });
+
+  it('M1: a GLOBAL stake-scale + price offset is detected ONCE and normalized out — uniform rows score 0', () => {
+    // three both-entered rows, ALL with the same A size (66) and price (0.11) vs B's perPositionUsd sizing —
+    // the config-mismatch shape M1 describes. A fourth row deviates (size 33 → double the B/A ratio).
+    const ledger = [filledLed('E1', 66), filledLed('E2', 66), filledLed('E3', 66), filledLed('E4', 33)];
+    const rep = computeShadowDiff(events4, idx4, ledger, CFG, 3);
+    const rows = ['E1', 'E2', 'E3', 'E4'].map((id) => rep.rows.find((r) => r.eventId === id)!);
+    const [e1, , , e4] = rows;
+
+    // the global ratio = the (uniform) per-row B/A ratio of the majority rows; the median absorbs E4's outlier.
+    const uniformRatio = e1!.b.entrySizeShares! / e1!.a.entrySizeShares!;
+    expect(rep.summary.globalSizeRatioBOverA).toBeCloseTo(uniformRatio, 6);
+    expect(rep.summary.globalNormalizationApplied).toBe(true);
+    // the systematic price offset (B fill − A ledger price) lands in the summary, not in every row's score.
+    expect(rep.summary.medianEntryPriceDeltaCents).toBeCloseTo((e1!.b.entryPrice! - 0.11) * 100, 6);
+
+    // uniform rows: residual 0 on BOTH axes → score exactly 0 despite the raw ×~2.5 size and +1¢ price deltas.
+    for (const r of rows.slice(0, 3)) {
+      expect(r!.divergenceScore).toBe(0);
+      expect(r!.notes.some((n) => n.includes('SIZE divergence'))).toBe(false);
+    }
+    // the deviating row scores its residual (ratio 2× the global → residualRel 1 → +10) and gets the alert.
+    expect(e4!.divergenceScore).toBeCloseTo(10, 6);
+    expect(e4!.notes.some((n) => n.includes('SIZE divergence beyond the global scale'))).toBe(true);
+  });
+
+  it('M2: a multi-bucket event (one event, two buckets entered) scores ≥50 and its note ranks FIRST', () => {
+    const idx = buildCaptureIndex(twoEvents());
+    const events = buildEvents(twoEvents(), new Map());
+    const ledger = [
+      led({ clientOrderId: 'm1', marketId: 'E1-c2', tokenId: 'E1-y2' }),
+      led({ clientOrderId: 'm2', marketId: 'E1-c1', tokenId: 'E1-y1' }),
+    ];
+    const rep = computeShadowDiff(events, idx, ledger, CFG, 3);
+    const e1 = rep.rows.find((r) => r.eventId === 'E1')!;
+    expect(e1.a.multiBucket).toBe(true);
+    expect(e1.a.bucketsEntered).toContain(1);
+    expect(e1.a.bucketsEntered).toContain(2);
+    expect(e1.divergenceScore).toBeGreaterThanOrEqual(50);
+    // the anomaly leads notes[0] — never buried behind EXPECTED tags (the table shows only notes[0]).
+    expect(e1.notes[0]).toContain('MULTI-BUCKET');
+  });
+
+  it('M3: a repriced intent NEVER scores its price/size delta — tagged intent-only instead', () => {
+    const idx = buildCaptureIndex(twoEvents());
+    const events = buildEvents(twoEvents(), new Map());
+    // one reprice, both rows priced FAR from B's fill (0.05 vs ~0.12) — pre-fix this scored ~+7.
+    const ledger = [
+      led({ clientOrderId: 'r1', marketId: 'E1-c2', price: 0.05, status: 'canceled', createdAt: '2026-07-06T08:00:05.000Z' }),
+      led({ clientOrderId: 'r2', marketId: 'E1-c2', price: 0.05, status: 'placed', createdAt: '2026-07-06T08:00:40.000Z' }),
+    ];
+    const rep = computeShadowDiff(events, idx, ledger, CFG, 3);
+    const e1 = rep.rows.find((r) => r.eventId === 'E1')!;
+    expect(e1.a.nReprices).toBe(1);
+    expect(e1.entryPriceDelta).not.toBeNull(); // the delta stays REPORTED…
+    expect(Math.abs(e1.entryPriceDelta!)).toBeGreaterThan(0.05);
+    expect(e1.divergenceScore).toBe(0); // …but NEVER scored (expected classes cannot inflate the ranking)
+    expect(e1.notes.some((n) => n.includes('EXPECTED(intent-only price/size)'))).toBe(true);
+  });
+
+  it('L3: an A-only row for a city outside --cities is tagged EXPECTED(city-scope) and UNscored', () => {
+    const idx = buildCaptureIndex(twoEvents());
+    const events = buildEvents(twoEvents(), new Map());
+    const parisCfg = makerExitCfg(['paris']); // harness scoped to paris; the fixtures are amsterdam
+    const rep = computeShadowDiff(events, idx, [led({ marketId: 'E1-c2' })], parisCfg, 3);
+    const e1 = rep.rows.find((r) => r.eventId === 'E1')!;
+    expect(e1.a.entered).toBe(true);
+    expect(e1.b.entered).toBe(false); // off the replay's city allowlist
+    expect(e1.outOfScopeA).toBe(true);
+    expect(e1.divergenceScore).toBe(0); // an expected scope artifact, not a score-100 phantom
+    expect(e1.notes.some((n) => n.includes('EXPECTED(city-scope)'))).toBe(true);
+    expect(rep.summary.nOutOfScopeA).toBe(1);
+    // a truly UNMAPPED market keeps its score-100 alert (it could be a real capture-coverage gap).
+    const rep2 = computeShadowDiff(events, idx, [led({ marketId: 'ghost', tokenId: 'g' })], parisCfg, 3);
+    const ghost = rep2.rows.find((r) => r.key.startsWith('unmapped:ghost'))!;
+    expect(ghost.divergenceScore).toBeGreaterThanOrEqual(100);
+    expect(ghost.notes[0]).toContain('UNMAPPED');
   });
 });
 

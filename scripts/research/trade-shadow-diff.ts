@@ -43,6 +43,30 @@
  *                             has no such concept. (Only bites once live.)
  *   5. consensus-source     — buckets can diverge if the daemon's capture stream seeds a different house prob
  *                             than the replay cfg assumes (bot.consensusSource); tagged when the bucket differs.
+ *   6. config-stake-scale   — side A sizes at trade_config.stake_per_buy_usd (seeded $10), side B at the
+ *                             replay's perPositionUsd ($20): a CONSTANT B/A share ratio on EVERY market. The
+ *                             harness detects it ONCE (median B/A over both-entered rows, applied at ≥3
+ *                             samples), surfaces it as a summary config-mismatch line, and scores per-row size
+ *                             only on the RESIDUAL — a global knob mismatch cannot crush the ranking (lens M1).
+ *   7. maker-shade          — side A's ledger price is the post_only-SHADED maker limit (≈1 tick inside the
+ *                             book, order-intent.ts makerLimitPrice) vs side B's modeled fill: a near-constant
+ *                             offset. Detected as the median B−A price delta and normalized out of per-row
+ *                             scores the same way (lens M1).
+ *
+ * SCORING DISCIPLINE (lens M3): per-row price/size deltas are SCORED only when side A's entry actually FILLED
+ * and was never repriced — an unfilled dry-run intent's resting limit is not a fill price, and a repriced
+ * entry's first-row limit is stale by construction (expected classes #1/#2). The deltas are still computed +
+ * summarized; they just cannot inflate the per-row ranking. Likewise a side's "realized P&L" exists only once a
+ * SELL fill exists (the 0082 N1 realized-at-sell convention) — an open filled BUY is cost, not realized P&L.
+ * ENTRY TIMING (lens L2): entryAtDeltaMs compares DELIBERATELY ASYMMETRIC clocks — A's intent-reservation
+ * created_at (≈ the daemon's first-enterable decision) vs B's modeled FILL tick (decision + maker-rest
+ * latency). A positive delta ≈ B's modeled fill latency; a LARGE NEGATIVE one is the anomaly. Rendered (Δmin),
+ * never scored — timing noise would drown the ranking.
+ *
+ * CITY SCOPE (lens L3): the ledger read is city-UNFILTERED while the capture window / side B honor --cities —
+ * a daemon row for a city outside --cities surfaces as an A-only row: tagged EXPECTED(city-scope) + UNscored
+ * when its city is derivable from the capture index, else kept as a scored "unmapped" row (it could equally be
+ * a real capture-coverage gap). Widen --cities to cover the daemon allowlist for a clean read.
  *
  * Pure + total: junk → empty sections / NaN, never throws. The pure core imports only sibling core mappers +
  * the maker-exit replay engine — never packages/trading, never io, never fs (the DB read lives in the CLI tail).
@@ -88,6 +112,15 @@ const parseMs = (iso: string | null | undefined): number | null => {
   const ms = Date.parse(String(iso));
   return Number.isFinite(ms) ? ms : null;
 };
+const median = (xs: number[]): number => {
+  const s = xs.filter((v) => Number.isFinite(v)).sort((a, b) => a - b);
+  const n = s.length;
+  return n === 0 ? NaN : n % 2 ? s[(n - 1) / 2]! : (s[n / 2 - 1]! + s[n / 2]!) / 2;
+};
+
+/** M1 — a detected global systematic delta is normalized out of per-row scores only at this many both-entered
+ *  samples or more; below it a "global" is indistinguishable from a per-row divergence, so scoring stays raw. */
+export const GLOBAL_NORMALIZE_MIN_SAMPLES = 3;
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 // Types — side A (the dry-run ledger), the capture index, the normalized per-side decision, the diff
@@ -189,9 +222,17 @@ export interface ShadowDiffRow {
   bucketAgree: boolean | null; // null unless BOTH entered
   entryPriceDelta: number | null; // b − a (price units)
   entrySizeDelta: number | null; // b − a (shares)
+  /** b − a entry timing (ms) — SEMANTICS DELIBERATELY ASYMMETRIC (lens L2, documented not matched): A stamps
+   *  the daemon's intent RESERVATION (created_at ≈ its first-enterable decision tick + one tick-loop latency),
+   *  B stamps the replay's modeled FILL tick (its decision tick + the maker-rest latency). A positive delta ≈
+   *  B's modeled fill latency (+ capture-vs-daemon clock skew); a LARGE NEGATIVE delta (B filled long before A
+   *  even reserved) is the anomaly worth investigating. Rendered as Δmin in the table; NEVER scored. */
   entryAtDeltaMs: number | null; // b − a
   exitKindAgree: boolean | null; // null unless BOTH have an exit kind
   realizedPnlDelta: number | null; // b − a (only meaningful once both realize)
+  /** L3 — A entered a market whose city is derivably OUTSIDE the harness --cities scope (an expected scope
+   *  artifact, tagged + unscored — widen --cities); absent/false for in-scope and unmapped rows. */
+  outOfScopeA?: boolean;
   divergenceScore: number;
   notes: string[];
 }
@@ -210,6 +251,19 @@ export interface ShadowDiffSummary {
   meanEntrySizeDelta: number; // signed b − a shares
   nARepricesTotal: number; // expected class #2
   nAEntriesUnfilled: number; // expected class #1
+  /** M1 — the detected GLOBAL size scale: median B/A entry shares over both-entered rows (NaN with no samples).
+   *  A ratio ≠ 1 means the two sides' stake knobs differ (trade_config.stake_per_buy_usd vs the replay's
+   *  perPositionUsd) — an EXPECTED config-level divergence surfaced ONCE here; per-row size scores use the
+   *  residual after dividing this out (applied at ≥ GLOBAL_NORMALIZE_MIN_SAMPLES samples). */
+  globalSizeRatioBOverA: number;
+  /** M1 — the detected systematic entry-price offset: median B−A in CENTS over both-entered rows (NaN with no
+   *  samples). The maker post_only shade shows up here as a ≈1-tick constant; per-row price scores use the
+   *  residual after subtracting it (same ≥3-sample floor). */
+  medianEntryPriceDeltaCents: number;
+  /** whether the two global normalizations above were actually applied to scoring (≥3 both-entered samples). */
+  globalNormalizationApplied: boolean;
+  /** L3 — A-only rows whose city is derivably OUTSIDE the harness cities (expected scope artifacts, unscored). */
+  nOutOfScopeA: number;
   exitKindDistB: Record<string, number>;
   totalRealizedPnlA: number;
   totalRealizedPnlB: number;
@@ -229,11 +283,14 @@ export interface ShadowDiffReport {
 
 /** The documented expected-divergence classes (surfaced in the report so a reader never mistakes them for bugs). */
 export const EXPECTED_DIVERGENCE_CLASSES: string[] = [
-  'dry-run-no-fill: dry-run entries never fill → side A carries entry intents only (no exits / no realized P&L)',
-  'reprice-vs-taker-fallback: the daemon re-pegs the maker entry; the replay takes a taker fallback',
+  'dry-run-no-fill: dry-run entries never fill → side A carries entry intents only (no exits / no realized P&L); its price/size deltas are reported, not scored',
+  'reprice-vs-taker-fallback: the daemon re-pegs the maker entry; the replay takes a taker fallback — repriced rows report price/size deltas but never score them',
   'live-mark-vs-captured-execBid: daemon SL/time-stop reads the live bid; the replay reads the captured execBid',
   'degraded-hold: the daemon holds sells while venue sell-truth is degraded; the replay has no such concept',
   'consensus-source: a bucket can diverge if the capture seed differs from the replay cfg (bot.consensusSource)',
+  'config-stake-scale: A sizes at trade_config.stake_per_buy_usd, B at the replay perPositionUsd — detected ONCE as the global median B/A share ratio and normalized out of per-row scores',
+  'maker-shade: A ledger price is the post_only-SHADED maker limit (≈1 tick inside the book) — detected as the median B−A price offset and normalized out of per-row scores',
+  'city-scope: the ledger read is city-unfiltered; a daemon row for a city outside --cities is out-of-scope (widen --cities), not a capture bug',
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
@@ -349,11 +406,18 @@ function marketDecisionOf(marketId: string, tradeDate: string, rows: DryRunLedge
   const entered = entryRows.length > 0;
   const first = entryRows[0] ?? null;
   const entryFilled = entryRows.reduce((m, r) => Math.max(m, r.sizeMatched), 0);
-  // realized P&L over the group's fills: Σ SELL proceeds − Σ BUY cost − Σ fees (N2 exact notionals; 0 in dry-run).
+  // realized P&L over the group's fills: Σ SELL proceeds − Σ BUY cost − Σ fees (N2 exact notionals). REALIZED
+  // only once a SELL fill exists (the 0082 N1 realized-at-sell convention, lens M3): an open filled BUY is
+  // deployed cost, not P&L — reporting it as a negative "realized" number would fabricate a P&L divergence
+  // against side B on every open position.
   const sellUsd = rows.filter((r) => r.side === 'SELL').reduce((a, r) => a + r.fillNotionalUsd, 0);
   const buyUsd = rows.filter((r) => r.side === 'BUY').reduce((a, r) => a + r.fillNotionalUsd, 0);
   const feeUsd = rows.reduce((a, r) => a + r.fillFeeUsd, 0);
-  const anyFill = rows.some((r) => r.sizeMatched > 1e-9);
+  const hasSellFill = rows.some((r) => r.side === 'SELL' && r.sizeMatched > 1e-9);
+  // L1 — a REPRICE leaves its PREDECESSOR entry row terminal-'canceled' (executor.reprice = cancel-then-repost),
+  // so reprices = canceled rows among all-but-the-last entry row. A failed-then-retried predecessor ('failed')
+  // is a RETRY, not a reprice; a trailing canceled row with no successor is a kill-cancel, also not a reprice.
+  const nReprices = entryRows.slice(0, -1).filter((r) => r.status === 'canceled').length;
   const ex = exitOf(rows);
 
   return {
@@ -372,9 +436,9 @@ function marketDecisionOf(marketId: string, tradeDate: string, rows: DryRunLedge
     exitKind: ex.kind,
     exitPrice: ex.price,
     exitAtMs: ex.atMs,
-    realizedPnlUsd: anyFill ? sellUsd - buyUsd - feeUsd : null,
+    realizedPnlUsd: hasSellFill ? sellUsd - buyUsd - feeUsd : null,
     nEntryRows: entryRows.length,
-    nReprices: Math.max(0, entryRows.length - 1),
+    nReprices,
     unmapped: ref == null,
   };
 }
@@ -466,49 +530,91 @@ export function replayDecisionOf(trade: MakerExitTrade): SideDecision {
 /** normalize an exit-kind to its comparable base (drop the resolution win/lose suffix). */
 const baseExitKind = (k: string | null): string | null => (k == null ? null : k.split(':')[0]!);
 
+/** M1 — the global systematic deltas detected ONCE over both-entered rows, normalized out of per-row scores. */
+interface ScoreGlobals {
+  /** median B/A entry-share ratio (identity 1 when below the sample floor). */
+  sizeRatioBOverA: number;
+  /** median B−A entry-price delta in PRICE UNITS (identity 0 when below the sample floor). */
+  priceDeltaMedian: number;
+}
+
 /** score + annotate one aligned row (higher score = more divergent = more bug-worthy). EXPECTED classes are
- *  tagged but do NOT inflate the score — the score ranks the UNEXPECTED disagreements to the top. */
-function scoreRow(row: ShadowDiffRow): void {
-  const { a, b, notes } = row;
+ *  tagged but do NOT inflate the score — the score ranks the UNEXPECTED disagreements to the top. Notes are
+ *  ordered by SEVERITY: scored ALERTS first, EXPECTED(...) tags last (the table shows notes[0] — lens M2). */
+function scoreRow(row: ShadowDiffRow, globals: ScoreGlobals, scopeCities: string[]): void {
+  const { a, b } = row;
+  const alerts: string[] = [];
+  const tags: string[] = [];
   let score = 0;
 
+  // M3 — the expected STRUCTURAL cases where A's entry price/size are intent-only observables: an unfilled
+  // dry-run intent's resting limit is not a fill price, and a repriced entry's first-row limit is stale by
+  // construction. Deltas stay computed + summarized; they are TAGGED here and never scored.
+  const intentOnly = (a.nReprices ?? 0) > 0 || (a.entered && (a.entryFilledShares ?? 0) < 1e-9);
+
+  // M2 — a REAL daemon anomaly, hoisted FIRST so its alert leads notes[0]: one event, MULTIPLE buckets entered
+  // (capital doubling; reachable because the daemon's positioned-set keys on conditionId, not eventId).
+  if (a.multiBucket) {
+    score += 50;
+    alerts.push(
+      `MULTI-BUCKET: A entered ${(a.bucketsEntered ?? []).length} buckets [${(a.bucketsEntered ?? []).join(', ')}] for ONE event — capital doubling; the daemon's positioned-set keys on conditionId, not eventId`,
+    );
+  }
+
   if (a.entered !== b.entered) {
-    score += 100;
     if (a.entered && !b.entered) {
-      notes.push(`ENTER DISAGREE: A entered, replay(B) did NOT (${b.notEnteredReason ?? 'no reason'}) — investigate live discovery vs replay universe`);
+      // L3 — a city derivably outside the harness scope is an expected artifact, not an enter-disagreement.
+      const outOfScope = a.unmapped !== true && row.city.length > 0 && !scopeCities.includes(row.city);
+      if (outOfScope) {
+        row.outOfScopeA = true;
+        tags.push(`EXPECTED(city-scope): A traded ${row.city}, outside the harness cities — widen --cities to the daemon allowlist; not a capture bug`);
+      } else if (a.unmapped === true) {
+        score += 100;
+        alerts.push('ENTER DISAGREE (A-only, UNMAPPED): market_id absent from the captured window — EITHER the daemon allowlist is wider than --cities (widen --cities) OR a real capture-coverage gap');
+      } else {
+        score += 100;
+        alerts.push(`ENTER DISAGREE: A entered, replay(B) did NOT (${b.notEnteredReason ?? 'no reason'}) — investigate live discovery vs replay universe`);
+      }
     } else {
-      notes.push('ENTER DISAGREE: replay(B) entered, A did NOT — daemon skipped a market the replay would enter');
+      score += 100;
+      alerts.push('ENTER DISAGREE: replay(B) entered, A did NOT — daemon skipped a market the replay would enter');
     }
   } else if (a.entered && b.entered) {
     if (row.bucketAgree === false) {
       score += 50;
-      notes.push(`BUCKET DISAGREE: A idx ${a.bucketIdx} (${a.bucketLabel}) vs B idx ${b.bucketIdx} (${b.bucketLabel}) — EXPECTED(consensus-source) if the seed differs, else a bug`);
+      alerts.push(`BUCKET DISAGREE: A idx ${a.bucketIdx} (${a.bucketLabel}) vs B idx ${b.bucketIdx} (${b.bucketLabel}) — EXPECTED(consensus-source) if the seed differs, else a bug`);
     }
-    if (fin(row.entryPriceDelta)) {
-      score += Math.min(30, Math.abs(row.entryPriceDelta!) * 100); // 1 pt per cent, capped
-    }
-    if (fin(row.entrySizeDelta) && fin(a.entrySizeShares) && a.entrySizeShares! > 0) {
-      const relSize = Math.abs(row.entrySizeDelta!) / a.entrySizeShares!;
-      score += Math.min(10, relSize * 10);
-      if (relSize > 0.25) {
-        notes.push(`SIZE divergence: A ${Math.round(a.entrySizeShares!)}sh vs B ${Math.round(b.entrySizeShares ?? 0)}sh — check trade_config.stake_per_buy_usd vs the replay's perPositionUsd`);
+    if (intentOnly) {
+      tags.push('EXPECTED(intent-only price/size): A price/size are unfilled-intent observables (dry-run no-fill / repriced) — deltas reported, not scored');
+    } else {
+      // M1 — score the RESIDUAL after the global systematic deltas (config-stake scale + maker shade).
+      if (fin(row.entryPriceDelta)) {
+        const residualPp = Math.abs(row.entryPriceDelta! - globals.priceDeltaMedian) * 100;
+        score += Math.min(30, residualPp); // 1 pt per residual cent, capped
+      }
+      if (fin(row.entrySizeDelta) && fin(a.entrySizeShares) && a.entrySizeShares! > 0 && fin(b.entrySizeShares)) {
+        const ratio = b.entrySizeShares! / a.entrySizeShares!;
+        const residualRel = globals.sizeRatioBOverA > 0 ? Math.abs(ratio / globals.sizeRatioBOverA - 1) : Math.abs(ratio - 1);
+        score += Math.min(10, residualRel * 10);
+        if (residualRel > 0.25) {
+          alerts.push(`SIZE divergence beyond the global scale: A ${Math.round(a.entrySizeShares!)}sh vs B ${Math.round(b.entrySizeShares!)}sh (global B/A ×${globals.sizeRatioBOverA.toFixed(2)})`);
+        }
       }
     }
     // exit-kind + P&L only score when BOTH sides realized (side A does not in dry-run — expected class #1).
     if (row.exitKindAgree === false) {
       score += 20;
-      notes.push(`EXIT DISAGREE: A ${a.exitKind} vs B ${b.exitKind}`);
+      alerts.push(`EXIT DISAGREE: A ${a.exitKind} vs B ${b.exitKind}`);
     }
     if (fin(row.realizedPnlDelta)) score += Math.min(20, Math.abs(row.realizedPnlDelta!));
   }
 
-  // ── expected-class annotations (tagged, not scored) ──
-  if (a.unmapped) notes.push('EXPECTED(capture-coverage): A market_id absent from the captured window (out-of-window / non-fresh market)');
-  if (a.entered && (a.entryFilledShares ?? 0) < 1e-9) notes.push('EXPECTED(dry-run-no-fill): A entry unfilled — dry-run never posts, so A carries no exit / no realized P&L');
-  if ((a.nReprices ?? 0) > 0) notes.push(`EXPECTED(reprice-vs-taker-fallback): A repriced the maker entry ${a.nReprices}× (replay takes a taker fallback)`);
-  if (a.multiBucket) notes.push(`A entered multiple buckets [${(a.bucketsEntered ?? []).join(', ')}] — argmax shifted mid-window (bucket instability)`);
-  if (b.exitKind && b.exitKind.startsWith('mtm_')) notes.push('B still open (mtm_unresolved) — its exit/P&L not yet realized');
+  // ── expected-class annotations (tagged, not scored; always AFTER the alerts) ──
+  if (a.entered && (a.entryFilledShares ?? 0) < 1e-9) tags.push('EXPECTED(dry-run-no-fill): A entry unfilled — dry-run never posts, so A carries no exit / no realized P&L');
+  if ((a.nReprices ?? 0) > 0) tags.push(`EXPECTED(reprice-vs-taker-fallback): A repriced the maker entry ${a.nReprices}× (replay takes a taker fallback)`);
+  if (b.exitKind && b.exitKind.startsWith('mtm_')) tags.push('B still open (mtm_unresolved) — its exit/P&L not yet realized');
 
+  row.notes = [...alerts, ...tags];
   row.divergenceScore = Math.round(score * 100) / 100;
 }
 
@@ -579,15 +685,27 @@ export function computeShadowDiff(
       divergenceScore: 0,
       notes: [],
     };
-    scoreRow(row);
     rows.push(row);
   }
+
+  // ── M1: detect the GLOBAL systematic deltas ONCE, over ALL both-entered rows (including intent-only rows —
+  //    the dry-run shadow is exactly where a config-scale mismatch shows), THEN score each row on the residual.
+  //    Below the sample floor a "global" is indistinguishable from a per-row divergence → identity (no normalize).
+  const bothEntered = rows.filter((r) => r.a.entered && r.b.entered);
+  const sizeRatioSamples = bothEntered
+    .map((r) => (fin(r.a.entrySizeShares) && r.a.entrySizeShares! > 0 && fin(r.b.entrySizeShares) ? r.b.entrySizeShares! / r.a.entrySizeShares! : NaN))
+    .filter((v) => Number.isFinite(v));
+  const priceDeltas = bothEntered.map((r) => r.entryPriceDelta).filter((v): v is number => fin(v));
+  const normalize = sizeRatioSamples.length >= GLOBAL_NORMALIZE_MIN_SAMPLES || priceDeltas.length >= GLOBAL_NORMALIZE_MIN_SAMPLES;
+  const globals: ScoreGlobals = {
+    sizeRatioBOverA: sizeRatioSamples.length >= GLOBAL_NORMALIZE_MIN_SAMPLES ? median(sizeRatioSamples) : 1,
+    priceDeltaMedian: priceDeltas.length >= GLOBAL_NORMALIZE_MIN_SAMPLES ? median(priceDeltas) : 0,
+  };
+  for (const row of rows) scoreRow(row, globals, cfg.cities);
 
   rows.sort((x, y) => y.divergenceScore - x.divergenceScore || (x.city + x.targetDate).localeCompare(y.city + y.targetDate));
 
   // ── summary stats ──
-  const bothEntered = rows.filter((r) => r.a.entered && r.b.entered);
-  const priceDeltas = bothEntered.map((r) => r.entryPriceDelta).filter((v): v is number => fin(v));
   const sizeDeltas = bothEntered.map((r) => r.entrySizeDelta).filter((v): v is number => fin(v));
   const exitKindDistB: Record<string, number> = {};
   for (const r of rows) {
@@ -615,6 +733,10 @@ export function computeShadowDiff(
     meanEntrySizeDelta: mean(sizeDeltas),
     nARepricesTotal: rows.reduce((a, r) => a + (r.a.nReprices ?? 0), 0),
     nAEntriesUnfilled: rows.filter((r) => r.a.entered && (r.a.entryFilledShares ?? 0) < 1e-9).length,
+    globalSizeRatioBOverA: median(sizeRatioSamples),
+    medianEntryPriceDeltaCents: median(priceDeltas.map((d) => d * 100)),
+    globalNormalizationApplied: normalize,
+    nOutOfScopeA: rows.filter((r) => r.outOfScopeA === true).length,
     exitKindDistB,
     totalRealizedPnlA: rows.reduce((a, r) => a + (fin(r.a.realizedPnlUsd) ? r.a.realizedPnlUsd! : 0), 0),
     totalRealizedPnlB: rows.reduce((a, r) => a + (fin(r.b.realizedPnlUsd) ? r.b.realizedPnlUsd! : 0), 0),
@@ -651,26 +773,45 @@ export function render(report: ShadowDiffReport, top: number, log: (m: string) =
   log('  EXPECTED divergence classes (tagged EXPECTED(...) below — NOT bugs, NOT scored):');
   for (const c of report.expectedDivergenceClasses) log(`    • ${c}`);
   log('');
+  log('  NOTE (city scope): the ledger read is city-UNFILTERED while side B honors --cities — daemon rows for');
+  log('  cities outside --cities surface as out-of-scope/unmapped A-only rows. Widen --cities to the daemon');
+  log('  allowlist for a clean read.');
+  log('');
   log('  ── summary ──');
-  log(`  events ${s.nEvents} · bothEntered ${s.nBothEntered} · A-only ${s.nAOnly} · B-only ${s.nBOnly} · bothSkipped ${s.nBothSkipped} · unmappedA ${s.nUnmappedA}`);
+  log(`  events ${s.nEvents} · bothEntered ${s.nBothEntered} · A-only ${s.nAOnly} (out-of-scope ${s.nOutOfScopeA}) · B-only ${s.nBOnly} · bothSkipped ${s.nBothSkipped} · unmappedA ${s.nUnmappedA}`);
   log(`  entry-agreement ${pct(s.entryAgreementRate)} · bucket-agreement ${pct(s.bucketAgreementRate)} (of both-entered)`);
   log(`  entry-price Δ(B−A): mean ${signedCents(s.meanEntryPriceDeltaCents)} · meanAbs ${absCents(s.meanAbsEntryPriceDeltaCents)} · size Δ mean ${signed(s.meanEntrySizeDelta)} sh`);
+  // M1 — the detected GLOBAL systematic deltas (config-stake scale + maker shade), surfaced ONCE here instead
+  // of polluting every row's score. Residual-only per-row scoring applies when the sample floor is met.
+  if (Number.isFinite(s.globalSizeRatioBOverA) && Math.abs(s.globalSizeRatioBOverA - 1) > 0.1) {
+    log(
+      `  ⚠ GLOBAL SIZE SCALE: B/A ×${s.globalSizeRatioBOverA.toFixed(2)} — trade_config.stake_per_buy_usd vs the replay's perPositionUsd differ (EXPECTED(config-stake-scale)); ` +
+        (s.globalNormalizationApplied ? 'per-row size scored on the residual only' : `below the n≥${GLOBAL_NORMALIZE_MIN_SAMPLES} floor — NOT yet normalized out of scores`),
+    );
+  }
+  if (Number.isFinite(s.medianEntryPriceDeltaCents) && Math.abs(s.medianEntryPriceDeltaCents) > 0.5) {
+    log(
+      `  ⚠ SYSTEMATIC ENTRY-PRICE OFFSET: median B−A ${signedCents(s.medianEntryPriceDeltaCents)} — consistent with the maker post_only shade (EXPECTED(maker-shade)); ` +
+        (s.globalNormalizationApplied ? 'per-row price scored on the residual only' : `below the n≥${GLOBAL_NORMALIZE_MIN_SAMPLES} floor — NOT yet normalized out of scores`),
+    );
+  }
   log(`  A reprices total ${s.nARepricesTotal} · A entries unfilled ${s.nAEntriesUnfilled} (dry-run-no-fill) · realized P&L A ${usd(s.totalRealizedPnlA)} / B ${usd(s.totalRealizedPnlB)}`);
   const exitDist = Object.entries(s.exitKindDistB).map(([k, n]) => `${k}:${n}`).join(' · ') || '—';
   log(`  B exit-kind mix: ${exitDist}`);
   log('');
   log(`  ── most-divergent markets (top ${Math.min(top, report.rows.length)} of ${report.rows.length}) ──`);
+  log('  Δmin = B modeled-fill tick − A intent-created (ASYMMETRIC by design: ≈ B fill latency; big negatives are the anomaly). Unscored.');
   log(
     `  ${'score'.padStart(6)}  ${'city'.padEnd(12)} ${'date'.padEnd(10)} ` +
       `${'A?'.padStart(2)} ${'B?'.padStart(2)}  ${'bktA'.padStart(4)} ${'bktB'.padStart(4)}  ` +
-      `${'pxA'.padStart(6)} ${'pxB'.padStart(6)}  ${'exitB'.padEnd(18)} ${'pnlB'.padStart(8)}  note`,
+      `${'pxA'.padStart(6)} ${'pxB'.padStart(6)}  ${'Δmin'.padStart(5)}  ${'exitB'.padEnd(18)} ${'pnlB'.padStart(8)}  note`,
   );
   for (const r of report.rows.slice(0, top)) {
     const note = r.notes[0] ?? '';
     log(
       `  ${String(r.divergenceScore).padStart(6)}  ${(r.city || '—').slice(0, 12).padEnd(12)} ${(r.targetDate || '—').padEnd(10)} ` +
         `${yn(r.a.entered).padStart(2)} ${yn(r.b.entered).padStart(2)}  ${bkt(r.a).padStart(4)} ${bkt(r.b).padStart(4)}  ` +
-        `${px(r.a.entryPrice).padStart(6)} ${px(r.b.entryPrice).padStart(6)}  ${(r.b.exitKind ?? '—').slice(0, 18).padEnd(18)} ` +
+        `${px(r.a.entryPrice).padStart(6)} ${px(r.b.entryPrice).padStart(6)}  ${dmin(r.entryAtDeltaMs).padStart(5)}  ${(r.b.exitKind ?? '—').slice(0, 18).padEnd(18)} ` +
         `${usd(r.b.realizedPnlUsd).padStart(8)}  ${note.slice(0, 72)}`,
     );
   }
@@ -678,6 +819,8 @@ export function render(report: ShadowDiffReport, top: number, log: (m: string) =
   log('  This decides NOTHING about capital — it surfaces daemon/replay divergences for the shadow week to');
   log('  investigate. Divergences in the EXPECTED classes above are by-design; the ranked score hunts the rest.');
 }
+
+const dmin = (ms: number | null): string => (ms != null && Number.isFinite(ms) ? `${ms >= 0 ? '+' : '−'}${Math.round(Math.abs(ms) / 60000)}` : '—');
 
 const signed = (v: number): string => (Number.isFinite(v) ? `${v >= 0 ? '+' : ''}${v.toFixed(2)}` : '—');
 const signedCents = (v: number): string => (Number.isFinite(v) ? `${v >= 0 ? '+' : ''}${v.toFixed(2)}¢` : '—');
@@ -753,6 +896,8 @@ export function sanity(): void {
   if ((e1.a.nReprices ?? 0) !== 1) throw new Error(`sanity: E1 should show 1 reprice, got ${e1.a.nReprices}`);
   if (!e1.notes.some((n) => n.includes('dry-run-no-fill'))) throw new Error('sanity: E1 must tag the dry-run-no-fill class');
   if (!e1.notes.some((n) => n.includes('reprice-vs-taker-fallback'))) throw new Error('sanity: E1 must tag the reprice class');
+  // M3: an agreement row whose A entry is an unfilled/repriced INTENT scores 0 — expected classes never score.
+  if (e1.divergenceScore !== 0) throw new Error(`sanity: E1 (agreement, intent-only) should score 0, got ${e1.divergenceScore}`);
   // E2: B entered, A absent → B-only, high score.
   if (e2.a.entered || !e2.b.entered) throw new Error('sanity: E2 should be B-only');
   if (e2.divergenceScore < 100) throw new Error(`sanity: E2 (B-only) score should be ≥100, got ${e2.divergenceScore}`);
