@@ -14,9 +14,11 @@
  *   (redacted). CLOB order place/cancel is gasless + the order never fills (far from market) → $0 cost.
  *   The brief's "1-share" order is raised to the VENUE FLOOR (≥5 shares AND ≥$1 notional — F12-r10): a
  *   literal 1-share order is REJECTED and cannot rest, so it would not prove the resting write path.
- *   REFUSED unless (TRADE_MODE=live AND trade_live_preflight() PASSes) OR the explicit --i-know-no-preflight
- *   escape is given (with a loud WARN): the smoke deliberately PRECEDES the gate PASS, so the escape lets a
- *   1-share cancel-immediately probe bypass the interlock — for THAT probe only, never for strategy trades.
+ *   GATING (lens LOW-4): TRADE_MODE=live is ALWAYS required — the env mode gate is never bypassable. On
+ *   top of that the probe needs trade_live_preflight() to PASS, OR the explicit --i-know-no-preflight
+ *   escape (loud WARN), which bypasses ONLY the preflight: the smoke deliberately PRECEDES the gate PASS,
+ *   so the escape lets the cancel-immediately probe run before a paper PASS — for THAT probe only, never
+ *   for strategy trades, and never without the operator's TRADE_MODE=live.
  *
  * BOUNDARY (§15 / §8): the wallet key + the CLOB client live ONLY inside packages/trading; this script never
  * reads the wallet signing key and never prints key material. NOT run in the T2 build — for the operator.
@@ -75,9 +77,10 @@ export function parseSmokeArgs(argv: string[]): SmokeArgs {
 }
 
 /**
- * The pure --live-smoke interlock. The probe is REFUSED unless it was requested AND either the real live
- * gate is open (TRADE_MODE=live AND preflight PASS) or the operator gave the explicit escape (which bypasses
- * the gate for a 1-share cancel-immediately probe ONLY — the smoke precedes the gate PASS by design).
+ * The pure --live-smoke interlock (lens LOW-4): TRADE_MODE=live is ALWAYS required — the escape can NEVER
+ * bypass the env mode gate. Given live mode, the probe additionally needs the preflight to PASS, or the
+ * explicit --i-know-no-preflight escape, which bypasses ONLY the preflight (loud WARN) — the smoke
+ * precedes the gate PASS by design, for the cancel-immediately probe only.
  */
 export function smokeLiveGate(args: {
   liveSmoke: boolean;
@@ -86,10 +89,12 @@ export function smokeLiveGate(args: {
   escape: boolean;
 }): { allow: boolean; reason: string } {
   if (!args.liveSmoke) return { allow: false, reason: 'not requested (steps 1–3 only)' };
-  if (args.escape) {
-    return { allow: true, reason: '--i-know-no-preflight: gate BYPASSED for a 1-share cancel-immediately probe (WARN)' };
+  if (args.mode !== 'live') {
+    return { allow: false, reason: `refused — --live-smoke needs TRADE_MODE=live (got '${args.mode}'); the mode gate is never bypassable` };
   }
-  if (args.mode !== 'live') return { allow: false, reason: `refused — --live-smoke needs TRADE_MODE=live (got '${args.mode}')` };
+  if (args.escape) {
+    return { allow: true, reason: '--i-know-no-preflight: PREFLIGHT bypassed for a 1-share cancel-immediately probe (WARN); TRADE_MODE=live verified' };
+  }
   if (!args.preflightOk) return { allow: false, reason: 'refused — trade_live_preflight() does not PASS' };
   return { allow: true, reason: 'trade_live_preflight() PASS' };
 }
@@ -182,7 +187,7 @@ async function main(): Promise<number> {
   const gate = smokeLiveGate({ liveSmoke: args.liveSmoke, mode, preflightOk, escape: args.escape });
   out(`\n[4] --live-smoke: ${gate.reason}`);
   if (gate.allow) {
-    if (args.escape) out('    ⚠ WARN: the live gate is BYPASSED (--i-know-no-preflight) for a 1-share cancel-immediately probe only.');
+    if (args.escape) out('    ⚠ WARN: the PREFLIGHT is bypassed (--i-know-no-preflight) for this cancel-immediately probe only; TRADE_MODE=live was verified.');
     const target2 = args.token ? { tokenId: args.token, label: '(--token)' } : await discoverToken(db, botCfg.cities);
     if (!target2) {
       out('    (no current market token to probe — pass --token <tokenId>)');

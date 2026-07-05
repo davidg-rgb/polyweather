@@ -1,7 +1,8 @@
 /**
- * Tests for the credential smoke's pure gate — the --live-smoke interlock (default OFF, refused unless the
- * live gate is open or the explicit escape is given) + the arg parse. No network; importing the module never
- * runs main() (the direct-invoke guard is false under vitest).
+ * Tests for the credential smoke's pure gate — the --live-smoke interlock + the arg parse. No network;
+ * importing the module never runs main() (the direct-invoke guard is false under vitest).
+ * Lens LOW-4: --live-smoke ALWAYS requires TRADE_MODE=live; the --i-know-no-preflight escape bypasses
+ * ONLY the preflight, never the mode gate.
  */
 import { describe, expect, it } from 'vitest';
 import { parseSmokeArgs, smokeLiveGate } from './trade-smoke.ts';
@@ -19,7 +20,7 @@ describe('parseSmokeArgs', () => {
   });
 });
 
-describe('smokeLiveGate — the --live-smoke interlock', () => {
+describe('smokeLiveGate — the --live-smoke interlock (LOW-4: the mode gate is never bypassable)', () => {
   it('does nothing when not requested', () => {
     expect(smokeLiveGate({ liveSmoke: false, mode: 'live', preflightOk: true, escape: false }).allow).toBe(false);
   });
@@ -36,9 +37,17 @@ describe('smokeLiveGate — the --live-smoke interlock', () => {
   it('allows on a passing live gate', () => {
     expect(smokeLiveGate({ liveSmoke: true, mode: 'live', preflightOk: true, escape: false }).allow).toBe(true);
   });
-  it('the explicit escape bypasses the gate (with a WARN reason)', () => {
-    const g = smokeLiveGate({ liveSmoke: true, mode: 'off', preflightOk: false, escape: true });
+  it('LOW-4: the escape does NOT bypass the mode gate — refused off live, whatever flags are given', () => {
+    for (const mode of ['off', 'dry-run'] as const) {
+      const g = smokeLiveGate({ liveSmoke: true, mode, preflightOk: true, escape: true });
+      expect(g.allow).toBe(false);
+      expect(g.reason).toContain('never bypassable');
+    }
+  });
+  it('the escape bypasses ONLY the preflight (TRADE_MODE=live still required)', () => {
+    const g = smokeLiveGate({ liveSmoke: true, mode: 'live', preflightOk: false, escape: true });
     expect(g.allow).toBe(true);
-    expect(g.reason).toContain('BYPASSED');
+    expect(g.reason).toContain('PREFLIGHT bypassed');
+    expect(g.reason).toContain('TRADE_MODE=live verified');
   });
 });

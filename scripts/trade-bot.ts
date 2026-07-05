@@ -57,6 +57,7 @@ import {
   preflightLive,
   redactText,
   resolveTradeMode,
+  parseTrades,
   rpcOrderLedger,
   MakerExecutor,
   type MakerClobClientish,
@@ -234,11 +235,38 @@ async function markFor(d: Daemon, tokenId: string, size: number, fallback: numbe
 }
 
 /**
+ * Venue sell truth for one token (live only): Σ our SELL trade sizes from `getTrades` — the same evidence
+ * read the startup reconcile uses. This floors the position's `soldSize` so fills whose ledger rows have
+ * gone terminal-canceled (a lifted-then-cancelled TP, an adjudicated FAK corpse — invisible to
+ * `bot_order_by_intent`) are never lost (lens CRITICAL-1/LOW-5). Failed venue trades are excluded. A read
+ * outage returns null (WARN) — assembly then falls back to the visible-ledger sum, which can only
+ * UNDER-count sold (exits may re-fire and be duplicate-blocked / venue-balance-rejected, never silently
+ * skipped) until the read recovers.
+ */
+async function venueSoldFor(d: Daemon, tokenId: string): Promise<number | null> {
+  if (d.mode !== 'live') return null; // dry-run rows never fill — the visible sum (0) is exact
+  try {
+    const trades = parseTrades(await d.client.getTrades({ asset_id: tokenId }));
+    let sold = 0;
+    for (const t of trades) {
+      if (t.side.toUpperCase() !== 'SELL') continue;
+      if (t.status.toUpperCase() === 'FAILED') continue;
+      sold += t.size;
+    }
+    return sold;
+  } catch (e) {
+    log({ msg: 'trade-bot.venue_sold_failed', level: 'WARN', tokenId, error: redactText(e instanceof Error ? e.message : String(e)) });
+    return null;
+  }
+}
+
+/**
  * Reconstruct every open position from the LEDGER + the VENUE (never memory) — the crash-resume contract.
  * For each market in the capture window, look up the entry intent; markets WITH an entry become positions
- * (their tp/sl/time-stop handles + fill state refreshed, their live mark read). Bounded by the capture
- * universe; markets whose captures have aged past the window are not reconstructable here (see the report's
- * flagged gap — a dedicated `list_open_live_orders` RPC would remove the bound, but 0082 is final).
+ * (their tp/sl/time-stop handles + fill state refreshed, their live mark + venue sell truth read). Bounded
+ * by the capture universe; markets whose captures have aged past the window are not reconstructable here
+ * (see the report's flagged gap — a dedicated `list_open_live_orders` RPC would remove the bound, but 0082
+ * is final).
  */
 async function reconstructPositions(
   d: Daemon,
@@ -259,6 +287,7 @@ async function reconstructPositions(
     ts = await refreshFill(d, ts);
 
     const mark = await markFor(d, meta.tokenId, entry.sizeMatched || entry.size, meta.execBidCapture);
+    const venueSoldSize = await venueSoldFor(d, meta.tokenId);
     const pos = assemblePosition({
       meta: {
         marketId: meta.marketId,
@@ -274,6 +303,7 @@ async function reconstructPositions(
       stopLoss: sl,
       timeStop: ts,
       mark,
+      venueSoldSize,
     });
     if (pos) positions.push(pos);
   }
@@ -324,7 +354,7 @@ async function tick(d: Daemon, botCitiesFallback: string[], minOrderSizeShares: 
   }
 
   const plan = decideTick({ mode: d.mode, config, preflight, cfg, now, candidates, positions });
-  const applied = await applyPlan(plan, d.executor, d.notify, log);
+  const applied = await applyPlan(plan, d.executor, d.notify, log, d.ledger);
 
   log({
     msg: 'trade-bot.tick',
@@ -336,6 +366,8 @@ async function tick(d: Daemon, botCitiesFallback: string[], minOrderSizeShares: 
     dryRun: applied.dryRun,
     duplicate: applied.duplicate,
     failed: applied.failed,
+    canceled: applied.canceled,
+    aborted: applied.aborted,
     skips: plan.skips.length,
     preflightOk: preflight?.ok ?? null,
     activeUntil: config.activeUntil,

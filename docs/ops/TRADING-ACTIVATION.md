@@ -78,7 +78,10 @@ Read from `trade_config`; enforced per placement by the daemon from the `trade_l
 
 **Only ENTRIES are cap/preflight-gated.** Exits (the resting take-profit, the taker stop-loss, the time-stop)
 are NEVER gated — a position must always be able to flatten (the kill + a de-activated console gate new entries
-only, per GO-LIVE §5).
+only, per GO-LIVE §5). **On a live preflight FAIL the daemon additionally CANCELS resting unfilled maker
+entries** — including a partially-filled entry's resting remainder — within one tick (lens MEDIUM-2): a working
+entry is future exposure, and the kill must stop it, not merely stop re-pricing it. Exit management and the TP
+rest keep running throughout.
 
 ---
 
@@ -124,11 +127,12 @@ TRADE_MODE=live pnpm tsx scripts/trade-smoke.ts --live-smoke
 ```
 
 `--live-smoke` places ONE resting `post_only` maker BUY FAR below market and cancels it immediately (CLOB
-place/cancel is gasless; the order never fills). It is **refused** unless `TRADE_MODE=live` AND
-`trade_live_preflight()` PASSes — OR you pass `--i-know-no-preflight`, which bypasses the gate for that
-1-share-cancel-immediately probe ONLY (a loud WARN prints). **The brief's "1-share" order is raised to the venue
-floor (≥ 5 shares AND ≥ $1 notional, F12-r10)** — a literal 1-share order is rejected and cannot rest, so it
-would not prove the resting write path.
+place/cancel is gasless; the order never fills). **`TRADE_MODE=live` is ALWAYS required — the env mode gate is
+never bypassable** (lens LOW-4). On top of that the probe needs `trade_live_preflight()` to PASS, OR
+`--i-know-no-preflight`, which bypasses **only the preflight** for that cancel-immediately probe (a loud WARN
+prints) — the smoke deliberately precedes the paper-gate PASS. **The brief's "1-share" order is raised to the
+venue floor (≥ 5 shares AND ≥ $1 notional, F12-r10)** — a literal 1-share order is rejected and cannot rest, so
+it would not prove the resting write path.
 
 ---
 
@@ -173,6 +177,18 @@ regardless of the prod whale-noise pause. A missing webhook never silences a saf
   ```
   Cross-check the `order_id` against Polymarket; cancel/settle manually as needed. Do NOT restart into a live
   tick until the row is resolved.
+- **Sold-truth accounting (venue trades as the sell floor).** Per position each tick, the daemon sums our
+  SELL fills for the token from the venue's trade log (`getTrades` — the same evidence read the startup
+  reconcile uses) and floors the position's `soldSize` with it. This is what makes "how much have we already
+  sold?" survive rows going terminal-canceled (a lifted-then-cancelled TP, an adjudicated FAK corpse), whose
+  fills are invisible to `bot_order_by_intent` (0082). A venue read outage degrades to the visible-ledger sum
+  (WARN logged) — exits may then be duplicate-blocked one tick, but nothing can silently over-sell: the intent
+  keys + the venue's balance check both stand in the way.
+- **Venue-dead FAK adjudication (automatic, loud).** A taker exit posts FAK — dead at the venue the moment its
+  immediate execution completes. If a FAK exit partial-fills (or fills nothing), its OPEN 'partial'/'placed'
+  ledger row would block every re-fire as a silent 'duplicate'. The daemon adjudicates such rows terminal via
+  `record_canceled` (fills preserved) with a WARN log + alert, then re-fires the unsold remainder. Rows still at
+  'intent' (no orderId) are never touched — the startup reconcile owns those.
 - **Heartbeat / deadman (a flagged coverage gap).** The daemon writes a mode-scoped `bot_tick_log` row each tick
   via the 0073 `record_bot_tick` idiom (+ a structured log line). But `bot_deadman_check` watches a **single**
   mode (`config.tradingMode`, default `paper`), so it will **NOT auto-alarm on this daemon's staleness** unless
@@ -184,16 +200,19 @@ regardless of the prod whale-noise pause. A missing webhook never silences a saf
 
 ## 9. Incident playbook — kill + drain
 
-1. **Instant kill (halt new placement):** set the console off. Exits/management keep running until you stop the
-   process; new entries stop within one tick (the preflight fails on `mode≠'live'`).
+1. **Instant kill (halt new exposure):** set the console off. Within one tick the preflight fails (`mode≠'live'`)
+   → new entries stop AND **the daemon itself cancels every resting unfilled maker ENTRY** (including a partial
+   entry's resting remainder — lens MEDIUM-2). Exit management (TP rest / SL / time-stop) keeps running while the
+   process is up, so open positions still flatten on their triggers.
    ```sql
    select public.trade_config_set(p_mode => 'off');
    ```
-   Then stop the daemon (SIGINT). **It leaves resting orders in place** (maker orders ARE the strategy) and logs
-   the open state loudly.
-2. **Cancel the resting orders (MANUAL — the daemon does not cancel on shutdown):** read the open orders (SQL
-   above), then cancel each on Polymarket (UI or the operator's CLOB tooling). There is no bulk kill RPC on the
-   service-role surface by design (the kill is a policy flip; cancellation is an operator action).
+   Then stop the daemon (SIGINT). Shutdown **leaves whatever still rests in place** (resting take-profits ARE the
+   strategy) and logs the open state loudly.
+2. **Cancel the remaining resting orders (MANUAL — the daemon does not cancel on shutdown):** after a kill tick,
+   what remains resting is exit-side (take-profits) plus anything from a daemon that was already stopped. Read the
+   open orders (SQL above), then cancel each on Polymarket (UI or the operator's CLOB tooling). There is no bulk
+   kill RPC on the service-role surface by design (the kill is a policy flip; cancellation is an operator action).
 3. **Suspected key exposure:** follow GO-LIVE-CHECKLIST-OPENING.md §7 — `bot_enabled=false`, **DRAIN** the
    dedicated wallet to a cold address, rotate the key, re-derive CLOB creds, re-run §1–§3. Re-issuing creds is
    insufficient; the funds must move.

@@ -29,9 +29,35 @@
  *   the preflight interlock (`trade_live_preflight`) + the per-market / total-concurrent caps read from the
  *   preflight `checks` payload. EXITS (TP rest / SL / time-stop) are NEVER cap- or preflight-gated: a
  *   position must always be able to flatten (the daily-loss kill + a de-activated console only gate NEW
- *   entries, exactly as GO-LIVE-CHECKLIST-OPENING.md §5 requires). `off` → the plan is empty. `dry-run` →
- *   the caps/preflight gates are skipped (dry-run ledger rows never count toward live caps, 0082 header)
- *   but every strategy gate still applies, so the shadow harness mirrors what live WOULD do.
+ *   entries, exactly as GO-LIVE-CHECKLIST-OPENING.md §5 requires). When the LIVE preflight FAILS (kill
+ *   tripped / console off / window expired), resting UNFILLED maker ENTRIES are additionally CANCELLED —
+ *   a working entry is future exposure and must stop within one tick of a kill; reprice_entry is likewise
+ *   preflight-gated (lens MEDIUM-2). `off` → the plan is empty. `dry-run` → the caps/preflight gates are
+ *   skipped (dry-run rows never count toward live caps, 0082 header) but every strategy gate still applies.
+ *
+ * SOLD-TRUTH ACCOUNTING (lens CRITICAL-1 + LOW-5): `remaining = filledSize − soldSize`, where `soldSize`
+ * counts EVERY sell-side fill of the position — the take-profit's, the stop-loss's, AND the time-stop's.
+ * The ledger read alone cannot carry this: `bot_order_by_intent` hides terminal canceled/failed rows
+ * (0082 `status not in ('canceled','failed')`), and `executor.cancel` records a lifted-then-cancelled TP
+ * as canceled — its partial fills VANISH from the visible rows (`size_matched` is preserved in the DB but
+ * unreadable through the port). So `assemblePosition` also takes venue trade truth (`getTrades`, the same
+ * evidence read reconcile uses — the daemon sums our SELL fills for the token) and uses
+ * `max(visibleLedgerFills, venueSold)`; dry-run has no venue and its rows never fill, so the visible sum
+ * is exact. A fully-covered position plans NOTHING — once the TP has filled everything, neither the
+ * stop-loss nor the time-stop can ever fire (the over-sell path is closed).
+ *
+ * FAK ADJUDICATION (lens MEDIUM-3): a taker exit posts as FAK — venue-dead the instant its immediate
+ * execution completes. A partial (or 0-fill, still-'placed') FAK row is therefore a CORPSE holding the
+ * intent key: `placeTaker` would return a silent 'duplicate' forever and the remainder could never
+ * re-fire (a stuck time-stop rides to resolution). `applyPlan` adjudicates such a row terminal via
+ * `recordCanceled` (the seam preserves `size_matched`; the partial-unique frees the key) — loudly (log +
+ * WARN alert), never silently — then re-fires the remainder. Rows still at 'intent' (no orderId — the
+ * post outcome is unknown) are NOT adjudicated: the startup reconcile sweep owns those.
+ *
+ * TP-CANCEL RACE GUARD: before a taker exit, the resting TP is cancelled. If the venue reports the cancel
+ * did NOT fully take (`allCanceled=false` — the TP raced a fill), the taker is ABORTED for this tick: the
+ * raced fill means `remaining` is stale-high and posting would over-sell. The next tick's fill-poll picks
+ * up the raced fill and re-decides with correct accounting.
  */
 import {
   localHourInstant,
@@ -44,10 +70,12 @@ import {
   type RawCaptureRow,
 } from '../../packages/core/src/index.ts';
 import {
+  orderIntentKey,
   redactText,
   STAKE_CEILING_USD,
   type CancelResult,
   type MakerOrderRequest,
+  type OrderLedger,
   type OrderLedgerRow,
   type OrderPlacementResult,
   type OrderPurpose,
@@ -241,6 +269,12 @@ export interface LivePosition {
   modelProb: number;
   /** cumulative shares held (the entry order's cumulative sizeMatched). */
   filledSize: number;
+  /**
+   * cumulative shares already SOLD — the sum of ALL sell-side fills (TP + stop_loss + time_stop),
+   * floored by venue trade truth so fills on canceled rows (invisible to `bot_order_by_intent`) are never
+   * lost (lens CRITICAL-1/LOW-5). The single source for `remaining = filledSize − soldSize`.
+   */
+  soldSize: number;
   /** the CURRENT executable bid — the realizable sell mark (the daemon fetches it live). */
   mark: number | null;
   entry: OrderHandle | null;
@@ -263,12 +297,17 @@ const handleOf = (row: OrderLedgerRow | null): OrderHandle | null =>
       };
 
 /**
- * Assemble one `LivePosition` from its ledger rows + the current mark. Returns null when there is no entry
- * row (the market is a fresh candidate, not yet a position). PURE — the daemon does the I/O (findByIntentKey
- * per purpose + a fill-poll + a book read) and hands the rows in; this is the tested "ledger → resumed
- * state" mapping. `stop_loss` takes precedence over `time_stop` for the single `exit` handle (they never
- * both exist — a position flattens once — but if a prior tick fired a SL and this tick also crossed the
- * time-stop, the SL row is the live one).
+ * Assemble one `LivePosition` from its ledger rows + the current mark + venue sell truth. Returns null when
+ * there is no entry row (the market is a fresh candidate, not yet a position). PURE — the daemon does the
+ * I/O (findByIntentKey per purpose + a fill-poll + a book read + a `getTrades` sweep) and hands the facts
+ * in; this is the tested "ledger → resumed state" mapping.
+ *
+ * `soldSize` (lens CRITICAL-1 + LOW-5) = max(Σ visible sell-row fills, venueSoldSize): the visible sum
+ * covers dry-run (no venue, rows never fill) and live rows still open; the venue floor covers fills whose
+ * rows have gone terminal-canceled (a lifted-then-cancelled TP, an adjudicated FAK corpse) — invisible to
+ * `bot_order_by_intent` (0082). BOTH exit rows contribute when both exist (LOW-5: no fill is dropped, none
+ * is double-counted — each row's `sizeMatched` is its own order's fills). `stop_loss` takes precedence over
+ * `time_stop` for the single observability `exit` handle.
  */
 export function assemblePosition(args: {
   meta: {
@@ -285,10 +324,15 @@ export function assemblePosition(args: {
   stopLoss: OrderLedgerRow | null;
   timeStop: OrderLedgerRow | null;
   mark: number | null;
+  /** Σ our SELL trade sizes for this token from venue `getTrades` (live); null = unavailable/dry-run. */
+  venueSoldSize?: number | null;
 }): LivePosition | null {
   const { meta, entry, tp, stopLoss, timeStop, mark } = args;
   if (entry == null) return null;
   const exitRow = stopLoss ?? timeStop ?? null;
+  const visibleSold = (tp?.sizeMatched ?? 0) + (stopLoss?.sizeMatched ?? 0) + (timeStop?.sizeMatched ?? 0);
+  const venueSold = args.venueSoldSize;
+  const soldSize = Math.max(visibleSold, fin(venueSold) ? venueSold : 0);
   return {
     marketId: meta.marketId,
     tokenId: meta.tokenId,
@@ -299,6 +343,7 @@ export function assemblePosition(args: {
     entryPrice: entry.price,
     modelProb: meta.modelProb,
     filledSize: entry.sizeMatched,
+    soldSize,
     mark: mark ?? null,
     entry: handleOf(entry),
     tp: handleOf(tp),
@@ -314,6 +359,15 @@ export type Intent =
   | { kind: 'enter'; marketRef: string; req: MakerOrderRequest }
   | { kind: 'rest_tp'; marketRef: string; req: MakerOrderRequest }
   | { kind: 'reprice_entry'; marketRef: string; oldOrderId: string; oldClientOrderId: string; req: MakerOrderRequest }
+  | {
+      /** cancel a resting (un/partially-filled) maker ENTRY — the live-kill "stop new exposure" action
+       *  (lens MEDIUM-2): emitted instead of reprice/hold when the LIVE preflight fails. */
+      kind: 'cancel_entry';
+      marketRef: string;
+      orderId: string;
+      clientOrderId: string;
+      reason: string;
+    }
   | {
       kind: 'exit_taker';
       marketRef: string;
@@ -374,41 +428,68 @@ function repriceTarget(modelProb: number, cfg: DecideCfg): number {
 // decideTick — the pure spine: (mode, config, preflight, candidates, positions, now) → intents.
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 
-/** Manage one open position: exits (never gated) take priority over resting the TP, over the entry window. */
-function planForPosition(p: LivePosition, cfg: DecideCfg, nowMs: number): Intent | null {
-  const held = p.filledSize;
+/** Is this entry handle a live, cancellable resting order at the venue? */
+function restingEntry(e: OrderHandle | null): e is OrderHandle & { orderId: string } {
+  return e != null && e.orderId != null && (e.status === 'placed' || e.status === 'partial');
+}
 
-  // (A) NOTHING filled yet — the entry maker order is still working. Re-peg it after the maker window.
+const cancelEntryIntent = (p: LivePosition, e: OrderHandle & { orderId: string }, reason: string): Intent => ({
+  kind: 'cancel_entry',
+  marketRef: p.marketId,
+  orderId: e.orderId,
+  clientOrderId: e.clientOrderId,
+  reason,
+});
+
+/**
+ * Manage one open position: exits (never gated) take priority over resting the TP, over the entry window.
+ * `entriesBlocked` (live preflight failed): reprice is suppressed and any resting maker ENTRY — including
+ * a partially-filled one's unfilled remainder — is CANCELLED (MEDIUM-2: a kill stops new exposure within
+ * one tick); exits + the TP rest keep working (they only flatten).
+ */
+function planForPosition(p: LivePosition, cfg: DecideCfg, nowMs: number, entriesBlocked: boolean): Intent[] {
+  const held = p.filledSize;
+  const out: Intent[] = [];
+
+  // (A) NOTHING filled yet — the entry maker order is still working.
   if (!(held > 0)) {
     const e = p.entry;
-    if (!e || e.orderId == null) return null; // dangling (post→record window) → reconcile owns it, not reprice
-    if (e.status !== 'placed' && e.status !== 'partial') return null; // terminal / already filled elsewhere
-    if (e.restingSinceMs == null) return null; // no clock → cannot age the window; hold
+    if (!restingEntry(e)) return out; // dangling ('intent', no orderId) → reconcile owns it; terminal → done
+    if (entriesBlocked) return [cancelEntryIntent(p, e, 'preflight_blocked — kill cancels resting entries')];
+    if (e.restingSinceMs == null) return out; // no clock → cannot age the window; hold
     const restMin = (nowMs - e.restingSinceMs) / 60_000;
-    if (restMin < cfg.makerFillWindowMin) return null; // within the window → keep resting
-    return {
-      kind: 'reprice_entry',
-      marketRef: p.marketId,
-      oldOrderId: e.orderId,
-      oldClientOrderId: e.clientOrderId,
-      req: {
-        marketId: p.marketId,
-        tokenId: p.tokenId,
-        side: 'BUY',
-        purpose: 'entry',
-        tradeDate: p.targetDate,
-        targetPrice: repriceTarget(p.modelProb, cfg),
-        size: e.size, // the ORIGINAL intent size — executor.reprice reposts the remainder
-        negRisk: cfg.negRisk,
-        orderType: 'GTC',
+    if (restMin < cfg.makerFillWindowMin) return out; // within the window → keep resting
+    return [
+      {
+        kind: 'reprice_entry',
+        marketRef: p.marketId,
+        oldOrderId: e.orderId,
+        oldClientOrderId: e.clientOrderId,
+        req: {
+          marketId: p.marketId,
+          tokenId: p.tokenId,
+          side: 'BUY',
+          purpose: 'entry',
+          tradeDate: p.targetDate,
+          targetPrice: repriceTarget(p.modelProb, cfg),
+          size: e.size, // the ORIGINAL intent size — executor.reprice reposts the remainder
+          negRisk: cfg.negRisk,
+          orderType: 'GTC',
+        },
       },
-    };
+    ];
   }
 
-  // (B) HOLDING `held` shares — manage the exit. Re-fire only the UNSOLD remainder (a FAK can partial-fill).
-  const exitFilled = p.exit?.sizeMatched ?? 0;
-  const remaining = held - exitFilled;
-  if (!(remaining > 1e-9)) return null; // fully flattened
+  // A PARTIALLY-filled entry still rests its unfilled remainder — under a kill, cancel that too (MEDIUM-2).
+  if (entriesBlocked && restingEntry(p.entry)) {
+    out.push(cancelEntryIntent(p, p.entry, 'preflight_blocked — kill cancels the partial entry remainder'));
+  }
+
+  // (B) HOLDING `held` shares — manage the exit. `remaining` subtracts EVERY sell-side fill (TP + SL +
+  // time-stop, venue-floored — soldSize; lens CRITICAL-1/LOW-5): a fully-filled TP closes the position, a
+  // partial TP shrinks what any later stop may sell. A FAK exit re-fires only its unsold remainder.
+  const remaining = held - p.soldSize;
+  if (!(remaining > 1e-9)) return out; // fully flattened — nothing may sell
 
   const timeStopMs = timeStopMsOf(p, cfg);
   const slStop = stopOf(p.entryPrice, cfg);
@@ -416,15 +497,17 @@ function planForPosition(p: LivePosition, cfg: DecideCfg, nowMs: number): Intent
 
   // priority 1 — the HARD time-stop (clock-only, the dominant backstop): flatten as a taker.
   if (timeStopMs != null && nowMs >= timeStopMs) {
-    return exitTaker(p, cfg, 'time_stop', pickWorst(mark, slStop), remaining);
+    out.push(exitTaker(p, cfg, 'time_stop', pickWorst(mark, slStop), remaining));
+    return out;
   }
   // priority 2 — the stop-loss on the realizable bid mark: cut the loss (cannot rest above a falling book, §12).
   if (fin(mark) && mark <= slStop) {
-    return exitTaker(p, cfg, 'stop_loss', mark, remaining);
+    out.push(exitTaker(p, cfg, 'stop_loss', mark, remaining));
+    return out;
   }
   // priority 3 — rest the MAKER take-profit once (idempotent via the ledger; skip if already resting/terminal).
   if (p.tp == null) {
-    return {
+    out.push({
       kind: 'rest_tp',
       marketRef: p.marketId,
       req: {
@@ -438,9 +521,10 @@ function planForPosition(p: LivePosition, cfg: DecideCfg, nowMs: number): Intent
         negRisk: cfg.negRisk,
         orderType: 'GTC',
       },
-    };
+    });
+    return out;
   }
-  return null; // TP resting, no stop, before the time-stop → hold (the venue fills the maker TP)
+  return out; // TP resting, no stop, before the time-stop → hold (the venue fills the maker TP)
 }
 
 /** the worst price a flatten will accept — the current bid mark, else the stop, else a 1¢ floor (never NaN). */
@@ -487,19 +571,20 @@ export function decideTick(state: TickState): TickPlan {
   if (mode === 'off') return { intents, skips: [{ ref: 'ALL', reason: 'mode_off — the rail is inert' }] };
 
   const nowMs = now.getTime();
+  const liveGated = mode === 'live';
+  const entriesBlocked = liveGated && (preflight == null || !preflight.ok);
 
   // 1 · MANAGE existing positions first (exits are NEVER cap/preflight-gated — a position must always be
-  //     able to flatten; the daily-loss kill + a de-activated console gate only NEW entries).
+  //     able to flatten; the daily-loss kill + a de-activated console gate only NEW entries). Under a live
+  //     kill (entriesBlocked), reprice is suppressed and resting maker entries are CANCELLED (MEDIUM-2).
   const positioned = new Set(positions.map((p) => `${p.marketId}|${p.targetDate}`));
   for (const p of positions) {
-    const intent = planForPosition(p, cfg, nowMs);
-    if (intent) intents.push(intent);
+    intents.push(...planForPosition(p, cfg, nowMs, entriesBlocked));
   }
 
   // 2 · ENTER new positions. LIVE mode enforces the preflight interlock + the caps; dry-run skips them
   //     (its ledger rows never count toward live caps) but keeps every strategy gate.
-  const liveGated = mode === 'live';
-  if (liveGated && (preflight == null || !preflight.ok)) {
+  if (entriesBlocked) {
     const why = preflight?.reasons?.length ? preflight.reasons.join('; ') : 'preflight verdict unavailable';
     for (const c of candidates) skips.push({ ref: c.marketId, reason: `preflight_blocked: ${why}` });
     return { intents, skips };
@@ -607,6 +692,10 @@ export interface ApplyResult {
   dryRun: number;
   duplicate: number;
   failed: number;
+  /** cancel_entry intents executed (the live-kill new-exposure stop, MEDIUM-2). */
+  canceled: number;
+  /** taker exits ABORTED this tick because the TP cancel raced a fill (the over-sell race guard). */
+  aborted: number;
 }
 
 export async function applyPlan(
@@ -614,12 +703,16 @@ export async function applyPlan(
   executor: DaemonExecutor,
   notify: (a: TradeAlert) => Promise<boolean>,
   log: (entry: Record<string, unknown>) => void,
+  /** the order ledger — enables the venue-dead FAK adjudication (MEDIUM-3). Optional for pure-driver tests. */
+  ledger?: OrderLedger,
 ): Promise<ApplyResult> {
   const applied: AppliedIntent[] = [];
   let posted = 0;
   let dryRun = 0;
   let duplicate = 0;
   let failed = 0;
+  let canceled = 0;
+  let aborted = 0;
 
   for (const intent of plan.intents) {
     try {
@@ -634,9 +727,60 @@ export async function applyPlan(
           result = rr.placed;
           break;
         }
+        case 'cancel_entry': {
+          // the live-kill "stop new exposure" action (MEDIUM-2): cancel the resting maker entry at the
+          // venue; executor.cancel records the row canceled when the venue confirms (frees the key).
+          const cr = await executor.cancel(intent.orderId, intent.clientOrderId);
+          canceled++;
+          applied.push({ intent, result: null, error: null });
+          log({
+            msg: 'trade-bot.intent',
+            kind: intent.kind,
+            marketRef: intent.marketRef,
+            allCanceled: cr.allCanceled,
+            reason: intent.reason,
+          });
+          continue;
+        }
         case 'exit_taker': {
           // cancel the resting maker TP FIRST (never rest a SELL and taker-SELL the same shares).
-          if (intent.cancelTp) await executor.cancel(intent.cancelTp.orderId, intent.cancelTp.clientOrderId);
+          if (intent.cancelTp) {
+            const cr = await executor.cancel(intent.cancelTp.orderId, intent.cancelTp.clientOrderId);
+            if (!cr.allCanceled) {
+              // RACE GUARD: the TP raced a fill — `remaining` is stale-high and the taker would over-sell.
+              // ABORT this tick; the next tick's fill-poll picks up the raced fill and re-decides.
+              aborted++;
+              applied.push({ intent, result: null, error: null });
+              log({ msg: 'trade-bot.exit_aborted', level: 'WARN', kind: intent.kind, marketRef: intent.marketRef, purpose: intent.purpose, reason: 'TP cancel raced a fill (allCanceled=false) — taker aborted this tick' });
+              await notify({
+                kind: 'TRADE_BOT_EXIT_ABORTED',
+                severity: 'WARN',
+                title: `trade-bot ${intent.purpose} aborted: TP cancel raced a fill (${intent.marketRef})`,
+                body: 'The resting take-profit was lifted while being cancelled; the taker exit is deferred one tick so the raced fill enters the sold accounting first.',
+                dedupeKey: `trade-bot-abort:${intent.marketRef}:${intent.purpose}`,
+              });
+              continue;
+            }
+          }
+          // FAK ADJUDICATION (MEDIUM-3): a prior FAK for this same exit intent that partial- (or zero-)
+          // filled left an OPEN 'partial'/'placed' row — a venue-dead corpse (FAK never rests) that would
+          // make this re-fire a silent 'duplicate' forever. Adjudicate it terminal (record_canceled
+          // preserves size_matched; the partial-unique frees the key), loudly, then place.
+          if (ledger) {
+            const key = orderIntentKey(intent.req);
+            const open = await ledger.findByIntentKey(key, executor.mode);
+            if (open && open.orderId != null && (open.status === 'partial' || open.status === 'placed')) {
+              await ledger.recordCanceled(open.clientOrderId);
+              log({ msg: 'trade-bot.fak_adjudicated', level: 'WARN', marketRef: intent.marketRef, purpose: intent.purpose, clientOrderId: open.clientOrderId, orderId: open.orderId, sizeMatched: open.sizeMatched, reason: 'venue-dead FAK exit row adjudicated terminal so the remainder can re-fire' });
+              await notify({
+                kind: 'TRADE_BOT_FAK_ADJUDICATED',
+                severity: 'WARN',
+                title: `trade-bot adjudicated a dead FAK ${intent.purpose} (${intent.marketRef})`,
+                body: `Row ${open.clientOrderId} (order ${open.orderId}, matched ${open.sizeMatched}/${open.size}) was a venue-dead FAK still holding the intent key — recorded canceled (fills preserved) so the unsold remainder re-fires.`,
+                dedupeKey: `trade-bot-fak:${open.clientOrderId}`,
+              });
+            }
+          }
           result = await executor.placeTaker(intent.req);
           break;
         }
@@ -675,5 +819,5 @@ export async function applyPlan(
     }
   }
 
-  return { applied, posted, dryRun, duplicate, failed };
+  return { applied, posted, dryRun, duplicate, failed, canceled, aborted };
 }

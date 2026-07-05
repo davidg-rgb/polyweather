@@ -3,19 +3,25 @@
  * every executor / ledger / preflight / book is a fixture. Covers the T2 test contract — entry gating
  * (maxEntry / depth / allowlist / caps / preflight-block), TP/SL/time-stop arming + firing, the reprice
  * window, restart resume (ledger rows → resumed state), off/dry-run never posting, and record_*-raise
- * routing.
+ * routing — plus the t2-lens regressions: sold-truth accounting (CRITICAL-1/LOW-5), the live-kill
+ * entry-cancel (MEDIUM-2), the venue-dead FAK adjudication against a by_intent-faithful fake ledger
+ * (MEDIUM-3), and the TP-cancel race guard.
  */
 import { describe, expect, it, vi } from 'vitest';
 import { ExecutionError } from '../../packages/core/src/index.ts';
 import { makerExitCfg } from '../../packages/core/src/index.ts';
+import { orderIntentKey } from '../../packages/trading/src/index.ts';
 import type {
   CancelResult,
   MakerOrderRequest,
+  OrderLedger,
   OrderLedgerRow,
   OrderPlacementResult,
+  ReserveIntentInput,
   TakerOrderRequest,
   TradeAlert,
   TradeConfig,
+  TradeMode,
   TradePreflight,
 } from '../../packages/trading/src/index.ts';
 import {
@@ -125,6 +131,7 @@ function position(over: Partial<LivePosition> = {}): LivePosition {
     entryPrice: 0.15,
     modelProb: 0.3,
     filledSize: 66,
+    soldSize: 0,
     mark: 0.2,
     entry: handle({ status: 'filled', sizeMatched: 66 }),
     tp: null,
@@ -285,16 +292,65 @@ describe('decideTick — position management', () => {
   });
 
   it('re-fires only the UNSOLD remainder after a partial taker flatten', () => {
-    const pos = position({ resolvesAtMs: NOW.getTime() + 3_600_000, mark: 0.25, filledSize: 66, exit: handle({ purpose: 'time_stop', status: 'partial', sizeMatched: 40 }) });
+    const pos = position({ resolvesAtMs: NOW.getTime() + 3_600_000, mark: 0.25, filledSize: 66, soldSize: 40, exit: handle({ purpose: 'time_stop', status: 'partial', sizeMatched: 40 }) });
     const plan = decideTick(state({ positions: [pos] }));
     const ex = plan.intents.find((i) => i.kind === 'exit_taker') as Extract<Intent, { kind: 'exit_taker' }>;
     expect(ex.req.size).toBe(26);
   });
 
   it('no intent once fully flattened', () => {
-    const pos = position({ resolvesAtMs: NOW.getTime() + 3_600_000, mark: 0.25, filledSize: 66, exit: handle({ purpose: 'time_stop', status: 'filled', sizeMatched: 66 }) });
+    const pos = position({ resolvesAtMs: NOW.getTime() + 3_600_000, mark: 0.25, filledSize: 66, soldSize: 66, exit: handle({ purpose: 'time_stop', status: 'filled', sizeMatched: 66 }) });
     const plan = decideTick(state({ positions: [pos] }));
     expect(plan.intents).toHaveLength(0);
+  });
+});
+
+// ── SOLD-TRUTH ACCOUNTING (lens CRITICAL-1 + LOW-5) — the over-sell path is closed ─────────────────
+describe('decideTick — sold-truth accounting (CRITICAL-1/LOW-5)', () => {
+  const tpFilled = (matched: number, size = 66) =>
+    handle({ purpose: 'take_profit', status: matched >= size ? 'filled' : 'partial', orderId: 'tp1', clientOrderId: 'ctp1', size, sizeMatched: matched });
+
+  it('CRIT-1a: a FULLY-filled take-profit closes the position — no exit fires even past the time-stop', () => {
+    // resolvesAt = now + 1h ⇒ the time-stop clock has tripped; the TP already sold everything.
+    const pos = position({ resolvesAtMs: NOW.getTime() + 3_600_000, mark: 0.3, soldSize: 66, tp: tpFilled(66) });
+    const plan = decideTick(state({ positions: [pos] }));
+    expect(plan.intents).toHaveLength(0);
+  });
+
+  it('CRIT-1b: a PARTIAL take-profit (40/66) + time-stop exits EXACTLY the 26 unsold shares, cancelling the TP rest', () => {
+    const pos = position({ resolvesAtMs: NOW.getTime() + 3_600_000, mark: 0.3, soldSize: 40, tp: tpFilled(40) });
+    const plan = decideTick(state({ positions: [pos] }));
+    const ex = plan.intents.find((i) => i.kind === 'exit_taker') as Extract<Intent, { kind: 'exit_taker' }>;
+    expect(ex.purpose).toBe('time_stop');
+    expect(ex.req.size).toBe(26);
+    expect(ex.cancelTp).toEqual({ orderId: 'tp1', clientOrderId: 'ctp1' });
+  });
+
+  it('CRIT-1c: a fully-filled take-profit suppresses the stop-loss — no sell on a crashed mark', () => {
+    const pos = position({ mark: 0.01, soldSize: 66, tp: tpFilled(66) }); // mark deep below the stop
+    const plan = decideTick(state({ positions: [pos] }));
+    expect(plan.intents.filter((i) => i.kind === 'exit_taker')).toHaveLength(0);
+    expect(plan.intents.filter((i) => i.kind === 'rest_tp')).toHaveLength(0);
+  });
+
+  it('LOW-5: both stop_loss and time_stop fills count once — a covered position plans nothing', () => {
+    // 30 sold by an SL partial + 36 by a later time-stop = 66 = held (assembly sums them into soldSize).
+    const pos = position({
+      resolvesAtMs: NOW.getTime() + 3_600_000,
+      mark: 0.01,
+      soldSize: 66,
+      exit: handle({ purpose: 'stop_loss', status: 'partial', sizeMatched: 30 }),
+    });
+    const plan = decideTick(state({ positions: [pos] }));
+    expect(plan.intents).toHaveLength(0);
+  });
+
+  it('a partial TP shrinks what a stop-loss may sell (no over-sell through the SL path)', () => {
+    const pos = position({ mark: 0.05, soldSize: 40, tp: tpFilled(40) }); // SL trigger, 26 unsold
+    const plan = decideTick(state({ positions: [pos] }));
+    const ex = plan.intents.find((i) => i.kind === 'exit_taker') as Extract<Intent, { kind: 'exit_taker' }>;
+    expect(ex.purpose).toBe('stop_loss');
+    expect(ex.req.size).toBe(26);
   });
 });
 
@@ -321,6 +377,57 @@ describe('decideTick — entry reprice window', () => {
     const entry = handle({ status: 'placed', orderId: null, sizeMatched: 0, restingSinceMs: NOW.getTime() - 60 * 60_000 });
     const plan = decideTick(state({ positions: [position({ filledSize: 0, entry, tp: null, mark: null })] }));
     expect(plan.intents.filter((i) => i.kind === 'reprice_entry')).toHaveLength(0);
+  });
+});
+
+// ── LIVE-KILL ENTRY CANCEL (lens MEDIUM-2) — a kill stops new exposure within one tick ──────────────
+describe('decideTick — live kill (preflight fail) cancels resting entries, never reprices', () => {
+  const failedPre = preflight({}, false, ['daily-loss kill tripped']);
+
+  it('MEDIUM-2: preflight fail → NO reprice_entry; the resting unfilled entry is CANCELLED instead', () => {
+    // 31 min resting — would reprice on a healthy tick.
+    const entry = handle({ status: 'placed', sizeMatched: 0, restingSinceMs: NOW.getTime() - 31 * 60_000 });
+    const plan = decideTick(state({ preflight: failedPre, positions: [position({ filledSize: 0, entry, tp: null, mark: null })] }));
+    expect(plan.intents.filter((i) => i.kind === 'reprice_entry')).toHaveLength(0);
+    const ce = plan.intents.find((i) => i.kind === 'cancel_entry') as Extract<Intent, { kind: 'cancel_entry' }>;
+    expect(ce).toBeDefined();
+    expect(ce.orderId).toBe('v1');
+    expect(ce.clientOrderId).toBe('c1');
+  });
+
+  it('cancels a resting entry even INSIDE the maker window (a kill does not wait for the reprice clock)', () => {
+    const entry = handle({ status: 'placed', sizeMatched: 0, restingSinceMs: NOW.getTime() - 5 * 60_000 }); // 5 min
+    const plan = decideTick(state({ preflight: failedPre, positions: [position({ filledSize: 0, entry, tp: null, mark: null })] }));
+    expect(plan.intents.some((i) => i.kind === 'cancel_entry')).toBe(true);
+  });
+
+  it("cancels a PARTIALLY-filled entry's resting remainder while its exits keep working", () => {
+    // entry partial: 20 filled of 66, remainder resting; mark below the stop → the SL must still fire.
+    const entry = handle({ status: 'partial', sizeMatched: 20 });
+    const pos = position({ filledSize: 20, soldSize: 0, entry, tp: null, mark: 0.05 });
+    const plan = decideTick(state({ preflight: failedPre, positions: [pos] }));
+    expect(plan.intents.some((i) => i.kind === 'cancel_entry')).toBe(true);
+    const ex = plan.intents.find((i) => i.kind === 'exit_taker') as Extract<Intent, { kind: 'exit_taker' }>;
+    expect(ex.purpose).toBe('stop_loss');
+    expect(ex.req.size).toBe(20); // only what is held
+  });
+
+  it('the TP rest still arms under a kill (it only flattens — not new exposure)', () => {
+    const plan = decideTick(state({ preflight: failedPre, positions: [position({ mark: 0.2, tp: null })] }));
+    expect(plan.intents.some((i) => i.kind === 'rest_tp')).toBe(true);
+  });
+
+  it('dry-run never emits cancel_entry (the kill gate is live-only)', () => {
+    const entry = handle({ status: 'placed', sizeMatched: 0, restingSinceMs: NOW.getTime() - 31 * 60_000 });
+    const plan = decideTick(state({ mode: 'dry-run', preflight: null, positions: [position({ filledSize: 0, entry, tp: null, mark: null })] }));
+    expect(plan.intents.some((i) => i.kind === 'cancel_entry')).toBe(false);
+    expect(plan.intents.some((i) => i.kind === 'reprice_entry')).toBe(true); // the normal window action
+  });
+
+  it('does not cancel a dangling entry (no orderId — reconcile owns it) even under a kill', () => {
+    const entry = handle({ status: 'placed', orderId: null, sizeMatched: 0, restingSinceMs: NOW.getTime() - 60 * 60_000 });
+    const plan = decideTick(state({ preflight: failedPre, positions: [position({ filledSize: 0, entry, tp: null, mark: null })] }));
+    expect(plan.intents.some((i) => i.kind === 'cancel_entry')).toBe(false);
   });
 });
 
@@ -379,6 +486,46 @@ describe('assemblePosition — restart resume from ledger rows', () => {
     const pos = assemblePosition({ meta, entry: row(), tp: null, stopLoss: row({ side: 'SELL', purpose: 'stop_loss', status: 'partial', clientOrderId: 'csl', orderId: 'sl1', sizeMatched: 30 }), timeStop: null, mark: 0.05 });
     expect(pos!.exit!.purpose).toBe('stop_loss');
     expect(pos!.exit!.sizeMatched).toBe(30);
+  });
+
+  it('LOW-5: soldSize sums fills across TP + stop_loss + time_stop rows (each counted once)', () => {
+    const pos = assemblePosition({
+      meta,
+      entry: row(),
+      tp: row({ side: 'SELL', purpose: 'take_profit', status: 'partial', clientOrderId: 'ctp', orderId: 'tp1', sizeMatched: 20 }),
+      stopLoss: row({ side: 'SELL', purpose: 'stop_loss', status: 'partial', clientOrderId: 'csl', orderId: 'sl1', sizeMatched: 30 }),
+      timeStop: row({ side: 'SELL', purpose: 'time_stop', status: 'partial', clientOrderId: 'cts', orderId: 'ts1', sizeMatched: 16 }),
+      mark: 0.05,
+    });
+    expect(pos!.soldSize).toBe(66); // 20 + 30 + 16 — fully covered, decide will plan nothing
+  });
+
+  it('CRIT-1: venue trade truth FLOORS soldSize — fills on canceled rows (invisible to by_intent) are never lost', () => {
+    // The TP partial-filled 40 then was cancelled before a taker exit → its row is terminal-canceled and
+    // findByIntentKey returns null; the SL row shows 26. The venue trade log still knows all 66.
+    const pos = assemblePosition({
+      meta,
+      entry: row(),
+      tp: null, // canceled → invisible
+      stopLoss: row({ side: 'SELL', purpose: 'stop_loss', status: 'filled', clientOrderId: 'csl', orderId: 'sl1', sizeMatched: 26 }),
+      timeStop: null,
+      mark: 0.05,
+      venueSoldSize: 66,
+    });
+    expect(pos!.soldSize).toBe(66); // NOT 26 — the venue floor closes the over-sell path
+  });
+
+  it('a venue read outage (venueSoldSize null) degrades to the visible-ledger sum', () => {
+    const pos = assemblePosition({
+      meta,
+      entry: row(),
+      tp: row({ side: 'SELL', purpose: 'take_profit', status: 'partial', clientOrderId: 'ctp', orderId: 'tp1', sizeMatched: 40 }),
+      stopLoss: null,
+      timeStop: null,
+      mark: 0.2,
+      venueSoldSize: null,
+    });
+    expect(pos!.soldSize).toBe(40);
   });
 });
 
@@ -448,11 +595,64 @@ describe('discoverCandidates — reuses the replay twin selectEntries', () => {
 });
 
 // ── applyPlan — the driver (off/dry-run never post; record_*-raise routing) ────────────────────────
+
+/**
+ * A fake OrderLedger honoring the REAL 0082 `bot_order_by_intent` contract (lens MEDIUM-3's test
+ * requirement): findByIntentKey returns the OPEN row — `status not in ('canceled','failed')` — or null;
+ * recordCanceled flips the row terminal PRESERVING sizeMatched (the T3-confirmed seam semantics), which
+ * frees the partial-unique so a fresh reserve/place for the same intent key can proceed.
+ */
+class FakeLedger implements OrderLedger {
+  rows: OrderLedgerRow[] = [];
+  canceledCids: string[] = [];
+  private open(intentKey: string, mode: TradeMode): OrderLedgerRow | null {
+    return this.rows.find((r) => r.intentKey === intentKey && r.mode === mode && r.status !== 'canceled' && r.status !== 'failed') ?? null;
+  }
+  async findByIntentKey(intentKey: string, mode: TradeMode): Promise<OrderLedgerRow | null> {
+    return this.open(intentKey, mode);
+  }
+  async reserveIntent(input: ReserveIntentInput): Promise<'reserved' | 'exists'> {
+    if (this.open(input.intentKey, input.mode)) return 'exists';
+    this.rows.push({ mode: input.mode, intentKey: input.intentKey, clientOrderId: input.clientOrderId, status: 'intent', orderId: null, side: input.side, purpose: input.purpose, price: input.price, size: input.size, sizeMatched: 0, tokenId: input.tokenId, marketId: input.marketId, createdAt: new Date().toISOString() });
+    return 'reserved';
+  }
+  async listDanglingIntents(): Promise<OrderLedgerRow[]> {
+    return [];
+  }
+  async recordPlaced(clientOrderId: string, orderId: string): Promise<void> {
+    const r = this.rows.find((x) => x.clientOrderId === clientOrderId);
+    if (r) {
+      r.status = 'placed';
+      r.orderId = orderId;
+    }
+  }
+  async recordFill(clientOrderId: string, sizeMatched: number, _avgPrice: number, status: 'filled' | 'partial'): Promise<void> {
+    const r = this.rows.find((x) => x.clientOrderId === clientOrderId);
+    if (r) {
+      r.sizeMatched = sizeMatched;
+      r.status = status;
+    }
+  }
+  async recordCanceled(clientOrderId: string): Promise<void> {
+    const r = this.rows.find((x) => x.clientOrderId === clientOrderId);
+    if (r) r.status = 'canceled'; // sizeMatched PRESERVED — the seam contract
+    this.canceledCids.push(clientOrderId);
+  }
+  async recordFailed(clientOrderId: string): Promise<void> {
+    const r = this.rows.find((x) => x.clientOrderId === clientOrderId);
+    if (r) r.status = 'failed';
+  }
+}
+
 class FakeExecutor implements DaemonExecutor {
   readonly mode;
   calls: string[] = [];
   placeResult: OrderPlacementResult;
   placeThrows: Error | null = null;
+  /** when false, cancel() reports the order was NOT (fully) canceled — the raced-a-fill venue response. */
+  cancelSucceeds = true;
+  /** when set, placeTaker honors the REAL executor's by_intent idempotency against this ledger. */
+  ledger: FakeLedger | null = null;
   constructor(mode: DaemonExecutor['mode'], placeResult: OrderPlacementResult) {
     this.mode = mode;
     this.placeResult = placeResult;
@@ -464,6 +664,14 @@ class FakeExecutor implements DaemonExecutor {
   }
   async placeTaker(req: TakerOrderRequest): Promise<OrderPlacementResult> {
     this.calls.push(`placeTaker:${req.purpose}:${req.marketId}`);
+    if (this.ledger) {
+      // mirror the real placeTaker's FIRST move (live.ts): an OPEN row for the intent key ⇒ 'duplicate'.
+      const open = await this.ledger.findByIntentKey(orderIntentKey(req), this.mode);
+      if (open) {
+        return { ...this.placeResult, status: 'duplicate', side: req.side, purpose: req.purpose, reason: `open intent already ${open.status}` };
+      }
+      await this.ledger.reserveIntent({ mode: this.mode, intentKey: orderIntentKey(req), clientOrderId: `c-${this.calls.length}`, marketId: req.marketId, tokenId: req.tokenId, side: req.side, purpose: req.purpose, orderType: 'FAK', price: req.worstPrice, size: req.size, tradeDate: req.tradeDate });
+    }
     return { ...this.placeResult, side: req.side, purpose: req.purpose };
   }
   async reprice(oldOrderId: string, _c: string, newReq: MakerOrderRequest): Promise<{ cancel: CancelResult; placed: OrderPlacementResult }> {
@@ -472,7 +680,9 @@ class FakeExecutor implements DaemonExecutor {
   }
   async cancel(orderId: string): Promise<CancelResult> {
     this.calls.push(`cancel:${orderId}`);
-    return { requested: [orderId], canceled: [orderId], notCanceled: {}, allCanceled: true };
+    return this.cancelSucceeds
+      ? { requested: [orderId], canceled: [orderId], notCanceled: {}, allCanceled: true }
+      : { requested: [orderId], canceled: [], notCanceled: { [orderId]: 'order raced a fill' }, allCanceled: false };
   }
 }
 
@@ -555,6 +765,90 @@ describe('applyPlan — the driver', () => {
     await applyPlan({ intents: [enterIntent], skips: [] }, ex, async (a) => (alerts.push(a), true), log);
     expect(alerts[0]!.body).not.toContain('abcdef123456');
     expect(alerts[0]!.body).toContain('REDACTED');
+  });
+
+  it('MEDIUM-2: drives cancel_entry through executor.cancel and counts it', async () => {
+    const ex = new FakeExecutor('live', RESULT('placed'));
+    const ce: Intent = { kind: 'cancel_entry', marketRef: 'm1', orderId: 'v1', clientOrderId: 'c1', reason: 'preflight_blocked' };
+    const r = await applyPlan({ intents: [ce], skips: [] }, ex, async () => true, log);
+    expect(ex.calls).toEqual(['cancel:v1']);
+    expect(r.canceled).toBe(1);
+    expect(r.failed).toBe(0);
+  });
+});
+
+// ── RACE GUARD + FAK ADJUDICATION (lens MEDIUM-3) ───────────────────────────────────────────────────
+describe('applyPlan — TP-cancel race guard + venue-dead FAK adjudication', () => {
+  const exitIntent = (over: Partial<Extract<Intent, { kind: 'exit_taker' }>> = {}): Intent => ({
+    kind: 'exit_taker',
+    marketRef: 'm1',
+    purpose: 'time_stop',
+    req: { marketId: 'm1', tokenId: 't1', side: 'SELL', purpose: 'time_stop', tradeDate: '2026-07-06', worstPrice: 0.2, size: 26, negRisk: true },
+    ...over,
+  });
+
+  it('ABORTS the taker when the TP cancel raced a fill (allCanceled=false) — no naked sell, WARN alerted', async () => {
+    const ex = new FakeExecutor('live', RESULT('placed'));
+    ex.cancelSucceeds = false;
+    const alerts: TradeAlert[] = [];
+    const r = await applyPlan(
+      { intents: [exitIntent({ cancelTp: { orderId: 'tp1', clientOrderId: 'ctp1' } })], skips: [] },
+      ex,
+      async (a) => (alerts.push(a), true),
+      log,
+    );
+    expect(ex.calls).toEqual(['cancel:tp1']); // placeTaker NEVER invoked
+    expect(r.aborted).toBe(1);
+    expect(r.posted).toBe(0);
+    expect(alerts.some((a) => a.kind === 'TRADE_BOT_EXIT_ABORTED' && a.severity === 'WARN')).toBe(true);
+  });
+
+  it('MEDIUM-3: a venue-dead FAK partial exit row is adjudicated terminal so the remainder RE-FIRES (never a silent duplicate)', async () => {
+    const ledger = new FakeLedger();
+    // the corpse: a prior time_stop FAK that partial-filled 40/66 — OPEN per the real by_intent contract.
+    const key = orderIntentKey({ marketId: 'm1', side: 'SELL', purpose: 'time_stop', tradeDate: '2026-07-06' });
+    ledger.rows.push({ mode: 'live', intentKey: key, clientOrderId: 'corpse1', status: 'partial', orderId: 'vdead1', side: 'SELL', purpose: 'time_stop', price: 0.2, size: 66, sizeMatched: 40, tokenId: 't1', marketId: 'm1', createdAt: '2026-07-06T05:00:00Z' });
+    const ex = new FakeExecutor('live', RESULT('placed'));
+    ex.ledger = ledger; // placeTaker honors the REAL idempotency: an open row ⇒ 'duplicate'
+    const alerts: TradeAlert[] = [];
+
+    // WITHOUT the ledger param the re-fire is duplicate-blocked (the false-green the lens flagged):
+    const blocked = await applyPlan({ intents: [exitIntent()], skips: [] }, ex, async () => true, log);
+    expect(blocked.duplicate).toBe(1);
+    expect(blocked.posted).toBe(0);
+
+    // WITH the ledger, the corpse is adjudicated (canceled, fills preserved) and the remainder posts:
+    const r = await applyPlan({ intents: [exitIntent()], skips: [] }, ex, async (a) => (alerts.push(a), true), log, ledger);
+    expect(ledger.canceledCids).toEqual(['corpse1']);
+    const corpse = ledger.rows.find((x) => x.clientOrderId === 'corpse1')!;
+    expect(corpse.status).toBe('canceled');
+    expect(corpse.sizeMatched).toBe(40); // the seam preserves partial-fill accounting
+    expect(r.posted).toBe(1); // the remainder RE-FIRED
+    expect(r.duplicate).toBe(0);
+    expect(alerts.some((a) => a.kind === 'TRADE_BOT_FAK_ADJUDICATED' && a.severity === 'WARN')).toBe(true); // never silent
+  });
+
+  it('MEDIUM-3: a 0-fill venue-dead FAK (still `placed`) is adjudicated the same way', async () => {
+    const ledger = new FakeLedger();
+    const key = orderIntentKey({ marketId: 'm1', side: 'SELL', purpose: 'time_stop', tradeDate: '2026-07-06' });
+    ledger.rows.push({ mode: 'live', intentKey: key, clientOrderId: 'corpse2', status: 'placed', orderId: 'vdead2', side: 'SELL', purpose: 'time_stop', price: 0.2, size: 66, sizeMatched: 0, tokenId: 't1', marketId: 'm1', createdAt: '2026-07-06T05:00:00Z' });
+    const ex = new FakeExecutor('live', RESULT('placed'));
+    ex.ledger = ledger;
+    const r = await applyPlan({ intents: [exitIntent()], skips: [] }, ex, async () => true, log, ledger);
+    expect(ledger.canceledCids).toEqual(['corpse2']);
+    expect(r.posted).toBe(1);
+  });
+
+  it('does NOT adjudicate a row still at `intent` (no orderId — the startup reconcile owns it)', async () => {
+    const ledger = new FakeLedger();
+    const key = orderIntentKey({ marketId: 'm1', side: 'SELL', purpose: 'time_stop', tradeDate: '2026-07-06' });
+    ledger.rows.push({ mode: 'live', intentKey: key, clientOrderId: 'dangling1', status: 'intent', orderId: null, side: 'SELL', purpose: 'time_stop', price: 0.2, size: 66, sizeMatched: 0, tokenId: 't1', marketId: 'm1', createdAt: '2026-07-06T05:00:00Z' });
+    const ex = new FakeExecutor('live', RESULT('placed'));
+    ex.ledger = ledger;
+    const r = await applyPlan({ intents: [exitIntent()], skips: [] }, ex, async () => true, log, ledger);
+    expect(ledger.canceledCids).toEqual([]); // untouched — reconcile's job
+    expect(r.duplicate).toBe(1); // duplicate-blocked this tick (safe: the key stays reserved)
+    expect(r.posted).toBe(0);
   });
 });
 
