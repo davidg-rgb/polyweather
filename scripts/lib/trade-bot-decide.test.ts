@@ -29,6 +29,7 @@ import {
   assemblePosition,
   decideTick,
   discoverCandidates,
+  sellHoldAlerts,
   stopOf,
   timeStopMsOf,
   toDecideCfg,
@@ -132,6 +133,7 @@ function position(over: Partial<LivePosition> = {}): LivePosition {
     modelProb: 0.3,
     filledSize: 66,
     soldSize: 0,
+    soldTruthDegraded: false,
     mark: 0.2,
     entry: handle({ status: 'filled', sizeMatched: 66 }),
     tp: null,
@@ -354,6 +356,60 @@ describe('decideTick — sold-truth accounting (CRITICAL-1/LOW-5)', () => {
   });
 });
 
+// ── DEGRADED-MODE SELL HOLD (lens NEW-LOW-1) — getTrades is safety-load-bearing ─────────────────────
+describe('decideTick — degraded sell-truth holds every SELL for the position', () => {
+  // the invisible-fill fixture: the TP partial-filled 40 then was cancelled (its row is terminal →
+  // invisible), the visible ledger shows only soldSize 0, and the venue read is DOWN — soldSize is
+  // understated and any SELL sized from it would over-sell.
+  const degraded = (over: Partial<LivePosition> = {}) =>
+    position({ soldTruthDegraded: true, soldSize: 0, tp: null, ...over });
+
+  it('NEW-LOW-1: no taker exit posts while venue sell-truth is unavailable — even past the time-stop', () => {
+    const plan = decideTick(state({ positions: [degraded({ resolvesAtMs: NOW.getTime() + 3_600_000, mark: 0.25 })] }));
+    expect(plan.intents.filter((i) => i.kind === 'exit_taker')).toHaveLength(0);
+    expect(plan.skips.some((s) => s.reason.includes('sell_hold_degraded'))).toBe(true);
+  });
+
+  it('NEW-LOW-1: no stop-loss posts on a crashed mark while degraded', () => {
+    const plan = decideTick(state({ positions: [degraded({ mark: 0.01 })] }));
+    expect(plan.intents.filter((i) => i.kind === 'exit_taker')).toHaveLength(0);
+  });
+
+  it('NEW-LOW-1: the TP rest is held too (its sizing has the same over-sell exposure)', () => {
+    const plan = decideTick(state({ positions: [degraded({ mark: 0.2 })] }));
+    expect(plan.intents.filter((i) => i.kind === 'rest_tp')).toHaveLength(0);
+  });
+
+  it('entry-side management is unaffected (BUY side has no over-sell risk)', () => {
+    const entry = handle({ status: 'placed', sizeMatched: 0, restingSinceMs: NOW.getTime() - 31 * 60_000 });
+    const plan = decideTick(state({ positions: [degraded({ filledSize: 0, entry, mark: null })] }));
+    expect(plan.intents.some((i) => i.kind === 'reprice_entry')).toBe(true);
+  });
+
+  it('venueSold restored → the exit resumes, correctly sized from the venue floor', () => {
+    // same position, read recovered: venue truth says 40 already sold → the time-stop fires exactly 26.
+    const pos = position({ resolvesAtMs: NOW.getTime() + 3_600_000, mark: 0.25, soldTruthDegraded: false, soldSize: 40, tp: null });
+    const plan = decideTick(state({ positions: [pos] }));
+    const ex = plan.intents.find((i) => i.kind === 'exit_taker') as Extract<Intent, { kind: 'exit_taker' }>;
+    expect(ex.purpose).toBe('time_stop');
+    expect(ex.req.size).toBe(26);
+    expect(plan.skips.some((s) => s.reason.includes('sell_hold_degraded'))).toBe(false);
+  });
+
+  it('sellHoldAlerts maps each degraded held position to a CRITICAL alert (fired every affected tick)', () => {
+    const alerts = sellHoldAlerts([degraded({ mark: 0.01 }), position({ soldTruthDegraded: false })]);
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]).toMatchObject({ kind: 'TRADE_BOT_SELL_HOLD', severity: 'CRITICAL' });
+    expect(alerts[0]!.body).toContain('PAUSED');
+  });
+
+  it('sellHoldAlerts stays quiet for a degraded position already fully covered by VISIBLE fills', () => {
+    // nothing is held back — no sell would fire anyway, so no CRITICAL page.
+    const alerts = sellHoldAlerts([degraded({ soldSize: 66 })]);
+    expect(alerts).toHaveLength(0);
+  });
+});
+
 // ── REPRICE WINDOW ─────────────────────────────────────────────────────────────────────────────────
 describe('decideTick — entry reprice window', () => {
   it('holds a resting entry within the maker window', () => {
@@ -401,14 +457,17 @@ describe('decideTick — live kill (preflight fail) cancels resting entries, nev
     expect(plan.intents.some((i) => i.kind === 'cancel_entry')).toBe(true);
   });
 
-  it("cancels a PARTIALLY-filled entry's resting remainder while its exits keep working", () => {
+  it("NEW-LOW-2: a PARTIALLY-filled entry's resting remainder is deliberately LEFT WORKING under a kill; exits stay armed", () => {
     // entry partial: 20 filled of 66, remainder resting; mark below the stop → the SL must still fire.
+    // Cancelling the remainder would record_canceled the entry row → terminal → invisible to by_intent →
+    // the NEXT tick could not reconstruct the position and the 20 held shares would lose their SL/time-stop
+    // backstop. The remainder's exposure is already committed capital in the preflight accounting.
     const entry = handle({ status: 'partial', sizeMatched: 20 });
     const pos = position({ filledSize: 20, soldSize: 0, entry, tp: null, mark: 0.05 });
     const plan = decideTick(state({ preflight: failedPre, positions: [pos] }));
-    expect(plan.intents.some((i) => i.kind === 'cancel_entry')).toBe(true);
+    expect(plan.intents.some((i) => i.kind === 'cancel_entry')).toBe(false); // remainder NOT cancelled
     const ex = plan.intents.find((i) => i.kind === 'exit_taker') as Extract<Intent, { kind: 'exit_taker' }>;
-    expect(ex.purpose).toBe('stop_loss');
+    expect(ex.purpose).toBe('stop_loss'); // exits still armed — the held shares stay managed
     expect(ex.req.size).toBe(20); // only what is held
   });
 
@@ -526,6 +585,13 @@ describe('assemblePosition — restart resume from ledger rows', () => {
       venueSoldSize: null,
     });
     expect(pos!.soldSize).toBe(40);
+  });
+
+  it('NEW-LOW-1: the degraded flag propagates (and defaults false)', () => {
+    const degraded = assemblePosition({ meta, entry: row(), tp: null, stopLoss: null, timeStop: null, mark: 0.2, venueSoldSize: null, soldTruthDegraded: true });
+    expect(degraded!.soldTruthDegraded).toBe(true);
+    const healthy = assemblePosition({ meta, entry: row(), tp: null, stopLoss: null, timeStop: null, mark: 0.2, venueSoldSize: 0 });
+    expect(healthy!.soldTruthDegraded).toBe(false);
   });
 });
 

@@ -78,10 +78,14 @@ Read from `trade_config`; enforced per placement by the daemon from the `trade_l
 
 **Only ENTRIES are cap/preflight-gated.** Exits (the resting take-profit, the taker stop-loss, the time-stop)
 are NEVER gated — a position must always be able to flatten (the kill + a de-activated console gate new entries
-only, per GO-LIVE §5). **On a live preflight FAIL the daemon additionally CANCELS resting unfilled maker
-entries** — including a partially-filled entry's resting remainder — within one tick (lens MEDIUM-2): a working
-entry is future exposure, and the kill must stop it, not merely stop re-pricing it. Exit management and the TP
-rest keep running throughout.
+only, per GO-LIVE §5). **On a live preflight FAIL the daemon additionally CANCELS FULLY-UNFILLED resting maker
+entries within one tick** (lens MEDIUM-2): a working entry is future exposure, and the kill must stop it, not
+merely stop re-pricing it. **A PARTIALLY-filled entry's resting remainder is deliberately LEFT WORKING under a
+kill** (lens NEW-LOW-2): cancelling it would record the entry row terminal-canceled, which hides it from the
+ledger read the next tick reconstructs positions from — the HELD shares would be orphaned from their
+stop-loss/time-stop backstop. The remainder's exposure is already counted by the preflight as committed capital,
+so cancelling buys little and costs the position's reconstructability. Exit management and the TP rest keep
+running throughout.
 
 ---
 
@@ -181,9 +185,16 @@ regardless of the prod whale-noise pause. A missing webhook never silences a saf
   SELL fills for the token from the venue's trade log (`getTrades` — the same evidence read the startup
   reconcile uses) and floors the position's `soldSize` with it. This is what makes "how much have we already
   sold?" survive rows going terminal-canceled (a lifted-then-cancelled TP, an adjudicated FAK corpse), whose
-  fills are invisible to `bot_order_by_intent` (0082). A venue read outage degrades to the visible-ledger sum
-  (WARN logged) — exits may then be duplicate-blocked one tick, but nothing can silently over-sell: the intent
-  keys + the venue's balance check both stand in the way.
+  fills are invisible to `bot_order_by_intent` (0082).
+- **Exits SELF-PAUSE during a venue-trades outage (lens NEW-LOW-1).** The `getTrades` read is
+  safety-load-bearing, not telemetry: while it is failing for a position's token, `soldSize` may be
+  understated, so the daemon **holds every SELL for that position** — the taker stop-loss/time-stop AND the
+  TP rest — and fires a **CRITICAL `TRADE_BOT_SELL_HOLD` alert every affected tick** (never silent). Why:
+  the over-sell guarantee outranks exit latency — positions are §9R-capped ($10 stake / $25 ceiling), so a
+  few ticks of exit delay is bounded risk, while sizing a SELL from understated accounting and hoping the
+  venue's balance check rejects it is not accounting. An already-resting TP stays working (it was sized when
+  truth was known). Sells resume automatically, correctly sized, on the first healthy read. If the CRITICAL
+  persists, treat it as an incident: check CLOB `/trades` connectivity, then §9.
 - **Venue-dead FAK adjudication (automatic, loud).** A taker exit posts FAK — dead at the venue the moment its
   immediate execution completes. If a FAK exit partial-fills (or fills nothing), its OPEN 'partial'/'placed'
   ledger row would block every re-fire as a silent 'duplicate'. The daemon adjudicates such rows terminal via
@@ -201,9 +212,11 @@ regardless of the prod whale-noise pause. A missing webhook never silences a saf
 ## 9. Incident playbook — kill + drain
 
 1. **Instant kill (halt new exposure):** set the console off. Within one tick the preflight fails (`mode≠'live'`)
-   → new entries stop AND **the daemon itself cancels every resting unfilled maker ENTRY** (including a partial
-   entry's resting remainder — lens MEDIUM-2). Exit management (TP rest / SL / time-stop) keeps running while the
-   process is up, so open positions still flatten on their triggers.
+   → new entries stop AND **the daemon itself cancels every FULLY-UNFILLED resting maker ENTRY** (lens MEDIUM-2).
+   A partially-filled entry's resting remainder is deliberately left working (lens NEW-LOW-2 — cancelling it would
+   orphan the held shares from reconstruction; see §3); cancel it MANUALLY on Polymarket if you want it gone too.
+   Exit management (TP rest / SL / time-stop) keeps running while the process is up, so open positions still
+   flatten on their triggers.
    ```sql
    select public.trade_config_set(p_mode => 'off');
    ```

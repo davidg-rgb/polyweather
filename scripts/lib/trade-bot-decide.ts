@@ -30,10 +30,16 @@
  *   preflight `checks` payload. EXITS (TP rest / SL / time-stop) are NEVER cap- or preflight-gated: a
  *   position must always be able to flatten (the daily-loss kill + a de-activated console only gate NEW
  *   entries, exactly as GO-LIVE-CHECKLIST-OPENING.md §5 requires). When the LIVE preflight FAILS (kill
- *   tripped / console off / window expired), resting UNFILLED maker ENTRIES are additionally CANCELLED —
- *   a working entry is future exposure and must stop within one tick of a kill; reprice_entry is likewise
- *   preflight-gated (lens MEDIUM-2). `off` → the plan is empty. `dry-run` → the caps/preflight gates are
- *   skipped (dry-run rows never count toward live caps, 0082 header) but every strategy gate still applies.
+ *   tripped / console off / window expired), FULLY-UNFILLED resting maker ENTRIES are additionally
+ *   CANCELLED — a working entry is future exposure and must stop within one tick of a kill; reprice_entry
+ *   is likewise preflight-gated (lens MEDIUM-2). A PARTIALLY-filled entry's resting remainder is
+ *   DELIBERATELY LEFT WORKING under a kill (lens NEW-LOW-2): cancelling it would `record_canceled` the
+ *   entry row → terminal → invisible to `bot_order_by_intent` → the NEXT tick could no longer reconstruct
+ *   the position and the HELD shares would lose their stop-loss/time-stop backstop. The remainder's
+ *   exposure is already counted by the preflight as committed capital, so cancelling buys little and
+ *   costs the position's reconstructability — held shares staying managed outranks it. `off` → the plan
+ *   is empty. `dry-run` → the caps/preflight gates are skipped (dry-run rows never count toward live
+ *   caps, 0082 header) but every strategy gate still applies.
  *
  * SOLD-TRUTH ACCOUNTING (lens CRITICAL-1 + LOW-5): `remaining = filledSize − soldSize`, where `soldSize`
  * counts EVERY sell-side fill of the position — the take-profit's, the stop-loss's, AND the time-stop's.
@@ -45,6 +51,16 @@
  * `max(visibleLedgerFills, venueSold)`; dry-run has no venue and its rows never fill, so the visible sum
  * is exact. A fully-covered position plans NOTHING — once the TP has filled everything, neither the
  * stop-loss nor the time-stop can ever fire (the over-sell path is closed).
+ *
+ * DEGRADED-MODE SELL HOLD (lens NEW-LOW-1): the venue trade read is SAFETY-LOAD-BEARING, not telemetry.
+ * While `getTrades` is unavailable for a live position's token (`soldTruthDegraded`), `soldSize` may be
+ * UNDERSTATED (fills on invisible terminal-canceled rows), so NO sell may be sized from it:
+ * `planForPosition` holds the taker exits AND the TP rest for that position this tick (an ALREADY-resting
+ * TP stays — it was sized when truth was known), `decideTick` surfaces a `sell_hold_degraded` skip, and
+ * the daemon fires a CRITICAL `sellHoldAlerts` alert EVERY affected tick — never silent. The over-sell
+ * guarantee outranks exit latency: the position is §9R-capped, and relying on the venue's balance check
+ * to reject an oversized SELL is not accounting. Sells resume, correctly sized, the tick the read
+ * recovers. Dry-run is never degraded (no venue; its rows never fill, so the visible sum is exact).
  *
  * FAK ADJUDICATION (lens MEDIUM-3): a taker exit posts as FAK — venue-dead the instant its immediate
  * execution completes. A partial (or 0-fill, still-'placed') FAK row is therefore a CORPSE holding the
@@ -275,6 +291,13 @@ export interface LivePosition {
    * lost (lens CRITICAL-1/LOW-5). The single source for `remaining = filledSize − soldSize`.
    */
   soldSize: number;
+  /**
+   * true when the venue trade read (`getTrades`) was ATTEMPTED and FAILED for this live position's token
+   * (lens NEW-LOW-1) — `soldSize` may then be UNDERSTATED (invisible terminal-canceled fills), so NO sell
+   * may be sized from it this tick: the taker exits + the TP rest are held and the daemon alerts
+   * CRITICAL. Always false in dry-run (no venue read is applicable; the visible sum is exact).
+   */
+  soldTruthDegraded: boolean;
   /** the CURRENT executable bid — the realizable sell mark (the daemon fetches it live). */
   mark: number | null;
   entry: OrderHandle | null;
@@ -326,6 +349,8 @@ export function assemblePosition(args: {
   mark: number | null;
   /** Σ our SELL trade sizes for this token from venue `getTrades` (live); null = unavailable/dry-run. */
   venueSoldSize?: number | null;
+  /** the venue trade read was attempted and FAILED (live) — sells are held this tick (NEW-LOW-1). */
+  soldTruthDegraded?: boolean;
 }): LivePosition | null {
   const { meta, entry, tp, stopLoss, timeStop, mark } = args;
   if (entry == null) return null;
@@ -344,6 +369,7 @@ export function assemblePosition(args: {
     modelProb: meta.modelProb,
     filledSize: entry.sizeMatched,
     soldSize,
+    soldTruthDegraded: args.soldTruthDegraded === true,
     mark: mark ?? null,
     entry: handleOf(entry),
     tp: handleOf(tp),
@@ -360,8 +386,10 @@ export type Intent =
   | { kind: 'rest_tp'; marketRef: string; req: MakerOrderRequest }
   | { kind: 'reprice_entry'; marketRef: string; oldOrderId: string; oldClientOrderId: string; req: MakerOrderRequest }
   | {
-      /** cancel a resting (un/partially-filled) maker ENTRY — the live-kill "stop new exposure" action
-       *  (lens MEDIUM-2): emitted instead of reprice/hold when the LIVE preflight fails. */
+      /** cancel a FULLY-UNFILLED resting maker ENTRY — the live-kill "stop new exposure" action (lens
+       *  MEDIUM-2): emitted instead of reprice/hold when the LIVE preflight fails. Never emitted for a
+       *  partially-filled entry (NEW-LOW-2 — record_canceled would orphan the held shares from
+       *  reconstruction; see planForPosition). */
       kind: 'cancel_entry';
       marketRef: string;
       orderId: string;
@@ -443,19 +471,26 @@ const cancelEntryIntent = (p: LivePosition, e: OrderHandle & { orderId: string }
 
 /**
  * Manage one open position: exits (never gated) take priority over resting the TP, over the entry window.
- * `entriesBlocked` (live preflight failed): reprice is suppressed and any resting maker ENTRY — including
- * a partially-filled one's unfilled remainder — is CANCELLED (MEDIUM-2: a kill stops new exposure within
- * one tick); exits + the TP rest keep working (they only flatten).
+ * `entriesBlocked` (live preflight failed): reprice is suppressed and a FULLY-UNFILLED resting maker
+ * ENTRY is CANCELLED (MEDIUM-2: a kill stops new exposure within one tick); exits + the TP rest keep
+ * working (they only flatten). A PARTIALLY-filled entry's resting remainder is deliberately NOT cancelled
+ * (NEW-LOW-2): `executor.cancel` would `record_canceled` the entry row → terminal → invisible to
+ * `bot_order_by_intent` → the next tick could not reconstruct the position, orphaning the HELD shares
+ * from their stop-loss/time-stop backstop. Its exposure is already committed capital in the preflight
+ * accounting; reconstructability of the held shares wins. (The evaluated alternative — a venue-only
+ * cancel that skips the ledger write to keep the row visible — was rejected: it re-cancels at the venue
+ * every kill tick, leaves a permanent ledger/venue divergence on an "open" row that is venue-dead, and
+ * inflates the open-exposure read.)
  */
 function planForPosition(p: LivePosition, cfg: DecideCfg, nowMs: number, entriesBlocked: boolean): Intent[] {
   const held = p.filledSize;
   const out: Intent[] = [];
 
-  // (A) NOTHING filled yet — the entry maker order is still working.
+  // (A) NOTHING filled yet — the entry maker order is still working (held == 0 ⇒ fully unfilled).
   if (!(held > 0)) {
     const e = p.entry;
     if (!restingEntry(e)) return out; // dangling ('intent', no orderId) → reconcile owns it; terminal → done
-    if (entriesBlocked) return [cancelEntryIntent(p, e, 'preflight_blocked — kill cancels resting entries')];
+    if (entriesBlocked) return [cancelEntryIntent(p, e, 'preflight_blocked — kill cancels fully-unfilled resting entries')];
     if (e.restingSinceMs == null) return out; // no clock → cannot age the window; hold
     const restMin = (nowMs - e.restingSinceMs) / 60_000;
     if (restMin < cfg.makerFillWindowMin) return out; // within the window → keep resting
@@ -480,16 +515,17 @@ function planForPosition(p: LivePosition, cfg: DecideCfg, nowMs: number, entries
     ];
   }
 
-  // A PARTIALLY-filled entry still rests its unfilled remainder — under a kill, cancel that too (MEDIUM-2).
-  if (entriesBlocked && restingEntry(p.entry)) {
-    out.push(cancelEntryIntent(p, p.entry, 'preflight_blocked — kill cancels the partial entry remainder'));
-  }
-
   // (B) HOLDING `held` shares — manage the exit. `remaining` subtracts EVERY sell-side fill (TP + SL +
   // time-stop, venue-floored — soldSize; lens CRITICAL-1/LOW-5): a fully-filled TP closes the position, a
   // partial TP shrinks what any later stop may sell. A FAK exit re-fires only its unsold remainder.
   const remaining = held - p.soldSize;
   if (!(remaining > 1e-9)) return out; // fully flattened — nothing may sell
+
+  // NEW-LOW-1 — DEGRADED-MODE SELL HOLD: the venue sell-truth read failed, so `remaining` may be
+  // OVERSTATED (invisible terminal-canceled fills). No sell may be sized from it: hold the taker exits
+  // AND the TP rest this tick (an already-resting TP stays — it was sized when truth was known).
+  // decideTick surfaces the skip; the daemon fires a CRITICAL sellHoldAlerts alert every affected tick.
+  if (p.soldTruthDegraded) return out;
 
   const timeStopMs = timeStopMsOf(p, cfg);
   const slStop = stopOf(p.entryPrice, cfg);
@@ -576,9 +612,17 @@ export function decideTick(state: TickState): TickPlan {
 
   // 1 · MANAGE existing positions first (exits are NEVER cap/preflight-gated — a position must always be
   //     able to flatten; the daily-loss kill + a de-activated console gate only NEW entries). Under a live
-  //     kill (entriesBlocked), reprice is suppressed and resting maker entries are CANCELLED (MEDIUM-2).
+  //     kill (entriesBlocked), reprice is suppressed and FULLY-UNFILLED resting entries are CANCELLED
+  //     (MEDIUM-2/NEW-LOW-2). A degraded sell-truth position holds its sells this tick (NEW-LOW-1).
   const positioned = new Set(positions.map((p) => `${p.marketId}|${p.targetDate}`));
   for (const p of positions) {
+    if (p.soldTruthDegraded && p.filledSize - p.soldSize > 1e-9) {
+      skips.push({
+        ref: p.marketId,
+        reason:
+          'sell_hold_degraded — venue sell-truth (getTrades) unavailable; soldSize may be understated, so taker exits + the TP rest are HELD this tick (over-sell guard; the daemon alerts CRITICAL)',
+      });
+    }
     intents.push(...planForPosition(p, cfg, nowMs, entriesBlocked));
   }
 
@@ -658,6 +702,34 @@ export function decideTick(state: TickState): TickPlan {
   }
 
   return { intents, skips };
+}
+
+/**
+ * NEW-LOW-1 — the CRITICAL escalation for the degraded-mode sell hold. PURE: maps every position whose
+ * sells are held this tick (venue sell-truth unavailable + an unsold remainder that WOULD otherwise be
+ * sellable) to a CRITICAL alert. The daemon fires these through `notify` EVERY affected tick — the raw
+ * local channel does not dedupe, so a persisting outage keeps paging until the read recovers (never
+ * silent: exits are paused, the operator must know).
+ */
+export function sellHoldAlerts(positions: LivePosition[]): TradeAlert[] {
+  const out: TradeAlert[] = [];
+  for (const p of positions) {
+    if (!p.soldTruthDegraded) continue;
+    if (!(p.filledSize - p.soldSize > 1e-9)) continue; // fully covered by visible fills — nothing is held back
+    out.push({
+      kind: 'TRADE_BOT_SELL_HOLD',
+      severity: 'CRITICAL',
+      title: `trade-bot: SELLS HELD on ${p.city} ${p.targetDate} (${p.marketId}) — venue sell-truth unavailable`,
+      body:
+        `getTrades for token ${p.tokenId} is failing, so soldSize may be understated (fills on ` +
+        `terminal-canceled rows are invisible to the ledger read). All taker exits + TP rests for this ` +
+        `position are PAUSED until the venue trade read recovers — the over-sell guarantee outranks exit ` +
+        `latency (the position is §9R-capped). Investigate CLOB /trades connectivity now; sells resume ` +
+        `automatically, correctly sized, on the first healthy tick.`,
+      dedupeKey: `trade-bot-sellhold:${p.marketId}`,
+    });
+  }
+  return out;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────

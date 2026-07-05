@@ -77,6 +77,7 @@ import {
   assemblePosition,
   decideTick,
   discoverCandidates,
+  sellHoldAlerts,
   toDecideCfg,
   type DecideCfg,
   type DiscoveredCandidate,
@@ -238,13 +239,16 @@ async function markFor(d: Daemon, tokenId: string, size: number, fallback: numbe
  * Venue sell truth for one token (live only): Σ our SELL trade sizes from `getTrades` — the same evidence
  * read the startup reconcile uses. This floors the position's `soldSize` so fills whose ledger rows have
  * gone terminal-canceled (a lifted-then-cancelled TP, an adjudicated FAK corpse — invisible to
- * `bot_order_by_intent`) are never lost (lens CRITICAL-1/LOW-5). Failed venue trades are excluded. A read
- * outage returns null (WARN) — assembly then falls back to the visible-ledger sum, which can only
- * UNDER-count sold (exits may re-fire and be duplicate-blocked / venue-balance-rejected, never silently
- * skipped) until the read recovers.
+ * `bot_order_by_intent`) are never lost (lens CRITICAL-1/LOW-5). Failed venue trades are excluded.
+ *
+ * The read is SAFETY-LOAD-BEARING (lens NEW-LOW-1): on a live read outage it returns
+ * `{ sold: null, degraded: true }` — the position's sells are then HELD for the tick (the decide spine
+ * refuses to size any SELL from a possibly-understated soldSize) and the daemon fires a CRITICAL
+ * `sellHoldAlerts` alert. dry-run: `{ sold: null, degraded: false }` — no venue read is applicable and
+ * dry-run rows never fill, so the visible ledger sum is exact.
  */
-async function venueSoldFor(d: Daemon, tokenId: string): Promise<number | null> {
-  if (d.mode !== 'live') return null; // dry-run rows never fill — the visible sum (0) is exact
+async function venueSoldFor(d: Daemon, tokenId: string): Promise<{ sold: number | null; degraded: boolean }> {
+  if (d.mode !== 'live') return { sold: null, degraded: false }; // dry-run rows never fill — visible sum exact
   try {
     const trades = parseTrades(await d.client.getTrades({ asset_id: tokenId }));
     let sold = 0;
@@ -253,10 +257,10 @@ async function venueSoldFor(d: Daemon, tokenId: string): Promise<number | null> 
       if (t.status.toUpperCase() === 'FAILED') continue;
       sold += t.size;
     }
-    return sold;
+    return { sold, degraded: false };
   } catch (e) {
     log({ msg: 'trade-bot.venue_sold_failed', level: 'WARN', tokenId, error: redactText(e instanceof Error ? e.message : String(e)) });
-    return null;
+    return { sold: null, degraded: true };
   }
 }
 
@@ -287,7 +291,7 @@ async function reconstructPositions(
     ts = await refreshFill(d, ts);
 
     const mark = await markFor(d, meta.tokenId, entry.sizeMatched || entry.size, meta.execBidCapture);
-    const venueSoldSize = await venueSoldFor(d, meta.tokenId);
+    const venueSold = await venueSoldFor(d, meta.tokenId);
     const pos = assemblePosition({
       meta: {
         marketId: meta.marketId,
@@ -303,7 +307,8 @@ async function reconstructPositions(
       stopLoss: sl,
       timeStop: ts,
       mark,
-      venueSoldSize,
+      venueSoldSize: venueSold.sold,
+      soldTruthDegraded: venueSold.degraded,
     });
     if (pos) positions.push(pos);
   }
@@ -341,6 +346,10 @@ async function tick(d: Daemon, botCitiesFallback: string[], minOrderSizeShares: 
   const candidates: DiscoveredCandidate[] = discoverCandidates(captures, cfgFull, now);
   const metaByMarket = buildEventMeta(captures);
   const positions = await reconstructPositions(d, metaByMarket);
+
+  // NEW-LOW-1 — the degraded-mode sell hold is escalated CRITICAL every affected tick (never silent):
+  // a position whose venue sell-truth read failed has its taker exits + TP rest paused this tick.
+  for (const a of sellHoldAlerts(positions)) await d.notify(a);
 
   // preflight interlock — LIVE only (a pure read; dry-run/off never post live so never gate on it).
   let preflight: TradePreflight | null = null;
