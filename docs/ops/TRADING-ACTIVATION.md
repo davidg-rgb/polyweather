@@ -139,6 +139,22 @@ prints) — the smoke deliberately precedes the paper-gate PASS. **The brief's "
 venue floor (≥ 5 shares AND ≥ $1 notional, F12-r10)** — a literal 1-share order is rejected and cannot rest, so
 it would not prove the resting write path.
 
+**PowerShell form (the operator's Windows console — the venue is reached directly from the machine, so a
+Supabase/pg_net outage does NOT block this):**
+
+```powershell
+cd "D:\Second Brain\03 Projects\Polyweather"
+$env:TRADE_MODE = "live"
+pnpm tsx scripts/trade-smoke.ts --live-smoke --i-know-no-preflight
+$env:TRADE_MODE = "dry-run"   # reset IMMEDIATELY after, same terminal
+```
+
+`--i-know-no-preflight` is required until the forward paper gate PASSes (trade_live_preflight() cannot PASS
+before then by design); it bypasses ONLY the preflight for this one place-and-cancel probe and prints a loud
+WARN — expected. Success signature: [1] creds derived · [2] funder recognized · [3] redacted payload · [4]
+order posted far below market then `canceled OK`, 0 open orders left. Nothing fills, nothing costs (CLOB
+place/cancel is gasless).
+
 ---
 
 ## 6. Daily-loss kill semantics (realized-at-sell, UTC window)
