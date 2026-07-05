@@ -130,7 +130,8 @@ The optional write-path proof (operator-run only, **costs nothing**):
 TRADE_MODE=live pnpm tsx scripts/trade-smoke.ts --live-smoke
 ```
 
-`--live-smoke` places ONE resting `post_only` maker BUY FAR below market and cancels it immediately (CLOB
+`--live-smoke` places ONE resting maker BUY FAR below market (maker-ness is price-enforced — the pinned
+clob-client v4 has no `post_only` flag) and cancels it immediately (CLOB
 place/cancel is gasless; the order never fills). **`TRADE_MODE=live` is ALWAYS required — the env mode gate is
 never bypassable** (lens LOW-4). On top of that the probe needs `trade_live_preflight()` to PASS, OR
 `--i-know-no-preflight`, which bypasses **only the preflight** for that cancel-immediately probe (a loud WARN
@@ -181,9 +182,13 @@ regardless of the prod whale-noise pause. A missing webhook never silences a saf
   ```
   Cross-check the `order_id` against Polymarket; cancel/settle manually as needed. Do NOT restart into a live
   tick until the row is resolved.
-- **Sold-truth accounting (venue trades as the sell floor).** Per position each tick, the daemon sums our
+- **Sold-truth accounting (venue trades as the sell floor).** Per position each tick, the daemon sums OUR
   SELL fills for the token from the venue's trade log (`getTrades` — the same evidence read the startup
-  reconcile uses) and floors the position's `soldSize` with it. This is what makes "how much have we already
+  reconcile uses) and floors the position's `soldSize` with it. The trade record is **TAKER-centric**
+  (verified against the installed clob-client v4.22.8): the top-level `side`/`size` describe the TAKER
+  order; `trader_side` says which side we were, and our maker fills (the strategy's dominant case) are
+  `maker_orders[]` legs attributed by our on-chain maker address. An unattributable maker SELL leg
+  degrades the read (sells held) rather than guessing. This is what makes "how much have we already
   sold?" survive rows going terminal-canceled (a lifted-then-cancelled TP, an adjudicated FAK corpse), whose
   fills are invisible to `bot_order_by_intent` (0082). A read counts as trustworthy ONLY when the page is
   COMPLETE: a cursor-bearing / at-page-limit response (`tradesResponseTruncated`, §11.1) is treated as

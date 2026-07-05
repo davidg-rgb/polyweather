@@ -14,7 +14,23 @@ import { assemblePosition, sellHoldAlerts } from './lib/trade-bot-decide.ts';
 import { refreshFill, venueSoldFor, type Daemon } from './trade-bot.ts';
 
 // ── fixtures ────────────────────────────────────────────────────────────────────────────────────────
-const sell = (size: number, status = 'CONFIRMED') => ({ price: '0.2', side: 'SELL', size: String(size), asset_id: 'tokA', status });
+// OUR taker-perspective SELL (an FAK stop/time-stop fill): top-level side/size ARE ours.
+const sell = (size: number, status = 'CONFIRMED') => ({ price: '0.2', side: 'SELL', size: String(size), asset_id: 'tokA', status, trader_side: 'TAKER', taker_order_id: '0xT', maker_orders: [] });
+// a maker-perspective trade (the venue record is TAKER-centric: top-level side = the TAKER's; our fill is a leg).
+const makerTrade = (
+  takerSide: 'BUY' | 'SELL',
+  legs: Array<{ side: 'BUY' | 'SELL'; size: number; addr?: string; orderId?: string; tokenId?: string }>,
+  takerSize = 50,
+) => ({
+  price: '0.2',
+  side: takerSide,
+  size: String(takerSize),
+  asset_id: 'tokA',
+  status: 'CONFIRMED',
+  trader_side: 'MAKER',
+  taker_order_id: '0xT',
+  maker_orders: legs.map((l, i) => ({ order_id: l.orderId ?? `0xM${i}`, side: l.side, price: '0.2', matched_amount: String(l.size), maker_address: l.addr ?? '0xUS', asset_id: l.tokenId ?? 'tokA' })),
+});
 
 function daemon(over: Partial<Daemon> = {}): { d: Daemon; alerts: TradeAlert[] } {
   const alerts: TradeAlert[] = [];
@@ -26,6 +42,8 @@ function daemon(over: Partial<Daemon> = {}): { d: Daemon; alerts: TradeAlert[] }
     executor: {} as MakerExecutor,
     client: {} as MakerClobClientish,
     notify,
+    address: '0xUS',
+    warnedDust: new Set(),
     ...over,
   };
   return { d, alerts };
@@ -84,6 +102,50 @@ describe('venueSoldFor — §11.1 truncation is degraded (over-sell backstop)', 
     const { d } = daemon({ mode: 'dry-run', client: clientWithTrades(spy) });
     expect(await venueSoldFor(d, 'tokA')).toEqual({ sold: null, degraded: false });
     expect(spy).not.toHaveBeenCalled();
+  });
+});
+
+// ── VENUE TAKER-CENTRIC SEMANTICS — the CRITICAL side-inversion falsifiers ────────────────────────────
+describe('venueSoldFor — taker-centric trade records (trader_side + maker_orders resolve OUR side/size)', () => {
+  it('FALSIFIER: our filled maker BUY entry (top-level side=SELL — the taker sold into our bid) counts ZERO sold — the position must NOT be marked flattened', async () => {
+    const { d } = daemon({ client: clientWithTrades(async () => [makerTrade('SELL', [{ side: 'BUY', size: 20 }], 20)]) });
+    expect(await venueSoldFor(d, 'tokA')).toEqual({ sold: 0, degraded: false });
+  });
+
+  it('FALSIFIER: our maker TP SELL lifted by a taker BUY (top-level side=BUY) IS counted — at the LEG matched_amount, not the taker total', async () => {
+    const { d } = daemon({ client: clientWithTrades(async () => [makerTrade('BUY', [{ side: 'SELL', size: 12 }], 50)]) });
+    expect(await venueSoldFor(d, 'tokA')).toEqual({ sold: 12, degraded: false });
+  });
+
+  it('mixed history: maker entry fill + maker TP fill + taker FAK sell sum to exactly OUR sells', async () => {
+    const { d } = daemon({
+      client: clientWithTrades(async () => [
+        makerTrade('SELL', [{ side: 'BUY', size: 20 }], 20), // entry fill — not sold
+        makerTrade('BUY', [{ side: 'SELL', size: 12 }], 40), // TP fill — sold 12
+        sell(6), // taker stop remainder — sold 6
+      ]),
+    });
+    expect(await venueSoldFor(d, 'tokA')).toEqual({ sold: 18, degraded: false });
+  });
+
+  it("a SIBLING maker's SELL leg in the same taker order (different maker_address) is NOT ours", async () => {
+    const { d } = daemon({ client: clientWithTrades(async () => [makerTrade('BUY', [{ side: 'SELL', size: 12 }, { side: 'SELL', size: 40, addr: '0xTHEM' }], 52)]) });
+    expect(await venueSoldFor(d, 'tokA')).toEqual({ sold: 12, degraded: false });
+  });
+
+  it('secondary attribution: a known SELL order id counts even when addresses are unavailable', async () => {
+    const { d } = daemon({ address: null, client: clientWithTrades(async () => [makerTrade('BUY', [{ side: 'SELL', size: 12, addr: '', orderId: '0xTP' }])]) });
+    expect(await venueSoldFor(d, 'tokA', new Set(['0xTP']))).toEqual({ sold: 12, degraded: false });
+  });
+
+  it('an UNATTRIBUTABLE maker SELL leg degrades the read (hold sells) — never guessed in either direction', async () => {
+    const { d } = daemon({ address: null, client: clientWithTrades(async () => [makerTrade('BUY', [{ side: 'SELL', size: 12, addr: '' }])]) });
+    expect(await venueSoldFor(d, 'tokA')).toEqual({ sold: null, degraded: true });
+  });
+
+  it('a trades page missing trader_side (shape drift) degrades via the fail-loud parse — never silently inverted', async () => {
+    const { d } = daemon({ client: clientWithTrades(async () => [{ price: '0.2', side: 'SELL', size: '20', asset_id: 'tokA', status: 'CONFIRMED' }]) });
+    expect(await venueSoldFor(d, 'tokA')).toEqual({ sold: null, degraded: true });
   });
 
   it('END-TO-END: a truncated page drives the SAME hold + CRITICAL path as a throw; a short page does NOT', async () => {

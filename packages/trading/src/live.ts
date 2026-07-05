@@ -26,6 +26,7 @@ import {
   redactText,
   resolveTradeMode,
   takerLimitPrice,
+  tradeCouldBeOurFill,
   tradesResponseTruncated,
 } from './order-intent.ts';
 import { rpcOrderLedger } from './order-ledger.ts';
@@ -54,14 +55,17 @@ export interface ClobClientish {
     args: { tokenID: string; price: number; size: number; side: 'BUY' | 'SELL' },
     options: { tickSize: number; negRisk: boolean },
   ): Promise<unknown>;
-  /** `postOnly` is the native 3rd positional bool (GTC/GTD-only) — research report §9.2.
+  /** ⚠ the 3rd positional in the PINNED @polymarket/clob-client@4.22.8 is `deferExec` (deferred
+   *  settlement), NOT a post-only flag — v4 has NO post_only anywhere in its dist (verified; the
+   *  research report's §9.2 post_only claim was resolved against the different `clob-client-v2`
+   *  package). NEVER pass `true` here: maker-ness is enforced entirely BY PRICE (`makerLimitPrice`).
    *  The response's `success`/`errorMsg` fields distinguish a CLEAN VENUE REJECTION (success=false,
    *  request processed, no order created → safe to free the intent) from a transport throw or a
    *  shapeless response (order state UNKNOWN → the intent must be held for reconcile — HIGH-A). */
   postOrder(
     order: unknown,
     orderType: OrderType,
-    postOnly?: boolean,
+    deferExec?: boolean,
   ): Promise<{ orderID?: string; success?: boolean; errorMsg?: string }>;
   getOrder(orderID: string): Promise<{
     status?: string;
@@ -142,6 +146,9 @@ async function bootstrapClobClient(): Promise<{
   creds: unknown;
   sigType: number;
   funderSet: boolean;
+  /** the on-chain maker/funder address our orders carry (funder when set, else the signer address) —
+   *  PUBLIC info (it is on every order we post), needed to attribute maker legs in venue trade records. */
+  address: string | null;
 }> {
   const key = envVar('POLY_PRIVATE_KEY');
   if (!key) {
@@ -153,7 +160,7 @@ async function bootstrapClobClient(): Promise<{
   const isDeno = (globalThis as { Deno?: unknown }).Deno != null;
   const ethersSpec = isDeno ? 'npm:ethers@5' : 'ethers';
   const clobSpec = isDeno ? 'npm:@polymarket/clob-client@4' : '@polymarket/clob-client';
-  const { Wallet } = (await import(ethersSpec)) as { Wallet: new (k: string) => unknown };
+  const { Wallet } = (await import(ethersSpec)) as { Wallet: new (k: string) => { address?: string } };
   const { ClobClient } = (await import(clobSpec)) as {
     ClobClient: new (host: string, chainId: number, signer: unknown, creds?: unknown, sigType?: number, funder?: string) => MakerClobClientish & {
       createOrDeriveApiKey(): Promise<unknown>;
@@ -166,11 +173,26 @@ async function bootstrapClobClient(): Promise<{
   // The 400-fallback inside this call is EXPECTED (derive→create) — see suppressConsoleDuring.
   const creds = await suppressConsoleDuring(() => bootstrap.createOrDeriveApiKey());
   const client = new ClobClient('https://clob.polymarket.com', 137, signer, creds, sigType, funder);
-  return { client, creds, sigType, funderSet: funder != null && funder !== '' };
+  const funderSet = funder != null && funder !== '';
+  return { client, creds, sigType, funderSet, address: (funderSet ? funder : signer.address) ?? null };
 }
 
 export async function createClobClient(): Promise<MakerClobClientish> {
   return (await bootstrapClobClient()).client;
+}
+
+/**
+ * `createClobClient` + the trading identity the venue's TAKER-centric trade records need: our on-chain
+ * maker/funder address (POLY_FUNDER_ADDRESS when set, else the signer's address). The address is PUBLIC
+ * (it rides on every order we post) — the key itself never leaves this file (§15). The daemon threads it
+ * into the sell-truth read so OUR maker legs in `getTrades` can be told apart from sibling makers'.
+ */
+export async function createClobClientWithIdentity(): Promise<{
+  client: MakerClobClientish;
+  address: string | null;
+}> {
+  const b = await bootstrapClobClient();
+  return { client: b.client, address: b.address };
 }
 
 /**
@@ -279,8 +301,8 @@ export class LiveExecutor implements TradeExecutor {
 // adjudication).
 //
 // Extends the dormant taker rail above with: (1) MAKER placement (resting GTC/GTD, maker-ness enforced
-// BY PRICE — BUY strictly below best ask, SELL strictly above best bid — with the native `post_only`
-// flag passed as defense-in-depth); (2) the order lifecycle (cancel / cancel-all-for-market / list /
+// BY PRICE — BUY strictly below best ask, SELL strictly above best bid; the pinned clob-client v4 has
+// NO post_only flag, so price is the ONLY guarantee); (2) the order lifecycle (cancel / cancel-all-for-market / list /
 // fill-poll with partial-fill accounting / cancel-then-repost reprice / startup reconcile); (3)
 // MODE-SCOPED DB-ledger idempotency — a retry or crash-restart NEVER double-places, and a failure
 // AFTER a successful post NEVER frees the intent key: the row stays 'placed' and a needs-reconcile
@@ -335,8 +357,9 @@ export class MakerExecutor {
 
   /**
    * Post a resting MAKER order for the tuned strategy (entry or take-profit). The limit is re-priced to
-   * sit strictly inside the spread (never crosses → never pays taker fees), then posted GTC/GTD with
-   * `post_only`. Idempotent per (mode, market|side|purpose|date): an OPEN intent is never re-placed.
+   * sit strictly inside the spread (never crosses → never pays taker fees), then posted GTC/GTD — the
+   * price IS the maker guarantee (v4 SDK has no post_only; the result's `postOnly` field is a posture
+   * marker only). Idempotent per (mode, market|side|purpose|date): an OPEN intent is never re-placed.
    */
   async place(req: MakerOrderRequest): Promise<OrderPlacementResult> {
     const mode = this.mode;
@@ -397,14 +420,13 @@ export class MakerExecutor {
       return { ...base, status: 'dry_run', clientOrderId, orderId: syntheticId, limitPrice: priced.price, sizeMatched: 0 };
     }
 
-    return this.postAndRecord(client, order, clientOrderId, { ...base, clientOrderId, limitPrice: priced.price }, orderType, true, req.size, `${req.marketId} ${req.side} ${req.purpose}`);
+    return this.postAndRecord(client, order, clientOrderId, { ...base, clientOrderId, limitPrice: priced.price }, orderType, req.size, `${req.marketId} ${req.side} ${req.purpose}`);
   }
 
   /**
    * Post a TAKER exit (FAK marketable-limit with a worst-price slippage guard) — the stop-loss /
    * time-stop leg. FAK takes whatever depth exists and cancels the rest (never hangs a resting order in
-   * a thin weather book — research report §1). Idempotent through the same ledger; `post_only` is never
-   * set (the venue rejects it on FOK/FAK).
+   * a thin weather book — research report §1). Idempotent through the same ledger.
    */
   async placeTaker(req: TakerOrderRequest): Promise<OrderPlacementResult> {
     const mode = this.mode;
@@ -441,7 +463,7 @@ export class MakerExecutor {
       this.log({ msg: 'taker.dry_run', intentKey, clientOrderId, tokenId: req.tokenId, side: req.side, purpose: req.purpose, orderType: 'FAK', price, size: req.size, payload: redactOrderPayload(order) });
       return { ...base, status: 'dry_run', clientOrderId, orderId: syntheticId, limitPrice: price, sizeMatched: 0 };
     }
-    return this.postAndRecord(client, order, clientOrderId, { ...base, clientOrderId, limitPrice: price }, 'FAK', false, req.size, `${req.marketId} ${req.side} ${req.purpose}`);
+    return this.postAndRecord(client, order, clientOrderId, { ...base, clientOrderId, limitPrice: price }, 'FAK', req.size, `${req.marketId} ${req.side} ${req.purpose}`);
   }
 
   /**
@@ -469,7 +491,6 @@ export class MakerExecutor {
     clientOrderId: string,
     result: Omit<OrderPlacementResult, 'status' | 'orderId' | 'sizeMatched'> & { clientOrderId: string },
     orderType: OrderType,
-    postOnly: boolean,
     requestedSize: number,
     label: string,
   ): Promise<OrderPlacementResult> {
@@ -477,7 +498,9 @@ export class MakerExecutor {
     let postAttempted = false;
     try {
       postAttempted = true;
-      const posted = await client.postOrder(order, orderType, postOnly);
+      // ⚠ NEVER a 3rd positional: in the pinned v4 SDK it is `deferExec` (an unintended venue flag),
+      // NOT post_only — which v4 does not support at all. Maker-ness is enforced by price upstream.
+      const posted = await client.postOrder(order, orderType);
       orderId = posted?.orderID;
       if (!orderId) {
         if (posted?.success === false) {
@@ -595,19 +618,48 @@ export class MakerExecutor {
     }
   }
 
-  /** Cancel one resting order (live only; dry-run/off are no-ops — no real order exists). */
+  /**
+   * Cancel one resting order (live only; dry-run/off are no-ops — no real order exists).
+   *
+   * RACED-FILL ADJUDICATION: a venue cancel can race a fill even when it reports `allCanceled` (the
+   * fill landed in the caller's poll→cancel window; the venue then cancels only the remainder). So the
+   * post-cancel state is ALWAYS polled before any ledger transition (the same discipline `reprice`
+   * uses), and the poll's cumulative matched decides it:
+   *
+   *   matched == 0        → record_canceled (the key frees) — the previous behavior, now PROVEN safe.
+   *   0 < matched < size  → record_fill('partial') and NO record_canceled: the row stays VISIBLE to
+   *                         `bot_order_by_intent`, so the raced fill survives into next-tick position
+   *                         reconstruction (entry BUYs have NO venue getTrades floor — hiding the row
+   *                         would orphan the held shares from all TP/stop/time-stop management).
+   *   matched >= size     → record_fill('filled') (terminal-but-blocking) — the intent SUCCEEDED.
+   *
+   * The poll result is surfaced as `CancelResult.sizeMatched` so callers sizing a follow-up SELL
+   * (the TP-cancel → taker-exit path) can re-derive `remaining` from fresh truth instead of the
+   * stale pre-cancel read. A poll THROW propagates (no ledger transition — the row stays open and the
+   * next tick's fill-poll/retry re-adjudicates); a not-fully-canceled response returns unpolled as
+   * before (the caller aborts; nothing was freed).
+   */
   async cancel(orderId: string, clientOrderId?: string): Promise<CancelResult> {
     if (this.mode !== 'live') {
-      return { requested: [orderId], canceled: [orderId], notCanceled: {}, allCanceled: true };
+      return { requested: [orderId], canceled: [orderId], notCanceled: {}, allCanceled: true, sizeMatched: 0 };
     }
     const client = await this.deps.client();
     const res = parseCancelResult(await client.cancelOrder({ orderID: orderId }), [orderId]);
-    if (clientOrderId && res.allCanceled) {
-      await this.ledgerWriteOrAlert('record_canceled', clientOrderId, orderId, () =>
-        this.ledger.recordCanceled(clientOrderId),
+    if (!clientOrderId || !res.allCanceled) return res;
+
+    const poll = parseOrderFillPoll(await client.getOrder(orderId), orderId);
+    const matched = poll.sizeMatched;
+    if (matched > 0) {
+      await this.ledgerWriteOrAlert('record_fill (cancel raced a fill)', clientOrderId, orderId, () =>
+        this.ledger.recordFill(clientOrderId, matched, poll.avgPrice ?? 0, poll.filled ? 'filled' : 'partial'),
       );
+      // Deliberately NO record_canceled: the row must stay visible so the fill is never orphaned.
+      return { ...res, sizeMatched: matched };
     }
-    return res;
+    await this.ledgerWriteOrAlert('record_canceled', clientOrderId, orderId, () =>
+      this.ledger.recordCanceled(clientOrderId),
+    );
+    return { ...res, sizeMatched: 0 };
   }
 
   /** Cancel every resting order on a market (the flatten/kill primitive; live only). */
@@ -648,13 +700,19 @@ export class MakerExecutor {
    *   3. If the cancel failed AND the order is still open at the venue (e.g. rate-limited cancel), the
    *      reprice ABORTS with no ledger change — freeing/reposting beside a live resting order would
    *      double-place.
-   *   4. Crash-safety ordering (why free-then-place is safe): fills are recorded, THEN the old row is
-   *      freed (recordCanceled — preserves size_matched), THEN the remainder is placed. At every crash
-   *      point at most ONE live resting order exists for the intent: before the venue cancel there is
-   *      only the old order; between cancel and recordCanceled the venue holds NO resting order and the
-   *      key is still blocked (a re-place returns 'duplicate'; a follow-up reprice re-runs the
-   *      transition idempotently); between recordCanceled and place() the key is free but the venue is
-   *      empty — a crash-restart place() creates exactly one new order. The double-place shape
+   *   4. A raced fill (full OR partial) keeps the old row VISIBLE: full → recordFill('filled')
+   *      (terminal-but-blocking); partial → recordFill('partial') and NO recordCanceled/repost — the
+   *      remainder is abandoned. `bot_order_by_intent` hides terminal canceled rows and entry BUYs have
+   *      no venue getTrades floor, so record_canceled-ing a filled entry row would orphan the held
+   *      shares from all next-tick position management (no TP/stop/time-stop). Only a PROVEN-unfilled
+   *      (matched == 0) old order is freed and its full size reposted.
+   *   5. Crash-safety ordering on the matched==0 path (why free-then-place is safe): the old row is
+   *      freed (recordCanceled), THEN the remainder is placed. At every crash point at most ONE live
+   *      resting order exists for the intent: before the venue cancel there is only the old order;
+   *      between cancel and recordCanceled the venue holds NO resting order and the key is still
+   *      blocked (a re-place returns 'duplicate'; a follow-up reprice re-runs the transition
+   *      idempotently); between recordCanceled and place() the key is free but the venue is empty — a
+   *      crash-restart place() creates exactly one new order. The double-place shape
    *      (place-before-free) is unreachable: reserveIntent would return 'exists'.
    *
    * Non-live: dry-run frees the old dry-run row + re-places (ledger-only, venue untouched); off is a no-op.
@@ -733,13 +791,23 @@ export class MakerExecutor {
       return { cancel, placed: rejected('old order fully filled during reprice — nothing to repost', matched, 0) };
     }
     if (matched > 0) {
-      // Book the partial BEFORE freeing so the accounting survives the transition (contract:
-      // bot_order_record_canceled preserves size_matched).
+      // The cancel raced a PARTIAL fill. Book it and STOP — no record_canceled, no repost: freeing the
+      // row would hide it from `bot_order_by_intent` (0082 filters terminal canceled/failed), and an
+      // entry BUY has NO venue getTrades floor, so the raced shares would vanish from next-tick position
+      // reconstruction — held at the wallet with no TP/stop-loss/time-stop ever sized for them (and, in
+      // the below-min-remainder case, the whole position would disappear). The row stays 'partial'
+      // (visible, key-blocking — a re-place is 'duplicate'); the venue holds no resting order, so the
+      // unfilled remainder is deliberately ABANDONED: the held shares' manageability outranks re-pegging
+      // the rest. Mirrors the full-fill branch's row-stays semantics.
       await this.ledgerWriteOrAlert('record_fill (reprice, partial)', oldClientOrderId, oldOrderId, () =>
         this.ledger.recordFill(oldClientOrderId, matched, poll.avgPrice ?? oldRow?.price ?? 0, 'partial'),
       );
+      return {
+        cancel,
+        placed: rejected('old order partially filled during reprice — row kept partial (held shares stay reconstructable); remainder not reposted', matched, 0),
+      };
     }
-    // Free the key ONLY now: the venue holds no resting order for this intent (canceled/terminal above).
+    // Free the key ONLY now: the venue holds no resting order AND nothing filled (matched == 0).
     await this.ledgerWriteOrAlert('record_canceled (reprice)', oldClientOrderId, oldOrderId, () =>
       this.ledger.recordCanceled(oldClientOrderId),
     );
@@ -759,8 +827,9 @@ export class MakerExecutor {
    *   adopt — exactly ONE venue open order matches HEURISTICALLY (side exact, price within one tick,
    *           original size exact — there is NO server-side client-order-id on the CLOB, so identity
    *           can only be inferred from what we know we sent) → recordPlaced(venue orderId).
-   *   freed — NO open order matches AND the token's recent trades show no same-side fill at our price
-   *           → confirmed never posted → the key is freed (recordFailed).
+   *   freed — NO open order matches AND the token's recent trades show no fill that could be ours at
+   *           our side/price (perspective-aware: taker top-level OR any maker leg — the venue trade
+   *           record is taker-centric) → confirmed never posted → the key is freed (recordFailed).
    *   held  — ANY ambiguity (multiple candidates, or a matching trade that could be our fill, or the
    *           evidence reads themselves fail) → the row stays non-terminal + a WARN alert. A key is
    *           NEVER freed on ambiguity.
@@ -823,11 +892,15 @@ export class MakerExecutor {
           continue;
         }
         const trades = parseTrades(rawTrades);
-        const tradeHit = trades.some(
-          (t) => t.side.toUpperCase() === row.side && Math.abs(t.price - row.price) <= tick + 1e-9,
-        );
+        // PERSPECTIVE-AWARE match (the venue trade record is TAKER-centric): a crash-dangling MAKER
+        // order that posted-and-filled arrives as a trade whose TOP-LEVEL side is the TAKER's (the
+        // opposite of ours) with OUR fill as a maker leg — the naive `t.side === row.side` check would
+        // read it as no-match and FREE a filled order's key → double-place. `tradeCouldBeOurFill`
+        // checks the top-level side/price on taker-perspective trades and every maker LEG's own
+        // side/price on maker-perspective ones (over-matching a sibling's leg only HOLDS — safe).
+        const tradeHit = trades.some((t) => tradeCouldBeOurFill(t, row, tick));
         if (tradeHit) {
-          await held('no open order, but a recent same-side trade at our price could be our fill');
+          await held('no open order, but a recent trade matching our side/price (taker top-level or a maker leg) could be our fill');
           continue;
         }
         await this.ledger.recordFailed(row.clientOrderId, 'reconcile: confirmed never posted (no open order, no matching trade)');

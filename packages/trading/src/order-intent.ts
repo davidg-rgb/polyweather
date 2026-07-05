@@ -5,8 +5,10 @@
  *
  * The maker-price rule (deliverable #1): a resting BUY must sit STRICTLY BELOW the best ask and a
  * resting SELL STRICTLY ABOVE the best bid, snapped to the tick grid — so the order can never cross
- * and pay taker fees, independent of any SDK `post_only` flag. (`post_only` is verified native and IS
- * passed as defense-in-depth — research/REPORT-clob-bracket-execution.md §9.2 — but price is the guarantee.)
+ * and pay taker fees. Price is the ONLY maker guarantee: the pinned `@polymarket/clob-client@4.22.8`
+ * has NO post_only flag anywhere (its `postOrder` 3rd positional is `deferExec` — verified against the
+ * installed dist; the research report's §9.2 post_only claim was resolved against the different
+ * `clob-client-v2` package and does NOT apply to v4).
  */
 import { ClobShapeError, normalizeBook, type RawClobBook } from '@weather-edge/core';
 import type {
@@ -19,6 +21,7 @@ import type {
   OrderSide,
   TradeMode,
   VenueTrade,
+  VenueTradeMakerLeg,
 } from './types.ts';
 
 const round6 = (x: number): number => Math.round(x * 1e6) / 1e6;
@@ -257,6 +260,25 @@ export function tradesResponseTruncated(raw: unknown): boolean {
   return arr != null && arr.length >= CLOB_TRADES_PAGE_LIMIT;
 }
 
+const mapMakerLeg = (v: unknown, idx: number): VenueTradeMakerLeg => {
+  const m = asRecord(v);
+  const side = m['side'];
+  const price = strictNum(m['price'], 'price', `trades.maker_orders[${idx}]`);
+  const size = strictNum(m['matched_amount'] ?? m['matchedAmount'] ?? m['size'], 'matched_amount', `trades.maker_orders[${idx}]`);
+  // FAIL-LOUD: a maker leg with no side/size could hide OUR fill — sell-truth degrades, reconcile holds.
+  if (typeof side !== 'string' || side.length === 0 || price === null || size === null) {
+    throw new ClobShapeError(`trades maker_orders element missing side/price/matched_amount: ${JSON.stringify(v).slice(0, 80)}`);
+  }
+  return {
+    orderId: String(m['order_id'] ?? m['orderID'] ?? m['id'] ?? ''),
+    side,
+    price,
+    size,
+    makerAddress: String(m['maker_address'] ?? m['makerAddress'] ?? ''),
+    tokenId: String(m['asset_id'] ?? m['tokenID'] ?? m['token_id'] ?? ''),
+  };
+};
+
 /**
  * Parse a raw `getTrades` response (array, or `{trades:[…]}`/`{data:[…]}`/`{history:[…]}`) into
  * VenueTrade[]. Same fail-loud idiom as parseOpenOrders: reconcile uses a trades read as the LAST
@@ -264,6 +286,13 @@ export function tradesResponseTruncated(raw: unknown): boolean {
  * "no trades" (which would free a key whose order may have filled). Page COMPLETENESS is a separate
  * concern — a well-formed but truncated page parses fine here; `tradesResponseTruncated` (§11.1) is what
  * flags it so the sell-truth read degrades instead of under-counting.
+ *
+ * ⚠ VENUE SEMANTICS (verified against the installed @polymarket/clob-client@4.22.8 Trade type): the
+ * record is TAKER-centric — top-level `side`/`size`/`price` describe the TAKER order; `trader_side`
+ * says which side WE were; `maker_orders[]` carries the per-leg maker fills (own side, own
+ * `matched_amount`, own maker_address). For this maker-first strategy nearly every fill of ours is a
+ * MAKER leg, so a missing/unrecognized `trader_side` FAILS LOUD — coercing it would invert our side
+ * attribution (a filled maker BUY entry arrives as a side='SELL' trade).
  */
 export function parseTrades(raw: unknown): VenueTrade[] {
   const arr = extractTradesArray(raw);
@@ -279,14 +308,101 @@ export function parseTrades(raw: unknown): VenueTrade[] {
     if (price === null || typeof side !== 'string') {
       throw new ClobShapeError(`trades element missing price/side: ${JSON.stringify(v).slice(0, 80)}`);
     }
+    const traderSide = String(t['trader_side'] ?? t['traderSide'] ?? '').toUpperCase();
+    if (traderSide !== 'TAKER' && traderSide !== 'MAKER') {
+      throw new ClobShapeError(`trades element missing/unrecognized trader_side: ${JSON.stringify(v).slice(0, 80)}`);
+    }
+    const legsRaw = t['maker_orders'] ?? t['makerOrders'];
     return {
       side,
       price,
       size: strictNum(t['size'], 'size', 'trades') ?? 0,
       tokenId: String(t['asset_id'] ?? t['tokenID'] ?? t['token_id'] ?? ''),
       status: String(t['status'] ?? ''),
+      traderSide: traderSide as 'TAKER' | 'MAKER',
+      takerOrderId: String(t['taker_order_id'] ?? t['takerOrderId'] ?? ''),
+      makerOrders: Array.isArray(legsRaw) ? legsRaw.map(mapMakerLeg) : [],
     };
   });
+}
+
+/** The daemon's sell-truth sum over one token's trades — see `sumOurSellSize`. */
+export interface OurSellSum {
+  /** Σ OUR SELL fill sizes (taker-perspective top-level sizes + our attributed maker SELL legs). */
+  sold: number;
+  /** true when a maker-perspective SELL leg could NOT be attributed (ours vs a sibling maker's) —
+   *  the caller must treat the read as DEGRADED (hold sells) rather than guess in either direction. */
+  unattributed: boolean;
+}
+
+/**
+ * Resolve Σ OUR SELL fill sizes from parsed venue trades — perspective-aware (the venue trade record
+ * is TAKER-centric):
+ *
+ *   - `traderSide==='TAKER'` (our FAK stop/time-stop): the top-level side/size ARE ours.
+ *   - `traderSide==='MAKER'` (our resting TP lifted): our fills are the `makerOrders` legs that are
+ *     OURS — attributed by `ourAddress` (the on-chain maker/funder address; legs from OTHER makers
+ *     matched in the same taker order appear beside ours) or, secondarily, by a known order id.
+ *
+ * A SELL leg that cannot be attributed either way sets `unattributed` — under-counting it could let a
+ * follow-up SELL over-sell, over-counting it silently under-manages the position, so the caller must
+ * degrade (hold sells this tick) instead. FAILED trades are excluded; legs on other tokens skipped.
+ */
+export function sumOurSellSize(
+  trades: VenueTrade[],
+  opts: { tokenId?: string; ourAddress?: string | null; knownOrderIds?: ReadonlySet<string> } = {},
+): OurSellSum {
+  const addr = opts.ourAddress ? opts.ourAddress.toLowerCase() : null;
+  let sold = 0;
+  let unattributed = false;
+  for (const t of trades) {
+    if (t.status.toUpperCase() === 'FAILED') continue;
+    if (t.traderSide === 'TAKER') {
+      if (t.side.toUpperCase() === 'SELL') sold += t.size;
+      continue;
+    }
+    // MAKER perspective: our fill is among the legs. A legless maker record hides our leg entirely.
+    if (t.makerOrders.length === 0) {
+      unattributed = true;
+      continue;
+    }
+    for (const leg of t.makerOrders) {
+      if (leg.side.toUpperCase() !== 'SELL') continue; // only sells feed soldSize
+      if (opts.tokenId && leg.tokenId && leg.tokenId !== opts.tokenId) continue; // another bucket's leg
+      const legAddr = leg.makerAddress ? leg.makerAddress.toLowerCase() : null;
+      if (addr !== null && legAddr !== null) {
+        if (legAddr === addr) sold += leg.size;
+        continue; // confidently attributed (ours or a sibling's)
+      }
+      if (opts.knownOrderIds && leg.orderId && opts.knownOrderIds.has(leg.orderId)) {
+        sold += leg.size;
+        continue;
+      }
+      unattributed = true; // can't tell whose SELL this is — the caller must degrade
+    }
+  }
+  return { sold, unattributed };
+}
+
+/**
+ * Could this venue trade contain OUR fill for a (side, price) intent? — the reconcile evidence
+ * predicate. Perspective-aware: taker-perspective trades match on the top-level side/price; maker-
+ * perspective trades match on ANY maker leg's own side/price (a dangling maker BUY that posted-and-
+ * filled arrives as a side='SELL' taker record whose leg is our BUY). Deliberately attribution-FREE:
+ * reconcile uses a hit to HOLD (never free) a dangling intent, so over-matching a sibling maker's leg
+ * is safe while under-matching would free a filled order's key → double-place.
+ */
+export function tradeCouldBeOurFill(
+  t: VenueTrade,
+  row: { side: string; price: number },
+  tick: number,
+): boolean {
+  const tol = (tick > 0 ? tick : 0.01) + 1e-9;
+  const side = row.side.toUpperCase();
+  if (t.traderSide === 'TAKER') {
+    return t.side.toUpperCase() === side && Math.abs(t.price - row.price) <= tol;
+  }
+  return t.makerOrders.some((m) => m.side.toUpperCase() === side && Math.abs(m.price - row.price) <= tol);
 }
 
 /** The startup-reconcile heuristic match decision for one dangling intent row. */

@@ -20,9 +20,12 @@ import {
   redactOrderPayload,
   redactText,
   resolveTradeMode,
+  sumOurSellSize,
   takerLimitPrice,
+  tradeCouldBeOurFill,
   tradesResponseTruncated,
   type OpenOrder,
+  type VenueTrade,
 } from '../src/index.ts';
 
 const env = (v: string | undefined) => (name: string) => (name === 'TRADE_MODE' ? v : undefined);
@@ -177,18 +180,129 @@ describe('parseOpenOrders / parseOrderFillPoll — partial-fill accounting, FAIL
   });
 });
 
-describe('parseTrades — FAIL-LOUD (the reconcile evidence read)', () => {
-  it('parses array / {trades} / {data} shapes', () => {
-    const t = { price: '0.18', side: 'BUY', size: '74', asset_id: 'tokA', status: 'CONFIRMED' };
-    expect(parseTrades([t])[0]).toEqual({ side: 'BUY', price: 0.18, size: 74, tokenId: 'tokA', status: 'CONFIRMED' });
+describe('parseTrades — FAIL-LOUD, TAKER-CENTRIC (the reconcile evidence + sell-truth read)', () => {
+  const leg = { order_id: '0xM1', side: 'SELL', price: '0.18', matched_amount: '30', maker_address: '0xUS', asset_id: 'tokA' };
+  const t = { price: '0.18', side: 'BUY', size: '74', asset_id: 'tokA', status: 'CONFIRMED', trader_side: 'TAKER', taker_order_id: '0xT1', maker_orders: [leg] };
+
+  it('parses array / {trades} / {data} shapes, carrying trader_side + per-leg maker fills', () => {
+    expect(parseTrades([t])[0]).toEqual({
+      side: 'BUY',
+      price: 0.18,
+      size: 74,
+      tokenId: 'tokA',
+      status: 'CONFIRMED',
+      traderSide: 'TAKER',
+      takerOrderId: '0xT1',
+      makerOrders: [{ orderId: '0xM1', side: 'SELL', price: 0.18, size: 30, makerAddress: '0xUS', tokenId: 'tokA' }],
+    });
     expect(parseTrades({ trades: [t] })).toHaveLength(1);
     expect(parseTrades({ data: [] })).toEqual([]);
+    expect(parseTrades([{ ...t, trader_side: 'maker' }])[0]!.traderSide).toBe('MAKER'); // case-normalized
+    expect(parseTrades([{ ...t, maker_orders: undefined }])[0]!.makerOrders).toEqual([]);
   });
   it('unrecognized shapes / elements missing price+side RAISE — never coerce to "no trades"', () => {
     expect(() => parseTrades(null)).toThrow(ClobShapeError);
     expect(() => parseTrades('nope')).toThrow(ClobShapeError);
     expect(() => parseTrades({ foo: [] })).toThrow(ClobShapeError);
     expect(() => parseTrades([{ size: '5' }])).toThrow(ClobShapeError);
+  });
+  it('a missing/unrecognized trader_side RAISES — coercing the perspective would invert our side attribution (a filled maker BUY arrives as side=SELL)', () => {
+    expect(() => parseTrades([{ price: '0.18', side: 'BUY', size: '74', asset_id: 'tokA', status: 'CONFIRMED' }])).toThrow(ClobShapeError);
+    expect(() => parseTrades([{ ...t, trader_side: 'BOTH' }])).toThrow(ClobShapeError);
+  });
+  it('a maker leg missing side/price/matched_amount RAISES — it could hide OUR fill', () => {
+    expect(() => parseTrades([{ ...t, maker_orders: [{ order_id: '0xM1', price: '0.18', matched_amount: '30' }] }])).toThrow(ClobShapeError);
+    expect(() => parseTrades([{ ...t, maker_orders: [{ ...leg, matched_amount: undefined, size: undefined }] }])).toThrow(ClobShapeError);
+    expect(() => parseTrades([{ ...t, maker_orders: [{ ...leg, price: 'lots' }] }])).toThrow(ClobShapeError);
+  });
+});
+
+describe('sumOurSellSize — perspective-aware sell truth (the venue trade record is TAKER-centric)', () => {
+  const vt = (over: Partial<VenueTrade> = {}): VenueTrade => ({
+    side: 'BUY',
+    price: 0.3,
+    size: 20,
+    tokenId: 'tokA',
+    status: 'CONFIRMED',
+    traderSide: 'TAKER',
+    takerOrderId: '0xT',
+    makerOrders: [],
+    ...over,
+  });
+  const legOf = (over: Partial<VenueTrade['makerOrders'][number]> = {}) => ({
+    orderId: '0xM1',
+    side: 'SELL',
+    price: 0.3,
+    size: 12,
+    makerAddress: '0xUS',
+    tokenId: 'tokA',
+    ...over,
+  });
+  const opts = { tokenId: 'tokA', ourAddress: '0xUS' };
+
+  it('FALSIFIER (the CRITICAL side-inversion): our filled maker BUY entry — top-level side=SELL (the taker sold into our bid) — counts ZERO toward sold', () => {
+    const entryFill = vt({ side: 'SELL', size: 20, traderSide: 'MAKER', makerOrders: [legOf({ side: 'BUY', size: 20 })] });
+    expect(sumOurSellSize([entryFill], opts)).toEqual({ sold: 0, unattributed: false });
+  });
+
+  it('FALSIFIER: our maker TP SELL lifted by a taker BUY — top-level side=BUY — DOES count, at the LEG size (matched_amount), not the taker total', () => {
+    const tpFill = vt({ side: 'BUY', size: 50, traderSide: 'MAKER', makerOrders: [legOf({ side: 'SELL', size: 12 })] });
+    expect(sumOurSellSize([tpFill], opts)).toEqual({ sold: 12, unattributed: false });
+  });
+
+  it('taker-perspective trades keep the top-level semantics: our FAK SELL counts its size, our taker BUY does not', () => {
+    expect(sumOurSellSize([vt({ side: 'SELL', size: 26 })], opts)).toEqual({ sold: 26, unattributed: false });
+    expect(sumOurSellSize([vt({ side: 'BUY', size: 26 })], opts)).toEqual({ sold: 0, unattributed: false });
+  });
+
+  it("a SIBLING maker's SELL leg (different maker_address) in the same taker order is NOT counted as ours", () => {
+    const mixed = vt({
+      side: 'BUY',
+      traderSide: 'MAKER',
+      makerOrders: [legOf({ side: 'SELL', size: 12 }), legOf({ orderId: '0xTHEIRS', makerAddress: '0xTHEM', side: 'SELL', size: 40 })],
+    });
+    expect(sumOurSellSize([mixed], opts)).toEqual({ sold: 12, unattributed: false });
+  });
+
+  it('secondary attribution by known order id when no address is available', () => {
+    const tpFill = vt({ side: 'BUY', traderSide: 'MAKER', makerOrders: [legOf({ makerAddress: '' })] });
+    expect(sumOurSellSize([tpFill], { tokenId: 'tokA', ourAddress: null, knownOrderIds: new Set(['0xM1']) })).toEqual({ sold: 12, unattributed: false });
+  });
+
+  it('an UNATTRIBUTABLE SELL leg (no address match possible, unknown id) flags unattributed — the caller must degrade, never guess', () => {
+    const tpFill = vt({ side: 'BUY', traderSide: 'MAKER', makerOrders: [legOf({ makerAddress: '' })] });
+    expect(sumOurSellSize([tpFill], { tokenId: 'tokA', ourAddress: null })).toEqual({ sold: 0, unattributed: true });
+    const legless = vt({ side: 'BUY', traderSide: 'MAKER', makerOrders: [] });
+    expect(sumOurSellSize([legless], opts)).toEqual({ sold: 0, unattributed: true });
+  });
+
+  it('address matching is case-insensitive; FAILED trades and other-token legs are excluded', () => {
+    const tpFill = vt({ side: 'BUY', traderSide: 'MAKER', makerOrders: [legOf({ makerAddress: '0xus' })] });
+    expect(sumOurSellSize([tpFill], { tokenId: 'tokA', ourAddress: '0XUS' })).toEqual({ sold: 12, unattributed: false });
+    expect(sumOurSellSize([vt({ side: 'SELL', size: 26, status: 'FAILED' })], opts)).toEqual({ sold: 0, unattributed: false });
+    const otherTok = vt({ side: 'BUY', traderSide: 'MAKER', makerOrders: [legOf({ tokenId: 'tokB' })] });
+    expect(sumOurSellSize([otherTok], opts)).toEqual({ sold: 0, unattributed: false });
+  });
+});
+
+describe('tradeCouldBeOurFill — perspective-aware reconcile evidence predicate', () => {
+  const row = { side: 'BUY', price: 0.18 };
+  const base: VenueTrade = { side: 'SELL', price: 0.18, size: 74, tokenId: 'tokA', status: 'CONFIRMED', traderSide: 'MAKER', takerOrderId: '0xT', makerOrders: [] };
+
+  it('FALSIFIER: a filled dangling maker BUY arrives with top-level side=SELL — matched via its maker BUY leg, regardless of the top-level side', () => {
+    const t = { ...base, makerOrders: [{ orderId: '0xM', side: 'BUY', price: 0.18, size: 74, makerAddress: '0xUS', tokenId: 'tokA' }] };
+    expect(tradeCouldBeOurFill(t, row, 0.01)).toBe(true);
+  });
+  it('taker-perspective trades match on the top-level side/price (within one tick)', () => {
+    expect(tradeCouldBeOurFill({ ...base, side: 'BUY', traderSide: 'TAKER' }, row, 0.01)).toBe(true);
+    expect(tradeCouldBeOurFill({ ...base, side: 'BUY', price: 0.185, traderSide: 'TAKER' }, row, 0.01)).toBe(true);
+    expect(tradeCouldBeOurFill({ ...base, side: 'SELL', traderSide: 'TAKER' }, row, 0.01)).toBe(false);
+    expect(tradeCouldBeOurFill({ ...base, side: 'BUY', price: 0.25, traderSide: 'TAKER' }, row, 0.01)).toBe(false);
+  });
+  it('maker-perspective trades with no side/price-matching leg are not a hit', () => {
+    const t = { ...base, makerOrders: [{ orderId: '0xM', side: 'SELL', price: 0.18, size: 74, makerAddress: '0xUS', tokenId: 'tokA' }] };
+    expect(tradeCouldBeOurFill(t, row, 0.01)).toBe(false);
+    expect(tradeCouldBeOurFill(base, row, 0.01)).toBe(false); // legless — nothing to match
   });
 });
 

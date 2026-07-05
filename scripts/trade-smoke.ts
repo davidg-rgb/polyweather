@@ -168,7 +168,7 @@ async function main(): Promise<number> {
         { tokenID: target.tokenId, price, size, side: 'BUY' },
         { tickSize: tick, negRisk: true },
       );
-      out(`    would-be maker BUY on ${target.label} (${size} sh @ ${price}, post_only GTC):`);
+      out(`    would-be maker BUY on ${target.label} (${size} sh @ ${price}, price-enforced maker GTC):`);
       out(`    ${JSON.stringify(redactOrderPayload(order))}`);
     } catch (e) {
       out(`    build FAILED: ${redactText(e instanceof Error ? `${e.name}: ${e.message}` : String(e))}`);
@@ -195,12 +195,13 @@ async function main(): Promise<number> {
       try {
         const tick = Number(await client.getTickSize(target2.tokenId)) || 0.01;
         const top = parseOrderBookTop(await client.getOrderBook(target2.tokenId));
-        // rest FAR below the market so post_only rests and never fills; raise to the venue floor.
+        // rest FAR below the market so the order rests and never fills (price is the maker guarantee —
+        // the pinned clob-client v4 has NO post_only; its 3rd positional is deferExec, never passed).
         const price = Math.max(tick, 0.02);
         const minSize = top.minOrderSize > 0 ? top.minOrderSize : botCfg.minOrderSizeShares;
         const size = Math.max(minSize, Math.ceil(1 / price));
         const order = await client.createOrder({ tokenID: target2.tokenId, price, size, side: 'BUY' }, { tickSize: tick, negRisk: true });
-        const posted = await client.postOrder(order, 'GTC', true);
+        const posted = await client.postOrder(order, 'GTC');
         out(`    placed (redacted): ${JSON.stringify(redactOrderPayload(posted))}`);
         const orderId = posted?.orderID;
         if (orderId) {

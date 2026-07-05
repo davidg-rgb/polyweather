@@ -70,10 +70,19 @@
  * WARN alert), never silently — then re-fires the remainder. Rows still at 'intent' (no orderId — the
  * post outcome is unknown) are NOT adjudicated: the startup reconcile sweep owns those.
  *
- * TP-CANCEL RACE GUARD: before a taker exit, the resting TP is cancelled. If the venue reports the cancel
- * did NOT fully take (`allCanceled=false` — the TP raced a fill), the taker is ABORTED for this tick: the
- * raced fill means `remaining` is stale-high and posting would over-sell. The next tick's fill-poll picks
- * up the raced fill and re-decides with correct accounting.
+ * TP-CANCEL RACE GUARD (both directions): before a taker exit, the resting TP is cancelled. If the venue
+ * reports the cancel did NOT fully take (`allCanceled=false` — the TP fully raced a fill), the taker is
+ * ABORTED for this tick. If the cancel DID take, a PARTIAL fill can still have raced into the poll→cancel
+ * window (the venue cancels only the remainder and reports `allCanceled`), so the taker size is
+ * RE-DERIVED from the executor's post-cancel poll (`CancelResult.sizeMatched` vs the decide-time TP
+ * matched): the raced delta is subtracted (never over-sell), a fully-covered exit posts nothing, a
+ * sub-min remainder dust-parks, and a missing post-cancel read aborts the tick. The next tick's
+ * fill-poll re-decides with correct accounting either way.
+ *
+ * DUST PARK (venue min-order floor): exit intents are never sized below `cfg.minOrderSizeShares` — a
+ * sub-min unsold remainder cannot execute at the venue (place/placeTaker throw ERR_MIN_SIZE), so
+ * planning it would livelock a CRITICAL every tick. `dustRemainder` parks the position instead (skip +
+ * ONE daemon WARN via `dustParkAlerts`); an already-resting TP keeps working venue-side.
  */
 import {
   localHourInstant,
@@ -413,8 +422,11 @@ export type Intent =
       marketRef: string;
       purpose: 'stop_loss' | 'time_stop';
       req: TakerOrderRequest;
-      /** cancel the resting maker TP first (you cannot rest a SELL and taker-SELL the same shares). */
-      cancelTp?: { orderId: string; clientOrderId: string };
+      /** cancel the resting maker TP first (you cannot rest a SELL and taker-SELL the same shares).
+       *  `sizeMatched` is the TP's DECIDE-TIME cumulative matched — the baseline `applyPlan` compares
+       *  the post-cancel poll against to detect a fill raced into the poll→cancel window (a raced fill
+       *  makes `req.size` stale-high; the taker is resized down by the delta, never over-sold). */
+      cancelTp?: { orderId: string; clientOrderId: string; sizeMatched: number };
     };
 
 /** A candidate/position the tick deliberately did NOT act on, with the verbatim reason (logged + tested). */
@@ -480,6 +492,24 @@ const cancelEntryIntent = (p: LivePosition, e: OrderHandle & { orderId: string }
   clientOrderId: e.clientOrderId,
   reason,
 });
+
+/**
+ * The DUST floor: the position's unsold remainder when it is strictly below the venue min-order size
+ * (`cfg.minOrderSizeShares`, the same floor entry sizing checks) — no exit order for it can ever
+ * execute (`place`/`placeTaker` throw ERR_MIN_SIZE before reserving), so emitting one would livelock a
+ * CRITICAL `TRADE_BOT_INTENT_FAILED` every tick for a state the code can neither execute nor suppress.
+ * Returns the dust remainder, or null when the position is not dust (nothing held / fully covered /
+ * sellable / sold-truth degraded — the degraded hold outranks and has its own CRITICAL). A dust
+ * position is PARKED: no new intents; an already-resting TP stays working venue-side (a resting
+ * order's remainder MAY go sub-min — the floor applies at placement) and can still flatten it.
+ */
+export function dustRemainder(p: LivePosition, cfg: DecideCfg): number | null {
+  if (p.soldTruthDegraded) return null;
+  const remaining = p.filledSize - p.soldSize;
+  if (!(remaining > 1e-9)) return null;
+  if (!(cfg.minOrderSizeShares > 0) || remaining >= cfg.minOrderSizeShares - 1e-9) return null;
+  return remaining;
+}
 
 /**
  * §11.2 — true when a live kill WANTS to cancel a fully-unfilled resting entry but THIS tick's fill poll of
@@ -557,6 +587,13 @@ function planForPosition(p: LivePosition, cfg: DecideCfg, nowMs: number, entries
   // decideTick surfaces the skip; the daemon fires a CRITICAL sellHoldAlerts alert every affected tick.
   if (p.soldTruthDegraded) return out;
 
+  // DUST PARK — a remainder below the venue min-order floor can NEVER execute an exit order (the
+  // executor rejects it pre-reserve), so emitting exit_taker/rest_tp for it would livelock ERR_MIN_SIZE
+  // → a CRITICAL every tick. Plan nothing: the position is parked (an already-resting TP keeps working
+  // venue-side and may still flatten it as a maker; otherwise the dust rides to resolution). decideTick
+  // surfaces the skip; the daemon fires ONE WARN dustParkAlerts alert.
+  if (dustRemainder(p, cfg) != null) return out;
+
   const timeStopMs = timeStopMsOf(p, cfg);
   const slStop = stopOf(p.entryPrice, cfg);
   const mark = p.mark;
@@ -609,7 +646,7 @@ function exitTaker(
 ): Intent {
   const cancelTp =
     p.tp && p.tp.orderId != null && (p.tp.status === 'placed' || p.tp.status === 'partial')
-      ? { orderId: p.tp.orderId, clientOrderId: p.tp.clientOrderId }
+      ? { orderId: p.tp.orderId, clientOrderId: p.tp.clientOrderId, sizeMatched: p.tp.sizeMatched }
       : undefined;
   return {
     kind: 'exit_taker',
@@ -658,6 +695,13 @@ export function decideTick(state: TickState): TickPlan {
         ref: p.marketId,
         reason:
           'cancel_entry_deferred_stale_poll — live kill wants to cancel this fully-unfilled resting entry, but its fill state was not freshly polled this tick (getOrder failed); a stale sizeMatched=0 could hide a partial fill, so the cancel is DEFERRED to next tick (the daemon fires a WARN)',
+      });
+    }
+    const dust = dustRemainder(p, cfg);
+    if (dust != null) {
+      skips.push({
+        ref: p.marketId,
+        reason: `dust_below_min_order — unsold remainder ${dust.toFixed(2)} sh < venue min ${cfg.minOrderSizeShares}; no exit order can execute, position parked (the daemon warns ONCE; a resting TP keeps working venue-side)`,
       });
     }
     intents.push(...planForPosition(p, cfg, nowMs, entriesBlocked));
@@ -770,6 +814,33 @@ export function sellHoldAlerts(positions: LivePosition[]): TradeAlert[] {
 }
 
 /**
+ * The WARN escalation for a DUST-PARKED position (unsold remainder below the venue min-order floor —
+ * see `dustRemainder`). PURE: one WARN alert per dust position. The daemon fires each dedupeKey ONCE
+ * per process (its `warnedDust` set) — deliberately NOT a repeating CRITICAL: nothing is executable,
+ * nothing is at over-sell risk (the remainder is bounded below the venue min ≈ $1–2), and the state
+ * only clears when a resting TP fills the dust or the market resolves.
+ */
+export function dustParkAlerts(positions: LivePosition[], cfg: DecideCfg): TradeAlert[] {
+  const out: TradeAlert[] = [];
+  for (const p of positions) {
+    const dust = dustRemainder(p, cfg);
+    if (dust == null) continue;
+    out.push({
+      kind: 'TRADE_BOT_DUST_PARKED',
+      severity: 'WARN',
+      title: `trade-bot: DUST parked on ${p.city} ${p.targetDate} (${p.marketId}) — remainder below venue min`,
+      body:
+        `Unsold remainder ${dust.toFixed(2)} sh is below the venue min-order size ` +
+        `(${cfg.minOrderSizeShares} sh), so no exit order for it can execute — the position is PARKED ` +
+        `(no stop-loss/time-stop can fire for the dust). ${p.tp ? 'The resting take-profit stays working venue-side and may still flatten it as a maker.' : 'It rides to resolution.'} ` +
+        `Exposure is bounded below the venue minimum (~$1–2 at these prices). This alert fires once.`,
+      dedupeKey: `trade-bot-dust:${p.marketId}|${p.targetDate}`,
+    });
+  }
+  return out;
+}
+
+/**
  * §11.2 — the WARN escalation for a DEFERRED kill-cancel. PURE: maps every position where a live kill wants
  * to cancel a fully-unfilled resting entry but the entry's fill state was NOT freshly polled this tick
  * (`entryPollFresh === false`) to a WARN alert. The daemon fires these through `notify` (a structured WARN
@@ -843,6 +914,9 @@ export async function applyPlan(
   log: (entry: Record<string, unknown>) => void,
   /** the order ledger — enables the venue-dead FAK adjudication (MEDIUM-3). Optional for pure-driver tests. */
   ledger?: OrderLedger,
+  /** the venue min-order floor in shares — a taker exit RESIZED below it after a raced TP fill is
+   *  dust-parked (one WARN) instead of posted (the venue would reject it). 0 disables the floor. */
+  minOrderSizeShares = 0,
 ): Promise<ApplyResult> {
   const applied: AppliedIntent[] = [];
   let posted = 0;
@@ -882,6 +956,7 @@ export async function applyPlan(
         }
         case 'exit_taker': {
           // cancel the resting maker TP FIRST (never rest a SELL and taker-SELL the same shares).
+          let exitReq = intent.req;
           if (intent.cancelTp) {
             const cr = await executor.cancel(intent.cancelTp.orderId, intent.cancelTp.clientOrderId);
             if (!cr.allCanceled) {
@@ -899,13 +974,58 @@ export async function applyPlan(
               });
               continue;
             }
+            // TP-CANCEL RACE, allCanceled=true side: a PARTIAL fill raced into the poll→cancel window
+            // still cancels "fully" at the venue (only the remainder is canceled) — `req.size` was sized
+            // from the DECIDE-time TP matched and is now stale-high. Re-derive from the executor's
+            // post-cancel poll (`cr.sizeMatched`, the freshest cumulative matched) before posting.
+            if (cr.sizeMatched == null) {
+              // No post-cancel truth (poll unavailable) — sizing from the stale remaining could
+              // over-sell. Abort exactly like a raced cancel; next tick re-decides on fresh accounting.
+              aborted++;
+              applied.push({ intent, result: null, error: null });
+              log({ msg: 'trade-bot.exit_aborted', level: 'WARN', kind: intent.kind, marketRef: intent.marketRef, purpose: intent.purpose, reason: 'TP canceled but its post-cancel fill state is unknown — taker aborted this tick (over-sell guard)' });
+              await notify({
+                kind: 'TRADE_BOT_EXIT_ABORTED',
+                severity: 'WARN',
+                title: `trade-bot ${intent.purpose} aborted: post-cancel TP fill state unknown (${intent.marketRef})`,
+                body: 'The resting take-profit was canceled but its post-cancel matched size could not be read; the taker exit is deferred one tick so it is never sized from stale sold accounting.',
+                dedupeKey: `trade-bot-abort:${intent.marketRef}:${intent.purpose}`,
+              });
+              continue;
+            }
+            const raced = Math.max(0, cr.sizeMatched - intent.cancelTp.sizeMatched);
+            if (raced > 0) {
+              const resized = intent.req.size - raced;
+              log({ msg: 'trade-bot.exit_resized', level: 'WARN', kind: intent.kind, marketRef: intent.marketRef, purpose: intent.purpose, racedTpFill: raced, from: intent.req.size, to: Math.max(0, resized), reason: 'a TP fill raced the cancel window — taker size re-derived from the post-cancel poll' });
+              if (!(resized > 1e-9)) {
+                // the raced TP fill covered the whole exit — nothing left to sell.
+                applied.push({ intent, result: null, error: null });
+                log({ msg: 'trade-bot.exit_covered', kind: intent.kind, marketRef: intent.marketRef, purpose: intent.purpose, reason: 'raced TP fill covered the full exit size — no taker posted' });
+                continue;
+              }
+              if (minOrderSizeShares > 0 && resized < minOrderSizeShares - 1e-9) {
+                // sub-min dust after the raced fill: the venue would reject the post → park (one WARN;
+                // next tick the raced fill is in soldSize and dustRemainder plans nothing further).
+                applied.push({ intent, result: null, error: null });
+                log({ msg: 'trade-bot.exit_dust', level: 'WARN', kind: intent.kind, marketRef: intent.marketRef, purpose: intent.purpose, remainder: resized, reason: `resized exit ${resized.toFixed(2)} sh < venue min ${minOrderSizeShares} — dust-parked, not posted` });
+                await notify({
+                  kind: 'TRADE_BOT_DUST_PARKED',
+                  severity: 'WARN',
+                  title: `trade-bot ${intent.purpose} dust after raced TP fill (${intent.marketRef})`,
+                  body: `The raced TP fill left an unsold remainder of ${resized.toFixed(2)} sh — below the venue min-order size (${minOrderSizeShares} sh), so no exit order can execute. The position is parked; exposure is bounded below the venue minimum.`,
+                  dedupeKey: `trade-bot-dust:${intent.marketRef}:${intent.purpose}`,
+                });
+                continue;
+              }
+              exitReq = { ...intent.req, size: resized };
+            }
           }
           // FAK ADJUDICATION (MEDIUM-3): a prior FAK for this same exit intent that partial- (or zero-)
           // filled left an OPEN 'partial'/'placed' row — a venue-dead corpse (FAK never rests) that would
           // make this re-fire a silent 'duplicate' forever. Adjudicate it terminal (record_canceled
           // preserves size_matched; the partial-unique frees the key), loudly, then place.
           if (ledger) {
-            const key = orderIntentKey(intent.req);
+            const key = orderIntentKey(exitReq);
             const open = await ledger.findByIntentKey(key, executor.mode);
             if (open && open.orderId != null && (open.status === 'partial' || open.status === 'placed')) {
               await ledger.recordCanceled(open.clientOrderId);
@@ -919,7 +1039,7 @@ export async function applyPlan(
               });
             }
           }
-          result = await executor.placeTaker(intent.req);
+          result = await executor.placeTaker(exitReq);
           break;
         }
       }

@@ -160,7 +160,7 @@ const deps = (
 const callOrder = (fn: unknown): number => (fn as Mock).mock.invocationCallOrder[0]!;
 
 describe('MakerExecutor.place — maker pricing + mode + idempotency', () => {
-  it('live BUY: rests strictly below best ask (0.18<0.20), GTC + post_only=true, negRisk threaded; find→reserve(mode live)→post→record', async () => {
+  it('live BUY: rests strictly below best ask (0.18<0.20), GTC, negRisk threaded; find→reserve(mode live)→post→record', async () => {
     const client = mockClient();
     const { ledger, calls } = mockLedger();
     const exec = new MakerExecutor(deps('live', client, ledger));
@@ -172,11 +172,21 @@ describe('MakerExecutor.place — maker pricing + mode + idempotency', () => {
       { tickSize: 0.01, negRisk: true },
     );
     expect(client.postOrder).toHaveBeenCalledTimes(1);
-    expect(client.postOrder).toHaveBeenCalledWith(expect.anything(), 'GTC', true);
+    expect(client.postOrder).toHaveBeenCalledWith(expect.anything(), 'GTC');
     expect(calls.map((c) => c.fn)).toEqual(['findByIntentKey', 'reserveIntent', 'recordPlaced']);
     expect(calls[0]!.args).toEqual([KEY, 'live']);
     expect(calls[1]!.args[0]).toMatchObject({ mode: 'live', intentKey: KEY });
     expect(r).toMatchObject({ mode: 'live', status: 'placed', orderId: '0xORDER', limitPrice: 0.18, postOnly: true, orderType: 'GTC', sizeMatched: 0 });
+  });
+
+  it('CALL-SHAPE LOCK: postOrder gets exactly (order, orderType) — NEVER a 3rd positional (it is deferExec in the pinned v4 SDK, not post_only; v4 has no post_only at all)', async () => {
+    const client = mockClient();
+    const exec = new MakerExecutor(deps('live', client, mockLedger().ledger));
+    await exec.place(req);
+    const call = (client.postOrder as Mock).mock.calls[0]!;
+    expect(call).toHaveLength(2);
+    expect(call[1]).toBe('GTC');
+    expect(call[2]).toBeUndefined(); // deferExec must never be sent
   });
 
   it('live SELL take-profit rests strictly above best bid', async () => {
@@ -452,7 +462,7 @@ describe('MakerExecutor.place — maker pricing + mode + idempotency', () => {
 });
 
 describe('MakerExecutor.placeTaker — FAK exit leg', () => {
-  it('live: FAK, worst-price snapped, post_only NOT set', async () => {
+  it('live: FAK, worst-price snapped, no 3rd postOrder positional (deferExec never sent)', async () => {
     const client = mockClient({ getOrder: vi.fn(async () => ({ status: 'matched', original_size: '74', size_matched: '74', price: '0.31' })) });
     const { ledger } = mockLedger();
     const exec = new MakerExecutor(deps('live', client, ledger));
@@ -460,7 +470,8 @@ describe('MakerExecutor.placeTaker — FAK exit leg', () => {
     const t: TakerOrderRequest = { marketId: '0xcond', tokenId: 'tok-yes', side: 'SELL', purpose: 'stop_loss', tradeDate: '2026-07-05', worstPrice: 0.312, size: 74 };
     const r = await exec.placeTaker(t);
 
-    expect(client.postOrder).toHaveBeenCalledWith(expect.anything(), 'FAK', false);
+    expect(client.postOrder).toHaveBeenCalledWith(expect.anything(), 'FAK');
+    expect((client.postOrder as Mock).mock.calls[0]).toHaveLength(2);
     expect(client.createOrder).toHaveBeenCalledWith(expect.objectContaining({ side: 'SELL', price: 0.31 }), expect.anything());
     expect(r).toMatchObject({ status: 'placed', orderType: 'FAK', postOnly: false, sizeMatched: 74 });
   });
@@ -488,19 +499,60 @@ describe('MakerExecutor.placeTaker — FAK exit leg', () => {
 });
 
 describe('MakerExecutor lifecycle — cancel / cancel-all / list / poll', () => {
-  it('cancel: live cancels + records; dry-run never touches the venue', async () => {
-    const client = mockClient();
+  it('cancel: live cancels + polls post-cancel (0 matched → records canceled, sizeMatched 0); dry-run never touches the venue', async () => {
+    const client = mockClient({ getOrder: vi.fn(async () => ({ status: 'canceled', original_size: '74', size_matched: '0', price: '0.18' })) });
     const { ledger, calls } = mockLedger([row()]);
     const exec = new MakerExecutor(deps('live', client, ledger));
     const res = await exec.cancel('0xOLD', 'cid-old');
     expect(client.cancelOrder).toHaveBeenCalledWith({ orderID: '0xOLD' });
     expect(res.allCanceled).toBe(true);
+    expect(res.sizeMatched).toBe(0);
     expect(calls.some((c) => c.fn === 'recordCanceled')).toBe(true);
 
     const client2 = mockClient();
     const exec2 = new MakerExecutor(deps('dry-run', client2, mockLedger().ledger));
-    await exec2.cancel('0xORDER');
+    const dryRes = await exec2.cancel('0xORDER');
     expect(client2.cancelOrder).not.toHaveBeenCalled();
+    expect(dryRes.sizeMatched).toBe(0); // dry-run rows never fill — truthful 0
+  });
+
+  it('RACED-PARTIAL cancel: a fill in the poll→cancel window is RECORDED and the row stays VISIBLE (partial, NOT canceled) — the fill survives into reconstruction', async () => {
+    const client = mockClient({ getOrder: vi.fn(async () => ({ status: 'canceled', original_size: '74', size_matched: '18', price: '0.18' })) });
+    const { ledger, calls, rows } = mockLedger([row()]);
+    const exec = new MakerExecutor(deps('live', client, ledger));
+
+    const res = await exec.cancel('0xOLD', 'cid-old');
+
+    expect(res.allCanceled).toBe(true);
+    expect(res.sizeMatched).toBe(18); // the fresh post-cancel truth callers size follow-up SELLs from
+    expect(calls.find((c) => c.fn === 'recordFill')?.args).toEqual(['cid-old', 18, 0.18, 'partial']);
+    expect(calls.some((c) => c.fn === 'recordCanceled')).toBe(false); // NEVER hidden from by_intent
+    expect(rows.get('cid-old')).toMatchObject({ status: 'partial', sizeMatched: 18 });
+    // the row is still the OPEN row for the key — next-tick reconstruction sees the held shares.
+    expect(await ledger.findByIntentKey(KEY, 'live')).toMatchObject({ clientOrderId: 'cid-old', sizeMatched: 18 });
+  });
+
+  it('RACED-FULL cancel: a complete fill records filled (terminal-but-blocking) — the intent succeeded', async () => {
+    const client = mockClient({ getOrder: vi.fn(async () => ({ status: 'matched', original_size: '74', size_matched: '74', price: '0.18' })) });
+    const { ledger, calls, rows } = mockLedger([row()]);
+    const exec = new MakerExecutor(deps('live', client, ledger));
+
+    const res = await exec.cancel('0xOLD', 'cid-old');
+
+    expect(res.sizeMatched).toBe(74);
+    expect(calls.find((c) => c.fn === 'recordFill')?.args).toEqual(['cid-old', 74, 0.18, 'filled']);
+    expect(calls.some((c) => c.fn === 'recordCanceled')).toBe(false);
+    expect(rows.get('cid-old')).toMatchObject({ status: 'filled' });
+  });
+
+  it('cancel post-cancel poll THROWS: no ledger transition (row stays open for the next tick), the throw propagates', async () => {
+    const client = mockClient({ getOrder: vi.fn(async () => Promise.reject(new Error('CLOB 503'))) });
+    const { ledger, calls, rows } = mockLedger([row()]);
+    const exec = new MakerExecutor(deps('live', client, ledger));
+
+    await expect(exec.cancel('0xOLD', 'cid-old')).rejects.toThrow();
+    expect(calls.some((c) => c.fn === 'recordCanceled' || c.fn === 'recordFill')).toBe(false);
+    expect(rows.get('cid-old')!.status).toBe('placed');
   });
 
   it('T3-final: record_canceled RAISING during cancel() → needs-reconcile alert + ERR_LEDGER_WRITE (never swallowed)', async () => {
@@ -595,20 +647,36 @@ describe('MakerExecutor.reprice — cancel-then-repost the ledger remainder (MED
     expect(client.postOrder).not.toHaveBeenCalled();
   });
 
-  it('LOW-8: partial fill before the cancel → books the partial FIRST, frees, reposts ONLY the remainder (74−30=44)', async () => {
+  it('cancel races a PARTIAL fill: books the partial and KEEPS the row visible — no free, no repost (the held shares must stay reconstructable through by_intent; entry BUYs have no venue floor)', async () => {
     const client = stateClient({ status: 'canceled', original_size: '74', size_matched: '30', price: '0.18' });
-    const { ledger, calls } = mockLedger([row()]);
+    const { ledger, calls, rows } = mockLedger([row()]);
     const exec = new MakerExecutor(deps('live', client, ledger));
 
     const { placed } = await exec.reprice('0xOLD', 'cid-old', { ...req, targetPrice: 0.17 });
 
     expect(calls.find((c) => c.fn === 'recordFill')?.args).toEqual(['cid-old', 30, 0.18, 'partial']);
-    const fillIdx = calls.findIndex((c) => c.fn === 'recordFill');
-    const cancelIdx = calls.findIndex((c) => c.fn === 'recordCanceled');
-    expect(fillIdx).toBeGreaterThanOrEqual(0);
-    expect(cancelIdx).toBeGreaterThan(fillIdx); // accounting booked BEFORE the free
-    expect(placed.status).toBe('placed');
-    expect(client.createOrder).toHaveBeenCalledWith(expect.objectContaining({ size: 44 }), expect.anything());
+    expect(calls.some((c) => c.fn === 'recordCanceled')).toBe(false); // NEVER record_canceled a filled entry
+    expect(client.postOrder).not.toHaveBeenCalled(); // remainder deliberately abandoned
+    expect(placed.status).toBe('rejected');
+    expect(placed.reason).toContain('partially filled during reprice');
+    expect(placed.sizeMatched).toBe(30);
+    expect(rows.get('cid-old')).toMatchObject({ status: 'partial', sizeMatched: 30 });
+    // the raced fill SURVIVES the transition: the by_intent read still returns the row with its shares.
+    expect(await ledger.findByIntentKey(KEY, 'live')).toMatchObject({ clientOrderId: 'cid-old', sizeMatched: 30 });
+  });
+
+  it('a raced partial with a BELOW-MIN remainder no longer vanishes: the row (and the whole position) stays visible', async () => {
+    // 70/74 filled → remainder 4 < min 5. The OLD behavior record_canceled-ed the row and skipped the
+    // repost → NO open entry row → the nearly-fully-filled position disappeared from reconstruction.
+    const client = stateClient({ status: 'canceled', original_size: '74', size_matched: '70', price: '0.18' });
+    const { ledger, rows } = mockLedger([row()]);
+    const exec = new MakerExecutor(deps('live', client, ledger));
+
+    const { placed } = await exec.reprice('0xOLD', 'cid-old', { ...req, targetPrice: 0.17 });
+
+    expect(placed.status).toBe('rejected');
+    expect(rows.get('cid-old')).toMatchObject({ status: 'partial', sizeMatched: 70 });
+    expect(await ledger.findByIntentKey(KEY, 'live')).not.toBeNull();
   });
 
   it('cancel failed and the order is STILL LIVE: aborts — no ledger transition, no repost (double-place guard)', async () => {
@@ -731,10 +799,10 @@ describe('MakerExecutor.reconcileOpenOrders — the startup sweep (HIGH-2)', () 
     expect(rows.get('cid-dangling')!.status).toBe('failed');
   });
 
-  it('no open order BUT a matching same-side trade at our price: held (could be our fill) — never freed', async () => {
+  it('no open order BUT a TAKER-perspective trade matching our side/price: held (could be our fill) — never freed', async () => {
     const client = mockClient({
       getOpenOrders: vi.fn(async () => []),
-      getTrades: vi.fn(async () => [{ price: '0.18', side: 'BUY', size: '74', asset_id: 'tok-yes', status: 'CONFIRMED' }]),
+      getTrades: vi.fn(async () => [{ price: '0.18', side: 'BUY', size: '74', asset_id: 'tok-yes', status: 'CONFIRMED', trader_side: 'TAKER', taker_order_id: '0xT1', maker_orders: [] }]),
     });
     const { ledger, calls, rows } = mockLedger([dangling()]);
     const alerts: TradeAlert[] = [];
@@ -746,6 +814,60 @@ describe('MakerExecutor.reconcileOpenOrders — the startup sweep (HIGH-2)', () 
     expect(alerts[0]).toMatchObject({ kind: 'RECONCILE_AMBIGUOUS', severity: 'WARN' });
     expect(rows.get('cid-dangling')!.status).toBe('intent');
     expect(calls.some((c) => c.fn === 'recordFailed')).toBe(false);
+  });
+
+  it('FALSIFIER (venue taker-centric semantics): a dangling maker BUY that posted-and-FILLED shows a trade with TOP-LEVEL side=SELL (the taker sold into our bid) and OUR fill as a maker BUY leg — it must be HELD, never freed as "never posted" (freeing would double-place)', async () => {
+    const client = mockClient({
+      getOpenOrders: vi.fn(async () => []), // fully filled → not resting anymore
+      getTrades: vi.fn(async () => [
+        {
+          price: '0.18',
+          side: 'SELL', // the TAKER's side — the naive t.side===row.side read frees the key here
+          size: '74',
+          asset_id: 'tok-yes',
+          status: 'CONFIRMED',
+          trader_side: 'MAKER',
+          taker_order_id: '0xT1',
+          maker_orders: [
+            { order_id: '0xOURS', side: 'BUY', price: '0.18', matched_amount: '74', maker_address: '0xUS', asset_id: 'tok-yes' },
+          ],
+        },
+      ]),
+    });
+    const { ledger, calls, rows } = mockLedger([dangling()]);
+    const alerts: TradeAlert[] = [];
+    const exec = new MakerExecutor(deps('live', client, ledger, { notify: async (a: TradeAlert) => (alerts.push(a), true) }));
+
+    const out = await exec.reconcileOpenOrders();
+
+    expect(out[0]).toMatchObject({ kind: 'held' });
+    expect(rows.get('cid-dangling')!.status).toBe('intent'); // key NOT freed → no double-place
+    expect(calls.some((c) => c.fn === 'recordFailed')).toBe(false);
+  });
+
+  it('a MAKER-perspective trade whose legs do NOT match our side/price is not a hit — still freed (no over-hold)', async () => {
+    const client = mockClient({
+      getOpenOrders: vi.fn(async () => []),
+      getTrades: vi.fn(async () => [
+        {
+          price: '0.18',
+          side: 'BUY',
+          size: '20',
+          asset_id: 'tok-yes',
+          status: 'CONFIRMED',
+          trader_side: 'MAKER',
+          taker_order_id: '0xT2',
+          maker_orders: [{ order_id: '0xOTHER', side: 'SELL', price: '0.31', matched_amount: '20', maker_address: '0xTHEM', asset_id: 'tok-yes' }],
+        },
+      ]),
+    });
+    const { ledger, rows } = mockLedger([dangling()]);
+    const exec = new MakerExecutor(deps('live', client, ledger));
+
+    const out = await exec.reconcileOpenOrders();
+
+    expect(out[0]).toMatchObject({ kind: 'freed' });
+    expect(rows.get('cid-dangling')!.status).toBe('failed');
   });
 
   it('an evidence read failing (malformed open-orders response) holds the row — never frees on missing evidence', async () => {

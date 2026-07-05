@@ -50,7 +50,7 @@ import {
   type RawClobBook,
 } from '../packages/core/src/index.ts';
 import {
-  createClobClient,
+  createClobClientWithIdentity,
   danglingEnvelopeReady,
   loadTradeConfig,
   orderIntentKey,
@@ -58,6 +58,7 @@ import {
   redactText,
   resolveTradeMode,
   parseTrades,
+  sumOurSellSize,
   tradesResponseTruncated,
   rpcOrderLedger,
   MakerExecutor,
@@ -78,6 +79,7 @@ import {
   assemblePosition,
   decideTick,
   discoverCandidates,
+  dustParkAlerts,
   entryCancelDeferredAlerts,
   sellHoldAlerts,
   toDecideCfg,
@@ -175,6 +177,15 @@ export interface Daemon {
   executor: MakerExecutor;
   client: MakerClobClientish;
   notify: (a: TradeAlert) => Promise<boolean>;
+  /** OUR on-chain maker/funder address (PUBLIC — it rides on every order we post; from
+   *  `createClobClientWithIdentity`). The venue's trade records are TAKER-centric: when we were the
+   *  MAKER our fill is a `maker_orders[]` leg, and this address is what tells OUR legs apart from
+   *  sibling makers' matched in the same taker order. null ⇒ maker legs are unattributable and the
+   *  sell-truth read DEGRADES (holds sells) rather than guessing. */
+  address: string | null;
+  /** one-shot dedupe for the dust-park WARN (finding: a sub-min remainder must warn ONCE, not
+   *  CRITICAL-page every tick) — alert keys already warned this process lifetime. */
+  warnedDust: Set<string>;
 }
 
 /** findByIntentKey for one purpose of a market/day. Redacting-safe; returns null on any read error. */
@@ -245,10 +256,19 @@ async function markFor(d: Daemon, tokenId: string, size: number, fallback: numbe
 }
 
 /**
- * Venue sell truth for one token (live only): Σ our SELL trade sizes from `getTrades` — the same evidence
+ * Venue sell truth for one token (live only): Σ OUR SELL fill sizes from `getTrades` — the same evidence
  * read the startup reconcile uses. This floors the position's `soldSize` so fills whose ledger rows have
  * gone terminal-canceled (a lifted-then-cancelled TP, an adjudicated FAK corpse — invisible to
  * `bot_order_by_intent`) are never lost (lens CRITICAL-1/LOW-5). Failed venue trades are excluded.
+ *
+ * ⚠ VENUE SEMANTICS (the /data/trades record is TAKER-centric — installed SDK v4.22.8 Trade type):
+ * the top-level `side`/`size` describe the TAKER order, `trader_side` says which side WE were, and our
+ * maker fills live in `maker_orders[]` legs. For this maker-first strategy the dominant fills are MAKER
+ * legs — a naive top-level read INVERTS them (our filled maker BUY entry arrives as side='SELL' and
+ * would be counted as sold → position marked flattened, no TP/SL ever rests; our maker TP SELL arrives
+ * as side='BUY' and would be missed → over-sell). `sumOurSellSize` resolves the perspective and
+ * attributes maker legs by OUR address (`d.address`), falling back to the position's known SELL order
+ * ids; an unattributable SELL leg degrades the read (hold sells) rather than guessing.
  *
  * The read is SAFETY-LOAD-BEARING (lens NEW-LOW-1): on a live read outage it returns
  * `{ sold: null, degraded: true }` — the position's sells are then HELD for the tick (the decide spine
@@ -261,7 +281,11 @@ async function markFor(d: Daemon, tokenId: string, size: number, fallback: numbe
  * IDENTICALLY to a throw: degrade and hold. We do NOT follow the cursor (single-call read is the contract;
  * the strategy trades ~1 BUY + ≤3 SELLs per token, so a real page is never near the limit).
  */
-export async function venueSoldFor(d: Daemon, tokenId: string): Promise<{ sold: number | null; degraded: boolean }> {
+export async function venueSoldFor(
+  d: Daemon,
+  tokenId: string,
+  knownSellOrderIds?: ReadonlySet<string>,
+): Promise<{ sold: number | null; degraded: boolean }> {
   if (d.mode !== 'live') return { sold: null, degraded: false }; // dry-run rows never fill — visible sum exact
   try {
     const raw = await d.client.getTrades({ asset_id: tokenId });
@@ -272,11 +296,12 @@ export async function venueSoldFor(d: Daemon, tokenId: string): Promise<{ sold: 
       return { sold: null, degraded: true };
     }
     const trades = parseTrades(raw);
-    let sold = 0;
-    for (const t of trades) {
-      if (t.side.toUpperCase() !== 'SELL') continue;
-      if (t.status.toUpperCase() === 'FAILED') continue;
-      sold += t.size;
+    const { sold, unattributed } = sumOurSellSize(trades, { tokenId, ourAddress: d.address, knownOrderIds: knownSellOrderIds });
+    if (unattributed) {
+      // A maker-perspective SELL leg we could not attribute (ours vs a sibling maker's): counting it
+      // could under-manage the position, dropping it could over-sell — so hold the sells instead.
+      log({ msg: 'trade-bot.venue_sold_unattributable', level: 'WARN', tokenId, note: 'a maker SELL leg in getTrades could not be attributed (no address match, unknown order id) — treated as degraded (sells held this tick)' });
+      return { sold: null, degraded: true };
     }
     return { sold, degraded: false };
   } catch (e) {
@@ -310,7 +335,10 @@ async function reconstructPositions(
     const ts = (await refreshFill(d, await findOrder(d.ledger, d.mode, meta.marketId, 'SELL', 'time_stop', meta.targetDate))).row;
 
     const mark = await markFor(d, meta.tokenId, entry.sizeMatched || entry.size, meta.execBidCapture);
-    const venueSold = await venueSoldFor(d, meta.tokenId);
+    // the position's OPEN sell rows' venue ids — the secondary maker-leg attribution key (the primary
+    // is d.address; canceled rows' ids are unreadable through the port, which is exactly why).
+    const knownSellIds = new Set([tp, sl, ts].flatMap((r) => (r?.orderId ? [r.orderId] : [])));
+    const venueSold = await venueSoldFor(d, meta.tokenId, knownSellIds);
     const pos = assemblePosition({
       meta: {
         marketId: meta.marketId,
@@ -372,6 +400,17 @@ async function tick(d: Daemon, botCitiesFallback: string[], minOrderSizeShares: 
   // a position whose venue sell-truth read failed has its taker exits + TP rest paused this tick.
   for (const a of sellHoldAlerts(positions)) await d.notify(a);
 
+  // DUST PARK — an unsold remainder below the venue min-order floor can never execute an exit order
+  // (place/placeTaker reject it), so the decide spine plans nothing for it (no ERR_MIN_SIZE CRITICAL
+  // livelock); surface it to the operator ONCE per position (an already-resting TP keeps working
+  // venue-side and can still flatten the dust as a maker).
+  for (const a of dustParkAlerts(positions, cfg)) {
+    const k = a.dedupeKey ?? `${a.kind}:${a.title}`;
+    if (d.warnedDust.has(k)) continue;
+    d.warnedDust.add(k);
+    await d.notify(a);
+  }
+
   // preflight interlock — LIVE only (a pure read; dry-run/off never post live so never gate on it).
   let preflight: TradePreflight | null = null;
   if (d.mode === 'live') {
@@ -391,7 +430,7 @@ async function tick(d: Daemon, botCitiesFallback: string[], minOrderSizeShares: 
   for (const a of entryCancelDeferredAlerts(positions, entriesBlocked)) await d.notify(a);
 
   const plan = decideTick({ mode: d.mode, config, preflight, cfg, now, candidates, positions });
-  const applied = await applyPlan(plan, d.executor, d.notify, log, d.ledger);
+  const applied = await applyPlan(plan, d.executor, d.notify, log, d.ledger, cfg.minOrderSizeShares);
 
   log({
     msg: 'trade-bot.tick',
@@ -463,10 +502,14 @@ export async function main(): Promise<number> {
 
   // Construct the CLOB client ONCE (shared across placements + book reads) — dry-run + live both need it
   // (dry-run signs the would-be order to log the exact redacted payload). The key is read INSIDE
-  // createClobClient (packages/trading/live.ts, §15) — never here.
+  // createClobClientWithIdentity (packages/trading/live.ts, §15) — never here; only the PUBLIC on-chain
+  // maker address comes back (the sell-truth read's maker-leg attribution key).
   let client: MakerClobClientish;
+  let address: string | null = null;
   try {
-    client = await createClobClient();
+    const identity = await createClobClientWithIdentity();
+    client = identity.client;
+    address = identity.address;
   } catch (e) {
     log({ msg: 'trade-bot.fatal', level: 'CRITICAL', error: redactText(e instanceof Error ? e.message : String(e)), hint: `dry-run + live require the wallet signing key (${'POLY_' + 'PRIVATE_KEY'}) in .env.local (to sign the would-be order); TRADE_MODE=off needs no key` });
     await sdb.end();
@@ -474,7 +517,7 @@ export async function main(): Promise<number> {
   }
   const clientFactory = (): Promise<MakerClobClientish> => Promise.resolve(client);
   const executor = new MakerExecutor({ db, client: clientFactory, notify, getEnvVar: (n) => process.env[n] });
-  const d: Daemon = { mode, db, ledger, executor, client, notify };
+  const d: Daemon = { mode, db, ledger, executor, client, notify, address, warnedDust: new Set() };
 
   // ── STARTUP ────────────────────────────────────────────────────────────────────────────────────
   let config: TradeConfig;

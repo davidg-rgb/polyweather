@@ -29,6 +29,8 @@ import {
   assemblePosition,
   decideTick,
   discoverCandidates,
+  dustParkAlerts,
+  dustRemainder,
   entryCancelDeferredAlerts,
   sellHoldAlerts,
   stopOf,
@@ -271,7 +273,7 @@ describe('decideTick — position management', () => {
     const sl = plan.intents.find((i) => i.kind === 'exit_taker') as Extract<Intent, { kind: 'exit_taker' }>;
     expect(sl.purpose).toBe('stop_loss');
     expect(sl.req).toMatchObject({ side: 'SELL', purpose: 'stop_loss', worstPrice: 0.07 });
-    expect(sl.cancelTp).toEqual({ orderId: 'tp1', clientOrderId: 'ctp1' });
+    expect(sl.cancelTp).toEqual({ orderId: 'tp1', clientOrderId: 'ctp1', sizeMatched: 0 });
   });
 
   it('holds (no stop) when the mark sits above the stop', () => {
@@ -285,7 +287,7 @@ describe('decideTick — position management', () => {
     const plan = decideTick(state({ positions: [pos] }));
     const ex = plan.intents.find((i) => i.kind === 'exit_taker') as Extract<Intent, { kind: 'exit_taker' }>;
     expect(ex.purpose).toBe('time_stop');
-    expect(ex.cancelTp).toEqual({ orderId: 'tp1', clientOrderId: 'ctp1' });
+    expect(ex.cancelTp).toEqual({ orderId: 'tp1', clientOrderId: 'ctp1', sizeMatched: 0 });
   });
 
   it('the time-stop takes priority over the take-profit rest', () => {
@@ -327,7 +329,8 @@ describe('decideTick — sold-truth accounting (CRITICAL-1/LOW-5)', () => {
     const ex = plan.intents.find((i) => i.kind === 'exit_taker') as Extract<Intent, { kind: 'exit_taker' }>;
     expect(ex.purpose).toBe('time_stop');
     expect(ex.req.size).toBe(26);
-    expect(ex.cancelTp).toEqual({ orderId: 'tp1', clientOrderId: 'ctp1' });
+    // the decide-time TP matched rides along as the raced-fill baseline for applyPlan's re-derive.
+    expect(ex.cancelTp).toEqual({ orderId: 'tp1', clientOrderId: 'ctp1', sizeMatched: 40 });
   });
 
   it('CRIT-1c: a fully-filled take-profit suppresses the stop-loss — no sell on a crashed mark', () => {
@@ -772,6 +775,9 @@ class FakeExecutor implements DaemonExecutor {
   placeThrows: Error | null = null;
   /** when false, cancel() reports the order was NOT (fully) canceled — the raced-a-fill venue response. */
   cancelSucceeds = true;
+  /** the post-cancel cumulative matched cancel() reports (CancelResult.sizeMatched); null ⇒ omitted
+   *  (the poll-unavailable case the driver must treat as an over-sell hazard → abort). */
+  postCancelMatched: number | null = 0;
   /** when set, placeTaker honors the REAL executor's by_intent idempotency against this ledger. */
   ledger: FakeLedger | null = null;
   constructor(mode: DaemonExecutor['mode'], placeResult: OrderPlacementResult) {
@@ -801,9 +807,16 @@ class FakeExecutor implements DaemonExecutor {
   }
   async cancel(orderId: string): Promise<CancelResult> {
     this.calls.push(`cancel:${orderId}`);
-    return this.cancelSucceeds
-      ? { requested: [orderId], canceled: [orderId], notCanceled: {}, allCanceled: true }
-      : { requested: [orderId], canceled: [], notCanceled: { [orderId]: 'order raced a fill' }, allCanceled: false };
+    if (!this.cancelSucceeds) {
+      return { requested: [orderId], canceled: [], notCanceled: { [orderId]: 'order raced a fill' }, allCanceled: false };
+    }
+    return {
+      requested: [orderId],
+      canceled: [orderId],
+      notCanceled: {},
+      allCanceled: true,
+      ...(this.postCancelMatched == null ? {} : { sizeMatched: this.postCancelMatched }),
+    };
   }
 }
 
@@ -837,7 +850,7 @@ describe('applyPlan — the driver', () => {
 
   it('exit_taker cancels the resting TP BEFORE the taker sell', async () => {
     const ex = new FakeExecutor('live', RESULT('placed'));
-    const exit: Intent = { kind: 'exit_taker', marketRef: 'm1', purpose: 'stop_loss', req: { marketId: 'm1', tokenId: 't1', side: 'SELL', purpose: 'stop_loss', tradeDate: '2026-07-06', worstPrice: 0.07, size: 66, negRisk: true }, cancelTp: { orderId: 'tp1', clientOrderId: 'ctp1' } };
+    const exit: Intent = { kind: 'exit_taker', marketRef: 'm1', purpose: 'stop_loss', req: { marketId: 'm1', tokenId: 't1', side: 'SELL', purpose: 'stop_loss', tradeDate: '2026-07-06', worstPrice: 0.07, size: 66, negRisk: true }, cancelTp: { orderId: 'tp1', clientOrderId: 'ctp1', sizeMatched: 0 } };
     await applyPlan({ intents: [exit], skips: [] }, ex, async () => true, log);
     expect(ex.calls).toEqual(['cancel:tp1', 'placeTaker:stop_loss:m1']);
   });
@@ -913,7 +926,7 @@ describe('applyPlan — TP-cancel race guard + venue-dead FAK adjudication', () 
     ex.cancelSucceeds = false;
     const alerts: TradeAlert[] = [];
     const r = await applyPlan(
-      { intents: [exitIntent({ cancelTp: { orderId: 'tp1', clientOrderId: 'ctp1' } })], skips: [] },
+      { intents: [exitIntent({ cancelTp: { orderId: 'tp1', clientOrderId: 'ctp1', sizeMatched: 0 } })], skips: [] },
       ex,
       async (a) => (alerts.push(a), true),
       log,
@@ -970,6 +983,133 @@ describe('applyPlan — TP-cancel race guard + venue-dead FAK adjudication', () 
     expect(ledger.canceledCids).toEqual([]); // untouched — reconcile's job
     expect(r.duplicate).toBe(1); // duplicate-blocked this tick (safe: the key stays reserved)
     expect(r.posted).toBe(0);
+  });
+});
+
+// ── TP-CANCEL RACE, allCanceled=true side — the taker is re-derived from the post-cancel poll ────────
+describe('applyPlan — a PARTIAL TP fill raced into the poll→cancel window resizes the taker (never over-sell)', () => {
+  const exitIntent = (size: number, tpMatchedAtDecide: number): Intent => ({
+    kind: 'exit_taker',
+    marketRef: 'm1',
+    purpose: 'stop_loss',
+    req: { marketId: 'm1', tokenId: 't1', side: 'SELL', purpose: 'stop_loss', tradeDate: '2026-07-06', worstPrice: 0.07, size, negRisk: true },
+    cancelTp: { orderId: 'tp1', clientOrderId: 'ctp1', sizeMatched: tpMatchedAtDecide },
+  });
+
+  it('FALSIFIER (the race): decide sized 10 from a 0-matched TP; 4 filled during the cancel (allCanceled=true) → the FAK posts 6, not 10', async () => {
+    const ex = new FakeExecutor('live', RESULT('placed'));
+    ex.postCancelMatched = 4; // the executor's post-cancel poll reports the raced fill
+    const placedSizes: number[] = [];
+    const origPlaceTaker = ex.placeTaker.bind(ex);
+    ex.placeTaker = async (req) => {
+      placedSizes.push(req.size);
+      return origPlaceTaker(req);
+    };
+    const r = await applyPlan({ intents: [exitIntent(10, 0)], skips: [] }, ex, async () => true, log, undefined, 5);
+    expect(placedSizes).toEqual([6]);
+    expect(r.posted).toBe(1);
+    expect(r.aborted).toBe(0);
+  });
+
+  it('the raced delta is measured against the DECIDE-TIME TP matched, not zero (TP already 40-matched at decide; 45 post-cancel → shrink by 5)', async () => {
+    const ex = new FakeExecutor('live', RESULT('placed'));
+    ex.postCancelMatched = 45;
+    const placedSizes: number[] = [];
+    const orig = ex.placeTaker.bind(ex);
+    ex.placeTaker = async (req) => (placedSizes.push(req.size), orig(req));
+    await applyPlan({ intents: [exitIntent(26, 40)], skips: [] }, ex, async () => true, log, undefined, 5);
+    expect(placedSizes).toEqual([21]);
+  });
+
+  it('no raced fill (post-cancel matched == decide-time matched) → the FAK posts the original size', async () => {
+    const ex = new FakeExecutor('live', RESULT('placed'));
+    ex.postCancelMatched = 40;
+    const placedSizes: number[] = [];
+    const orig = ex.placeTaker.bind(ex);
+    ex.placeTaker = async (req) => (placedSizes.push(req.size), orig(req));
+    await applyPlan({ intents: [exitIntent(26, 40)], skips: [] }, ex, async () => true, log, undefined, 5);
+    expect(placedSizes).toEqual([26]);
+  });
+
+  it('the raced fill covers the WHOLE exit → nothing posted (no over-sell, no venue rejection)', async () => {
+    const ex = new FakeExecutor('live', RESULT('placed'));
+    ex.postCancelMatched = 10; // decide sized 10 from a 0-matched TP; all 10 raced
+    const r = await applyPlan({ intents: [exitIntent(10, 0)], skips: [] }, ex, async () => true, log, undefined, 5);
+    expect(ex.calls).toEqual(['cancel:tp1']); // placeTaker never invoked
+    expect(r.posted).toBe(0);
+    expect(r.failed).toBe(0);
+  });
+
+  it('a resized remainder below the venue min dust-parks with ONE WARN — never a CRITICAL livelock', async () => {
+    const ex = new FakeExecutor('live', RESULT('placed'));
+    ex.postCancelMatched = 7; // 10 − 7 = 3 < min 5
+    const alerts: TradeAlert[] = [];
+    const r = await applyPlan({ intents: [exitIntent(10, 0)], skips: [] }, ex, async (a) => (alerts.push(a), true), log, undefined, 5);
+    expect(ex.calls).toEqual(['cancel:tp1']);
+    expect(r.posted).toBe(0);
+    expect(r.failed).toBe(0);
+    expect(alerts).toEqual([expect.objectContaining({ kind: 'TRADE_BOT_DUST_PARKED', severity: 'WARN' })]);
+  });
+
+  it('post-cancel fill state UNKNOWN (no sizeMatched on the cancel result) → the taker ABORTS this tick (over-sell guard), WARN alerted', async () => {
+    const ex = new FakeExecutor('live', RESULT('placed'));
+    ex.postCancelMatched = null;
+    const alerts: TradeAlert[] = [];
+    const r = await applyPlan({ intents: [exitIntent(10, 0)], skips: [] }, ex, async (a) => (alerts.push(a), true), log, undefined, 5);
+    expect(ex.calls).toEqual(['cancel:tp1']);
+    expect(r.aborted).toBe(1);
+    expect(r.posted).toBe(0);
+    expect(alerts.some((a) => a.kind === 'TRADE_BOT_EXIT_ABORTED' && a.severity === 'WARN')).toBe(true);
+  });
+
+  it('an exit WITHOUT a resting TP (no cancelTp) posts unchanged — no cancel, no re-derive', async () => {
+    const ex = new FakeExecutor('live', RESULT('placed'));
+    const bare: Intent = { kind: 'exit_taker', marketRef: 'm1', purpose: 'time_stop', req: { marketId: 'm1', tokenId: 't1', side: 'SELL', purpose: 'time_stop', tradeDate: '2026-07-06', worstPrice: 0.2, size: 26, negRisk: true } };
+    const r = await applyPlan({ intents: [bare], skips: [] }, ex, async () => true, log, undefined, 5);
+    expect(ex.calls).toEqual(['placeTaker:time_stop:m1']);
+    expect(r.posted).toBe(1);
+  });
+});
+
+// ── DUST PARK — a sub-min unsold remainder plans nothing (no ERR_MIN_SIZE CRITICAL livelock) ─────────
+describe('decideTick — dust park (unsold remainder below the venue min-order floor)', () => {
+  const dustPos = (over: Partial<LivePosition> = {}) =>
+    // held 66, sold 63 → remaining 3 < min 5; time-stop clock already tripped (resolvesAt = now + 1h).
+    position({ resolvesAtMs: NOW.getTime() + 3_600_000, mark: 0.01, filledSize: 66, soldSize: 63, ...over });
+
+  it('FALSIFIER (the livelock): a 3-share remainder past the time-stop on a crashed mark plans NO exit and NO TP — only a dust skip', () => {
+    const plan = decideTick(state({ positions: [dustPos()] }));
+    expect(plan.intents).toHaveLength(0);
+    expect(plan.skips.some((s) => s.reason.startsWith('dust_below_min_order'))).toBe(true);
+  });
+
+  it('a remainder AT/ABOVE the floor still exits normally (5 sh = min 5)', () => {
+    const plan = decideTick(state({ positions: [dustPos({ soldSize: 61 })] })); // remaining 5
+    const ex = plan.intents.find((i) => i.kind === 'exit_taker') as Extract<Intent, { kind: 'exit_taker' }>;
+    expect(ex).toBeDefined();
+    expect(ex.req.size).toBe(5);
+    expect(plan.skips.some((s) => s.reason.startsWith('dust_below_min_order'))).toBe(false);
+  });
+
+  it('degraded sold-truth outranks dust (its CRITICAL hold owns the tick; dust is not classified from an untrusted soldSize)', () => {
+    const plan = decideTick(state({ positions: [dustPos({ soldTruthDegraded: true })] }));
+    expect(plan.intents).toHaveLength(0);
+    expect(plan.skips.some((s) => s.reason.startsWith('sell_hold_degraded'))).toBe(true);
+    expect(plan.skips.some((s) => s.reason.startsWith('dust_below_min_order'))).toBe(false);
+  });
+
+  it('dustRemainder: null when flattened / sellable / degraded; the remainder when parked', () => {
+    expect(dustRemainder(dustPos(), CFG)).toBeCloseTo(3, 9);
+    expect(dustRemainder(dustPos({ soldSize: 66 }), CFG)).toBeNull(); // flattened
+    expect(dustRemainder(dustPos({ soldSize: 40 }), CFG)).toBeNull(); // 26 ≥ 5 — sellable
+    expect(dustRemainder(dustPos({ soldTruthDegraded: true }), CFG)).toBeNull();
+  });
+
+  it('dustParkAlerts: ONE WARN per dust position (the daemon dedupes it to once per process)', () => {
+    const alerts = dustParkAlerts([dustPos(), dustPos({ marketId: 'm2', soldSize: 40 })], CFG);
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]).toMatchObject({ kind: 'TRADE_BOT_DUST_PARKED', severity: 'WARN', dedupeKey: 'trade-bot-dust:m1|2026-07-06' });
+    expect(alerts[0]!.body).toContain('below the venue min-order size');
   });
 });
 

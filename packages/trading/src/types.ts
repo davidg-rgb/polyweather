@@ -86,11 +86,13 @@ export interface FillRpcResult {
 //
 // These extend the Phase-A taker rail above so the tuned MAKER-EXIT strategy (MAKER-EXIT-SIM.md:
 // maker GTC entry + resting maker TP + taker FAK stop/time-stop) can run end-to-end. The SDK call
-// surface here is grounded in `research/REPORT-clob-bracket-execution.md` (RESOLVED against published
-// the published `clob-client-v2@1.0.6` SDK): order types GTC/GTD/FOK/FAK (§1); `post_only` is a native
-// positional bool, GTC/GTD-only (§9.2); NO server-side client-order-id — idempotency is OUR own DB
-// ledger (§5); no atomic amend — reprice = cancel-then-repost the remainder (§3); partial fills are
-// tracked via cumulative `size_matched` (§4).
+// surface here is grounded in `research/REPORT-clob-bracket-execution.md` PLUS a re-verification
+// against the INSTALLED `@polymarket/clob-client@4.22.8` dist (the report's §9 resolved some surfaces
+// against the different `clob-client-v2@1.0.6` package): order types GTC/GTD/FOK/FAK (§1); the v4 SDK
+// has NO post_only anywhere — maker-ness is enforced BY PRICE alone (`makerLimitPrice`), and
+// `postOrder`'s 3rd positional is `deferExec`, never passed; NO server-side client-order-id —
+// idempotency is OUR own DB ledger (§5); no atomic amend — reprice = cancel-then-repost the remainder
+// (§3); partial fills are tracked via cumulative `size_matched` (§4).
 // ───────────────────────────────────────────────────────────────────────────────────────────────────
 
 /** The venue's four order types (research report §1). Maker-eligible: GTC/GTD. Taker: FOK/FAK. */
@@ -224,15 +226,52 @@ export interface CancelResult {
   notCanceled: Record<string, string>;
   /** true iff every requested id was canceled (none raced a fill). */
   allCanceled: boolean;
+  /**
+   * the order's POST-CANCEL cumulative matched size — set by `MakerExecutor.cancel`'s post-cancel
+   * fill poll (a venue cancel can race a fill even when it reports `allCanceled`), so callers can
+   * re-derive `remaining` from fresh truth before sizing a follow-up SELL. Absent when no poll ran
+   * (parseCancelResult never sets it); 0 in non-live modes (dry-run rows never fill).
+   */
+  sizeMatched?: number;
 }
 
-/** A parsed venue trade/fill row (`getTrades`, research report §5) — the reconcile evidence read. */
-export interface VenueTrade {
+/**
+ * One maker leg of a venue trade record (`Trade.maker_orders[]`, installed SDK v4.22.8). The venue's
+ * trade record is TAKER-centric — when WE were the maker, OUR fill is one (or more) of these legs:
+ * `side` is the LEG's own side and `size` its `matched_amount`; `makerAddress` identifies whose leg it
+ * is (the on-chain maker/funder address — legs from OTHER makers matched in the same taker order can
+ * appear beside ours).
+ */
+export interface VenueTradeMakerLeg {
+  orderId: string;
   side: string;
   price: number;
+  /** this leg's `matched_amount` — OUR fill size when the leg is ours. */
+  size: number;
+  makerAddress: string;
+  tokenId: string;
+}
+
+/**
+ * A parsed venue trade/fill row (`getTrades`, installed SDK v4.22.8 `Trade`) — the reconcile evidence
+ * read + the daemon's sell-truth floor. ⚠ TAKER-CENTRIC record: the top-level `side`/`size`/`price`
+ * describe the TAKER order; `traderSide` says which side WE were. Our maker fills (this strategy's
+ * dominant case — resting entries + TPs) live in `makerOrders[]` with per-leg side/size. NEVER read
+ * the top-level `side`/`size` as ours without checking `traderSide` — use `sumOurSellSize` /
+ * `tradeCouldBeOurFill` (order-intent.ts).
+ */
+export interface VenueTrade {
+  /** the TAKER order's side — OUR side ONLY when `traderSide === 'TAKER'`. */
+  side: string;
+  price: number;
+  /** the TAKER order's matched total — OUR size ONLY when `traderSide === 'TAKER'`. */
   size: number;
   tokenId: string;
   status: string;
+  /** which side of the record WE were — the perspective key for every read of this row. */
+  traderSide: 'TAKER' | 'MAKER';
+  takerOrderId: string;
+  makerOrders: VenueTradeMakerLeg[];
 }
 
 /**
@@ -250,7 +289,7 @@ export interface ReconcileOutcome {
   reason: string;
 }
 
-/** A maker order request (GTC/GTD, post_only). `targetPrice` is RE-PRICED to guarantee non-crossing. */
+/** A maker order request (GTC/GTD, price-enforced maker). `targetPrice` is RE-PRICED to guarantee non-crossing. */
 export interface MakerOrderRequest {
   /** conditionId — the market identity for the idempotency key + cancel-by-market. */
   marketId: string;
@@ -301,6 +340,8 @@ export interface OrderPlacementResult {
   side: OrderSide;
   purpose: OrderPurpose;
   orderType: OrderType;
+  /** the MAKER posture marker (true for resting entry/TP intents). ⚠ observability only: the pinned
+   *  clob-client v4 has NO post_only wire flag — maker-ness is enforced entirely by `makerLimitPrice`. */
   postOnly: boolean;
   limitPrice: number | null;
   size: number;
