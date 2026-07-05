@@ -108,6 +108,29 @@ function envVar(name: string): string | undefined {
 }
 
 /**
+ * clob-client's HTTP helper console.error()s the FULL axios error — request config included, which
+ * carries the transient L1 auth headers (POLY_ADDRESS + the timestamped POLY_SIGNATURE) — on the
+ * EXPECTED 400 inside createOrDeriveApiKey's derive→create fallback. No key material, but auth
+ * headers do not belong in daemon logs (C51 hygiene follow-up). Scope-silence the console for
+ * exactly one awaited call; failures still THROW loudly through the normal ExecutionError paths.
+ * Restoration is finally-guaranteed. Concurrency caveat: console is process-global, so unrelated
+ * lines emitted DURING the awaited call are also dropped — acceptable for the one-shot bootstrap.
+ */
+export async function suppressConsoleDuring<T>(fn: () => Promise<T>): Promise<T> {
+  const con = (globalThis as unknown as { console?: Record<string, unknown> }).console;
+  if (!con) return fn();
+  const methods = ['error', 'warn', 'log', 'info', 'debug'] as const;
+  const saved: Array<[string, unknown]> = methods.map((m) => [m, con[m]]);
+  const noop = (): void => {};
+  for (const m of methods) con[m] = noop;
+  try {
+    return await fn();
+  } finally {
+    for (const [m, f] of saved) con[m] = f;
+  }
+}
+
+/**
  * Production client factory: ClobClient(host, chainId=137, signer from
  * POLY_PRIVATE_KEY, creds via createOrDeriveApiKey). Dynamic non-literal
  * specifiers: resolved by Deno at run time, invisible to tsc/Node — nothing
@@ -139,7 +162,8 @@ async function bootstrapClobClient(): Promise<{
   const sigType = Number(envVar('POLY_SIGNATURE_TYPE') ?? 0);
   const funder = envVar('POLY_FUNDER_ADDRESS');
   const bootstrap = new ClobClient('https://clob.polymarket.com', 137, signer, undefined, sigType, funder);
-  const creds = await bootstrap.createOrDeriveApiKey();
+  // The 400-fallback inside this call is EXPECTED (derive→create) — see suppressConsoleDuring.
+  const creds = await suppressConsoleDuring(() => bootstrap.createOrDeriveApiKey());
   const client = new ClobClient('https://clob.polymarket.com', 137, signer, creds, sigType, funder);
   return { client, creds, sigType, funderSet: funder != null && funder !== '' };
 }

@@ -6,7 +6,7 @@
  */
 import { describe, expect, it, vi } from 'vitest';
 import { ExecutionError } from '@weather-edge/core';
-import { LiveExecutor, createClobClient, type ApprovedBet, type ClobClientish, type TradeAlert } from '../src/index.ts';
+import { LiveExecutor, createClobClient, suppressConsoleDuring, type ApprovedBet, type ClobClientish, type TradeAlert } from '../src/index.ts';
 
 const bet: ApprovedBet = {
   betId: 'b-1',
@@ -161,5 +161,42 @@ describe('LiveExecutor (§6.20 — mock-tested, dormant)', () => {
     } finally {
       if (saved !== undefined) process.env[KEY] = saved;
     }
+  });
+});
+
+describe('suppressConsoleDuring (C51 bootstrap-hygiene follow-up)', () => {
+  it('drops console output emitted inside the call, restores every method after, passes the value through', async () => {
+    const before = { error: console.error, warn: console.warn, log: console.log, info: console.info, debug: console.debug };
+    const spy = vi.fn();
+    const savedError = console.error;
+    console.error = spy; // stand-in for the daemon's real sink — must NOT be hit from inside
+    try {
+      const out = await suppressConsoleDuring(async () => {
+        // what clob-client does on the expected derive→create 400 fallback
+        console.error('axios error with POLY_ADDRESS/POLY_SIGNATURE headers');
+        console.log('request config dump');
+        return 'creds';
+      });
+      expect(out).toBe('creds');
+      expect(spy).not.toHaveBeenCalled();
+      expect(console.error).toBe(spy); // our pre-call override restored, not clobbered
+    } finally {
+      console.error = savedError;
+    }
+    // and with no override in play, everything is back to the originals
+    expect(console.warn).toBe(before.warn);
+    expect(console.log).toBe(before.log);
+    expect(console.info).toBe(before.info);
+    expect(console.debug).toBe(before.debug);
+  });
+
+  it('restores the console and rethrows when the wrapped call throws (failures stay loud)', async () => {
+    const original = console.error;
+    await expect(
+      suppressConsoleDuring(async () => {
+        throw new ExecutionError('ERR_CLOB', 'bootstrap failed');
+      }),
+    ).rejects.toMatchObject({ code: 'ERR_CLOB' });
+    expect(console.error).toBe(original);
   });
 });
