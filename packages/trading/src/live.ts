@@ -26,6 +26,7 @@ import {
   redactText,
   resolveTradeMode,
   takerLimitPrice,
+  tradesResponseTruncated,
 } from './order-intent.ts';
 import { rpcOrderLedger } from './order-ledger.ts';
 import type {
@@ -813,7 +814,15 @@ export class MakerExecutor {
         }
         // No open order — check recent trades before concluding "never posted": the order could have
         // posted AND filled (or filled-then-expired) without ever resting long enough to list.
-        const trades = parseTrades(await client.getTrades({ asset_id: row.tokenId }));
+        const rawTrades = await client.getTrades({ asset_id: row.tokenId });
+        // §11.1 — a TRUNCATED trades page (cursor/at-limit) is INCOMPLETE evidence: a fill could sit on a
+        // later page. Freeing a key on it would double-place if the order actually filled → treat exactly
+        // like a failed evidence read (hold, never free). Same detector the daemon's sell-truth read uses.
+        if (tradesResponseTruncated(rawTrades)) {
+          await held('trades evidence read was truncated (cursor-bearing / at page limit) — a fill could be on a later page; cannot conclude "never posted"');
+          continue;
+        }
+        const trades = parseTrades(rawTrades);
         const tradeHit = trades.some(
           (t) => t.side.toUpperCase() === row.side && Math.abs(t.price - row.price) <= tick + 1e-9,
         );

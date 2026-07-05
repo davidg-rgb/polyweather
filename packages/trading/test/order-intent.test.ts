@@ -8,6 +8,7 @@
 import { describe, expect, it } from 'vitest';
 import { ClobShapeError } from '@weather-edge/core';
 import {
+  CLOB_TRADES_PAGE_LIMIT,
   makerLimitPrice,
   matchDanglingIntent,
   orderIntentKey,
@@ -20,6 +21,7 @@ import {
   redactText,
   resolveTradeMode,
   takerLimitPrice,
+  tradesResponseTruncated,
   type OpenOrder,
 } from '../src/index.ts';
 
@@ -187,6 +189,46 @@ describe('parseTrades — FAIL-LOUD (the reconcile evidence read)', () => {
     expect(() => parseTrades('nope')).toThrow(ClobShapeError);
     expect(() => parseTrades({ foo: [] })).toThrow(ClobShapeError);
     expect(() => parseTrades([{ size: '5' }])).toThrow(ClobShapeError);
+  });
+});
+
+describe('tradesResponseTruncated — §11.1 the sell-truth over-sell backstop', () => {
+  const t = { price: '0.18', side: 'SELL', size: '5', asset_id: 'tokA', status: 'CONFIRMED' };
+
+  it('a bare array or {…} envelope UNDER the page limit with no cursor is COMPLETE → false', () => {
+    expect(tradesResponseTruncated([t, t, t])).toBe(false);
+    expect(tradesResponseTruncated([])).toBe(false);
+    expect(tradesResponseTruncated({ data: [t] })).toBe(false);
+    expect(tradesResponseTruncated({ trades: [] })).toBe(false);
+  });
+
+  it('the terminal cursor sentinel ("LTE=") or an empty cursor means COMPLETE → false', () => {
+    expect(tradesResponseTruncated({ next_cursor: 'LTE=', data: [t] })).toBe(false);
+    expect(tradesResponseTruncated({ next_cursor: '', data: [t] })).toBe(false);
+    expect(tradesResponseTruncated({ next_cursor: '   ', data: [t] })).toBe(false);
+    expect(tradesResponseTruncated({ nextCursor: 'LTE=', data: [t] })).toBe(false);
+  });
+
+  it('a present, non-terminal cursor means MORE PAGES → truncated (true), even with a short page', () => {
+    expect(tradesResponseTruncated({ next_cursor: 'MTAw', data: [t] })).toBe(true);
+    expect(tradesResponseTruncated({ nextCursor: 'MTAw', trades: [t] })).toBe(true);
+    // even a bare array can't carry a cursor, but an envelope with an empty data page + a live cursor does:
+    expect(tradesResponseTruncated({ next_cursor: 'abc', data: [] })).toBe(true);
+  });
+
+  it('a page AT/ABOVE the page limit is conservatively truncated → true (array or envelope)', () => {
+    const full = Array.from({ length: CLOB_TRADES_PAGE_LIMIT }, () => t);
+    expect(CLOB_TRADES_PAGE_LIMIT).toBe(100);
+    expect(tradesResponseTruncated(full)).toBe(true);
+    expect(tradesResponseTruncated([...full, t])).toBe(true); // above the limit
+    expect(tradesResponseTruncated({ data: full })).toBe(true);
+    expect(tradesResponseTruncated(full.slice(0, CLOB_TRADES_PAGE_LIMIT - 1))).toBe(false); // one under → complete
+  });
+
+  it('never throws on an unrecognized shape (a pure boolean detector; parseTrades raises separately)', () => {
+    expect(tradesResponseTruncated(null)).toBe(false);
+    expect(tradesResponseTruncated('nope')).toBe(false);
+    expect(tradesResponseTruncated({ foo: [] })).toBe(false);
   });
 });
 

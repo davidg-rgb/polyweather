@@ -185,11 +185,16 @@ regardless of the prod whale-noise pause. A missing webhook never silences a saf
   SELL fills for the token from the venue's trade log (`getTrades` — the same evidence read the startup
   reconcile uses) and floors the position's `soldSize` with it. This is what makes "how much have we already
   sold?" survive rows going terminal-canceled (a lifted-then-cancelled TP, an adjudicated FAK corpse), whose
-  fills are invisible to `bot_order_by_intent` (0082).
-- **Exits SELF-PAUSE during a venue-trades outage (lens NEW-LOW-1).** The `getTrades` read is
-  safety-load-bearing, not telemetry: while it is failing for a position's token, `soldSize` may be
-  understated, so the daemon **holds every SELL for that position** — the taker stop-loss/time-stop AND the
-  TP rest — and fires a **CRITICAL `TRADE_BOT_SELL_HOLD` alert every affected tick** (never silent). Why:
+  fills are invisible to `bot_order_by_intent` (0082). A read counts as trustworthy ONLY when the page is
+  COMPLETE: a cursor-bearing / at-page-limit response (`tradesResponseTruncated`, §11.1) is treated as
+  degraded, exactly like a throw — an incomplete page could under-count `soldSize` and defeat the over-sell
+  guard, so it self-pauses the sells rather than trusting a partial sum. The read stays a single call (no
+  pagination — the strategy trades ~1 BUY + ≤3 SELLs per token, so a real page never reaches the limit).
+- **Exits SELF-PAUSE during a venue-trades outage OR a truncated read (lens NEW-LOW-1 / §11.1).** The
+  `getTrades` read is safety-load-bearing, not telemetry: while it is failing — OR returning an incomplete
+  page — for a position's token, `soldSize` may be understated, so the daemon **holds every SELL for that
+  position** — the taker stop-loss/time-stop AND the TP rest — and fires a **CRITICAL `TRADE_BOT_SELL_HOLD`
+  alert every affected tick** (never silent). Why:
   the over-sell guarantee outranks exit latency — positions are §9R-capped ($10 stake / $25 ceiling), so a
   few ticks of exit delay is bounded risk, while sizing a SELL from understated accounting and hoping the
   venue's balance check rejects it is not accounting. An already-resting TP stays working (it was sized when
@@ -240,17 +245,29 @@ that has not passed — and the forward-paper §9R-E `PASS` is the gate of recor
 
 ---
 
-## 11. Known venue-edge residuals (lens-waived follow-ups, 2026-07-05)
+## 11. Known venue-edge residuals — both CLOSED (built + tested, 2026-07-05)
 
-Two LOW findings from the T2 review series were **accepted as follow-ups, not fixed** — both are narrow
+Two LOW findings from the T2 review series were originally accepted as follow-ups — both narrow
 venue-eventual-consistency edges, bounded by the §9R caps and self-limited by this strategy's tiny per-token
-trade count (~1 entry BUY + ≤3 exit SELLs; a single-`asset_id` `/trades` read does not paginate at that size):
+trade count (~1 entry BUY + ≤3 exit SELLs; a single-`asset_id` `/trades` read does not paginate at that size).
+**Both are now BUILT + TESTED** (they earned the fix because each is a correctness backstop on the over-sell /
+no-orphan-fill guarantees, not a taker-edge lever):
 
-1. **Silent `getTrades` truncation can false-negative the degraded flag.** The sell-truth read treats a THROW
-   as degraded (exits self-pause, §8) but a *successful-yet-incomplete* response would under-count `soldSize`
-   with `degraded=false`. Follow-up: treat a cursor-bearing/at-limit `/trades` response as degraded.
-2. **A poll-missed partial entry fill concurrent with a kill-cancel orphans that fill.** If `getOrder` returns
-   stale `sizeMatched=0` for a partially-filled entry in the same tick a preflight kill fires, the resting
-   remainder is cancelled and the missed fill is lost to reconstruction (entry BUYs have no `getTrades` floor —
-   only SELLs do). The fully-filled case is self-protected (`allCanceled=false` skips the terminal write).
-   Follow-up: gate `cancel_entry` on a fresh successful entry poll this tick.
+1. **CLOSED — silent `getTrades` truncation no longer false-negatives the degraded flag.** The parse layer now
+   exposes `tradesResponseTruncated(raw)` (order-intent.ts): a response is truncated when it carries a
+   non-terminal `next_cursor` (present, non-empty, ≠ the `"LTE="` sentinel) OR its page is ≥
+   `CLOB_TRADES_PAGE_LIMIT` (100). The daemon's `venueSoldFor` (§8) treats a truncated page **exactly like a
+   throw** → `{ sold: null, degraded: true }` → the sells self-pause + `TRADE_BOT_SELL_HOLD` CRITICAL, so an
+   incomplete page can never under-count `soldSize`. The read stays a SINGLE call (no pagination-following, out
+   of scope). Same detector also hardens the startup-reconcile trades read in `live.ts` (a truncated page is
+   incomplete evidence → HOLD, never free a key). Tests: `order-intent.test.ts` (the detector, all shapes) +
+   `scripts/trade-bot.test.ts` (`venueSoldFor` truncated/at-limit/throw → degraded end-to-end into the CRITICAL).
+2. **CLOSED — a poll-missed partial entry fill can no longer be orphaned by a kill-cancel.** `refreshFill`
+   now returns `{ row, fresh }`; `fresh` is false ONLY when a LIVE poll of the resting entry THREW. That
+   `entryPollFresh` flag rides on the `LivePosition`, and the decide spine's kill-path cancel of a
+   fully-unfilled resting entry (`planForPosition`) may only fire when `entryPollFresh === true` — a stale
+   `sizeMatched=0` DEFERS the cancel to the next tick (a `cancel_entry_deferred_stale_poll` skip +
+   `entryCancelDeferredAlerts` WARN, never CRITICAL), so a partial fill the poll missed is never
+   `record_canceled`-orphaned. The known-partial (`filledSize>0`) remainder is still left working (NEW-LOW-2),
+   and the fully-filled case stays self-protected (`allCanceled=false`). Tests: `trade-bot-decide.test.ts`
+   (stale → defer + skip; fresh → cancel; alert mapping) + `scripts/trade-bot.test.ts` (`refreshFill` freshness).

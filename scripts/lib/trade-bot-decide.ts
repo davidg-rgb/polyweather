@@ -298,6 +298,15 @@ export interface LivePosition {
    * CRITICAL. Always false in dry-run (no venue read is applicable; the visible sum is exact).
    */
   soldTruthDegraded: boolean;
+  /**
+   * true when the entry order's venue fill state was FRESHLY and SUCCESSFULLY polled this tick (§11.2) — or
+   * when no poll was needed (dry-run/off, no orderId, terminal status). Only false when a LIVE poll of the
+   * resting entry THREW, leaving a possibly-stale `filledSize`. A live kill (§preflight fail) may cancel a
+   * fully-unfilled resting entry ONLY when this is true: a stale `sizeMatched=0` could hide a poll-missed
+   * partial fill that `cancel_entry` would orphan from reconstruction (entry BUYs have no `getTrades`
+   * floor). Defaults true (dry-run / non-kill paths never consult it). Set by the daemon's `refreshFill`.
+   */
+  entryPollFresh: boolean;
   /** the CURRENT executable bid — the realizable sell mark (the daemon fetches it live). */
   mark: number | null;
   entry: OrderHandle | null;
@@ -351,6 +360,8 @@ export function assemblePosition(args: {
   venueSoldSize?: number | null;
   /** the venue trade read was attempted and FAILED (live) — sells are held this tick (NEW-LOW-1). */
   soldTruthDegraded?: boolean;
+  /** the entry's fill state was freshly + successfully polled this tick (§11.2). Defaults true. */
+  entryPollFresh?: boolean;
 }): LivePosition | null {
   const { meta, entry, tp, stopLoss, timeStop, mark } = args;
   if (entry == null) return null;
@@ -370,6 +381,7 @@ export function assemblePosition(args: {
     filledSize: entry.sizeMatched,
     soldSize,
     soldTruthDegraded: args.soldTruthDegraded === true,
+    entryPollFresh: args.entryPollFresh !== false, // default true; only an explicit false (a failed poll) gates
     mark: mark ?? null,
     entry: handleOf(entry),
     tp: handleOf(tp),
@@ -470,6 +482,19 @@ const cancelEntryIntent = (p: LivePosition, e: OrderHandle & { orderId: string }
 });
 
 /**
+ * §11.2 — true when a live kill WANTS to cancel a fully-unfilled resting entry but THIS tick's fill poll of
+ * that entry did NOT freshly succeed (`entryPollFresh === false`). Cancelling on a stale `sizeMatched=0`
+ * could `record_canceled` an entry that actually partial-filled (the poll just missed it) → the missed fill
+ * is orphaned from reconstruction (entry BUYs have no `getTrades` floor — only SELLs do). So the cancel is
+ * DEFERRED (planForPosition holds it, decideTick surfaces a skip, the daemon fires a WARN); it retries next
+ * tick once a healthy poll confirms 0 matched. A KNOWN partial (`filledSize>0`) is a different case — its
+ * remainder is deliberately left working (NEW-LOW-2), never cancelled — so this predicate excludes it.
+ */
+function entryCancelDeferredByStalePoll(p: LivePosition, entriesBlocked: boolean): boolean {
+  return entriesBlocked && !(p.filledSize > 0) && restingEntry(p.entry) && !p.entryPollFresh;
+}
+
+/**
  * Manage one open position: exits (never gated) take priority over resting the TP, over the entry window.
  * `entriesBlocked` (live preflight failed): reprice is suppressed and a FULLY-UNFILLED resting maker
  * ENTRY is CANCELLED (MEDIUM-2: a kill stops new exposure within one tick); exits + the TP rest keep
@@ -490,7 +515,12 @@ function planForPosition(p: LivePosition, cfg: DecideCfg, nowMs: number, entries
   if (!(held > 0)) {
     const e = p.entry;
     if (!restingEntry(e)) return out; // dangling ('intent', no orderId) → reconcile owns it; terminal → done
-    if (entriesBlocked) return [cancelEntryIntent(p, e, 'preflight_blocked — kill cancels fully-unfilled resting entries')];
+    if (entriesBlocked) {
+      // §11.2 — only cancel when the entry's 0-matched state is FRESHLY confirmed this tick; a stale poll
+      // could be hiding a partial fill that record_canceled would orphan → DEFER (retry next tick, WARN).
+      if (!p.entryPollFresh) return out;
+      return [cancelEntryIntent(p, e, 'preflight_blocked — kill cancels fully-unfilled resting entries')];
+    }
     if (e.restingSinceMs == null) return out; // no clock → cannot age the window; hold
     const restMin = (nowMs - e.restingSinceMs) / 60_000;
     if (restMin < cfg.makerFillWindowMin) return out; // within the window → keep resting
@@ -623,6 +653,13 @@ export function decideTick(state: TickState): TickPlan {
           'sell_hold_degraded — venue sell-truth (getTrades) unavailable; soldSize may be understated, so taker exits + the TP rest are HELD this tick (over-sell guard; the daemon alerts CRITICAL)',
       });
     }
+    if (entryCancelDeferredByStalePoll(p, entriesBlocked)) {
+      skips.push({
+        ref: p.marketId,
+        reason:
+          'cancel_entry_deferred_stale_poll — live kill wants to cancel this fully-unfilled resting entry, but its fill state was not freshly polled this tick (getOrder failed); a stale sizeMatched=0 could hide a partial fill, so the cancel is DEFERRED to next tick (the daemon fires a WARN)',
+      });
+    }
     intents.push(...planForPosition(p, cfg, nowMs, entriesBlocked));
   }
 
@@ -727,6 +764,34 @@ export function sellHoldAlerts(positions: LivePosition[]): TradeAlert[] {
         `latency (the position is §9R-capped). Investigate CLOB /trades connectivity now; sells resume ` +
         `automatically, correctly sized, on the first healthy tick.`,
       dedupeKey: `trade-bot-sellhold:${p.marketId}`,
+    });
+  }
+  return out;
+}
+
+/**
+ * §11.2 — the WARN escalation for a DEFERRED kill-cancel. PURE: maps every position where a live kill wants
+ * to cancel a fully-unfilled resting entry but the entry's fill state was NOT freshly polled this tick
+ * (`entryPollFresh === false`) to a WARN alert. The daemon fires these through `notify` (a structured WARN
+ * log + a raw Slack post) so the operator sees that a kill-cancel is waiting on a healthy `getOrder`. WARN,
+ * NOT CRITICAL: the entry is §9R-capped and retries next tick, and the deferral is the SAFE choice (a stale
+ * poll cannot hide an over-sell — it only risks orphaning a poll-missed partial, which the deferral avoids).
+ */
+export function entryCancelDeferredAlerts(positions: LivePosition[], entriesBlocked: boolean): TradeAlert[] {
+  const out: TradeAlert[] = [];
+  for (const p of positions) {
+    if (!entryCancelDeferredByStalePoll(p, entriesBlocked)) continue;
+    out.push({
+      kind: 'TRADE_BOT_ENTRY_CANCEL_DEFERRED',
+      severity: 'WARN',
+      title: `trade-bot: kill-cancel DEFERRED on ${p.city} ${p.targetDate} (${p.marketId}) — entry poll stale this tick`,
+      body:
+        `A live kill wants to cancel this fully-unfilled resting entry, but getOrder failed this tick so ` +
+        `its fill state (sizeMatched=0) is STALE — cancelling now could record_canceled an entry that ` +
+        `actually partial-filled and orphan the fill from reconstruction (entry BUYs have no getTrades ` +
+        `floor). The cancel is DEFERRED to the next tick once a healthy poll confirms 0 matched. No new ` +
+        `exposure is added meanwhile (entries stay blocked); the §9R-capped entry simply keeps resting.`,
+      dedupeKey: `trade-bot-cancel-deferred:${p.marketId}`,
     });
   }
   return out;

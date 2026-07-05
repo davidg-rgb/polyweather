@@ -29,6 +29,7 @@ import {
   assemblePosition,
   decideTick,
   discoverCandidates,
+  entryCancelDeferredAlerts,
   sellHoldAlerts,
   stopOf,
   timeStopMsOf,
@@ -134,6 +135,7 @@ function position(over: Partial<LivePosition> = {}): LivePosition {
     filledSize: 66,
     soldSize: 0,
     soldTruthDegraded: false,
+    entryPollFresh: true,
     mark: 0.2,
     entry: handle({ status: 'filled', sizeMatched: 66 }),
     tp: null,
@@ -488,6 +490,52 @@ describe('decideTick — live kill (preflight fail) cancels resting entries, nev
     const plan = decideTick(state({ preflight: failedPre, positions: [position({ filledSize: 0, entry, tp: null, mark: null })] }));
     expect(plan.intents.some((i) => i.kind === 'cancel_entry')).toBe(false);
   });
+
+  // ── §11.2 — the kill-cancel is gated on a FRESH successful entry poll this tick ──────────────────
+  const restingUnfilled = () => handle({ status: 'placed', sizeMatched: 0, restingSinceMs: NOW.getTime() - 31 * 60_000 });
+
+  it('§11.2: a STALE entry poll (entryPollFresh=false) DEFERS the cancel — no cancel_entry, a skip is surfaced', () => {
+    const plan = decideTick(state({ preflight: failedPre, positions: [position({ filledSize: 0, entry: restingUnfilled(), entryPollFresh: false, tp: null, mark: null })] }));
+    expect(plan.intents.some((i) => i.kind === 'cancel_entry')).toBe(false); // NOT cancelled on stale data
+    expect(plan.intents.some((i) => i.kind === 'reprice_entry')).toBe(false); // reprice is still kill-suppressed
+    expect(plan.skips.some((s) => s.reason.includes('cancel_entry_deferred_stale_poll'))).toBe(true);
+  });
+
+  it('§11.2: a later tick with a FRESH 0-matched poll (entryPollFresh=true) DOES cancel the entry', () => {
+    const plan = decideTick(state({ preflight: failedPre, positions: [position({ filledSize: 0, entry: restingUnfilled(), entryPollFresh: true, tp: null, mark: null })] }));
+    const ce = plan.intents.find((i) => i.kind === 'cancel_entry') as Extract<Intent, { kind: 'cancel_entry' }>;
+    expect(ce).toBeDefined();
+    expect(ce.orderId).toBe('v1');
+    expect(plan.skips.some((s) => s.reason.includes('cancel_entry_deferred_stale_poll'))).toBe(false);
+  });
+
+  it('§11.2: a stale poll on a KNOWN partial does NOT trigger the defer skip (the remainder is left working anyway, NEW-LOW-2)', () => {
+    // filledSize>0 → the partial-remainder path (never cancelled) owns this; the stale-poll defer excludes it.
+    const entry = handle({ status: 'partial', sizeMatched: 20 });
+    const plan = decideTick(state({ preflight: failedPre, positions: [position({ filledSize: 20, soldSize: 0, entry, entryPollFresh: false, tp: null, mark: 0.05 })] }));
+    expect(plan.intents.some((i) => i.kind === 'cancel_entry')).toBe(false);
+    expect(plan.skips.some((s) => s.reason.includes('cancel_entry_deferred_stale_poll'))).toBe(false);
+    expect(plan.intents.some((i) => i.kind === 'exit_taker' && i.purpose === 'stop_loss')).toBe(true); // exits still armed
+  });
+
+  it('§11.2: entryCancelDeferredAlerts fires a WARN per deferred position, and only when entriesBlocked', () => {
+    const stale = position({ filledSize: 0, entry: restingUnfilled(), entryPollFresh: false, tp: null, mark: null });
+    const fresh = position({ filledSize: 0, entry: restingUnfilled(), entryPollFresh: true, tp: null, mark: null });
+    // entriesBlocked=true → exactly the stale one pages (WARN, never CRITICAL)
+    const alerts = entryCancelDeferredAlerts([stale, fresh], true);
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]).toMatchObject({ kind: 'TRADE_BOT_ENTRY_CANCEL_DEFERRED', severity: 'WARN' });
+    expect(alerts[0]!.body).toContain('DEFERRED');
+    // no kill → no alert at all
+    expect(entryCancelDeferredAlerts([stale], false)).toHaveLength(0);
+  });
+
+  it('§11.2: a stale poll is HARMLESS on a healthy tick (no kill) — the reprice window still governs', () => {
+    // entriesBlocked=false → the stale flag is never consulted; the 31-min window reprices as normal.
+    const plan = decideTick(state({ positions: [position({ filledSize: 0, entry: restingUnfilled(), entryPollFresh: false, tp: null, mark: null })] }));
+    expect(plan.intents.some((i) => i.kind === 'reprice_entry')).toBe(true);
+    expect(plan.skips.some((s) => s.reason.includes('cancel_entry_deferred_stale_poll'))).toBe(false);
+  });
 });
 
 // ── EXIT MATH ──────────────────────────────────────────────────────────────────────────────────────
@@ -592,6 +640,13 @@ describe('assemblePosition — restart resume from ledger rows', () => {
     expect(degraded!.soldTruthDegraded).toBe(true);
     const healthy = assemblePosition({ meta, entry: row(), tp: null, stopLoss: null, timeStop: null, mark: 0.2, venueSoldSize: 0 });
     expect(healthy!.soldTruthDegraded).toBe(false);
+  });
+
+  it('§11.2: entryPollFresh propagates and DEFAULTS TRUE (omitted ⇒ trustworthy; explicit false gates the kill-cancel)', () => {
+    const dflt = assemblePosition({ meta, entry: row(), tp: null, stopLoss: null, timeStop: null, mark: 0.2 });
+    expect(dflt!.entryPollFresh).toBe(true); // omitted ⇒ true (dry-run / non-kill paths never consult it)
+    const stale = assemblePosition({ meta, entry: row(), tp: null, stopLoss: null, timeStop: null, mark: 0.2, entryPollFresh: false });
+    expect(stale!.entryPollFresh).toBe(false);
   });
 });
 

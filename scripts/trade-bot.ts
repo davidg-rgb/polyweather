@@ -58,6 +58,7 @@ import {
   redactText,
   resolveTradeMode,
   parseTrades,
+  tradesResponseTruncated,
   rpcOrderLedger,
   MakerExecutor,
   type MakerClobClientish,
@@ -77,6 +78,7 @@ import {
   assemblePosition,
   decideTick,
   discoverCandidates,
+  entryCancelDeferredAlerts,
   sellHoldAlerts,
   toDecideCfg,
   type DecideCfg,
@@ -166,7 +168,7 @@ function buildEventMeta(captures: RawCaptureRow[]): Map<string, EventMeta> {
 // The daemon
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 
-interface Daemon {
+export interface Daemon {
   mode: TradeMode;
   db: TradingDb;
   ledger: OrderLedger;
@@ -193,13 +195,19 @@ async function findOrder(
  * ledger — this is how a maker order that fills AFTER posting (the entry lifting, or the TP being lifted by
  * a buyer) enters the ledger. A record_* raise routes to a needs-reconcile CRITICAL (never suppressed); the
  * stale row is returned so the tick still makes a decision. dry-run/off: the venue is never polled.
+ *
+ * Returns `{ row, fresh }`. `fresh` = the row's venue fill-state is TRUSTWORTHY this tick — true when no
+ * poll was needed (dry-run/off, no orderId, or a terminal status) OR the live poll SUCCEEDED; **false only
+ * when a live poll of a resting order THREW**. The entry cancel-on-kill path (§11.2) consumes this: a stale
+ * `sizeMatched=0` from a failed poll must NOT license a `cancel_entry` that could orphan a poll-missed
+ * partial fill (entry BUYs have no `getTrades` floor — only SELLs do).
  */
-async function refreshFill(
+export async function refreshFill(
   d: Daemon,
   row: OrderLedgerRow | null,
-): Promise<OrderLedgerRow | null> {
-  if (row == null || d.mode !== 'live') return row;
-  if (row.orderId == null || (row.status !== 'placed' && row.status !== 'partial')) return row;
+): Promise<{ row: OrderLedgerRow | null; fresh: boolean }> {
+  if (row == null || d.mode !== 'live') return { row, fresh: true };
+  if (row.orderId == null || (row.status !== 'placed' && row.status !== 'partial')) return { row, fresh: true };
   try {
     const poll = await d.executor.pollFill(row.orderId, row.size);
     if (poll.sizeMatched > row.sizeMatched + 1e-9) {
@@ -209,8 +217,9 @@ async function refreshFill(
         poll.avgPrice ?? row.price,
         poll.filled ? 'filled' : 'partial',
       );
-      return (await d.ledger.findByIntentKey(row.intentKey, d.mode)) ?? row;
+      return { row: (await d.ledger.findByIntentKey(row.intentKey, d.mode)) ?? row, fresh: true };
     }
+    return { row, fresh: true }; // poll succeeded, no new fill — the resting-at-0 state is CONFIRMED fresh
   } catch (e) {
     await d.notify({
       kind: 'ORDER_NEEDS_RECONCILE',
@@ -220,7 +229,7 @@ async function refreshFill(
       dedupeKey: `trade-bot-poll:${row.clientOrderId}`,
     });
   }
-  return row;
+  return { row, fresh: false }; // live poll threw — the fill state is STALE this tick
 }
 
 /** The current executable sell mark for a held position. live: the real book; else the capture execBid. */
@@ -246,11 +255,23 @@ async function markFor(d: Daemon, tokenId: string, size: number, fallback: numbe
  * refuses to size any SELL from a possibly-understated soldSize) and the daemon fires a CRITICAL
  * `sellHoldAlerts` alert. dry-run: `{ sold: null, degraded: false }` — no venue read is applicable and
  * dry-run rows never fill, so the visible ledger sum is exact.
+ *
+ * §11.1 — a successful-but-TRUNCATED page (a non-terminal `next_cursor`, or a page at/above
+ * `CLOB_TRADES_PAGE_LIMIT`) would UNDER-count our SELL fills exactly like a lost read, so it is treated
+ * IDENTICALLY to a throw: degrade and hold. We do NOT follow the cursor (single-call read is the contract;
+ * the strategy trades ~1 BUY + ≤3 SELLs per token, so a real page is never near the limit).
  */
-async function venueSoldFor(d: Daemon, tokenId: string): Promise<{ sold: number | null; degraded: boolean }> {
+export async function venueSoldFor(d: Daemon, tokenId: string): Promise<{ sold: number | null; degraded: boolean }> {
   if (d.mode !== 'live') return { sold: null, degraded: false }; // dry-run rows never fill — visible sum exact
   try {
-    const trades = parseTrades(await d.client.getTrades({ asset_id: tokenId }));
+    const raw = await d.client.getTrades({ asset_id: tokenId });
+    if (tradesResponseTruncated(raw)) {
+      // §11.1: a cursor-bearing / at-page-limit response may be an incomplete first page — sizing a SELL
+      // from its partial soldSize could OVER-SELL. Degrade (hold the sells) exactly as on a throw.
+      log({ msg: 'trade-bot.venue_sold_truncated', level: 'WARN', tokenId, note: 'getTrades page is cursor-bearing/at page limit — treated as degraded (sell-truth may under-count)' });
+      return { sold: null, degraded: true };
+    }
+    const trades = parseTrades(raw);
     let sold = 0;
     for (const t of trades) {
       if (t.side.toUpperCase() !== 'SELL') continue;
@@ -280,15 +301,13 @@ async function reconstructPositions(
   for (const meta of metaByMarket.values()) {
     let entry = await findOrder(d.ledger, d.mode, meta.marketId, 'BUY', 'entry', meta.targetDate);
     if (entry == null) continue; // no position in this market
-    entry = await refreshFill(d, entry);
+    const entryRes = await refreshFill(d, entry);
+    entry = entryRes.row;
     if (entry == null) continue;
 
-    let tp = await findOrder(d.ledger, d.mode, meta.marketId, 'SELL', 'take_profit', meta.targetDate);
-    let sl = await findOrder(d.ledger, d.mode, meta.marketId, 'SELL', 'stop_loss', meta.targetDate);
-    let ts = await findOrder(d.ledger, d.mode, meta.marketId, 'SELL', 'time_stop', meta.targetDate);
-    tp = await refreshFill(d, tp);
-    sl = await refreshFill(d, sl);
-    ts = await refreshFill(d, ts);
+    const tp = (await refreshFill(d, await findOrder(d.ledger, d.mode, meta.marketId, 'SELL', 'take_profit', meta.targetDate))).row;
+    const sl = (await refreshFill(d, await findOrder(d.ledger, d.mode, meta.marketId, 'SELL', 'stop_loss', meta.targetDate))).row;
+    const ts = (await refreshFill(d, await findOrder(d.ledger, d.mode, meta.marketId, 'SELL', 'time_stop', meta.targetDate))).row;
 
     const mark = await markFor(d, meta.tokenId, entry.sizeMatched || entry.size, meta.execBidCapture);
     const venueSold = await venueSoldFor(d, meta.tokenId);
@@ -309,6 +328,8 @@ async function reconstructPositions(
       mark,
       venueSoldSize: venueSold.sold,
       soldTruthDegraded: venueSold.degraded,
+      // §11.2 — the entry's fill state must be FRESHLY confirmed this tick before a kill may cancel it.
+      entryPollFresh: entryRes.fresh,
     });
     if (pos) positions.push(pos);
   }
@@ -361,6 +382,13 @@ async function tick(d: Daemon, botCitiesFallback: string[], minOrderSizeShares: 
       preflight = { ok: false, reasons: ['preflight read failed'], checks: {} as TradePreflight['checks'] };
     }
   }
+
+  // §11.2 — a live kill wants to cancel fully-unfilled resting entries, but only when THIS tick freshly
+  // polled them. Any entry whose fill state is stale (poll threw) has its cancel DEFERRED (decideTick skips
+  // it) — fire a loud WARN so the operator knows a kill-cancel is waiting on a healthy poll. WARN, not
+  // CRITICAL (bounded: the §9R-capped entry retries next tick, and a stale poll can't hide an over-sell).
+  const entriesBlocked = d.mode === 'live' && (preflight == null || !preflight.ok);
+  for (const a of entryCancelDeferredAlerts(positions, entriesBlocked)) await d.notify(a);
 
   const plan = decideTick({ mode: d.mode, config, preflight, cfg, now, candidates, positions });
   const applied = await applyPlan(plan, d.executor, d.notify, log, d.ledger);

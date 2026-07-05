@@ -210,14 +210,10 @@ export function parseOrderFillPoll(raw: unknown, orderId: string, requestedSize 
   };
 }
 
-/**
- * Parse a raw `getTrades` response (array, or `{trades:[…]}`/`{data:[…]}`/`{history:[…]}`) into
- * VenueTrade[]. Same fail-loud idiom as parseOpenOrders: reconcile uses a trades read as the LAST
- * check before freeing an intent key, so a malformed response must abort (throw), never read as
- * "no trades" (which would free a key whose order may have filled).
- */
-export function parseTrades(raw: unknown): VenueTrade[] {
-  const arr = Array.isArray(raw)
+/** The array `parseTrades`/`tradesResponseTruncated` read from a raw `getTrades` response; null when the
+ *  shape is unrecognized (parseTrades then throws — the detector treats null as "can't tell", i.e. false). */
+function extractTradesArray(raw: unknown): unknown[] | null {
+  return Array.isArray(raw)
     ? raw
     : Array.isArray(asRecord(raw)['trades'])
       ? (asRecord(raw)['trades'] as unknown[])
@@ -226,6 +222,51 @@ export function parseTrades(raw: unknown): VenueTrade[] {
         : Array.isArray(asRecord(raw)['history'])
           ? (asRecord(raw)['history'] as unknown[])
           : null;
+}
+
+/**
+ * The CLOB `/trades` default page size (research report §5). A response whose array is AT/ABOVE this length
+ * may be a truncated first page (the venue caps a page here), so the sell-truth read treats it as degraded.
+ * The maker-exit strategy trades ~1 BUY + ≤3 SELLs per token, so a real page is nowhere near this — this is
+ * a conservative correctness backstop, NOT a signal to paginate (the read stays a single call; §11.1).
+ */
+export const CLOB_TRADES_PAGE_LIMIT = 100;
+
+/** Polymarket CLOB pagination's "no more pages" sentinel (base64 of -1). A `next_cursor` equal to this (or
+ *  empty) means the page is COMPLETE; any other non-empty cursor means MORE pages remain → truncated. */
+export const CLOB_TRADES_CURSOR_TERMINAL = 'LTE=';
+
+/**
+ * Detect a paginated / at-page-limit `getTrades` response (§11.1). A successful-but-INCOMPLETE trades page
+ * silently under-counts our SELL fills — which would let `soldSize` read low and defeat the over-sell guard
+ * — so the sell-truth read must treat it EXACTLY like a throw (degrade → hold the sells). Truncated when:
+ *   (a) the raw envelope carries a `next_cursor` that is present, non-empty, and NOT the terminal sentinel
+ *       (`"LTE="`) — the venue says more pages remain; OR
+ *   (b) the returned page length is ≥ `CLOB_TRADES_PAGE_LIMIT` — a full page MAY be the first of several
+ *       (conservative: at-limit counts as truncated).
+ * A bare array (or `{…}` envelope) with no cursor and < limit rows is COMPLETE → false. Never throws (a pure
+ * boolean detector); an unrecognized shape returns false and `parseTrades` raises on it separately.
+ */
+export function tradesResponseTruncated(raw: unknown): boolean {
+  const cursorRaw = asRecord(raw)['next_cursor'] ?? asRecord(raw)['nextCursor'];
+  if (typeof cursorRaw === 'string') {
+    const c = cursorRaw.trim();
+    if (c.length > 0 && c !== CLOB_TRADES_CURSOR_TERMINAL) return true;
+  }
+  const arr = extractTradesArray(raw);
+  return arr != null && arr.length >= CLOB_TRADES_PAGE_LIMIT;
+}
+
+/**
+ * Parse a raw `getTrades` response (array, or `{trades:[…]}`/`{data:[…]}`/`{history:[…]}`) into
+ * VenueTrade[]. Same fail-loud idiom as parseOpenOrders: reconcile uses a trades read as the LAST
+ * check before freeing an intent key, so a malformed response must abort (throw), never read as
+ * "no trades" (which would free a key whose order may have filled). Page COMPLETENESS is a separate
+ * concern — a well-formed but truncated page parses fine here; `tradesResponseTruncated` (§11.1) is what
+ * flags it so the sell-truth read degrades instead of under-counting.
+ */
+export function parseTrades(raw: unknown): VenueTrade[] {
+  const arr = extractTradesArray(raw);
   if (arr === null) {
     throw new ClobShapeError('unrecognized trades response shape', {
       shape: raw === null ? 'null' : typeof raw,
