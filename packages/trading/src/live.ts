@@ -113,7 +113,12 @@ function envVar(name: string): string | undefined {
  * specifiers: resolved by Deno at run time, invisible to tsc/Node — nothing
  * is installed until the live phase actually deploys it.
  */
-export async function createClobClient(): Promise<MakerClobClientish> {
+async function bootstrapClobClient(): Promise<{
+  client: MakerClobClientish;
+  creds: unknown;
+  sigType: number;
+  funderSet: boolean;
+}> {
   const key = envVar('POLY_PRIVATE_KEY');
   if (!key) {
     throw new ExecutionError('ERR_NO_KEY', 'POLY_PRIVATE_KEY missing from execute-bet function secrets');
@@ -131,7 +136,26 @@ export async function createClobClient(): Promise<MakerClobClientish> {
   const funder = envVar('POLY_FUNDER_ADDRESS');
   const bootstrap = new ClobClient('https://clob.polymarket.com', 137, signer, undefined, sigType, funder);
   const creds = await bootstrap.createOrDeriveApiKey();
-  return new ClobClient('https://clob.polymarket.com', 137, signer, creds, sigType, funder);
+  const client = new ClobClient('https://clob.polymarket.com', 137, signer, creds, sigType, funder);
+  return { client, creds, sigType, funderSet: funder != null && funder !== '' };
+}
+
+export async function createClobClient(): Promise<MakerClobClientish> {
+  return (await bootstrapClobClient()).client;
+}
+
+/**
+ * SMOKE-ONLY credential preview (scripts/trade-smoke.ts, GO-LIVE-CHECKLIST-OPENING.md §3). Derives the L2
+ * CLOB creds from `POLY_PRIVATE_KEY` (via the same bootstrap as `createClobClient`) and returns a REDACTED
+ * preview: the api-key uuid's first 8 chars ONLY, the signature type, and whether a funder is configured —
+ * NEVER the secret, the passphrase, or the private key. §15: the key + the client stay inside this file; the
+ * caller receives only these non-sensitive facts to print a "derived OK" line.
+ */
+export async function deriveClobApiKeyPreview(): Promise<{ apiKeyPreview: string; sigType: number; funderSet: boolean }> {
+  const { creds, sigType, funderSet } = await bootstrapClobClient();
+  const c = (creds ?? {}) as { key?: unknown; apiKey?: unknown };
+  const apiKey = String(c.key ?? c.apiKey ?? '');
+  return { apiKeyPreview: apiKey ? `${apiKey.slice(0, 8)}…` : '(none returned)', sigType, funderSet };
 }
 
 export class LiveExecutor implements TradeExecutor {
