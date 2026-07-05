@@ -11,9 +11,10 @@
  * operator funds the dedicated wallet, holds the signing key (.env.local), and authorizes every run. No capital
  * before a frozen forward-paper §9R-E PASS — the SQL interlock encodes that gate.
  *
- * STAGED-DARK: migration 0082 is merged-dark and NOT applied on prod, so dash_trading() does not exist there yet
- * → getTrading() returns null → this page renders its explicit "0082 NOT APPLIED" empty-state. The error path IS
- * the day-one state (it degrades gracefully; it does not 500).
+ * STAGED-DARK vs RPC ERROR (#22): while 0082 is unapplied, dash_trading() does not exist → getTrading()
+ * returns { kind: 'not-applied' } → the explicit "0082 NOT APPLIED" empty-state. Every OTHER failure
+ * (transient/DB-restart/auth) returns { kind: 'error' } → the distinct "console temporarily unavailable"
+ * state — never a false "not applied" diagnosis after the migration IS applied. Neither path 500s.
  */
 import type { ReactElement } from 'react';
 import type {
@@ -61,6 +62,32 @@ const ORDER_STATUS_COLOR: Record<string, string> = {
 };
 
 // ─── sub-components ──────────────────────────────────────────────────────────
+
+/**
+ * The RPC-error state (review #22) — dash_trading() EXISTS but the call failed (transient PostgREST error, a
+ * DB restart like 07-05's 07:36Z crash, an operator_guard rejection). Deliberately DISTINCT from the
+ * "0082 NOT APPLIED" state: telling the operator to re-apply a migration during a DB incident is a false
+ * diagnosis with a wrong remediation.
+ */
+function RpcErrorState({ message }: { message: string }): ReactElement {
+  return (
+    <div className="ams-dash">
+      <h1>
+        Trading activation console <span className="chip soft">LIVE-RAIL · RPC error</span>
+      </h1>
+      <div className="info-banner" style={{ borderLeftColor: RED }}>
+        <strong style={{ color: RED }}>Console temporarily unavailable.</strong> The{' '}
+        <span className="mono">dash_trading()</span> RPC exists but the call <strong>failed</strong> — a
+        transient database/PostgREST error or an auth rejection, <strong>not</strong> the
+        &ldquo;0082 not applied&rdquo; staged-dark state. No migration action is needed; retry shortly (the SQL
+        interlock, not this page, remains the authoritative gate).
+      </div>
+      <p className="muted small">
+        Error: <span className="mono">{message}</span>
+      </p>
+    </div>
+  );
+}
 
 /** The explicit "0082 NOT APPLIED" empty-state — the day-one state until the operator applies migration 0082. */
 function NotAppliedState(): ReactElement {
@@ -463,10 +490,13 @@ function AuditTable({ rows }: { rows: TradeAuditRow[] }): ReactElement {
 
 export default async function TradingPage(): Promise<ReactElement> {
   const db = await serverDb();
-  const view = await getTrading(db);
+  const load = await getTrading(db);
 
-  if (!view) return <NotAppliedState />;
+  // #22: only the undefined-function class renders "0082 NOT APPLIED"; every other failure is an RPC error.
+  if (load.kind === 'not-applied') return <NotAppliedState />;
+  if (load.kind === 'error') return <RpcErrorState message={load.message} />;
 
+  const view = load.view;
   const { config, preflight } = view;
 
   return (

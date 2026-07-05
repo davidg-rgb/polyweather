@@ -340,6 +340,15 @@ describe('migrations 0001–0010', () => {
       // ADDITIVE ONLY: the per-bucket object gains conditionId/tokenYes/tokenNo; every existing consumer's
       // mapper (core mapBucket) already read-or-defaulted them. Applied to prod 2026-07-05 ~06:35Z.
       '0083_capture_inputs_identity.sql',
+      // 0084 = LIVE-RAIL risk-accounting hardening, STAGED DARK (2026-07-05 review #7/#17/#18/#19/#21):
+      // trade_open_exposure() (the ONE shared exposure read — unfilled resting commitment + FILLED-HELD cost
+      // net of sold; a filled BUY no longer escapes total_concurrent_cap_usd) + trade_live_preflight/
+      // dash_trading re-stated onto it + bot_order_record_fill DROP+RECREATE with p_fee_usd (taker fees reach
+      // the N1 daily-loss kill) and a FOR UPDATE row lock (concurrent duplicate fills can't double-count) +
+      // bot_order_record_resolution_loss (books a hold-to-resolution full-stake loss as an idempotent
+      // synthetic $0-proceeds SELL) + dash_maker_exit_history additively carrying cityErrors per point.
+      // No table/cron change (count stays 29). Twin: trading-hardening.test.ts.
+      '0084_trading_hardening.sql',
     ]);
   });
 });

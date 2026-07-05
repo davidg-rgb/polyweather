@@ -178,12 +178,16 @@ export function rpcOrderLedger(db: TradingDb): OrderLedger {
       sizeMatched: number,
       avgPrice: number,
       status: 'filled' | 'partial',
+      feeUsd?: number,
     ): Promise<void> {
+      // 0084 #17: p_fee_usd is the delta's attributed venue fee — 0 on the maker path (the pre-0084 RPC
+      // hard-coded the column default; the recreated fn takes it explicitly, coalescing NULL to 0).
       await db.rpc('bot_order_record_fill', {
         p_client_order_id: clientOrderId,
         p_size_matched: sizeMatched,
         p_avg_price: avgPrice,
         p_status: status,
+        p_fee_usd: feeUsd ?? 0,
       });
     },
 
@@ -194,6 +198,55 @@ export function rpcOrderLedger(db: TradingDb): OrderLedger {
     async recordFailed(clientOrderId: string, error: string): Promise<void> {
       await db.rpc('bot_order_record_failed', { p_client_order_id: clientOrderId, p_error: error });
     },
+  };
+}
+
+/** The outcome of booking a hold-to-resolution loss (0084 #18 — `bot_order_record_resolution_loss`). */
+export interface ResolutionLossResult {
+  /** true = the synthetic $0-proceeds SELL landed this call; false = nothing held OR already booked. */
+  booked: boolean;
+  /** residual held shares the booking covers (Σ BUY fills − Σ SELL fills for the mode/market/token). */
+  heldSize: number;
+  /** the realized loss the N1 definition will now see (lifetime-avg basis × heldSize). */
+  lossUsd: number;
+  /** why booked=false ('no residual held shares …' | 'already booked'), when the RPC provides one. */
+  reason: string | null;
+}
+
+/**
+ * 0084 #18 — book a HOLD-TO-RESOLUTION full-stake loss into the ledger. When a held position's market
+ * resolves AGAINST it (an unfilled time-stop rode to resolution; tokens expired worthless) no SELL fill
+ * ever exists, so the realized-at-sell N1 daily-loss definition is structurally blind to the loss. This
+ * binding calls `bot_order_record_resolution_loss`, which inserts ONE synthetic, idempotent SELL row
+ * (price 0, purpose time_stop, status filled) + a $0-proceeds live_fills row for the residual held size —
+ * `trade_today_realized_loss()` then realizes −basis×held through the EXISTING machinery, and the shared
+ * exposure read (`trade_open_exposure`, #7) releases the held cost.
+ *
+ * Standalone (NOT on the `OrderLedger` port) so existing port fakes stay valid; idempotent server-side via
+ * the F4 partial-unique (mode, intent_key) index — a duplicate call returns { booked: false, reason:
+ * 'already booked' }, never a double count.
+ *
+ * ⚠ T2 DAEMON HOOK (for the integrator — one call site in scripts/trade-bot.ts's tick, deliberately NOT
+ * wired here to avoid colliding with the concurrent trade-SIDE work): after reconstructing positions, for
+ * any position whose market has RESOLVED AGAINST it (the capture stream's resolutions map: winnerIdx known
+ * and ≠ our bucket) with heldSize > 0, call
+ *   `await recordResolutionLoss(d.db, { mode: d.mode, marketId: p.marketId, tokenId: p.tokenId })`
+ * once (safe every tick — idempotent) and surface `booked: true` in the tick log.
+ */
+export async function recordResolutionLoss(
+  db: TradingDb,
+  args: { mode: TradeMode; marketId: string; tokenId: string },
+): Promise<ResolutionLossResult> {
+  const [row] = await db.rpc<{ bot_order_record_resolution_loss: unknown }>(
+    'bot_order_record_resolution_loss',
+    { p_mode: args.mode, p_market_id: args.marketId, p_token_id: args.tokenId },
+  );
+  const o = asRecord(row?.bot_order_record_resolution_loss);
+  return {
+    booked: o['booked'] === true,
+    heldSize: num(o['heldSize']),
+    lossUsd: num(o['lossUsd']),
+    reason: o['reason'] == null ? null : String(o['reason']),
   };
 }
 

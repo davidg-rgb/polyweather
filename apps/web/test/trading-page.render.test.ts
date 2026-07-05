@@ -4,8 +4,9 @@
  * (a) it never throws, (b) every section reaches the DOM on a populated LIVE fixture (mode + caps + interlock
  * verdict + reasons + gate/override + the daily-loss kill meter + open positions/orders + dry-run counts +
  * audit), (c) the CLEAR + KILL-TRIPPED branches render, (d) the seeded-dark APPLIED-but-empty state renders
- * without the not-applied banner, and (e) the explicit "0082 NOT APPLIED" empty-state renders when the loader
- * returns null (dash_trading absent — the day-one state). Mirrors data-page.render.test.ts.
+ * without the not-applied banner, (e) the explicit "0082 NOT APPLIED" empty-state renders ONLY for the
+ * loader's { kind: 'not-applied' } verdict, and (f) #22: { kind: 'error' } renders the DISTINCT
+ * "console temporarily unavailable" state, never the false not-applied diagnosis. Mirrors data-page.render.test.ts.
  */
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
@@ -56,7 +57,7 @@ const FIXTURE = {
 describe('/trading page renders', () => {
   it('renders end-to-end with the populated LIVE fixture and surfaces every section', async () => {
     vi.resetModules();
-    vi.doMock('../src/lib/loaders.ts', () => ({ getTrading: async () => FIXTURE }));
+    vi.doMock('../src/lib/loaders.ts', () => ({ getTrading: async () => ({ kind: 'ok', view: FIXTURE }) }));
     const { default: TradingPage } = await import('../src/app/(dash)/trading/page.tsx');
     const html = renderToStaticMarkup(await TradingPage());
 
@@ -113,7 +114,7 @@ describe('/trading page renders', () => {
         checks: { ...FIXTURE.preflight.checks, gatePass: true, override: false, overrideReason: null, todayLossUsd: '26.00' },
       },
     };
-    vi.doMock('../src/lib/loaders.ts', () => ({ getTrading: async () => HOT }));
+    vi.doMock('../src/lib/loaders.ts', () => ({ getTrading: async () => ({ kind: 'ok', view: HOT }) }));
     const { default: TradingPage } = await import('../src/app/(dash)/trading/page.tsx');
     const html = renderToStaticMarkup(await TradingPage());
     expect(html).toContain('interlock permits live entries'); // ok === true CLEAR verdict
@@ -146,7 +147,7 @@ describe('/trading page renders', () => {
       recentAudit: [],
       generatedAt: '2026-07-05T00:00:00Z',
     };
-    vi.doMock('../src/lib/loaders.ts', () => ({ getTrading: async () => EMPTY }));
+    vi.doMock('../src/lib/loaders.ts', () => ({ getTrading: async () => ({ kind: 'ok', view: EMPTY }) }));
     const { default: TradingPage } = await import('../src/app/(dash)/trading/page.tsx');
     const html = renderToStaticMarkup(await TradingPage());
     expect(html).toContain('MODE OFF');
@@ -156,14 +157,28 @@ describe('/trading page renders', () => {
     expect(html).toContain('No config changes recorded.');
   });
 
-  it('renders the explicit "0082 NOT APPLIED" empty-state when the loader returns null (day-one state)', async () => {
+  it("renders the explicit \"0082 NOT APPLIED\" empty-state ONLY for { kind: 'not-applied' } (day-one state)", async () => {
     vi.resetModules();
-    vi.doMock('../src/lib/loaders.ts', () => ({ getTrading: async () => null }));
+    vi.doMock('../src/lib/loaders.ts', () => ({ getTrading: async () => ({ kind: 'not-applied' }) }));
     const { default: TradingPage } = await import('../src/app/(dash)/trading/page.tsx');
     const html = renderToStaticMarkup(await TradingPage());
     expect(html).toContain('Trading activation console');
     expect(html).toContain('0082 NOT APPLIED');
     expect(html).toContain('merged-dark, not applied');
     expect(html).toContain('dash_trading()');
+  });
+
+  it("#22: renders the DISTINCT RPC-error state for { kind: 'error' } — never the not-applied diagnosis", async () => {
+    vi.resetModules();
+    vi.doMock('../src/lib/loaders.ts', () => ({
+      getTrading: async () => ({ kind: 'error', message: 'rpc dash_trading failed: upstream request timeout' }),
+    }));
+    const { default: TradingPage } = await import('../src/app/(dash)/trading/page.tsx');
+    const html = renderToStaticMarkup(await TradingPage());
+    expect(html).toContain('Trading activation console');
+    expect(html).toContain('Console temporarily unavailable');
+    expect(html).toContain('upstream request timeout'); // the error text is surfaced for the operator
+    expect(html).not.toContain('0082 NOT APPLIED'); // the false diagnosis must be gone
+    expect(html).not.toContain('merged-dark, not applied');
   });
 });

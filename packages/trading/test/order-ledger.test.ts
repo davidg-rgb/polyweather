@@ -5,7 +5,7 @@
  * jsonb single-row returns, and the snake_case→camelCase row mapping. Faked db.rpc (mockDb idiom).
  */
 import { describe, expect, it } from 'vitest';
-import { danglingEnvelopeReady, mapLedgerRow, rpcOrderLedger, type TradingDb } from '../src/index.ts';
+import { danglingEnvelopeReady, mapLedgerRow, recordResolutionLoss, rpcOrderLedger, type TradingDb } from '../src/index.ts';
 
 function mockDb(returns: Record<string, unknown> = {}) {
   const calls: { fn: string; args: Record<string, unknown> }[] = [];
@@ -118,11 +118,46 @@ describe('rpcOrderLedger — the mode-scoped RPC contract for T3', () => {
     await led.recordFailed('cid', 'boom');
     expect(calls).toEqual([
       { fn: 'bot_order_record_placed', args: { p_client_order_id: 'cid', p_order_id: '0xO' } },
-      { fn: 'bot_order_record_fill', args: { p_client_order_id: 'cid', p_size_matched: 30, p_avg_price: 0.18, p_status: 'partial' } },
+      // 0084 #17: an omitted feeUsd defaults to p_fee_usd 0 — the pre-0084 (maker $0-fee) behavior.
+      { fn: 'bot_order_record_fill', args: { p_client_order_id: 'cid', p_size_matched: 30, p_avg_price: 0.18, p_status: 'partial', p_fee_usd: 0 } },
       { fn: 'bot_order_record_canceled', args: { p_client_order_id: 'cid' } },
       { fn: 'bot_order_record_failed', args: { p_client_order_id: 'cid', p_error: 'boom' } },
     ]);
     for (const c of calls) expect(Object.keys(c.args)).not.toContain('p_mode');
+  });
+
+  it('0084 #17: recordFill passes an explicit feeUsd through as p_fee_usd (taker FAK exit fees reach the ledger)', async () => {
+    const { db, calls } = mockDb();
+    await rpcOrderLedger(db).recordFill('cid', 30, 0.18, 'filled', 0.27);
+    expect(calls).toEqual([
+      { fn: 'bot_order_record_fill', args: { p_client_order_id: 'cid', p_size_matched: 30, p_avg_price: 0.18, p_status: 'filled', p_fee_usd: 0.27 } },
+    ]);
+  });
+});
+
+describe('recordResolutionLoss — the 0084 #18 hold-to-resolution loss binding', () => {
+  it('calls bot_order_record_resolution_loss with p_mode/p_market_id/p_token_id and maps the envelope', async () => {
+    const { db, calls } = mockDb({
+      bot_order_record_resolution_loss: { booked: true, heldSize: '18', lossUsd: '4.86', clientOrderId: 'resolution-loss:live:0xc:tokA' },
+    });
+    const out = await recordResolutionLoss(db, { mode: 'live', marketId: '0xc', tokenId: 'tokA' });
+    expect(calls).toEqual([
+      { fn: 'bot_order_record_resolution_loss', args: { p_mode: 'live', p_market_id: '0xc', p_token_id: 'tokA' } },
+    ]);
+    expect(out).toEqual({ booked: true, heldSize: 18, lossUsd: 4.86, reason: null });
+  });
+
+  it('maps a booked:false verdict (already booked / nothing held) with the reason preserved', async () => {
+    const { db } = mockDb({
+      bot_order_record_resolution_loss: { booked: false, heldSize: 18, lossUsd: 4.86, reason: 'already booked' },
+    });
+    const out = await recordResolutionLoss(db, { mode: 'live', marketId: '0xc', tokenId: 'tokA' });
+    expect(out).toEqual({ booked: false, heldSize: 18, lossUsd: 4.86, reason: 'already booked' });
+  });
+
+  it('a missing/NULL RPC result maps to a safe not-booked verdict (never throws on shape)', async () => {
+    const out = await recordResolutionLoss(mockDb().db, { mode: 'live', marketId: '0xc', tokenId: 'tokA' });
+    expect(out).toEqual({ booked: false, heldSize: 0, lossUsd: 0, reason: null });
   });
 });
 

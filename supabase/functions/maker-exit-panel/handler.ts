@@ -39,14 +39,38 @@ const PANEL_DAYS = 21;
  * per-city fetch tuning — the 45-city scope must fit the ~400s isolate wall-clock with margin. The 2026-07-03
  * 45-city redeploy's first ticks DIED at the wall: 45 SEQUENTIAL convergence_capture_inputs calls (~3–8s each,
  * unbounded — the DbPort fetch has no timeout, so one hung statement stalls the whole loop) never reached the
- * snapshot write, leaving job_runs rows wedged 'running' and the gate-of-record stale. Bounded concurrency keeps
- * each statement under the 8s PostgREST cap while collapsing the wall to ~⌈45/5⌉ batches; the per-city timeout
- * bounds a hung fetch; the overall budget degrades to a PARTIAL view (skipped cities count into cityErrors,
- * which the page already surfaces) — a partial snapshot beats a dead tick.
+ * snapshot write, leaving job_runs rows wedged 'running' and the gate-of-record stale. Bounded concurrency
+ * collapses the wall to ~⌈45/5⌉ batches; the per-city timeout bounds a hung fetch; the overall budget degrades
+ * to a PARTIAL view (skipped cities count into cityErrors, which the page already surfaces) — a partial
+ * snapshot beats a dead tick.
+ *
+ * CITY_TIMEOUT_MS (2026-07-05 review #20): the RPC's OWN `statement_timeout='40s'` (0069/0076/0077/0083) is
+ * the real server-side bound — NOT the 8s PostgREST default an earlier comment assumed — so the client window
+ * must OUTLAST it. The previous 30s client race abandoned every 30–40s statement AFTER the server had already
+ * paid its full disk-IO cost (result discarded, city counted errored), and the worker then claimed the next
+ * city while the orphaned statement still ran — transiently exceeding the intended 5-statement DB bound during
+ * exactly the IO-starved regime this pool exists to survive. At 45s (= 40s server bound + 5s transport margin)
+ * the SERVER always settles the statement class first (killed or completed ≤40s), so a client timeout now
+ * fires only on a transport-level hang — behind which no live DB statement remains, so the freed worker slot
+ * no longer stacks a 6th statement on the pool.
  */
 const FETCH_CONCURRENCY = 5;
-const CITY_TIMEOUT_MS = 30_000;
+/** exported for the #20 tripwire test — must OUTLAST the RPC's 40s statement_timeout. */
+export const CITY_TIMEOUT_MS = 45_000;
 const FETCH_BUDGET_MS = 240_000;
+
+/**
+ * gate-write degradation floor (2026-07-05 review #8/#10): bot_gate_snapshot is the §9R-E GATE OF RECORD —
+ * 0082's trade_live_preflight() reads ONLY the latest mode='paper'/source='forward' row's label to unlock a
+ * live post, and the never-pruned history is what the operator freezes the capital decision on. A PARTIAL
+ * tick (per-city fetch errors / budget skips) computes the verdict over a biased city subset — a label the
+ * full panel never issued (both directions: a subset-PASS can unlock capital; an all-error INSUFFICIENT
+ * craters days of accrued history). The panel snapshot itself STILL lands (ops telemetry, /maker-exit, the
+ * deadman's record_bot_tick feed — all unchanged); only the gate-of-record write is withheld and the skip is
+ * surfaced in the tick stats (`gateWriteSkipped: 'degraded'`). Floor: cityErrors > 2 OR the view's scored
+ * nMarkets below the gate's own minimum sample (view.gate.minMarkets — the §9R-E 40-market bar).
+ */
+const GATE_WRITE_MAX_CITY_ERRORS = 2;
 
 /**
  * terminal-write retry tuning (WS-5, 2026-07-03) — see _shared/retry.ts for the idempotency argument. 2
@@ -59,14 +83,14 @@ const FETCH_BUDGET_MS = 240_000;
  * unlike the pruned-and-latest-read panel table.
  *
  * ARITHMETIC — the COMPLETE post-claim chain stays under the ~400s isolate wall with margin to spare:
- *   fetch phase worst case  = FETCH_BUDGET_MS (240s) + one in-flight city's CITY_TIMEOUT_MS tail (30s) = 270s
- *   (unchanged by this fix — the budget check only stops NEW claims, the city already in flight when the
- *   budget trips still runs to its own timeout).
+ *   fetch phase worst case  = FETCH_BUDGET_MS (240s) + one in-flight city's CITY_TIMEOUT_MS tail (45s) = 285s
+ *   (the budget check only stops NEW claims, the city already in flight when the budget trips still runs to
+ *   its own timeout).
  *   terminal-write phase worst case = 3 attempts × RECORD_WRITE_TIMEOUT_MS (15s = 45s) + 2 backoffs
  *   (3s + 8s = 11s) = 56s (every attempt hangs to its own timeout — the true worst case, not the common one).
  *   step-4 bookkeeping worst case = 2 × BOOKKEEPING_TIMEOUT_MS (10s) = 20s (both writes hang to their bound).
- *   total = 270s + 56s + 20s = 346s, leaving a ~54s (≈13%) margin under the 400s wall even in the all-hang
- *   case. (convergence-panel has NO step 4, so its chain is 270s + 56s = 326s / ~74s margin.)
+ *   total = 285s + 56s + 20s = 361s, leaving a ~39s (≈10%) margin under the 400s wall even in the all-hang
+ *   case. (convergence-panel has NO step 4, so its chain is 285s + 56s = 341s / ~59s margin.)
  */
 const RECORD_WRITE_RETRIES = 2;
 const RECORD_WRITE_BACKOFF_MS = [3_000, 8_000];
@@ -80,6 +104,10 @@ export interface MakerExitPanelDeps {
   cityTimeoutMs?: number;
   fetchBudgetMs?: number;
   bookkeepingTimeoutMs?: number;
+  /** test seams for the gate-write degradation floor (#8/#10) — production uses GATE_WRITE_MAX_CITY_ERRORS
+   *  and the view's own gate.minMarkets (the §9R-E 40-market bar). */
+  gateMaxCityErrors?: number;
+  gateMinMarkets?: number;
   /** test seam for the terminal-write retry backoff — production uses the real setTimeout-based sleep. */
   retrySleep?: (ms: number) => Promise<void>;
 }
@@ -106,10 +134,11 @@ export async function makerExitPanel(ctx: JobCtx, deps: MakerExitPanelDeps): Pro
 
   // 1) raw inputs (trimmed buckets, +bestBid; since 0077 server-thinned to ONE row per event per 20-min grid
   //    bucket PLUS the newest tick per event — the SAMPLE_MIN cadence class, so each per-city statement
-  //    detoasts a fraction of the tick series) for the fresh-allowlist window — fetched PER CITY to stay under the 8s PostgREST
-  //    statement cap (the whole-allowlist build exceeds it), through a bounded worker pool with a per-city
-  //    timeout + an overall budget (see the tuning block above); merge the per-city results. Interleaved
-  //    arrival order is safe: buildEvents groups per event and sorts ticks by capturedAt internally.
+  //    detoasts a fraction of the tick series) for the fresh-allowlist window — fetched PER CITY to keep each
+  //    statement small (the whole-allowlist build blows the RPC's 40s statement_timeout), through a bounded
+  //    worker pool with a per-city timeout + an overall budget (see the tuning block above); merge the
+  //    per-city results. Interleaved arrival order is safe: buildEvents groups per event and sorts ticks by
+  //    capturedAt internally.
   const fetchConcurrency = deps.fetchConcurrency ?? FETCH_CONCURRENCY;
   const cityTimeoutMs = deps.cityTimeoutMs ?? CITY_TIMEOUT_MS;
   const fetchBudgetMs = deps.fetchBudgetMs ?? FETCH_BUDGET_MS;
@@ -186,32 +215,50 @@ export async function makerExitPanel(ctx: JobCtx, deps: MakerExitPanelDeps): Pro
   //    the isolate toward the ~400s wall even though the tick's real work is done. NO retry — a timed-out-but-
   //    landed write retried here would duplicate a row in the never-pruned §9R-E gate history; on timeout this
   //    degrades exactly like any other step-4 failure (the catch below logs it non-fatally).
+  //
+  //    DEGRADED-TICK GUARD (#8/#10): a partial tick must NOT write the gate of record — its verdict was
+  //    computed over a biased city subset and the 0082 live-capital interlock reads ONLY the latest row's
+  //    label. The panel snapshot (step 3) and the liveness tick (record_bot_tick — the deadman feed) are
+  //    UNCHANGED; only record_bot_gate_snapshot is withheld, and the skip is surfaced in the tick stats.
+  const gateMaxCityErrors = deps.gateMaxCityErrors ?? GATE_WRITE_MAX_CITY_ERRORS;
+  const gateMinMarkets = deps.gateMinMarkets ?? view.gate.minMarkets;
+  const gateDegraded = cityErrors > gateMaxCityErrors || !(view.gate.nMarkets >= gateMinMarkets);
+  if (gateDegraded) {
+    log('degraded tick — gate-of-record write SKIPPED (panel snapshot + liveness tick unaffected)', {
+      cityErrors,
+      budgetSkipped,
+      nMarkets: view.gate.nMarkets,
+      floor: { maxCityErrors: gateMaxCityErrors, minMarkets: gateMinMarkets },
+    });
+  }
   const bookkeepingTimeoutMs = deps.bookkeepingTimeoutMs ?? BOOKKEEPING_TIMEOUT_MS;
   try {
-    await withTimeout(
-      db.rpc('record_bot_gate_snapshot', {
-        p_payload: {
-          mode: 'paper',
-          source: 'forward',
-          label: view.gate.label,
-          nMarkets: view.gate.nMarkets,
-          nCities: view.gate.nCities,
-          nDistinctDays: view.gate.nDistinctDays,
-          winFrac: view.gate.winFrac,
-          meanNetReturn: view.gate.meanNetReturn,
-          ciLow: view.gate.ciLow,
-          ciHigh: view.gate.ciHigh,
-          zeroSkillPassRate: view.gate.zeroSkillPassRate,
-          reason: view.gate.reason,
-          makerExitFrac: view.assumptions.makerFillRate,
-          realizedRebateUsd: view.assumptions.realizedRebateUsd,
-          totalNetUsd: view.money.realizedPnlUsd,
-          nOpen: view.money.nOpen,
-        },
-      }),
-      bookkeepingTimeoutMs,
-      `record_bot_gate_snapshot timed out after ${bookkeepingTimeoutMs}ms`,
-    );
+    if (!gateDegraded) {
+      await withTimeout(
+        db.rpc('record_bot_gate_snapshot', {
+          p_payload: {
+            mode: 'paper',
+            source: 'forward',
+            label: view.gate.label,
+            nMarkets: view.gate.nMarkets,
+            nCities: view.gate.nCities,
+            nDistinctDays: view.gate.nDistinctDays,
+            winFrac: view.gate.winFrac,
+            meanNetReturn: view.gate.meanNetReturn,
+            ciLow: view.gate.ciLow,
+            ciHigh: view.gate.ciHigh,
+            zeroSkillPassRate: view.gate.zeroSkillPassRate,
+            reason: view.gate.reason,
+            makerExitFrac: view.assumptions.makerFillRate,
+            realizedRebateUsd: view.assumptions.realizedRebateUsd,
+            totalNetUsd: view.money.realizedPnlUsd,
+            nOpen: view.money.nOpen,
+          },
+        }),
+        bookkeepingTimeoutMs,
+        `record_bot_gate_snapshot timed out after ${bookkeepingTimeoutMs}ms`,
+      );
+    }
     await withTimeout(
       db.rpc('record_bot_tick', {
         p_payload: {
@@ -244,6 +291,8 @@ export async function makerExitPanel(ctx: JobCtx, deps: MakerExitPanelDeps): Pro
     dominantDisqualifier: view.assumptions.dominantDisqualifier, // v2 "WHY zero" pool-context extension
     label: view.gate.label,
     snapshotId,
+    // #8/#10: present ONLY when the gate-of-record write was withheld this tick (degraded/partial view).
+    ...(gateDegraded ? { gateWriteSkipped: 'degraded' as const } : {}),
   };
   log('maker-exit-panel complete', stats);
   return stats;

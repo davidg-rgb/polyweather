@@ -1,16 +1,20 @@
 /**
  * getTrading (0082) — the LIVE-RAIL activation-console loader. A crafted dash_trading payload goes in; the
- * passthrough + the null-tolerant defaults come out. Pure unit test over a stubbed WebDb (no PGlite). The
- * throws-path is the day-one "0082 NOT APPLIED" state: dash_trading() does not exist on prod (migration merged
- * dark) → the RPC throws → getTrading returns null. Mirrors city-sim-loader / amsterdam-loader.
+ * passthrough + the null-tolerant defaults come out. Pure unit test over a stubbed WebDb (no PGlite).
+ *
+ * 2026-07-05 review #22: the loader now returns a DISCRIMINATED TradingLoad instead of a conflating null —
+ * ONLY the undefined-function error class (Postgres 42883 / PostgREST PGRST202 "could not find the function …
+ * in the schema cache") maps to { kind: 'not-applied' } (the true staged-dark day-one state); every other
+ * failure (transient 5xx, DB restart, operator_guard rejection) maps to { kind: 'error' } so /trading renders
+ * "console temporarily unavailable" instead of a false "0082 NOT APPLIED" diagnosis post-apply.
  */
 import { describe, expect, it } from 'vitest';
-import { getTrading } from '../src/lib/loaders.ts';
+import { getTrading, isUndefinedFunctionError } from '../src/lib/loaders.ts';
 import type { WebDb } from '../src/lib/api/deps.ts';
 
-const stubDb = (payload: unknown, opts: { throws?: boolean } = {}): WebDb => ({
+const stubDb = (payload: unknown, opts: { throwsMessage?: string } = {}): WebDb => ({
   rpc: (async (fn: string) => {
-    if (opts.throws) throw new Error('rpc absent');
+    if (opts.throwsMessage != null) throw new Error(opts.throwsMessage);
     return [{ [fn]: payload }];
   }) as WebDb['rpc'],
   getConfigRows: async () => [],
@@ -44,9 +48,11 @@ const PAYLOAD = {
 };
 
 describe('getTrading — dash_trading passthrough + null-tolerant defaults', () => {
-  it('passes the full activation-console payload through', async () => {
-    const v = (await getTrading(stubDb(PAYLOAD)))!;
-    expect(v).not.toBeNull();
+  it('passes the full activation-console payload through as { kind: ok }', async () => {
+    const load = await getTrading(stubDb(PAYLOAD));
+    expect(load.kind).toBe('ok');
+    if (load.kind !== 'ok') throw new Error('expected ok');
+    const v = load.view;
     expect(v.config!.mode).toBe('live');
     expect(v.preflight!.ok).toBe(false);
     expect(v.preflight!.checks.override).toBe(true);
@@ -65,7 +71,10 @@ describe('getTrading — dash_trading passthrough + null-tolerant defaults', () 
       preflight: { ok: false, reasons: [], checks: { mode: 'off' } },
       generatedAt: '2026-07-05T00:00:00Z',
     };
-    const v = (await getTrading(stubDb(lean)))!;
+    const load = await getTrading(stubDb(lean));
+    expect(load.kind).toBe('ok');
+    if (load.kind !== 'ok') throw new Error('expected ok');
+    const v = load.view;
     expect(v.openOrders).toEqual([]);
     expect(v.recentAudit).toEqual([]);
     expect(v.openExposureUsd).toBe(0);
@@ -73,12 +82,62 @@ describe('getTrading — dash_trading passthrough + null-tolerant defaults', () 
     expect(v.dryRun).toBeNull();
     expect(v.config!.mode).toBe('off');
   });
+});
 
-  it('returns null when the RPC is absent (0082 not applied → dash_trading throws)', async () => {
-    expect(await getTrading(stubDb(null, { throws: true }))).toBeNull();
+describe('getTrading — #22: not-applied vs RPC-error discrimination', () => {
+  it("PostgREST schema-cache miss (PGRST202 spelling) → 'not-applied'", async () => {
+    const load = await getTrading(
+      stubDb(null, {
+        throwsMessage:
+          'rpc dash_trading failed: Could not find the function public.dash_trading without parameters in the schema cache',
+      }),
+    );
+    expect(load).toEqual({ kind: 'not-applied' });
   });
 
-  it('returns null on an empty (null) RPC result', async () => {
-    expect(await getTrading(stubDb(null))).toBeNull();
+  it("Postgres 42883 spelling → 'not-applied'", async () => {
+    const load = await getTrading(
+      stubDb(null, { throwsMessage: 'rpc dash_trading failed: function public.dash_trading() does not exist' }),
+    );
+    expect(load).toEqual({ kind: 'not-applied' });
+  });
+
+  it("explicit error codes (PGRST202 / 42883) → 'not-applied'", async () => {
+    expect(await getTrading(stubDb(null, { throwsMessage: 'PGRST202' }))).toEqual({ kind: 'not-applied' });
+    expect(await getTrading(stubDb(null, { throwsMessage: 'error 42883' }))).toEqual({ kind: 'not-applied' });
+  });
+
+  it("a transient/DB-incident failure → 'error' with the message preserved (NEVER 'not-applied')", async () => {
+    const load = await getTrading(
+      stubDb(null, { throwsMessage: 'rpc dash_trading failed: upstream request timeout' }),
+    );
+    expect(load.kind).toBe('error');
+    if (load.kind !== 'error') throw new Error('expected error');
+    expect(load.message).toContain('upstream request timeout');
+  });
+
+  it("an operator_guard rejection → 'error', not 'not-applied'", async () => {
+    const load = await getTrading(stubDb(null, { throwsMessage: 'rpc dash_trading failed: ERR_FORBIDDEN' }));
+    expect(load.kind).toBe('error');
+  });
+
+  it("an empty (null) RPC result without a throw → 'error' (an anomaly, not the staged-dark state)", async () => {
+    const load = await getTrading(stubDb(null));
+    expect(load.kind).toBe('error');
+  });
+});
+
+describe('isUndefinedFunctionError — the #22 classifier', () => {
+  it('matches the undefined-function class only', () => {
+    expect(isUndefinedFunctionError('PGRST202')).toBe(true);
+    expect(isUndefinedFunctionError('42883')).toBe(true);
+    expect(isUndefinedFunctionError('function public.dash_trading() does not exist')).toBe(true);
+    expect(
+      isUndefinedFunctionError('Could not find the function public.dash_trading without parameters in the schema cache'),
+    ).toBe(true);
+    expect(isUndefinedFunctionError('upstream request timeout')).toBe(false);
+    expect(isUndefinedFunctionError('ERR_FORBIDDEN')).toBe(false);
+    // an unrelated missing function must not masquerade as the dash_trading staged-dark state
+    expect(isUndefinedFunctionError('function public.some_other_fn() does not exist')).toBe(false);
   });
 });

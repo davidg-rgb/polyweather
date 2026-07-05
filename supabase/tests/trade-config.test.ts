@@ -1059,10 +1059,13 @@ describe('0082 §9 — the six bot_order_* RPCs (the T1 OrderLedger contract)', 
       'public.bot_order_by_intent(text, text)',
       'public.bot_order_reserve_intent(text, text, text, text, text, text, text, text, numeric, numeric, date)',
       'public.bot_order_record_placed(text, text)',
-      'public.bot_order_record_fill(text, numeric, numeric, text)',
+      // 0084 #17/#19: record_fill was DROP+RECREATED with a trailing p_fee_usd (the 0054 no-overload idiom).
+      'public.bot_order_record_fill(text, numeric, numeric, text, numeric)',
       'public.bot_order_record_canceled(text)',
       'public.bot_order_record_failed(text, text)',
       'public.bot_order_list_dangling(text, integer)',
+      // 0084 #18: the hold-to-resolution loss booking joins the service-role-only ledger surface.
+      'public.bot_order_record_resolution_loss(text, text, text)',
     ];
     for (const sig of sigs) {
       const [g] = await rows<{ anon_can: boolean; authd_can: boolean; svc_can: boolean }>(

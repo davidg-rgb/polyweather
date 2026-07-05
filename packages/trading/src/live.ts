@@ -420,7 +420,8 @@ export class MakerExecutor {
       return { ...base, status: 'dry_run', clientOrderId, orderId: syntheticId, limitPrice: priced.price, sizeMatched: 0 };
     }
 
-    return this.postAndRecord(client, order, clientOrderId, { ...base, clientOrderId, limitPrice: priced.price }, orderType, req.size, `${req.marketId} ${req.side} ${req.purpose}`);
+    // maker path: priced-to-rest, never crosses → $0 venue fee by construction (feeRateBps 0).
+    return this.postAndRecord(client, order, clientOrderId, { ...base, clientOrderId, limitPrice: priced.price }, orderType, req.size, 0, `${req.marketId} ${req.side} ${req.purpose}`);
   }
 
   /**
@@ -463,7 +464,9 @@ export class MakerExecutor {
       this.log({ msg: 'taker.dry_run', intentKey, clientOrderId, tokenId: req.tokenId, side: req.side, purpose: req.purpose, orderType: 'FAK', price, size: req.size, payload: redactOrderPayload(order) });
       return { ...base, status: 'dry_run', clientOrderId, orderId: syntheticId, limitPrice: price, sizeMatched: 0 };
     }
-    return this.postAndRecord(client, order, clientOrderId, { ...base, clientOrderId, limitPrice: price }, 'FAK', req.size, `${req.marketId} ${req.side} ${req.purpose}`);
+    // 0084 #17: a FAK exit pays the venue's taker fee — book it with the fill so the N1 daily-loss kill
+    // sees it (the caller supplies the rate; omitted ⇒ 0, the pre-0084 behavior).
+    return this.postAndRecord(client, order, clientOrderId, { ...base, clientOrderId, limitPrice: price }, 'FAK', req.size, req.feeRateBps ?? 0, `${req.marketId} ${req.side} ${req.purpose}`);
   }
 
   /**
@@ -492,10 +495,15 @@ export class MakerExecutor {
     result: Omit<OrderPlacementResult, 'status' | 'orderId' | 'sizeMatched'> & { clientOrderId: string },
     orderType: OrderType,
     requestedSize: number,
+    feeRateBps: number,
     label: string,
   ): Promise<OrderPlacementResult> {
     let orderId: string | undefined;
     let postAttempted = false;
+    // 0084 #17: the venue fee attributed to a fill's CUMULATIVE snapshot — feeRateBps/10 000 × the filled
+    // notional (avg × size). 0 on the maker path (post_only never pays); the taker FAK exit passes its rate.
+    const feeFor = (sizeMatched: number, avgPrice: number): number =>
+      feeRateBps > 0 ? round6((feeRateBps / 10_000) * avgPrice * sizeMatched) : 0;
     try {
       postAttempted = true;
       // ⚠ NEVER a 3rd positional: in the pinned v4 SDK it is `deferExec` (an unintended venue flag),
@@ -518,9 +526,12 @@ export class MakerExecutor {
       const poll = parseOrderFillPoll(await client.getOrder(orderId), orderId, requestedSize);
       if (poll.filled) {
         // p_size_matched is CUMULATIVE (T3 schema appends only positive deltas to live_fills).
-        await this.ledger.recordFill(clientOrderId, poll.sizeMatched || requestedSize, poll.avgPrice ?? result.limitPrice ?? 0, 'filled');
+        const matched = poll.sizeMatched || requestedSize;
+        const avg = poll.avgPrice ?? result.limitPrice ?? 0;
+        await this.ledger.recordFill(clientOrderId, matched, avg, 'filled', feeFor(matched, avg));
       } else if (poll.partial) {
-        await this.ledger.recordFill(clientOrderId, poll.sizeMatched, poll.avgPrice ?? result.limitPrice ?? 0, 'partial');
+        const avg = poll.avgPrice ?? result.limitPrice ?? 0;
+        await this.ledger.recordFill(clientOrderId, poll.sizeMatched, avg, 'partial', feeFor(poll.sizeMatched, avg));
       }
       // resting (maker unmatched): stays 'placed'; the loop repolls / reprices / cancels via the chokepoint.
       return { ...result, status: 'placed', orderId, sizeMatched: poll.sizeMatched };

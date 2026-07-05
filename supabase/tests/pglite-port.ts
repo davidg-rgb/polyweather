@@ -163,11 +163,15 @@ const FN_ARGS: Record<string, string[]> = {
     'p_side', 'p_purpose', 'p_order_type', 'p_price', 'p_size', 'p_trade_date',
   ],
   bot_order_record_placed: ['p_client_order_id', 'p_order_id'],
-  bot_order_record_fill: ['p_client_order_id', 'p_size_matched', 'p_avg_price', 'p_status'],
+  // 0084 #17: p_fee_usd — an omitted arg arrives as SQL NULL positionally; the fn coalesces NULL to 0 (N9 idiom).
+  bot_order_record_fill: ['p_client_order_id', 'p_size_matched', 'p_avg_price', 'p_status', 'p_fee_usd'],
   bot_order_record_canceled: ['p_client_order_id'],
   bot_order_record_failed: ['p_client_order_id', 'p_error'],
   // N9: an omitted p_older_than_min arrives as SQL NULL positionally — the fn coalesces NULL to its default 5.
   bot_order_list_dangling: ['p_mode', 'p_older_than_min'],
+  // 0084 trading hardening (#7 shared exposure read / #18 hold-to-resolution loss booking).
+  trade_open_exposure: [],
+  bot_order_record_resolution_loss: ['p_mode', 'p_market_id', 'p_token_id'],
 };
 
 export function pglitePort(db: PGlite): DbPort {

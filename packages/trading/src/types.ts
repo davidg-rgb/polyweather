@@ -181,6 +181,11 @@ export interface OrderLedger {
     sizeMatched: number,
     avgPrice: number,
     status: 'filled' | 'partial',
+    /** 0084 #17: the venue fee ($) attributed to THIS call's delta — $0 on the maker path (post-only never
+     *  pays), computed caller-side for taker FAK exits (`TakerOrderRequest.feeRateBps` × the delta's
+     *  notional). Omitted/undefined ⇒ 0 (the pre-0084 behavior). Lands on the delta's `live_fills.fee_usd`
+     *  row so the N1 daily-loss definition's fee terms are live, not dead code. */
+    feeUsd?: number,
   ): Promise<void>;
   recordCanceled(clientOrderId: string): Promise<void>;
   recordFailed(clientOrderId: string, error: string): Promise<void>;
@@ -322,6 +327,10 @@ export interface TakerOrderRequest {
   size: number;
   negRisk?: boolean;
   minOrderSize?: number;
+  /** 0084 #17: the venue's taker fee rate in BASIS POINTS (e.g. weather 5% ⇒ 500). When set, the executor
+   *  books `feeRateBps/10 000 × avgPrice × sizeMatched` onto the fill's ledger row (live_fills.fee_usd) so
+   *  taker exit fees reach the N1 daily-loss kill. Omitted ⇒ $0 recorded (the pre-0084 behavior). */
+  feeRateBps?: number;
 }
 
 /** The outcome of a place attempt (maker or taker) across all trade modes. */

@@ -11,6 +11,9 @@ import type { ReactElement } from 'react';
 import type { MakerExitHistoryFeed } from '../lib/loaders.ts';
 import {
   MAKER_EXIT_TREND_SPECS,
+  TREND_MAX_CITY_ERRORS,
+  TREND_MIN_MARKETS,
+  filterTrendPoints,
   hasAnyFinite,
   lastFinite,
   seriesDomain,
@@ -144,18 +147,29 @@ function TrendCard({ spec, points, dates }: { spec: TrendSpec; points: MakerExit
 }
 
 /**
- * The small-multiples grid, rendered ABOVE the assumption tiles. Returns null when there are fewer than 2 snapshots
- * (a sparkline needs a segment) — the page then shows exactly its pre-0079 behaviour.
+ * The small-multiples grid, rendered ABOVE the assumption tiles. Degraded (partial-view) snapshots are
+ * FILTERED OUT of the headline + sparklines first (review #21: a 1-of-73-cities tick's makerFillRate of
+ * 0.0/1.0 must never crater the #1 KILL-driving assumption's trend) — the excluded count renders as a subtle
+ * note under the grid. Returns null when fewer than 2 trend-worthy snapshots remain (a sparkline needs a
+ * segment) — the page then shows exactly its pre-0079 behaviour.
  */
 export function MakerExitTrend({ history }: { history: MakerExitHistoryFeed | null }): ReactElement | null {
-  const points = history?.points ?? [];
+  const { points, excluded } = filterTrendPoints(history?.points ?? []);
   if (points.length < 2) return null;
   const dates = points.map((p) => p.capturedAt);
   return (
-    <div className="mx-trend" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: '0.6rem', marginBottom: '0.8rem' }}>
-      {MAKER_EXIT_TREND_SPECS.map((spec) => (
-        <TrendCard key={spec.key} spec={spec} points={points} dates={dates} />
-      ))}
-    </div>
+    <>
+      <div className="mx-trend" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: '0.6rem', marginBottom: excluded > 0 ? '0.25rem' : '0.8rem' }}>
+        {MAKER_EXIT_TREND_SPECS.map((spec) => (
+          <TrendCard key={spec.key} spec={spec} points={points} dates={dates} />
+        ))}
+      </div>
+      {excluded > 0 ? (
+        <p className="muted small" style={{ margin: '0 0 0.8rem', fontSize: '0.72rem' }}>
+          {excluded} degraded snapshot{excluded === 1 ? '' : 's'} excluded from the trend (partial city fetch
+          &gt;{TREND_MAX_CITY_ERRORS} errors, or below the {TREND_MIN_MARKETS}-market gate floor).
+        </p>
+      ) : null}
+    </>
   );
 }

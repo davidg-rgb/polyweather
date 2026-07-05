@@ -15,9 +15,10 @@
  * the per-city fetch-error count is surfaced into the stored view so the page can flag a silent undercount.
  *
  * v7 (2026-07-03, WS-1): the per-city fetch goes through the SAME bounded worker pool as maker-exit-panel v4
- * (concurrency 5 / 30s per-city timeout / 240s overall budget / partial-view degradation) + the 0077
- * server-thinned RPC. The v6 sequential loop had NO fetch timeout — one hung statement stalled the whole tick
- * past the ~400s isolate wall (the 2026-07-03 incident class; the cron was paused on v6 pending this fix).
+ * (concurrency 5 / 45s per-city timeout — outlasting the RPC's own 40s statement_timeout, review #20 / 240s
+ * overall budget / partial-view degradation) + the 0077 server-thinned RPC. The v6 sequential loop had NO
+ * fetch timeout — one hung statement stalled the whole tick past the ~400s isolate wall (the 2026-07-03
+ * incident class; the cron was paused on v6 pending this fix).
  */
 import type { JobCtx, JobStats } from '../_shared/runJob.ts';
 import { retryWrite, withTimeout } from '../_shared/retry.ts';
@@ -32,13 +33,22 @@ import {
 const PANEL_DAYS = 21;
 
 /**
- * per-city fetch tuning — mirror of maker-exit-panel v4 (one incident class, one fix shape): bounded
- * concurrency keeps each statement under the 8s PostgREST cap while collapsing the wall clock; the per-city
- * timeout bounds a hung fetch (the DbPort fetch has none); the overall budget degrades to a PARTIAL view
- * (skipped cities count into cityErrors, which the page already surfaces) — a partial snapshot beats a dead tick.
+ * per-city fetch tuning — mirror of maker-exit-panel (one incident class, one fix shape): bounded concurrency
+ * collapses the wall clock; the per-city timeout bounds a hung fetch (the DbPort fetch has none); the overall
+ * budget degrades to a PARTIAL view (skipped cities count into cityErrors, which the page already surfaces) —
+ * a partial snapshot beats a dead tick.
+ *
+ * CITY_TIMEOUT_MS (2026-07-05 review #20, mirrored from maker-exit-panel): the RPC's own
+ * `statement_timeout='40s'` (0069/0076/0077/0083) is the real server-side bound — NOT the 8s PostgREST
+ * default an earlier comment assumed — so the client window must OUTLAST it (45s = 40s + 5s transport
+ * margin). A 30s client race abandoned every 30–40s statement AFTER the server had already paid its full IO
+ * cost, and the freed worker then stacked a 6th statement on the intended 5-statement pool bound while the
+ * orphan still ran. At 45s the server always settles the statement class first, so a client timeout fires
+ * only on a transport-level hang — behind which no live DB statement remains.
  */
 const FETCH_CONCURRENCY = 5;
-const CITY_TIMEOUT_MS = 30_000;
+/** exported for the #20 tripwire test — must OUTLAST the RPC's 40s statement_timeout. */
+export const CITY_TIMEOUT_MS = 45_000;
 const FETCH_BUDGET_MS = 240_000;
 
 /**
@@ -46,12 +56,12 @@ const FETCH_BUDGET_MS = 240_000;
  * shape). See _shared/retry.ts for the idempotency argument.
  *
  * ARITHMETIC — this stays under the ~400s isolate wall with margin to spare:
- *   fetch phase worst case  = FETCH_BUDGET_MS (240s) + one in-flight city's CITY_TIMEOUT_MS tail (30s) = 270s
- *   (unchanged by this fix — the budget check only stops NEW claims, the city already in flight when the
- *   budget trips still runs to its own timeout).
+ *   fetch phase worst case  = FETCH_BUDGET_MS (240s) + one in-flight city's CITY_TIMEOUT_MS tail (45s) = 285s
+ *   (the budget check only stops NEW claims, the city already in flight when the budget trips still runs to
+ *   its own timeout).
  *   terminal-write phase worst case = 3 attempts × RECORD_WRITE_TIMEOUT_MS (15s = 45s) + 2 backoffs
  *   (3s + 8s = 11s) = 56s (every attempt hangs to its own timeout — the true worst case, not the common one).
- *   total = 270s + 56s = 326s, leaving a ~74s (≈19%) margin under the 400s wall even in the all-hang case.
+ *   total = 285s + 56s = 341s, leaving a ~59s (≈15%) margin under the 400s wall even in the all-hang case.
  */
 const RECORD_WRITE_RETRIES = 2;
 const RECORD_WRITE_BACKOFF_MS = [3_000, 8_000];

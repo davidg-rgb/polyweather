@@ -1960,6 +1960,9 @@ export interface MakerExitHistoryPoint {
   nMarkets: number | null;
   nCities: number | null;
   nDistinctDays: number | null;
+  /** the Edge tick's per-city fetch-error count (0084 adds it to the RPC; older rows / pre-0084 → null =
+   *  UNKNOWN, never fabricated 0). The trend filter treats >2 as a degraded (partial-view) snapshot. */
+  cityErrors: number | null;
 }
 
 export interface MakerExitHistoryFeed {
@@ -2095,32 +2098,63 @@ export interface TradingView {
 }
 
 /**
+ * The /trading load outcome (2026-07-05 review #22). The old loader conflated EVERY RPC failure with the
+ * "0082 NOT APPLIED" empty-state — once 0082 IS applied (prod, 2026-07-05 morning), a transient PostgREST
+ * 5xx / DB restart / operator_guard rejection rendered as a confidently WRONG "migration never applied"
+ * diagnosis (with apply_migration remediation steps) during exactly the incident windows this deployment
+ * already hit. The states are now distinguished at the catch site, where the error text still exists:
+ *   'not-applied' — the UNDEFINED-FUNCTION class only (Postgres 42883 / PostgREST PGRST202 "could not find
+ *                   the function … in the schema cache") → the true staged-dark day-one state.
+ *   'error'       — every OTHER failure (transient/auth/restart) → the page says "console temporarily
+ *                   unavailable", NOT "not applied".
+ */
+export type TradingLoad =
+  | { kind: 'ok'; view: TradingView }
+  | { kind: 'not-applied' }
+  | { kind: 'error'; message: string };
+
+/** The undefined-function error class: PGRST202 (PostgREST schema-cache miss) / 42883 (Postgres) / their
+ *  message spellings, scoped to the dash_trading symbol so an unrelated missing fn never masquerades. */
+export function isUndefinedFunctionError(message: string): boolean {
+  if (/PGRST202|42883/i.test(message)) return true;
+  return (
+    /dash_trading/i.test(message) &&
+    /(could not find the function|does not exist|not exist in the schema cache|no function matches)/i.test(message)
+  );
+}
+
+/**
  * The LIVE-RAIL trading activation console (dash_trading, 0082) for /trading. RPC-only, one round trip to the
  * operator-guarded dash_trading() — config + the live-mode interlock verdict + open LIVE orders + today's LIVE
  * spend/loss + dry-run counts + the config audit trail. The (dash) layout's requireOperator() gates the page;
  * the RPC self-guards via operator_guard() (same auth path as /maker-exit).
  *
- * STAGED-DARK DEGRADATION (the day-one state): migration 0082 is merged-dark and NOT applied on prod, so
- * dash_trading() DOES NOT EXIST there → the RPC call throws → we return null and the page renders its explicit
- * "0082 NOT APPLIED" empty-state. The error path IS the day-one state. (Same null-tolerant idiom as getMakerExit;
- * a transient RPC error / an operator-guard rejection degrade to the same null → empty-state.)
+ * STAGED-DARK DEGRADATION: while migration 0082 is not applied, dash_trading() does not exist → the RPC call
+ * throws the undefined-function class → { kind: 'not-applied' } → the page renders its explicit "0082 NOT
+ * APPLIED" empty-state. Every OTHER failure is { kind: 'error' } (#22) — never a false "not applied" claim.
  */
-export async function getTrading(db: WebDb): Promise<TradingView | null> {
+export async function getTrading(db: WebDb): Promise<TradingLoad> {
   let v: TradingView | null;
   try {
     v = await one<TradingView>(db, 'dash_trading', {});
-  } catch {
-    return null;
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    return isUndefinedFunctionError(message) ? { kind: 'not-applied' } : { kind: 'error', message };
   }
-  if (!v) return null;
+  // dash_trading always returns an object envelope; a null payload without a throw is an anomaly, not the
+  // staged-dark state — surface it as an error rather than a false "not applied" diagnosis.
+  if (!v) return { kind: 'error', message: 'dash_trading() returned an empty payload' };
   return {
-    config: v.config ?? null,
-    preflight: v.preflight ?? null,
-    openOrders: v.openOrders ?? [],
-    openExposureUsd: v.openExposureUsd ?? 0,
-    today: v.today ?? null,
-    dryRun: v.dryRun ?? null,
-    recentAudit: v.recentAudit ?? [],
-    generatedAt: v.generatedAt ?? null,
+    kind: 'ok',
+    view: {
+      config: v.config ?? null,
+      preflight: v.preflight ?? null,
+      openOrders: v.openOrders ?? [],
+      openExposureUsd: v.openExposureUsd ?? 0,
+      today: v.today ?? null,
+      dryRun: v.dryRun ?? null,
+      recentAudit: v.recentAudit ?? [],
+      generatedAt: v.generatedAt ?? null,
+    },
   };
 }

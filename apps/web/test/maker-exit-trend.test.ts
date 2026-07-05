@@ -7,8 +7,12 @@ import { describe, expect, it } from 'vitest';
 import type { MakerExitHistoryPoint } from '../src/lib/loaders.ts';
 import {
   MAKER_EXIT_TREND_SPECS,
+  TREND_MAX_CITY_ERRORS,
+  TREND_MIN_MARKETS,
   coerceFinite,
+  filterTrendPoints,
   hasAnyFinite,
+  isDegradedTrendPoint,
   lastFinite,
   seriesDomain,
   toSeries,
@@ -34,6 +38,7 @@ const pt = (makerFillRate: number | null, realizedRebateUsd: number | null = nul
     nMarkets: null,
     nCities: null,
     nDistinctDays: null,
+    cityErrors: null,
   }) as MakerExitHistoryPoint;
 
 describe('coerceFinite', () => {
@@ -83,6 +88,63 @@ describe('lastFinite / hasAnyFinite', () => {
   it('hasAnyFinite is false for an all-null series (drives the no-data card)', () => {
     expect(hasAnyFinite([null, null])).toBe(false);
     expect(hasAnyFinite([null, 0])).toBe(true); // a real 0 counts as data
+  });
+});
+
+describe('filterTrendPoints / isDegradedTrendPoint — the #21 degradation floor', () => {
+  const healthy = (over: Partial<MakerExitHistoryPoint> = {}): MakerExitHistoryPoint => ({
+    ...pt(0.42),
+    nMarkets: 60,
+    cityErrors: 0,
+    ...over,
+  });
+
+  it('pins the floor to the gate contract: 40 markets / ≤2 city errors', () => {
+    expect(TREND_MIN_MARKETS).toBe(40);
+    expect(TREND_MAX_CITY_ERRORS).toBe(2);
+  });
+
+  it('keeps a healthy snapshot (nMarkets ≥ 40, cityErrors ≤ 2)', () => {
+    expect(isDegradedTrendPoint(healthy())).toBe(false);
+    expect(isDegradedTrendPoint(healthy({ cityErrors: 2 }))).toBe(false); // boundary: 2 errors tolerated
+    expect(isDegradedTrendPoint(healthy({ nMarkets: 40 }))).toBe(false); // boundary: exactly the gate floor
+  });
+
+  it('excludes a partial-view snapshot (cityErrors > 2 — the 07-05 1-of-73-cities incident shape)', () => {
+    expect(isDegradedTrendPoint(healthy({ cityErrors: 3 }))).toBe(true);
+    expect(isDegradedTrendPoint(healthy({ cityErrors: 72 }))).toBe(true);
+  });
+
+  it('excludes a below-gate-floor sample (nMarkets < 40 or unknown)', () => {
+    expect(isDegradedTrendPoint(healthy({ nMarkets: 39 }))).toBe(true);
+    expect(isDegradedTrendPoint(healthy({ nMarkets: 1 }))).toBe(true); // the crater case: 0.0/1.0 over ≤2 exits
+    expect(isDegradedTrendPoint(healthy({ nMarkets: null }))).toBe(true); // unknown sample = not trend-worthy
+  });
+
+  it('a null cityErrors (pre-0084 snapshot) is UNKNOWN, not degraded — only the sample floor applies', () => {
+    expect(isDegradedTrendPoint(healthy({ cityErrors: null }))).toBe(false);
+    expect(isDegradedTrendPoint(healthy({ cityErrors: null, nMarkets: 10 }))).toBe(true);
+  });
+
+  it('filterTrendPoints preserves order and counts the excluded', () => {
+    const points = [healthy(), healthy({ cityErrors: 9 }), healthy({ nMarkets: 5 }), healthy({ makerFillRate: 0.5 })];
+    const { points: kept, excluded } = filterTrendPoints(points);
+    expect(kept).toHaveLength(2);
+    expect(excluded).toBe(2);
+    expect(kept[0]).toBe(points[0]);
+    expect(kept[1]).toBe(points[3]);
+  });
+
+  it('junk in → empty out, no throwing (the component contract)', () => {
+    expect(filterTrendPoints(undefined as unknown as MakerExitHistoryPoint[])).toEqual({ points: [], excluded: 0 });
+    expect(filterTrendPoints([])).toEqual({ points: [], excluded: 0 });
+  });
+
+  it('the degraded crater never reaches the headline: lastFinite over the FILTERED series skips it', () => {
+    // a healthy 0.42 history followed by a degraded 1-market tick reading 0.0 — the pre-#21 bug headlined 0% RED.
+    const points = [healthy(), healthy({ makerFillRate: 0.44 }), healthy({ makerFillRate: 0, nMarkets: 1, cityErrors: 72 })];
+    const { points: kept } = filterTrendPoints(points);
+    expect(lastFinite(toSeries(kept, 'makerFillRate'))).toBe(0.44);
   });
 });
 

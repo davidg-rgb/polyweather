@@ -80,6 +80,40 @@ export function coerceFinite(v: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+/**
+ * Degradation floor for the trend inputs (2026-07-05 review #21) — the SAME floor the Edge handler applies
+ * before writing the §9R-E gate of record: a snapshot produced by a partial tick (cityErrors > 2 — e.g. the
+ * 07-05 DB-crash day's 1-of-73-cities tick) or over less than the gate's own 40-market minimum sample is a
+ * PARTIAL VIEW — headlining/sparklining it (e.g. a makerFillRate of 0.0 or 1.0 over ≤2 realized exits) would
+ * mislead the operator watching the 0.30 edge-inversion threshold on assumption #1.
+ *
+ * cityErrors semantics: null = UNKNOWN (snapshots predating the 0084 RPC field) — NOT treated as degraded
+ * (only the sample-size floor applies there); a known count > TREND_MAX_CITY_ERRORS excludes the point.
+ */
+export const TREND_MIN_MARKETS = 40;
+export const TREND_MAX_CITY_ERRORS = 2;
+
+/** True when a snapshot fails the degradation floor and must not feed the trend headline/sparkline. */
+export function isDegradedTrendPoint(p: MakerExitHistoryPoint): boolean {
+  const cityErrors = coerceFinite(p?.cityErrors);
+  if (cityErrors != null && cityErrors > TREND_MAX_CITY_ERRORS) return true;
+  const nMarkets = coerceFinite(p?.nMarkets);
+  return !(nMarkets != null && nMarkets >= TREND_MIN_MARKETS);
+}
+
+/**
+ * Split the snapshot stream into trend-worthy points and a degraded-excluded count. Order is preserved
+ * (oldest→newest); junk in → { points: [], excluded: 0 } out (no throwing — the component contract).
+ */
+export function filterTrendPoints(points: MakerExitHistoryPoint[]): {
+  points: MakerExitHistoryPoint[];
+  excluded: number;
+} {
+  const all = Array.isArray(points) ? points : [];
+  const kept = all.filter((p) => !isDegradedTrendPoint(p));
+  return { points: kept, excluded: all.length - kept.length };
+}
+
 /** Extract one metric column as a null-preserving series (aligned 1:1 with the snapshot order). */
 export function toSeries(points: MakerExitHistoryPoint[], key: TrendMetricKey): (number | null)[] {
   return (Array.isArray(points) ? points : []).map((p) => coerceFinite(p?.[key]));

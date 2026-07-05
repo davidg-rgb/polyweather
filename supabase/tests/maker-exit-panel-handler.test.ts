@@ -8,8 +8,12 @@
  * parallelizes; (3) an exhausted fetch budget degrades to a PARTIAL view — remaining cities are skipped and
  * counted, and the snapshot still lands (a partial snapshot beats a dead tick).
  */
+import { readFileSync, readdirSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
-import { makerExitPanel } from '../functions/maker-exit-panel/handler.ts';
+import { CITY_TIMEOUT_MS, makerExitPanel } from '../functions/maker-exit-panel/handler.ts';
+import { CITY_TIMEOUT_MS as CONVERGENCE_CITY_TIMEOUT_MS } from '../functions/convergence-panel/handler.ts';
 import type { DbPort } from '../functions/_shared/db.ts';
 import type { JobCtx } from '../functions/_shared/runJob.ts';
 
@@ -104,7 +108,7 @@ describe('maker-exit-panel per-city fetch pool', () => {
     expect(stats.cityErrors).toBe(0);
   });
 
-  it('an exhausted budget skips remaining cities into cityErrors and still writes a partial snapshot', async () => {
+  it('an exhausted budget skips remaining cities into cityErrors, still writes a partial snapshot — but NOT the gate of record (#8/#10)', async () => {
     // FAKE TIMERS (2026-07-03, WS-5): this test previously raced real wall-clock Date.now() against a
     // real setTimeout-based city latency — under machine load the scheduling jitter between "the first
     // wave's synchronous budget check" and "the actual elapsed ms" could let an extra city slip through
@@ -117,33 +121,76 @@ describe('maker-exit-panel per-city fetch pool', () => {
       const db = fakeDb({ cities, behavior: () => 30 });
       // budget 0ms: the first wave (claimed at elapsed≡0, frozen by the fake clock) proceeds; every later
       // claim (after the 30ms fake-timer advance below) sees elapsed≥30ms → skipped.
-      const statsPromise = makerExitPanel(ctx(db), { now: NOW, fetchConcurrency: 2, fetchBudgetMs: 0 });
+      const statsPromise = makerExitPanel(ctx(db), { now: NOW, fetchConcurrency: 2, fetchBudgetMs: 0, gateMinMarkets: 0 });
       await vi.advanceTimersByTimeAsync(100); // fires every in-flight 30ms city sleep + drains the fallout
       const stats = await statsPromise;
       expect(db.fetchedCities.length).toBe(2);
       expect(stats.budgetSkipped).toBe(4);
       expect(stats.cityErrors).toBe(4); // skipped cities surface through the count the page already shows
       expect(db.writes).toContain('record_maker_exit_panel'); // partial view beats a dead tick
-      expect(db.writes).toContain('record_bot_gate_snapshot');
+      // #8/#10: cityErrors 4 > 2 breaches the degradation floor — the §9R-E gate of record (which 0082's
+      // live-capital interlock reads by LATEST label) must NOT receive this biased-subset verdict …
+      expect(db.writes).not.toContain('record_bot_gate_snapshot');
+      expect(stats.gateWriteSkipped).toBe('degraded'); // … and the skip is surfaced in the tick stats
+      expect(db.writes).toContain('record_bot_tick'); // the deadman's liveness feed is UNCHANGED
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it('the healthy path fetches every city exactly once with zero errors', async () => {
+  it('the healthy path fetches every city exactly once with zero errors — clean tick writes panel + gate + tick', async () => {
     const cities = ['a', 'b', 'c', 'd', 'e'];
     const db = fakeDb({ cities });
-    const stats = await makerExitPanel(ctx(db), { now: NOW });
+    // gateMinMarkets: 0 — the fake fixture has empty captures (nMarkets 0), so the production 40-market
+    // floor is lowered to isolate the CLEAN-tick contract: zero cityErrors + floor met ⇒ ALL THREE writes.
+    const stats = await makerExitPanel(ctx(db), { now: NOW, gateMinMarkets: 0 });
     expect(db.fetchedCities.sort()).toEqual(cities);
     expect(stats.cityErrors).toBe(0);
     expect(stats.budgetSkipped).toBe(0);
     expect(db.writes).toEqual(
       expect.arrayContaining(['record_maker_exit_panel', 'record_bot_gate_snapshot', 'record_bot_tick']),
     );
+    expect('gateWriteSkipped' in stats).toBe(false); // #8/#10: no skip marker on a clean tick
     // SIGNAL-BACKLOG #1 follow-on — the reward-eligibility tick diagnostic flows into the stats payload (the
     // fake captures are empty, so it's the "no realized trades yet" NaN, but the field must be present + wired).
     expect('qualifyingTickFrac' in stats).toBe(true);
     expect(Number.isNaN(stats.qualifyingTickFrac as number)).toBe(true);
+  });
+
+  describe('#8/#10 — the gate-of-record degradation floor (cityErrors > 2 OR nMarkets < the gate minimum)', () => {
+    it('cityErrors > 2 → panel snapshot + liveness tick written, gate row NOT written, skip surfaced in stats', async () => {
+      const cities = ['c1', 'c2', 'c3', 'c4', 'c5', 'c6'];
+      const db = fakeDb({ cities, behavior: (c) => (['c1', 'c2', 'c3'].includes(c) ? 'hang' : 'ok') });
+      const stats = await makerExitPanel(ctx(db), { now: NOW, cityTimeoutMs: 50, fetchConcurrency: 6, gateMinMarkets: 0 });
+      expect(stats.cityErrors).toBe(3); // 3 > 2 — degraded
+      expect(db.writes).toContain('record_maker_exit_panel'); // ops telemetry unchanged
+      expect(db.writes).not.toContain('record_bot_gate_snapshot'); // the gate of record is protected
+      expect(db.writes).toContain('record_bot_tick'); // the deadman feed unchanged
+      expect(stats.gateWriteSkipped).toBe('degraded');
+    });
+
+    it('cityErrors exactly 2 is tolerated — the gate row IS written', async () => {
+      const cities = ['c1', 'c2', 'c3', 'c4', 'c5'];
+      const db = fakeDb({ cities, behavior: (c) => (['c1', 'c2'].includes(c) ? 'hang' : 'ok') });
+      const stats = await makerExitPanel(ctx(db), { now: NOW, cityTimeoutMs: 50, fetchConcurrency: 5, gateMinMarkets: 0 });
+      expect(stats.cityErrors).toBe(2);
+      expect(db.writes).toContain('record_bot_gate_snapshot');
+      expect('gateWriteSkipped' in stats).toBe(false);
+    });
+
+    it('a below-minimum sample (nMarkets < the gate floor) skips the gate write even with ZERO city errors', async () => {
+      // production default: gateMinMarkets = view.gate.minMarkets (the §9R-E 40-market bar). The empty fake
+      // fixture scores nMarkets 0 — an adjudicable-looking verdict over ~no sample must not enter the record.
+      const cities = ['a', 'b'];
+      const db = fakeDb({ cities });
+      const stats = await makerExitPanel(ctx(db), { now: NOW }); // NO gateMinMarkets override — the real floor
+      expect(stats.cityErrors).toBe(0);
+      expect(stats.nMarkets).toBe(0);
+      expect(db.writes).toContain('record_maker_exit_panel');
+      expect(db.writes).not.toContain('record_bot_gate_snapshot');
+      expect(db.writes).toContain('record_bot_tick');
+      expect(stats.gateWriteSkipped).toBe('degraded');
+    });
   });
 
   it('SIGNAL-BACKLOG #1 follow-on v2 (2026-07-04) — the "WHY zero" dominantDisqualifier flows into the stats payload', async () => {
@@ -153,6 +200,44 @@ describe('maker-exit-panel per-city fetch pool', () => {
     expect('dominantDisqualifier' in stats).toBe(true);
     // no realized trades in this fake fixture (empty captures) → zero resting ticks accrued → the honest 'none'.
     expect(stats.dominantDisqualifier).toBe('none');
+  });
+});
+
+describe('#20 — the per-city client timeout must OUTLAST the RPC server-side statement_timeout', () => {
+  // A client window SHORTER than the server bound abandons every 30–40s statement AFTER the server already
+  // paid its full IO cost (result discarded, city errored) and lets the freed worker stack an extra live
+  // statement on the intended 5-statement pool bound. The tripwire reads the LATEST migration that (re)states
+  // convergence_capture_inputs and asserts both panel handlers' windows exceed its statement_timeout.
+  const serverStatementTimeoutMs = (): number => {
+    const dir = join(dirname(fileURLToPath(import.meta.url)), '..', 'migrations');
+    const files = readdirSync(dir).filter((f) => f.endsWith('.sql')).sort();
+    let ms = 0;
+    for (const f of files) {
+      const sql = readFileSync(join(dir, f), 'utf8');
+      if (!/convergence_capture_inputs/.test(sql)) continue;
+      const m = /set\s+statement_timeout\s+to\s+'(\d+)s'/i.exec(sql);
+      if (m) ms = Number(m[1]) * 1000; // later files win — the deployed definition
+    }
+    return ms;
+  };
+
+  it('both panel handlers give the server bound a head start (client > server)', () => {
+    const serverMs = serverStatementTimeoutMs();
+    expect(serverMs).toBeGreaterThan(0); // the RPC pins its own statement_timeout (0069/0076/0077/0083)
+    expect(CITY_TIMEOUT_MS).toBeGreaterThan(serverMs);
+    expect(CONVERGENCE_CITY_TIMEOUT_MS).toBeGreaterThan(serverMs);
+  });
+
+  it('a timed-out city is counted as errored and the pool stays bounded (no wedged slot)', async () => {
+    // one city hangs past the client window; the pool (bound 2) must finish every other city exactly once,
+    // count the hung one into cityErrors, and never exceed the bound — the tick completes with the snapshot.
+    const cities = ['c0', 'c1', 'c2', 'c3', 'c4', 'c5'];
+    const db = fakeDb({ cities, behavior: (c) => (c === 'c3' ? 'hang' : 10) });
+    const stats = await makerExitPanel(ctx(db), { now: NOW, cityTimeoutMs: 60, fetchConcurrency: 2, gateMinMarkets: 0 });
+    expect(stats.cityErrors).toBe(1);
+    expect(db.fetchedCities.sort()).toEqual(['c0', 'c1', 'c2', 'c4', 'c5']);
+    expect(db.maxInFlight).toBeLessThanOrEqual(2 + 1); // the bound + at most the one abandoned transport hang
+    expect(db.writes).toContain('record_maker_exit_panel');
   });
 });
 
@@ -191,7 +276,8 @@ describe('maker-exit-panel terminal-write retry (WS-5) — wiring, not the retry
       log: (msg) => logged.push(msg),
       startedAt: NOW,
     };
-    const stats = await makerExitPanel(loggingCtx, { now: NOW, bookkeepingTimeoutMs: 50 });
+    // gateMinMarkets 0: the clean-tick path must attempt the gate write so the hang/timeout is exercised.
+    const stats = await makerExitPanel(loggingCtx, { now: NOW, bookkeepingTimeoutMs: 50, gateMinMarkets: 0 });
     expect(stats.snapshotId).toBe(7); // the terminal snapshot landed before step 4 — the tick is 'ok'
     expect(logged.some((m) => m.includes('gate-snapshot / tick write failed (non-fatal)'))).toBe(true);
     expect(db.writes.filter((w) => w === 'record_bot_gate_snapshot')).toHaveLength(1); // bounded, NOT retried
