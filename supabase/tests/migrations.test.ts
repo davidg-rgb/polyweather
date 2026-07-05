@@ -333,6 +333,13 @@ describe('migrations 0001–0010', () => {
       // dash_trading/trade_config_set/trade_gate_override_* added to WEB_AUTHENTICATED below. No cron/edge fn
       // (count stays 29).
       '0082_trading_activation.sql',
+      // 0083 = the daemon-blocking identity fix found on the FIRST dry-run start (2026-07-05, operator-approved
+      // go-live morning): convergence_capture_inputs' bucket JSON was economics-only (idx/label/prices/depth/
+      // houseProb) — the T2 trade daemon discovers candidates through the SAME RPC and mapped every
+      // EntryCandidate to conditionId=''/tokenYes='' → the venue rejected every book read ("Invalid token id").
+      // ADDITIVE ONLY: the per-bucket object gains conditionId/tokenYes/tokenNo; every existing consumer's
+      // mapper (core mapBucket) already read-or-defaulted them. Applied to prod 2026-07-05 ~06:35Z.
+      '0083_capture_inputs_identity.sql',
     ]);
   });
 });
