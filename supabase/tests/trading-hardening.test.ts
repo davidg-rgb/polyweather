@@ -205,6 +205,7 @@ describe('0084 #7 — END-TO-END: the total-concurrent cap blocks a new entry on
     tstopHoursBeforeResolve: 18,
     timeStopLocalHour: 12,
     minOrderSizeShares: 5,
+    takerFeeRate: 0.05,
     negRisk: true,
   };
 

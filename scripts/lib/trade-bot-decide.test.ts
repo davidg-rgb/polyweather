@@ -32,6 +32,7 @@ import {
   dustParkAlerts,
   dustRemainder,
   entryCancelDeferredAlerts,
+  metaDegradedAlert,
   sellHoldAlerts,
   stopOf,
   timeStopMsOf,
@@ -138,6 +139,7 @@ function position(over: Partial<LivePosition> = {}): LivePosition {
     soldSize: 0,
     soldTruthDegraded: false,
     entryPollFresh: true,
+    metaDegraded: false,
     mark: 0.2,
     entry: handle({ status: 'filled', sizeMatched: 66 }),
     tp: null,
@@ -538,6 +540,128 @@ describe('decideTick — live kill (preflight fail) cancels resting entries, nev
     const plan = decideTick(state({ positions: [position({ filledSize: 0, entry: restingUnfilled(), entryPollFresh: false, tp: null, mark: null })] }));
     expect(plan.intents.some((i) => i.kind === 'reprice_entry')).toBe(true);
     expect(plan.skips.some((s) => s.reason.includes('cancel_entry_deferred_stale_poll'))).toBe(false);
+  });
+});
+
+// ── PREFLIGHT READ FAILURE (finding #15) — a hold, never a kill ─────────────────────────────────────
+describe('decideTick — a failed preflight READ holds; only a REAL verdict cancels (finding #15)', () => {
+  const restingUnfilled = () => handle({ status: 'placed', sizeMatched: 0, restingSinceMs: NOW.getTime() - 31 * 60_000 });
+
+  it('read failure → NO cancel_entry AND NO reprice: the resting entry is left untouched at the venue', () => {
+    const plan = decideTick(
+      state({ preflight: null, preflightReadFailed: true, positions: [position({ filledSize: 0, entry: restingUnfilled(), tp: null, mark: null })] }),
+    );
+    expect(plan.intents.some((i) => i.kind === 'cancel_entry')).toBe(false); // a DB blip must not cancel at the venue
+    expect(plan.intents.some((i) => i.kind === 'reprice_entry')).toBe(false); // the interlock cannot be confirmed
+  });
+
+  it('read failure → candidates are skipped with the distinct preflight_read_failed reason (not preflight_blocked)', () => {
+    const plan = decideTick(state({ preflight: null, preflightReadFailed: true, candidates: [cand()] }));
+    expect(enters(plan)).toHaveLength(0);
+    expect(plan.skips.some((s) => s.reason.includes('preflight_read_failed'))).toBe(true);
+    expect(plan.skips.some((s) => s.reason.includes('preflight_blocked'))).toBe(false);
+  });
+
+  it('read failure → exits still fire and the TP rest still arms (exits are NEVER preflight-gated)', () => {
+    const crashed = position({ mark: 0.05 }); // below the ternary stop
+    const healthy = position({ marketId: 'm2', mark: 0.2, tp: null });
+    const plan = decideTick(state({ preflight: null, preflightReadFailed: true, positions: [crashed, healthy] }));
+    expect(plan.intents.some((i) => i.kind === 'exit_taker' && i.purpose === 'stop_loss')).toBe(true);
+    expect(plan.intents.some((i) => i.kind === 'rest_tp')).toBe(true);
+  });
+
+  it('read failure never raises the stale-poll defer skip (nothing wants a cancel in the first place)', () => {
+    const stale = position({ filledSize: 0, entry: restingUnfilled(), entryPollFresh: false, tp: null, mark: null });
+    const plan = decideTick(state({ preflight: null, preflightReadFailed: true, positions: [stale] }));
+    expect(plan.skips.some((s) => s.reason.includes('cancel_entry_deferred_stale_poll'))).toBe(false);
+    // the daemon computes killWantsCancel=false on a read failure → no defer WARN either
+    expect(entryCancelDeferredAlerts([stale], false)).toHaveLength(0);
+  });
+
+  it('a REAL negative verdict (successful read) still cancels — the two states stay distinct', () => {
+    const plan = decideTick(
+      state({ preflight: preflight({}, false, ['daily-loss kill']), preflightReadFailed: false, positions: [position({ filledSize: 0, entry: restingUnfilled(), tp: null, mark: null })] }),
+    );
+    expect(plan.intents.some((i) => i.kind === 'cancel_entry')).toBe(true);
+  });
+
+  it('dry-run ignores preflightReadFailed entirely (the interlock is live-only)', () => {
+    const plan = decideTick(state({ mode: 'dry-run', preflight: null, preflightReadFailed: true, candidates: [cand()] }));
+    expect(enters(plan)).toHaveLength(1);
+  });
+});
+
+// ── DEGRADED / UNSEEDED CAPTURE META (findings #4/#5/#9) — positions never lose their exits ────────
+describe('decideTick — degraded/unseeded capture meta never gates the exits', () => {
+  it('an UNSEEDED capture (modelProb null) still fires the time-stop from the known resolvesAt clock', () => {
+    const pos = position({ modelProb: null, resolvesAtMs: NOW.getTime() + 3_600_000, mark: 0.25, tp: null });
+    const plan = decideTick(state({ positions: [pos] }));
+    expect(plan.intents.some((i) => i.kind === 'exit_taker' && i.purpose === 'time_stop')).toBe(true);
+  });
+
+  it('an unseeded capture holds ONLY the reprice: no re-peg target without houseProb, skip surfaced', () => {
+    const entry = handle({ status: 'placed', sizeMatched: 0, restingSinceMs: NOW.getTime() - 31 * 60_000 }); // past window
+    const plan = decideTick(state({ positions: [position({ filledSize: 0, entry, modelProb: null, tp: null, mark: null })] }));
+    expect(plan.intents.some((i) => i.kind === 'reprice_entry')).toBe(false);
+    expect(plan.skips.some((s) => s.reason.includes('reprice_held_unseeded'))).toBe(true);
+  });
+
+  it('metaDegraded: the stop-loss still fires on a live mark (exits run on ledger truth)', () => {
+    const pos = position({ metaDegraded: true, modelProb: null, resolvesAtMs: null, city: '', tz: '', mark: 0.05 });
+    const plan = decideTick(state({ positions: [pos] }));
+    const ex = plan.intents.find((i) => i.kind === 'exit_taker') as Extract<Intent, { kind: 'exit_taker' }>;
+    expect(ex).toBeDefined();
+    expect(ex.purpose).toBe('stop_loss');
+  });
+
+  it('metaDegraded: the TP rest still arms (sized from entryPrice + delta — no capture dependency)', () => {
+    const pos = position({ metaDegraded: true, modelProb: null, resolvesAtMs: null, city: '', tz: '', mark: 0.2, tp: null });
+    const plan = decideTick(state({ positions: [pos] }));
+    expect(plan.intents.some((i) => i.kind === 'rest_tp')).toBe(true);
+  });
+
+  it('metaDegraded surfaces the meta_degraded skip and holds the reprice', () => {
+    const entry = handle({ status: 'placed', sizeMatched: 0, restingSinceMs: NOW.getTime() - 31 * 60_000 });
+    const pos = position({ metaDegraded: true, modelProb: null, resolvesAtMs: null, city: '', tz: '', filledSize: 0, entry, tp: null, mark: null });
+    const plan = decideTick(state({ positions: [pos] }));
+    expect(plan.intents.some((i) => i.kind === 'reprice_entry')).toBe(false);
+    expect(plan.skips.some((s) => s.reason.includes('meta_degraded'))).toBe(true);
+  });
+
+  it('metaDegradedAlert maps the degraded positions to ONE WARN naming them; null when none', () => {
+    const degraded = position({ metaDegraded: true, modelProb: null, city: '', tz: '' });
+    const alert = metaDegradedAlert([degraded, position({ marketId: 'm2' })]);
+    expect(alert).not.toBeNull();
+    expect(alert).toMatchObject({ kind: 'TRADE_BOT_META_DEGRADED', severity: 'WARN' });
+    expect(alert!.body).toContain('m1');
+    expect(alert!.body).not.toContain('m2 '); // only the degraded one is named
+    expect(metaDegradedAlert([position()])).toBeNull();
+  });
+});
+
+// ── ONE BUCKET PER EVENT (findings #4/#5/#9) — the drift double-entry guard ─────────────────────────
+describe('decideTick — a drifted forecast center cannot open a second position in the same event', () => {
+  it('a candidate in the SAME event (city+date, different bucket/conditionId) is skipped', () => {
+    const plan = decideTick(state({ positions: [position()], candidates: [cand({ marketId: 'm2', tokenId: 't2' })] }));
+    expect(enters(plan)).toHaveLength(0);
+    expect(plan.skips.some((s) => s.reason.includes('already_positioned_event'))).toBe(true);
+  });
+
+  it('a different event (other city or date) still enters', () => {
+    const plan = decideTick(
+      state({
+        positions: [position()],
+        candidates: [cand({ marketId: 'm3', city: 'paris', tz: 'Europe/Paris' }), cand({ marketId: 'm4', targetDate: '2026-07-07' })],
+      }),
+    );
+    expect(enters(plan)).toHaveLength(2);
+  });
+
+  it('a metaDegraded position (unknown city) still market-blocks its own conditionId', () => {
+    const pos = position({ metaDegraded: true, modelProb: null, city: '', tz: '' });
+    const plan = decideTick(state({ positions: [pos], candidates: [cand()] })); // same marketId m1
+    expect(enters(plan)).toHaveLength(0);
+    expect(plan.skips.some((s) => s.reason === 'already_positioned')).toBe(true);
   });
 });
 

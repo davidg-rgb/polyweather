@@ -280,3 +280,45 @@ no-orphan-fill guarantees, not a taker-edge lever):
    `record_canceled`-orphaned. The known-partial (`filledSize>0`) remainder is still left working (NEW-LOW-2),
    and the fully-filled case stays self-protected (`allCanceled=false`). Tests: `trade-bot-decide.test.ts`
    (stale → defer + skip; fresh → cancel; alert mapping) + `scripts/trade-bot.test.ts` (`refreshFill` freshness).
+
+## 12. C64 review-hardening bundle (2026-07-05 — the 27-finding fix wave; operator apply steps)
+
+A 7-lane Fable review of the 07-03→07-05 build (`b416f31..HEAD`) surfaced 27 verified findings — the two
+CRITICAL ones (the CLOB **taker-centric trade-side inversion** that inverted maker-fill attribution in
+`venueSoldFor`/reconcile, and `postOrder`'s 3rd positional being **deferExec, not postOnly** in
+clob-client@4) lived on live-only paths the dry-run shadow week could never exercise. All fixes are merged
+and tested; the full verdicts live in the C64 cycle-log entry (FASTTRACK-PLAN.md).
+
+**What changed in behavior (already live in the daemon after restart):**
+- Venue trade records are parsed taker-centric (`trader_side` + `maker_orders[]`, fail-loud on unknown
+  shapes); our maker fills attribute by our funder address + known order ids; unattributable ⇒ the sell
+  path DEGRADES (holds sells + CRITICAL) rather than guessing.
+- `postOrder` is called with exactly (order, orderType) — maker-ness is price-only by design; no venue
+  flag requests post-only (v4 does not support it).
+- Position management is **ledger-keyed** (a position is managed by its own conditionId/tokenYes for its
+  whole life; the forecast argmax only drives NEW entries; per-event entry dedupe). Unseeded/missing
+  capture meta retains positions (`metaDegraded`), never drops them.
+- A discovery/preflight READ failure is a HOLD (degraded tick + WARN, escalation after 3), never an
+  empty-position-set or a synthesized kill verdict; only a real kill verdict cancels resting entries.
+- Single-instance guard: the daemon takes a mode-scoped Postgres advisory lock at startup — a second
+  copy exits loudly. `TRADE_TICK_SEC` is clamped ≥ 5 s.
+- Reprice/cancel-raced partial fills stay ledger-visible; TP-cancel races re-derive the FAK size
+  post-cancel; sub-min dust remainders park with ONE warn.
+- Hold-to-resolution losses are booked into the daily-loss kill via `bot_order_record_resolution_loss`
+  (idempotent; the tick calls it when a graded event's winner token ≠ a held position's token).
+- The replay engine adjudicates the hard time-stop BEFORE a same-tick maker-TP (conservative — the
+  pinned banner numbers predate this and shift slightly down on regen).
+
+**OPERATOR APPLY STEPS (in order, ~5 min):**
+1. Apply migration **`0084_trading_hardening.sql`** (AFTER 0082 — it CREATE-OR-REPLACEs 0082 fns and
+   drops/recreates `bot_order_record_fill`). Staged dark until then; nothing depends on it pre-apply.
+2. Redeploy **`maker-exit-panel`** and **`convergence-panel`** edge functions — activates the degraded-tick
+   gate-write skip (a partial view can no longer write the §9R-E gate-of-record) + the 45 s per-city
+   client timeout.
+3. Restart the dry-run daemon (the orchestrator's detached copy is restarted with the fixed code already;
+   if you run your own: Ctrl-C + `$env:TRADE_MODE = "dry-run"; pnpm tsx scripts/trade-bot.ts` — a second
+   concurrent copy now exits on the advisory lock, which is the guard working).
+
+Until step 1+2, the new code paths degrade gracefully: `p_fee_usd` and `cityErrors`-in-history simply
+don't exist yet (fees record 0 exactly as before; the trend treats unknown degradation as unknown), and
+the resolution-loss RPC calls fail as a logged WARN each tick (no tick kill).

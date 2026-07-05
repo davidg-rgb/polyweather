@@ -163,7 +163,10 @@ export interface CaptureMarketRef {
   tokenYes: string;
 }
 
-/** One event's center (argmax-houseProb) bucket at its latest capture — mirrors the daemon's buildEventMeta. */
+/** One event's center (argmax-houseProb) bucket at its latest capture — mirrors the daemon's ENTRY candidacy
+ *  (discoverCandidates). NOTE post-C64: the daemon's position MANAGEMENT is now ledger-keyed (buildEventMeta
+ *  indexes every bucket; the argmax only drives new entries), which matches the replay's hold-the-entered-token
+ *  semantics — the argmax center here remains correct for the entry-dim comparison this harness measures. */
 export interface CaptureEventRef {
   eventId: string;
   city: string;
@@ -300,8 +303,9 @@ export const EXPECTED_DIVERGENCE_CLASSES: string[] = [
 /**
  * Build the capture index from the RAW `opening_captures` rows (pure + total). For every bucket of every tick
  * it records conditionId → its bucket identity (latest capturedAt wins, so label/idx reflect the freshest book),
- * and per event the argmax-houseProb bucket at the latest tick (the forecast center — the daemon's buildEventMeta
- * choice) + the venue resolution epoch (first finite resolvesAt per event; constant per event = the Gamma endDate).
+ * and per event the argmax-houseProb bucket at the latest tick (the forecast center — the daemon's
+ * discoverCandidates entry choice; its management is ledger-keyed post-C64) + the venue resolution epoch
+ * (first finite resolvesAt per event; constant per event = the Gamma endDate).
  */
 export function buildCaptureIndex(rows: RawCaptureRow[]): CaptureIndex {
   const market = new Map<string, CaptureMarketRef>();
@@ -464,8 +468,9 @@ export function normalizeLedger(rows: DryRunLedgerRow[], index: CaptureIndex): M
 }
 
 /** Collapse the (possibly multiple, one-per-bucket) A market decisions of ONE event into a single SideDecision.
- *  Picks the bucket matching side B when present, else the earliest-entered — and flags a multi-bucket event
- *  (the daemon's argmax shifted mid-window, entering two buckets — a real bucket-instability divergence). */
+ *  Picks the bucket matching side B when present, else the earliest-entered — and flags a multi-bucket event.
+ *  Post-C64 the daemon dedupes entries per event (already_positioned_event), so a multi-bucket A side now
+ *  indicates a dedupe failure or pre-fix ledger rows — still a divergence worth surfacing, sharper meaning. */
 function collapseADecisions(mkts: MarketDecision[], bBucketIdx: number | null): SideDecision {
   if (mkts.length === 0) {
     return { entered: false, bucketIdx: null, bucketLabel: '', conditionId: null, entryPrice: null, entrySizeShares: null, entryAtMs: null, entryFilledShares: null, exitKind: null, exitPrice: null, exitAtMs: null, realizedPnlUsd: null };

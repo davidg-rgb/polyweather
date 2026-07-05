@@ -32,7 +32,10 @@
  *   entries, exactly as GO-LIVE-CHECKLIST-OPENING.md §5 requires). When the LIVE preflight FAILS (kill
  *   tripped / console off / window expired), FULLY-UNFILLED resting maker ENTRIES are additionally
  *   CANCELLED — a working entry is future exposure and must stop within one tick of a kill; reprice_entry
- *   is likewise preflight-gated (lens MEDIUM-2). A PARTIALLY-filled entry's resting remainder is
+ *   is likewise preflight-gated (lens MEDIUM-2). A FAILED preflight READ is NOT a kill (finding #15,
+ *   `TickState.preflightReadFailed`): the verdict is UNKNOWN → new entries + reprices are HELD, but no
+ *   venue-side cancel fires — a transient DB timeout must never destroy maker queue priority. A PARTIALLY-
+ *   filled entry's resting remainder is
  *   DELIBERATELY LEFT WORKING under a kill (lens NEW-LOW-2): cancelling it would `record_canceled` the
  *   entry row → terminal → invisible to `bot_order_by_intent` → the NEXT tick could no longer reconstruct
  *   the position and the HELD shares would lose their stop-loss/time-stop backstop. The remainder's
@@ -143,6 +146,8 @@ export interface DecideCfg {
   timeStopLocalHour: number;
   /** the venue order floor in shares (BotConfig.minOrderSizeShares, ≈5) — below it the venue rejects. */
   minOrderSizeShares: number;
+  /** 0.05 — the venue taker fee rate; booked on FAK exit fills so the N1 daily-loss kill sees it (0084 #17). */
+  takerFeeRate: number;
   /** weather is negRisk winner-take-all (default true). */
   negRisk: boolean;
 }
@@ -161,6 +166,7 @@ export function toDecideCfg(cfg: MakerExitCfg, minOrderSizeShares: number): Deci
     tstopHoursBeforeResolve: cfg.tstopHoursBeforeResolve,
     timeStopLocalHour: cfg.timeStopLocalHour,
     minOrderSizeShares,
+    takerFeeRate: cfg.takerFeeRate,
     negRisk: true,
   };
 }
@@ -290,8 +296,13 @@ export interface LivePosition {
   resolvesAtMs: number | null;
   /** the maker entry limit = the realized fill price (a maker order fills AT its resting limit). */
   entryPrice: number;
-  /** the bucket's house prob (unused by the delta-TP path; kept for parity / future model-TP). */
-  modelProb: number;
+  /**
+   * the entered bucket's house prob — the reprice re-peg input. NULL when the latest capture is unseeded
+   * (houseProb null by design on a seed outage) or the capture meta is missing entirely (`metaDegraded`):
+   * the maker-window reprice is then HELD (a re-peg target cannot be computed) while every exit keeps
+   * working — exits never depend on the model.
+   */
+  modelProb: number | null;
   /** cumulative shares held (the entry order's cumulative sizeMatched). */
   filledSize: number;
   /**
@@ -316,6 +327,14 @@ export interface LivePosition {
    * floor). Defaults true (dry-run / non-kill paths never consult it). Set by the daemon's `refreshFill`.
    */
   entryPollFresh: boolean;
+  /**
+   * true when the capture window carried NO meta for this position's market this tick (a discovery-RPC
+   * outage, an aged/pre-0083 capture) — the position is reconstructed from LEDGER identity alone (findings
+   * #4/#5/#9: never dropped). City/tz/resolvesAt/houseProb are then unknown: the time-stop clock and the
+   * reprice re-peg are HELD (surfaced as a skip + a daemon WARN), while ledger-truth exits (stop-loss on a
+   * live mark, TP sizing) keep working. Always false when the capture meta was found.
+   */
+  metaDegraded: boolean;
   /** the CURRENT executable bid — the realizable sell mark (the daemon fetches it live). */
   mark: number | null;
   entry: OrderHandle | null;
@@ -357,7 +376,8 @@ export function assemblePosition(args: {
     city: string;
     targetDate: string;
     tz: string;
-    modelProb: number;
+    /** null = the bucket's houseProb is unknown this tick (unseeded capture / degraded meta). */
+    modelProb: number | null;
     resolvesAtMs: number | null;
   };
   entry: OrderLedgerRow | null;
@@ -371,6 +391,8 @@ export function assemblePosition(args: {
   soldTruthDegraded?: boolean;
   /** the entry's fill state was freshly + successfully polled this tick (§11.2). Defaults true. */
   entryPollFresh?: boolean;
+  /** the capture window carried no meta for this market this tick (findings #4/#5/#9). Defaults false. */
+  metaDegraded?: boolean;
 }): LivePosition | null {
   const { meta, entry, tp, stopLoss, timeStop, mark } = args;
   if (entry == null) return null;
@@ -391,6 +413,7 @@ export function assemblePosition(args: {
     soldSize,
     soldTruthDegraded: args.soldTruthDegraded === true,
     entryPollFresh: args.entryPollFresh !== false, // default true; only an explicit false (a failed poll) gates
+    metaDegraded: args.metaDegraded === true,
     mark: mark ?? null,
     entry: handleOf(entry),
     tp: handleOf(tp),
@@ -445,6 +468,14 @@ export interface TickState {
   config: TradeConfig;
   /** the live interlock verdict — REQUIRED in live mode, null otherwise (dry-run/off never post live). */
   preflight: TradePreflight | null;
+  /**
+   * true when the live preflight READ itself failed this tick (a transient DB timeout — review finding
+   * #15). The verdict is then UNKNOWN, which is NOT a kill: new entries + reprices are HELD (the interlock
+   * cannot be confirmed), but resting entries are NOT cancelled at the venue — the destructive kill-cancel
+   * is licensed only by a POSITIVE negative verdict (`preflight.ok === false` from a successful read).
+   * Defaults false. Only meaningful in live mode.
+   */
+  preflightReadFailed?: boolean;
   cfg: DecideCfg;
   now: Date;
   candidates: DiscoveredCandidate[];
@@ -519,25 +550,35 @@ export function dustRemainder(p: LivePosition, cfg: DecideCfg): number | null {
  * DEFERRED (planForPosition holds it, decideTick surfaces a skip, the daemon fires a WARN); it retries next
  * tick once a healthy poll confirms 0 matched. A KNOWN partial (`filledSize>0`) is a different case — its
  * remainder is deliberately left working (NEW-LOW-2), never cancelled — so this predicate excludes it.
+ * `killWantsCancel` = a REAL negative preflight verdict (never a failed READ — finding #15).
  */
-function entryCancelDeferredByStalePoll(p: LivePosition, entriesBlocked: boolean): boolean {
-  return entriesBlocked && !(p.filledSize > 0) && restingEntry(p.entry) && !p.entryPollFresh;
+function entryCancelDeferredByStalePoll(p: LivePosition, killWantsCancel: boolean): boolean {
+  return killWantsCancel && !(p.filledSize > 0) && restingEntry(p.entry) && !p.entryPollFresh;
 }
 
 /**
  * Manage one open position: exits (never gated) take priority over resting the TP, over the entry window.
- * `entriesBlocked` (live preflight failed): reprice is suppressed and a FULLY-UNFILLED resting maker
- * ENTRY is CANCELLED (MEDIUM-2: a kill stops new exposure within one tick); exits + the TP rest keep
- * working (they only flatten). A PARTIALLY-filled entry's resting remainder is deliberately NOT cancelled
- * (NEW-LOW-2): `executor.cancel` would `record_canceled` the entry row → terminal → invisible to
- * `bot_order_by_intent` → the next tick could not reconstruct the position, orphaning the HELD shares
- * from their stop-loss/time-stop backstop. Its exposure is already committed capital in the preflight
- * accounting; reconstructability of the held shares wins. (The evaluated alternative — a venue-only
- * cancel that skips the ledger write to keep the row visible — was rejected: it re-cancels at the venue
- * every kill tick, leaves a permanent ledger/venue divergence on an "open" row that is venue-dead, and
- * inflates the open-exposure read.)
+ * `killWantsCancel` (live preflight returned a REAL negative verdict): reprice is suppressed and a
+ * FULLY-UNFILLED resting maker ENTRY is CANCELLED (MEDIUM-2: a kill stops new exposure within one tick);
+ * exits + the TP rest keep working (they only flatten). `entriesBlocked` WITHOUT `killWantsCancel` (the
+ * preflight READ failed — the verdict is UNKNOWN, finding #15): the resting entry is HELD as-is — no
+ * venue-side cancel from a DB blip (destroying maker queue priority on a flap), no reprice (the interlock
+ * cannot be confirmed) — it retries next tick. A PARTIALLY-filled entry's resting remainder is
+ * deliberately NOT cancelled (NEW-LOW-2): `executor.cancel` would `record_canceled` the entry row →
+ * terminal → invisible to `bot_order_by_intent` → the next tick could not reconstruct the position,
+ * orphaning the HELD shares from their stop-loss/time-stop backstop. Its exposure is already committed
+ * capital in the preflight accounting; reconstructability of the held shares wins. (The evaluated
+ * alternative — a venue-only cancel that skips the ledger write to keep the row visible — was rejected:
+ * it re-cancels at the venue every kill tick, leaves a permanent ledger/venue divergence on an "open" row
+ * that is venue-dead, and inflates the open-exposure read.)
  */
-function planForPosition(p: LivePosition, cfg: DecideCfg, nowMs: number, entriesBlocked: boolean): Intent[] {
+function planForPosition(
+  p: LivePosition,
+  cfg: DecideCfg,
+  nowMs: number,
+  entriesBlocked: boolean,
+  killWantsCancel: boolean,
+): Intent[] {
   const held = p.filledSize;
   const out: Intent[] = [];
 
@@ -545,15 +586,21 @@ function planForPosition(p: LivePosition, cfg: DecideCfg, nowMs: number, entries
   if (!(held > 0)) {
     const e = p.entry;
     if (!restingEntry(e)) return out; // dangling ('intent', no orderId) → reconcile owns it; terminal → done
-    if (entriesBlocked) {
+    if (killWantsCancel) {
       // §11.2 — only cancel when the entry's 0-matched state is FRESHLY confirmed this tick; a stale poll
       // could be hiding a partial fill that record_canceled would orphan → DEFER (retry next tick, WARN).
       if (!p.entryPollFresh) return out;
       return [cancelEntryIntent(p, e, 'preflight_blocked — kill cancels fully-unfilled resting entries')];
     }
+    // finding #15 — the preflight read failed (verdict UNKNOWN): HOLD the resting entry untouched. A read
+    // failure is not a kill; cancelling here would churn venue cancel/re-place on every DB flap.
+    if (entriesBlocked) return out;
     if (e.restingSinceMs == null) return out; // no clock → cannot age the window; hold
     const restMin = (nowMs - e.restingSinceMs) / 60_000;
     if (restMin < cfg.makerFillWindowMin) return out; // within the window → keep resting
+    // findings #4/#5/#9 — the re-peg target needs the bucket's houseProb; on an unseeded capture or
+    // degraded meta it is unknown → HOLD the reprice (decideTick surfaces the skip; exits are unaffected).
+    if (!fin(p.modelProb)) return out;
     return [
       {
         kind: 'reprice_entry',
@@ -660,6 +707,7 @@ function exitTaker(
       tradeDate: p.targetDate,
       worstPrice,
       size,
+      feeRateBps: Math.round(cfg.takerFeeRate * 10_000),
       negRisk: cfg.negRisk,
     },
     ...(cancelTp ? { cancelTp } : {}),
@@ -675,13 +723,22 @@ export function decideTick(state: TickState): TickPlan {
 
   const nowMs = now.getTime();
   const liveGated = mode === 'live';
-  const entriesBlocked = liveGated && (preflight == null || !preflight.ok);
+  // finding #15 — three-valued preflight: PASS / FAIL (a real kill verdict) / UNKNOWN (the read failed).
+  // UNKNOWN blocks new exposure exactly like FAIL, but it never licenses the destructive kill-cancel.
+  const preflightUnknown = liveGated && state.preflightReadFailed === true;
+  const entriesBlocked = liveGated && (preflightUnknown || preflight == null || !preflight.ok);
+  const killWantsCancel = liveGated && !preflightUnknown && preflight != null && !preflight.ok;
 
   // 1 · MANAGE existing positions first (exits are NEVER cap/preflight-gated — a position must always be
   //     able to flatten; the daily-loss kill + a de-activated console gate only NEW entries). Under a live
-  //     kill (entriesBlocked), reprice is suppressed and FULLY-UNFILLED resting entries are CANCELLED
-  //     (MEDIUM-2/NEW-LOW-2). A degraded sell-truth position holds its sells this tick (NEW-LOW-1).
+  //     kill (killWantsCancel), reprice is suppressed and FULLY-UNFILLED resting entries are CANCELLED
+  //     (MEDIUM-2/NEW-LOW-2); under a failed preflight READ they are merely HELD. A degraded sell-truth
+  //     position holds its sells this tick (NEW-LOW-1).
   const positioned = new Set(positions.map((p) => `${p.marketId}|${p.targetDate}`));
+  // findings #4/#5/#9 — the tuned strategy holds at most ONE bucket per event (centerHalfWidth 0): a
+  // forecast-center drift must not open a SECOND position in the same event while the first rides. An
+  // event is identified by (city, targetDate) — one daily-weather event per city per day.
+  const positionedEvents = new Set(positions.filter((p) => p.city !== '').map((p) => `${p.city}|${p.targetDate}`));
   for (const p of positions) {
     if (p.soldTruthDegraded && p.filledSize - p.soldSize > 1e-9) {
       skips.push({
@@ -690,11 +747,24 @@ export function decideTick(state: TickState): TickPlan {
           'sell_hold_degraded — venue sell-truth (getTrades) unavailable; soldSize may be understated, so taker exits + the TP rest are HELD this tick (over-sell guard; the daemon alerts CRITICAL)',
       });
     }
-    if (entryCancelDeferredByStalePoll(p, entriesBlocked)) {
+    if (entryCancelDeferredByStalePoll(p, killWantsCancel)) {
       skips.push({
         ref: p.marketId,
         reason:
           'cancel_entry_deferred_stale_poll — live kill wants to cancel this fully-unfilled resting entry, but its fill state was not freshly polled this tick (getOrder failed); a stale sizeMatched=0 could hide a partial fill, so the cancel is DEFERRED to next tick (the daemon fires a WARN)',
+      });
+    }
+    if (p.metaDegraded) {
+      skips.push({
+        ref: p.marketId,
+        reason:
+          'meta_degraded — the capture window carried no meta for this managed market this tick; the position is retained on LEDGER identity (never dropped), ledger-truth exits (stop-loss on a live mark) keep working, but the time-stop clock (resolvesAt) and the reprice re-peg are HELD until capture meta returns (the daemon fires a WARN)',
+      });
+    } else if (!fin(p.modelProb) && !(p.filledSize > 0) && restingEntry(p.entry) && !entriesBlocked) {
+      skips.push({
+        ref: p.marketId,
+        reason:
+          'reprice_held_unseeded — the latest capture carries no houseProb for the entered bucket (seed outage), so the maker-window reprice target cannot be computed; the resting entry is HELD as-is until the seed recovers (exits are unaffected)',
       });
     }
     const dust = dustRemainder(p, cfg);
@@ -704,14 +774,16 @@ export function decideTick(state: TickState): TickPlan {
         reason: `dust_below_min_order — unsold remainder ${dust.toFixed(2)} sh < venue min ${cfg.minOrderSizeShares}; no exit order can execute, position parked (the daemon warns ONCE; a resting TP keeps working venue-side)`,
       });
     }
-    intents.push(...planForPosition(p, cfg, nowMs, entriesBlocked));
+    intents.push(...planForPosition(p, cfg, nowMs, entriesBlocked, killWantsCancel));
   }
 
   // 2 · ENTER new positions. LIVE mode enforces the preflight interlock + the caps; dry-run skips them
   //     (its ledger rows never count toward live caps) but keeps every strategy gate.
   if (entriesBlocked) {
-    const why = preflight?.reasons?.length ? preflight.reasons.join('; ') : 'preflight verdict unavailable';
-    for (const c of candidates) skips.push({ ref: c.marketId, reason: `preflight_blocked: ${why}` });
+    const why = preflightUnknown
+      ? 'preflight_read_failed — the interlock verdict is UNKNOWN this tick (DB read failed): entries + reprices HELD, resting entries NOT cancelled (a read failure is not a kill); retrying next tick'
+      : `preflight_blocked: ${preflight?.reasons?.length ? preflight.reasons.join('; ') : 'preflight verdict unavailable'}`;
+    for (const c of candidates) skips.push({ ref: c.marketId, reason: why });
     return { intents, skips };
   }
 
@@ -725,6 +797,12 @@ export function decideTick(state: TickState): TickPlan {
     const key = `${c.marketId}|${c.targetDate}`;
     if (positioned.has(key)) {
       skips.push({ ref: c.marketId, reason: 'already_positioned' });
+      continue;
+    }
+    // findings #4/#5/#9 — a drifted forecast center makes the NEW center bucket a fresh conditionId; the
+    // market-level dedupe above would let it through and double the event exposure. One bucket per event.
+    if (positionedEvents.has(`${c.city}|${c.targetDate}`)) {
+      skips.push({ ref: c.marketId, reason: `already_positioned_event (${c.city} ${c.targetDate} — another bucket of this event is held; the tuned strategy takes at most one)` });
       continue;
     }
     if (!cfg.cities.includes(c.city)) {
@@ -847,11 +925,13 @@ export function dustParkAlerts(positions: LivePosition[], cfg: DecideCfg): Trade
  * log + a raw Slack post) so the operator sees that a kill-cancel is waiting on a healthy `getOrder`. WARN,
  * NOT CRITICAL: the entry is §9R-capped and retries next tick, and the deferral is the SAFE choice (a stale
  * poll cannot hide an over-sell — it only risks orphaning a poll-missed partial, which the deferral avoids).
+ * `killWantsCancel` must be the REAL-kill flag (a negative verdict from a SUCCESSFUL preflight read) — a
+ * failed READ never wants a cancel in the first place (finding #15).
  */
-export function entryCancelDeferredAlerts(positions: LivePosition[], entriesBlocked: boolean): TradeAlert[] {
+export function entryCancelDeferredAlerts(positions: LivePosition[], killWantsCancel: boolean): TradeAlert[] {
   const out: TradeAlert[] = [];
   for (const p of positions) {
-    if (!entryCancelDeferredByStalePoll(p, entriesBlocked)) continue;
+    if (!entryCancelDeferredByStalePoll(p, killWantsCancel)) continue;
     out.push({
       kind: 'TRADE_BOT_ENTRY_CANCEL_DEFERRED',
       severity: 'WARN',
@@ -867,6 +947,32 @@ export function entryCancelDeferredAlerts(positions: LivePosition[], entriesBloc
     });
   }
   return out;
+}
+
+/**
+ * Findings #4/#5/#9 — the SINGLE WARN for positions managed WITHOUT capture meta this tick. PURE: maps the
+ * tick's `metaDegraded` positions (retained on ledger identity — never dropped) to ONE alert naming them
+ * all, or null when none. The daemon fires it through the mode-gated alert channel every affected tick
+ * (self-heals the tick capture meta returns). WARN, not CRITICAL: ledger-truth exits (stop-loss on a live
+ * mark, TP sizing) keep working — only the capture-derived pieces (time-stop clock, reprice re-peg) wait.
+ */
+export function metaDegradedAlert(positions: LivePosition[]): TradeAlert | null {
+  const degraded = positions.filter((p) => p.metaDegraded);
+  if (degraded.length === 0) return null;
+  const names = degraded.map((p) => `${p.marketId} (${p.targetDate})`).join(', ');
+  return {
+    kind: 'TRADE_BOT_META_DEGRADED',
+    severity: 'WARN',
+    title: `trade-bot: ${degraded.length} position(s) managed WITHOUT capture meta this tick`,
+    body:
+      `The capture window carried no meta for: ${names}. Each position is RETAINED and managed from its ` +
+      `own LEDGER identity (marketId/token/tradeDate) — stop-loss on the live mark and TP sizing keep ` +
+      `working — but the capture-derived pieces are HELD: the resolvesAt time-stop clock cannot be ` +
+      `computed and the maker-window reprice has no re-peg target. Causes: a capture/discovery RPC outage, ` +
+      `captures aged past the window, or pre-0083 identity-less rows. Self-heals the tick capture meta ` +
+      `returns; if this persists, check convergence_capture_inputs / the opening-capture cron.`,
+    dedupeKey: 'trade-bot-meta-degraded',
+  };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
