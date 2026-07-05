@@ -71,6 +71,21 @@ dashboard, TypeScript monorepo (`packages/core|io|trading`, `supabase/functions`
 > headlining the **three measured assumptions** (maker-fill rate #1 / realized rebate #2 / days #3). Suite **1772
 > green**, typecheck clean. Operator deploy = apply 0073 + deploy the edge fn; then ≥7 days/≥40 markets accrue → the
 > live §9R-E gate adjudicates. **No capital before a frozen paper PASS.** Boundary intact (Claude never trades/keys).
+>
+> **↳ UPDATE 2026-07-05 — the operator authorized REAL BUYING (22:47 local 07-04) → the LIVE-RAIL execution stack is BUILT (night loop v9, C43–C49) and sits DARK behind the unchanged gate.**
+> Five lanes, each adversarially lens-reviewed to MERGE-CLEAN, all on main @ `7d35c79` (suite 160 files / 2583 green):
+> **T1** `packages/trading` MakerExecutor (maker entry/TP, taker FAK exits, dry-run-default mode ladder, idempotent
+> ledger) · **T2** the LOCAL daemon `scripts/trade-bot.ts` + operator smoke `scripts/trade-smoke.ts` + runbook
+> `docs/ops/TRADING-ACTIVATION.md` (its 3-round lens caught a CRITICAL filled-TP over-sell on the WINNING path
+> pre-merge) · **T3** migration **`0082` (trade_config + trade_live_preflight interlock + live ledger + dash_trading)
+> — MERGED-DARK, NOT applied** · **T4** the `/trading` operator console (renders "0082 NOT APPLIED" until then) ·
+> **T5** the shadow-week diff harness `scripts/research/trade-shadow-diff.ts` (dry-run daemon vs replay twin).
+> **NOTHING RUNS YET.** Operator morning items (`docs/ops/LIVE-RAIL-NIGHT-HANDOFF.md`): apply 0082 → run the smoke
+> (keyless-safe default) → start the DRY-RUN daemon (begins the shadow week T5 measures). TRADE_MODE defaults
+> never-live; a live post additionally needs the preflight interlock (forward-gate PASS or explicit 14d-capped
+> override). **The forward paper §9R-E gate is UNCHANGED as the gate of record (INSUFFICIENT 6-of-7 days at build
+> close, first 07-05 entries open) — no capital before a frozen PASS; the boundary holds (operator funds/keys/
+> authorizes; Claude never trades, never touches credentials).**
 
 - Hosted Supabase ref: `lenysiqxihsmxljvyybt` (eu-north-1) · Prod: `weather-edge-two.vercel.app`
 - Canonical docs: **`FINDINGS.md`** (the R&D verdict — start here: is there a tradable edge? no, and why),

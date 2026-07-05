@@ -48,6 +48,22 @@ record · PASS = stage the §9R decision doc only · INSUFFICIENT-regression = p
 | `bot.consensusSource` | `calibrated` | The validated seed (73.9 % vs 52.8 % selector) |
 | Slack | paused except WHALE_TRADE + deadman kinds | Deadmen page correctly (proven 07-03) |
 
+## What changed 2026-07-04 night → 07-05 (LIVE-RAIL; all pushed; cycle log C43–C49 in FASTTRACK-PLAN.md)
+
+- **The operator authorized real buying (22:47 local 07-04) → the LIVE-RAIL slate was built overnight and is
+  COMPLETE on main @ `7d35c79` (suite 160 files / 2583 green):** T1 `packages/trading` MakerExecutor rail ·
+  T2 the local daemon `scripts/trade-bot.ts` + operator smoke `scripts/trade-smoke.ts` + runbook
+  `docs/ops/TRADING-ACTIVATION.md` · T3 migration `0082` (activation console: trade_config + interlock +
+  ledger + dash_trading) **MERGED-DARK, NOT applied** · T4 the `/trading` operator console (renders "0082
+  NOT APPLIED" until applied) · T5 `scripts/research/trade-shadow-diff.ts` (dry-run-vs-replay divergence
+  harness for the shadow week; not runnable until 0082 + dry-run rows exist). Every lane went through the
+  adversarial lens loop to MERGE-CLEAN; the T2 series caught + closed a CRITICAL over-sell on the winning
+  path pre-merge. **Nothing runs yet — apply 0082, run the smoke, and start the dry-run daemon are operator
+  morning items (`docs/ops/LIVE-RAIL-NIGHT-HANDOFF.md` §"Operator morning items"). Boundary intact.**
+- **Gate:** still INSUFFICIENT 73/34/**6-of-7** at last read — but **n_open 0→2** (01:36Z): the first
+  07-05-targeted positions entered; day 7 = the first settle. KILL pre-authorized to record; PASS stage-only.
+- 0081 thread: gap-fill done+verified (C45); the 07-05 10:00Z `cities:4/placed>0` cron-slot proof remains.
+
 ## What changed 2026-07-03 night → 07-04 day (all pushed; cycle log C28–C42 in FASTTRACK-PLAN.md)
 
 - **Migrations 0079 (`dash_maker_exit_history`) + 0080 (`dash_city_forecast`) APPLIED live 07-04 08:10Z**
