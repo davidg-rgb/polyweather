@@ -423,4 +423,31 @@ describe('redaction — never surfaces signing/auth material (MEDIUM-4)', () => 
     const addr = '0x' + 'ef'.repeat(20); // 40 hex chars — an address
     expect(redactText(`funder ${addr}`)).toContain(addr);
   });
+
+  it('C74: a synthetic clob-client error dump carrying the L2 creds/signature comes out fully redacted', () => {
+    // the exact object @polymarket/clob-client's http-helper console.errors on a venue 400 — request
+    // config.headers (the L2 auth trio) INCLUDED — plus a logged creds object with the base64 secret.
+    const apiKey = '3f2a1b7c-9d4e-4a6b-8c1d-2e3f4a5b6c7d'; // uuid apiKey
+    const passphrase = 'a1b2c3d4-e5f6-4788-9a0b-1c2d3e4f5a6b'; // uuid passphrase
+    const secret = 'Zm9vYmFyc2VjcmV0YmFzZTY0dmFsdWVwYWQ='; // base64 secret (ends '=')
+    const signature = 'q7r8s9t0u1v2_w3x4-y5z6A7B8C9D0E1F2G3H4I5J6K7L8M9N0='; // base64url L2 signature (ends '=')
+    const dump = JSON.stringify({
+      status: 400,
+      data: { error: 'invalid order version', status: 400 },
+      config: { url: 'https://clob.polymarket.com/order', headers: { POLY_API_KEY: apiKey, POLY_PASSPHRASE: passphrase, POLY_SIGNATURE: signature } },
+      creds: { key: apiKey, secret, passphrase },
+    });
+    const clean = redactText(dump);
+    for (const s of [apiKey, passphrase, secret, signature]) expect(clean).not.toContain(s);
+    expect(clean).toContain('REDACTED');
+    // the diagnostic the operator actually needs still survives
+    expect(clean).toContain('invalid order version');
+    // benign ids/prices/addresses are NOT collateral damage of the new shape matchers
+    const addr = '0x' + 'ab'.repeat(20); // 40-hex address
+    const tokenId = '7'.repeat(72); // decimal tokenId
+    const survived = redactText(`funder ${addr} token ${tokenId} price 0.27`);
+    expect(survived).toContain(addr);
+    expect(survived).toContain(tokenId);
+    expect(survived).toContain('price 0.27');
+  });
 });

@@ -155,6 +155,25 @@ WARN — expected. Success signature: [1] creds derived · [2] funder recognized
 order posted far below market then `canceled OK`, 0 open orders left. Nothing fills, nothing costs (CLOB
 place/cancel is gasless).
 
+> **2026-07-06 — live-smoke run + two follow-ups (C74).** The operator ran the `--live-smoke` write-path probe.
+> Steps 1–3 PASSED (L2 creds derived, funder recognized, dry-run payload built); **step 4 was REJECTED by the
+> venue with `400 {"error":"invalid order version, please use the latest clob-client"}` — nothing rested
+> (`getOpenOrders` = 0).** Two outcomes:
+> 1. **The 400 is NOT fixed yet, and it is NOT a version bump.** Root cause is the Polymarket **CLOB V2 exchange
+>    cutover (~2026-04-28)**: the EIP-712 order domain version was bumped 1→2 with new exchange contracts, and
+>    the ENTIRE `@polymarket/clob-client` line (our pinned v4.22.8 AND the latest 5.8.1) still signs V1 orders →
+>    same 400. The real fix is a package swap to `@polymarket/clob-client-v2` (a signing-seam redesign), tracked
+>    as its own lane. **Re-running `--live-smoke` before that lands will STILL 400** (steps 1–3 keep passing) —
+>    the write path stays unproven until the v2 migration ships.
+> 2. **Credential leak on the step-4 error path — FIXED (this commit).** On the 400, clob-client's own HTTP
+>    helper `console.error`s the full axios error INCLUDING `config.headers` — the L2 auth trio POLY_API_KEY /
+>    POLY_PASSPHRASE / POLY_SIGNATURE — which bypassed every one of the smoke's `redactText` catch paths and
+>    printed the creds to the operator's terminal. The live client is now wrapped at the `bootstrapClobClient`
+>    seam in a redacting console guard (`withRedactedConsole` / `redactConsoleClient`), and `redactText` also
+>    masks the L2 cred SHAPES (uuid apiKey/passphrase + base64 secret/signature). A re-run is now SAFE (still
+>    400s, no longer leaks). **If that terminal session was captured anywhere, ROTATE the L2 CLOB creds** —
+>    they are derivable/regenerable via `createOrDeriveApiKey` and are NOT the wallet signing key.
+
 ---
 
 ## 6. Daily-loss kill semantics (realized-at-sell, UTC window)

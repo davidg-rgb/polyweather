@@ -136,6 +136,83 @@ export async function suppressConsoleDuring<T>(fn: () => Promise<T>): Promise<T>
 }
 
 /**
+ * A REDACTING sibling of `suppressConsoleDuring` (C74 credential-leak hardening). Where suppress DROPS all
+ * console output for one awaited call, this FORWARDS it — but each argument is first passed through
+ * `redactText`, so credential material a DEPENDENCY prints stays masked. The load-bearing case:
+ * @polymarket/clob-client's HTTP helper `console.error`s the FULL axios error — request `config.headers`
+ * INCLUDED — on any venue 4xx (its `errorHandling`), which carries the L2 auth headers POLY_API_KEY /
+ * POLY_PASSPHRASE / POLY_SIGNATURE. That console.error bypasses every one of OUR redactText catch paths, so
+ * the ONLY way to mask it is to intercept the console around the call. The operator still sees the status +
+ * venue-error text; only the secrets become `…REDACTED`.
+ *
+ * Concurrency-safe by DEPTH-COUNTING a single global install: the first entrant saves + installs the
+ * redacting console, nested/concurrent entrants reuse it, and the console is restored ONLY when the last
+ * one exits — so an interleaved pair can never restore the real console while another call is still
+ * mid-flight (the hazard a naive per-call save/restore would have under daemon concurrency).
+ */
+let redactConsoleDepth = 0;
+let redactConsoleSaved: Array<[string, (...a: unknown[]) => void]> | null = null;
+
+function redactConsoleArg(a: unknown): unknown {
+  if (typeof a === 'string') return redactText(a);
+  if (a instanceof Error) return redactText(`${a.name}: ${a.message}`);
+  try {
+    return redactText(JSON.stringify(a));
+  } catch {
+    return '…REDACTED';
+  }
+}
+
+export async function withRedactedConsole<T>(fn: () => Promise<T>): Promise<T> {
+  const con = (globalThis as unknown as { console?: Record<string, (...a: unknown[]) => void> }).console;
+  if (!con) return fn();
+  const methods = ['error', 'warn', 'log', 'info', 'debug'] as const;
+  if (redactConsoleDepth === 0) {
+    redactConsoleSaved = methods.map((m) => [m, con[m]] as [string, (...a: unknown[]) => void]);
+    for (const [m, orig] of redactConsoleSaved) {
+      con[m] = (...args: unknown[]): void => orig(...args.map(redactConsoleArg));
+    }
+  }
+  redactConsoleDepth++;
+  try {
+    return await fn();
+  } finally {
+    redactConsoleDepth--;
+    if (redactConsoleDepth === 0 && redactConsoleSaved) {
+      for (const [m, f] of redactConsoleSaved) con[m] = f;
+      redactConsoleSaved = null;
+    }
+  }
+}
+
+/**
+ * Wrap a live CLOB client so EVERY venue-touching call runs inside `withRedactedConsole` (C74). This is the
+ * single chokepoint: clob-client's own error logging fires on ANY venue 4xx from postOrder / cancel / the
+ * authed reads — not only the paths WE catch — so wrapping the client at the `bootstrapClobClient` seam
+ * protects the daemon (`trade-bot.ts`), the `execute-bet` LiveExecutor, AND the operator smoke at once with
+ * no per-call-site change. Only the known async venue methods are proxied (an allowlist), so non-function
+ * properties and `this`/state pass through untouched and the method's RETURN value is unchanged — redaction
+ * is log-only, never a behavior change on the order path.
+ */
+const REDACTED_CLIENT_METHODS: ReadonlySet<string> = new Set([
+  'getTickSize', 'createOrder', 'createMarketOrder', 'postOrder', 'postOrders', 'getOrder', 'getOpenOrders',
+  'getTrades', 'getOrderBook', 'getOrderBooks', 'cancelOrder', 'cancelOrders', 'cancelAll', 'cancelMarketOrders',
+]);
+
+export function redactConsoleClient<C extends object>(client: C): C {
+  return new Proxy(client, {
+    get(target, prop, receiver) {
+      const val = Reflect.get(target, prop, receiver);
+      if (typeof prop === 'string' && typeof val === 'function' && REDACTED_CLIENT_METHODS.has(prop)) {
+        const fn = val as (...a: unknown[]) => unknown;
+        return (...args: unknown[]): Promise<unknown> => withRedactedConsole(() => Promise.resolve(fn.apply(target, args)));
+      }
+      return val;
+    },
+  });
+}
+
+/**
  * Production client factory: ClobClient(host, chainId=137, signer from
  * POLY_PRIVATE_KEY, creds via createOrDeriveApiKey). Dynamic non-literal
  * specifiers: resolved by Deno at run time, invisible to tsc/Node — nothing
@@ -172,7 +249,12 @@ async function bootstrapClobClient(): Promise<{
   const bootstrap = new ClobClient('https://clob.polymarket.com', 137, signer, undefined, sigType, funder);
   // The 400-fallback inside this call is EXPECTED (derive→create) — see suppressConsoleDuring.
   const creds = await suppressConsoleDuring(() => bootstrap.createOrDeriveApiKey());
-  const client = new ClobClient('https://clob.polymarket.com', 137, signer, creds, sigType, funder);
+  // C74: wrap the live client at the seam so clob-client's own error logging (it console.errors the FULL
+  // axios error — request auth headers included — on any venue 4xx) can never leak the L2 creds. Every
+  // venue call then runs inside withRedactedConsole; covers the daemon AND the smoke through one chokepoint.
+  const client = redactConsoleClient(
+    new ClobClient('https://clob.polymarket.com', 137, signer, creds, sigType, funder),
+  );
   const funderSet = funder != null && funder !== '';
   return { client, creds, sigType, funderSet, address: (funderSet ? funder : signer.address) ?? null };
 }

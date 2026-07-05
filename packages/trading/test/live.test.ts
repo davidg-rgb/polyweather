@@ -6,7 +6,7 @@
  */
 import { describe, expect, it, vi } from 'vitest';
 import { ExecutionError } from '@weather-edge/core';
-import { LiveExecutor, createClobClient, suppressConsoleDuring, type ApprovedBet, type ClobClientish, type TradeAlert } from '../src/index.ts';
+import { LiveExecutor, createClobClient, redactConsoleClient, suppressConsoleDuring, withRedactedConsole, type ApprovedBet, type ClobClientish, type TradeAlert } from '../src/index.ts';
 
 const bet: ApprovedBet = {
   betId: 'b-1',
@@ -198,5 +198,97 @@ describe('suppressConsoleDuring (C51 bootstrap-hygiene follow-up)', () => {
       }),
     ).rejects.toMatchObject({ code: 'ERR_CLOB' });
     expect(console.error).toBe(original);
+  });
+});
+
+describe('withRedactedConsole + redactConsoleClient (C74 credential-leak hardening)', () => {
+  const apiKey = '3f2a1b7c-9d4e-4a6b-8c1d-2e3f4a5b6c7d';
+  const passphrase = 'a1b2c3d4-e5f6-4788-9a0b-1c2d3e4f5a6b';
+  const signature = 'q7r8s9t0u1v2_w3x4-y5z6A7B8C9D0E1F2G3H4I5J6K7L8M9N0=';
+  // exactly what @polymarket/clob-client's http-helper console.errors on a venue 400 (headers INCLUDED)
+  const credLine = (): string =>
+    JSON.stringify({ status: 400, config: { headers: { POLY_API_KEY: apiKey, POLY_PASSPHRASE: passphrase, POLY_SIGNATURE: signature } } });
+  const noSecrets = (printed: string): void => {
+    for (const s of [apiKey, passphrase, signature]) expect(printed).not.toContain(s);
+    expect(printed).toContain('REDACTED');
+  };
+
+  it('forwards console output but REDACTED, restores the pre-call sink after, passes the value through', async () => {
+    const saved = console.error;
+    const spy = vi.fn();
+    console.error = spy;
+    try {
+      const out = await withRedactedConsole(async () => {
+        console.error('[CLOB Client] request error', credLine());
+        return 'result';
+      });
+      expect(out).toBe('result');
+      expect(spy).toHaveBeenCalledTimes(1);
+      noSecrets(spy.mock.calls[0]!.map(String).join(' '));
+      expect(console.error).toBe(spy); // restored to our sink, not clobbered
+    } finally {
+      console.error = saved;
+    }
+  });
+
+  it('depth-counted install survives nesting; restores only when the LAST call exits', async () => {
+    const saved = console.error;
+    const spy = vi.fn();
+    console.error = spy;
+    try {
+      await withRedactedConsole(async () => {
+        const mid = console.error; // the redacting wrapper is now installed
+        expect(mid).not.toBe(spy);
+        await withRedactedConsole(async () => {
+          console.error(credLine());
+          expect(console.error).toBe(mid); // nested call reuses the install, no second layer
+        });
+        expect(console.error).toBe(mid); // inner exit must NOT restore while the outer is active
+      });
+      expect(console.error).toBe(spy); // outer exit restores
+      noSecrets(spy.mock.calls.map((c) => c.map(String).join(' ')).join(' '));
+    } finally {
+      console.error = saved;
+    }
+  });
+
+  it('restores the console and rethrows on throw (failures stay loud, depth never leaks)', async () => {
+    const saved = console.error;
+    try {
+      await expect(
+        withRedactedConsole(async () => {
+          throw new ExecutionError('ERR_CLOB', 'boom');
+        }),
+      ).rejects.toMatchObject({ code: 'ERR_CLOB' });
+      expect(console.error).toBe(saved);
+    } finally {
+      console.error = saved;
+    }
+  });
+
+  it('redactConsoleClient: venue-method cred logging is redacted; return value, `this`, and plain props survive', async () => {
+    const rawClient = {
+      creds: { marker: '0xORDERID' },
+      plain: 'kept',
+      async postOrder(): Promise<{ orderID: string }> {
+        // stand-in for clob-client's errorHandling console.error on a 400 — bypasses OUR catch paths
+        console.error('[CLOB Client] request error', credLine());
+        return { orderID: this.creds.marker }; // reads `this` → proves target binding survives the proxy
+      },
+    };
+    const client = redactConsoleClient(rawClient);
+    const saved = console.error;
+    const spy = vi.fn();
+    console.error = spy;
+    try {
+      const res = await client.postOrder();
+      expect(res).toEqual({ orderID: '0xORDERID' }); // return value + this-binding intact through the proxy
+      expect(client.plain).toBe('kept'); // non-function prop passes through unproxied
+      expect(spy).toHaveBeenCalledTimes(1);
+      noSecrets(spy.mock.calls[0]!.map(String).join(' '));
+      expect(console.error).toBe(spy); // restored
+    } finally {
+      console.error = saved;
+    }
   });
 });

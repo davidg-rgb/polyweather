@@ -482,16 +482,27 @@ export function redactOrderPayload(payload: unknown): unknown {
 const HEADER_SECRET_RE = /(POLY[-_](?:API[-_]?KEY|PASSPHRASE|SIGNATURE|SECRET|ADDRESS))["']?\s*[:=]?\s*["']?[A-Za-z0-9+/_.=-]{6,}/gi;
 const KV_SECRET_RE = /\b(signature|secret|passphrase|api[-_ ]?key|private[-_ ]?key|authorization|bearer)\b["']?\s*[:=]\s*["']?[^\s"',;}]{6,}/gi;
 const LONG_HEX_RE = /0x[0-9a-fA-F]{64,}/g;
+// C74: the Polymarket L2 CLOB creds by SHAPE — for when they land WITHOUT a redactable label (a bare value
+// in an error/config dump or a logged creds object, e.g. clob-client's console.error of the axios error).
+// The apiKey + passphrase are UUIDs; the secret + the L2 `POLY_SIGNATURE` are base64/base64url ending in `=`
+// padding. Both shapes are disjoint from what must SURVIVE for debuggability: a UUID has hyphens (an
+// address / order-id / decimal tokenId never does), and the base64 matcher REQUIRES `=` padding (40-hex
+// addresses, 0x order-ids, and decimal tokenIds have none) — so neither over-redacts benign context.
+const UUID_SECRET_RE = /\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b/g;
+const BASE64_SECRET_RE = /[A-Za-z0-9+/_-]{20,}={1,2}/g;
 
 /**
  * Redact authent-shaped material from a free-text string BEFORE it is persisted, alerted, or thrown.
- * Field-name→value pairs, L2 auth headers, long signature-shaped hex blobs, and known secret shapes
- * are all replaced; ordinary error prose (status codes, order ids, prices) survives.
+ * Field-name→value pairs, L2 auth headers, long signature-shaped hex blobs, the L2 cred SHAPES (UUID
+ * apiKey/passphrase + base64 secret/signature — C74), and known secret shapes are all replaced; ordinary
+ * error prose (status codes, order ids, prices, addresses) survives.
  */
 export function redactText(text: string): string {
   return text
     .replace(HEADER_SECRET_RE, '$1=…REDACTED')
     .replace(KV_SECRET_RE, '$1=…REDACTED')
     .replace(LONG_HEX_RE, '0x…REDACTED')
+    .replace(UUID_SECRET_RE, '…REDACTED')
+    .replace(BASE64_SECRET_RE, '…REDACTED')
     .replace(new RegExp(SECRET_SHAPE_RE, 'g'), '…REDACTED');
 }
