@@ -123,8 +123,12 @@ async function bootstrapClobClient(): Promise<{
   if (!key) {
     throw new ExecutionError('ERR_NO_KEY', 'POLY_PRIVATE_KEY missing from execute-bet function secrets');
   }
-  const ethersSpec = 'npm:ethers@5';
-  const clobSpec = 'npm:@polymarket/clob-client@4';
+  // Runtime-aware specifiers: Deno (Edge Functions) resolves npm: at run time; Node (the local daemon/smoke,
+  // pnpm tsx) needs the bare installed packages (workspace deps of @weather-edge/trading). Both stay
+  // NON-LITERAL dynamic imports so tsc never tries to resolve them (§15: the client exists only here).
+  const isDeno = (globalThis as { Deno?: unknown }).Deno != null;
+  const ethersSpec = isDeno ? 'npm:ethers@5' : 'ethers';
+  const clobSpec = isDeno ? 'npm:@polymarket/clob-client@4' : '@polymarket/clob-client';
   const { Wallet } = (await import(ethersSpec)) as { Wallet: new (k: string) => unknown };
   const { ClobClient } = (await import(clobSpec)) as {
     ClobClient: new (host: string, chainId: number, signer: unknown, creds?: unknown, sigType?: number, funder?: string) => MakerClobClientish & {
