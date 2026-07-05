@@ -26,3 +26,4 @@ Thumbs.db
 
 # Generated research artifacts (regenerable via the --csv / --emit flags)
 scripts/research/out/
+out/
