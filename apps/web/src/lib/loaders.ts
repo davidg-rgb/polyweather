@@ -1984,3 +1984,143 @@ export async function getMakerExitHistory(db: WebDb, limit = 200): Promise<Maker
   if (!v || !Array.isArray(v.points)) return null;
   return { generatedAt: v.generatedAt ?? null, n: v.n ?? v.points.length, points: v.points };
 }
+
+// --- /trading (LIVE-RAIL activation console, dash_trading 0082 — staged DARK on prod) --------------
+
+/**
+ * The trade_config singleton (dash_trading.config = to_jsonb of the row → snake_case). Numerics are
+ * jsonb-string-safe (file convention) — the page coerces with num()/fmtUsd()/fmtPct().
+ */
+export interface TradeConfig {
+  id: unknown;
+  mode: string;
+  stake_per_buy_usd: unknown;
+  per_position_cap_usd: unknown;
+  per_market_cap_usd: unknown;
+  total_concurrent_cap_usd: unknown;
+  daily_loss_kill_usd: unknown;
+  daily_loss_kill_frac: unknown;
+  city_allowlist: string[] | null;
+  active_until: string | null;
+  updated_at: string | null;
+}
+
+/**
+ * trade_live_preflight().checks — the camelCase interlock read (0082 §7). NB the caps appear here in camelCase
+ * AND in `config` in snake_case; the page reads caps from `config` (authoritative + allowlist/frac) and the
+ * gate / loss / exposure figures from here.
+ */
+export interface TradePreflightChecks {
+  mode: string;
+  activeUntil: string | null;
+  stakePerBuyUsd: unknown;
+  perPositionCapUsd: unknown;
+  perMarketCapUsd: unknown;
+  totalConcurrentCapUsd: unknown;
+  gatePass: boolean;
+  override: boolean;
+  overrideReason: string | null;
+  overrideExpiresAt: string | null;
+  todayLossUsd: unknown;
+  lossWindowStart: string | null;
+  dailyLossKillUsd: unknown;
+  dailyLossKillFracBasisUsd: unknown;
+  openExposureUsd: unknown;
+  /** marketId → open buy-side cost-basis exposure (the "positions from the checks payload"). */
+  perMarketExposureUsd: Record<string, unknown>;
+}
+
+export interface TradePreflight {
+  ok: boolean;
+  reasons: string[];
+  checks: TradePreflightChecks;
+}
+
+/**
+ * A live_orders row (dash_trading.openOrders = to_jsonb → snake_case). Only OPEN LIVE rows
+ * (mode='live', status intent|placed|partial) are enumerated here — terminal/filled and dry-run rows are NOT.
+ */
+export interface LiveOrder {
+  id: string;
+  intent_key: string;
+  client_order_id: string;
+  order_id: string | null;
+  market_id: string;
+  token_id: string;
+  side: string;
+  purpose: string;
+  order_type: string;
+  price: unknown;
+  size: unknown;
+  size_matched: unknown;
+  avg_price: unknown;
+  trade_date: string | null;
+  mode: string;
+  status: string;
+  reason: string | null;
+  created_at: string;
+  placed_at: string | null;
+  updated_at: string | null;
+}
+
+/** dash_trading.today — today's LIVE fill cashflow aggregates + the shared realized-loss (0082 §8). */
+export interface TradeToday {
+  buyUsd: unknown;
+  sellUsd: unknown;
+  feeUsd: unknown;
+  netUsd: unknown;
+  lossUsd: unknown;
+  lossWindowStart: string | null;
+  nFills: unknown;
+}
+
+/** A trade_config_audit row (dash_trading.recentAudit = to_jsonb → snake_case). */
+export interface TradeAuditRow {
+  id: unknown;
+  old_value: Record<string, unknown> | null;
+  new_value: Record<string, unknown> | null;
+  changed_at: string;
+  changed_by: string;
+}
+
+export interface TradingView {
+  config: TradeConfig | null;
+  preflight: TradePreflight | null;
+  openOrders: LiveOrder[];
+  openExposureUsd: unknown;
+  today: TradeToday | null;
+  dryRun: { openOrders: unknown; total: unknown } | null;
+  recentAudit: TradeAuditRow[];
+  generatedAt: string | null;
+}
+
+/**
+ * The LIVE-RAIL trading activation console (dash_trading, 0082) for /trading. RPC-only, one round trip to the
+ * operator-guarded dash_trading() — config + the live-mode interlock verdict + open LIVE orders + today's LIVE
+ * spend/loss + dry-run counts + the config audit trail. The (dash) layout's requireOperator() gates the page;
+ * the RPC self-guards via operator_guard() (same auth path as /maker-exit).
+ *
+ * STAGED-DARK DEGRADATION (the day-one state): migration 0082 is merged-dark and NOT applied on prod, so
+ * dash_trading() DOES NOT EXIST there → the RPC call throws → we return null and the page renders its explicit
+ * "0082 NOT APPLIED" empty-state. The error path IS the day-one state. (Same null-tolerant idiom as getMakerExit;
+ * a transient RPC error / an operator-guard rejection degrade to the same null → empty-state.)
+ */
+export async function getTrading(db: WebDb): Promise<TradingView | null> {
+  let v: TradingView | null;
+  try {
+    v = await one<TradingView>(db, 'dash_trading', {});
+  } catch {
+    return null;
+  }
+  if (!v) return null;
+  return {
+    config: v.config ?? null,
+    preflight: v.preflight ?? null,
+    openOrders: v.openOrders ?? [],
+    openExposureUsd: v.openExposureUsd ?? 0,
+    today: v.today ?? null,
+    dryRun: v.dryRun ?? null,
+    recentAudit: v.recentAudit ?? [],
+    generatedAt: v.generatedAt ?? null,
+  };
+}
