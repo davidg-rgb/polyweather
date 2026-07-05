@@ -262,6 +262,10 @@ no-orphan-fill guarantees, not a taker-edge lever):
    of scope). Same detector also hardens the startup-reconcile trades read in `live.ts` (a truncated page is
    incomplete evidence → HOLD, never free a key). Tests: `order-intent.test.ts` (the detector, all shapes) +
    `scripts/trade-bot.test.ts` (`venueSoldFor` truncated/at-limit/throw → degraded end-to-end into the CRITICAL).
+   Scope honesty (lens LOW, 07-05): against the CURRENT @polymarket/clob-client this guard is **latent
+   defense-in-depth, not an active-gap fix** — the client's `getTrades` exhausts the cursor internally and
+   returns the full array (or throws), so it cannot silently truncate today. The guard exists for a future
+   client/shape swap (a Data-API-style offset endpoint or a raw cursor envelope), where it becomes load-bearing.
 2. **CLOSED — a poll-missed partial entry fill can no longer be orphaned by a kill-cancel.** `refreshFill`
    now returns `{ row, fresh }`; `fresh` is false ONLY when a LIVE poll of the resting entry THREW. That
    `entryPollFresh` flag rides on the `LivePosition`, and the decide spine's kill-path cancel of a

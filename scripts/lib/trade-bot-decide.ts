@@ -789,8 +789,9 @@ export function entryCancelDeferredAlerts(positions: LivePosition[], entriesBloc
         `A live kill wants to cancel this fully-unfilled resting entry, but getOrder failed this tick so ` +
         `its fill state (sizeMatched=0) is STALE — cancelling now could record_canceled an entry that ` +
         `actually partial-filled and orphan the fill from reconstruction (entry BUYs have no getTrades ` +
-        `floor). The cancel is DEFERRED to the next tick once a healthy poll confirms 0 matched. No new ` +
-        `exposure is added meanwhile (entries stay blocked); the §9R-capped entry simply keeps resting.`,
+        `floor). The cancel is DEFERRED to the next tick once a healthy poll confirms 0 matched. No NEW ` +
+        `entries are placed meanwhile (blocked by the kill), but this already-resting entry stays working ` +
+        `and CAN still be lifted while the poll outage lasts — bounded by the §9R stake cap.`,
       dedupeKey: `trade-bot-cancel-deferred:${p.marketId}`,
     });
   }
