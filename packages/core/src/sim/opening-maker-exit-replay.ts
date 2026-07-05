@@ -18,8 +18,10 @@
  *
  * NO LOOK-AHEAD (the load-bearing invariant). The exit decision at tick t reads ONLY tick t's execBid + the wall
  * clock at t; the loop BREAKS at the first firing — a later up-tick can never rescue a stopped-out trade, and the
- * maker TP "fills" only at the tick where the bid actually reaches the resting limit (never retroactively). Pure +
- * total (junk → executed:false / NaN, never throws). Imports only sibling pure modules — never io/trading/fs.
+ * maker TP "fills" only at the tick where the bid actually reaches the resting limit (never retroactively). At a
+ * SAME-TICK tie the HARD time-stop adjudicates FIRST (the pinned bracketDecision/daemon precedence — conservative:
+ * a resting sell past timeStopMs is dead, never a maker fill). Pure + total (junk → executed:false / NaN, never
+ * throws). Imports only sibling pure modules — never io/trading/fs.
  */
 import {
   selectEntries,
@@ -413,16 +415,15 @@ function runMakerExitLeg(
     }
     prevMs = nowMs;
 
-    // (a) MAKER take-profit: a buyer lifts the resting sell — fill AT the limit, $0 fee + rebate.
-    if (fin(bid) && bid >= exitLimit) {
-      return settle(exitLimit, 'maker_take_profit', true, rebate(exitLimit), 0, j, rewardAcc, restingTicksCount, qualifyingRestingCount, distFromMidSumPp, midKnownTicksCount, withinBandTicksCount);
-    }
-    // (b) TAKER stop-loss: cut the loss by crossing into the bid (cannot rest above a falling market — §12).
-    if (fin(bid) && bid <= slStop) {
-      const fee = takerFeePerShare(bid, cfg.takerFeeRate) * shares;
-      return settle(bid, 'taker_stop_loss', false, 0, fee, j, rewardAcc, restingTicksCount, qualifyingRestingCount, distFromMidSumPp, midKnownTicksCount, withinBandTicksCount);
-    }
-    // (c) HARD time-stop (resolvesAt − N h): flatten as a taker at the realizable bid (or the last seen bid).
+    // (a) HARD time-stop (resolvesAt − N h): flatten as a taker at the realizable bid (or the last seen bid).
+    //     Adjudicated FIRST at a tick — the PINNED same-tick precedence (2026-07-05 review fix): bracketDecision
+    //     (opening-convergence.ts §3, "clock-only, the dominant backstop") and the live daemon's planForPosition
+    //     ("priority 1 — the HARD time-stop") both put the clock ahead of TP/SL, and the daemon CANCELS the
+    //     resting TP before its taker flatten. So on a tick already past timeStopMs a bid that reaches the TP
+    //     limit is a TAKER time-stop at the bid (fee paid), never a maker fill — the resting sell has been dead
+    //     since timeStopMs; crediting a maker fill there (the pre-fix order) resolved the unknown inter-tick
+    //     crossing time OPTIMISTICALLY, inflating makerExitFrac (assumption #1) + net P&L in the false-PASS
+    //     direction of the §9R-E gate. The SL leg of the tie is label-only (same price + fee).
     if (nowMs >= timeStopMs) {
       const px = fin(bid) ? bid : lastBid;
       if (px != null) {
@@ -430,6 +431,15 @@ function runMakerExitLeg(
         return settle(px, 'taker_time_stop', false, 0, fee, j, rewardAcc, restingTicksCount, qualifyingRestingCount, distFromMidSumPp, midKnownTicksCount, withinBandTicksCount);
       }
       break; // no bid to flatten into → settle below
+    }
+    // (b) MAKER take-profit: a buyer lifts the resting sell — fill AT the limit, $0 fee + rebate.
+    if (fin(bid) && bid >= exitLimit) {
+      return settle(exitLimit, 'maker_take_profit', true, rebate(exitLimit), 0, j, rewardAcc, restingTicksCount, qualifyingRestingCount, distFromMidSumPp, midKnownTicksCount, withinBandTicksCount);
+    }
+    // (c) TAKER stop-loss: cut the loss by crossing into the bid (cannot rest above a falling market — §12).
+    if (fin(bid) && bid <= slStop) {
+      const fee = takerFeePerShare(bid, cfg.takerFeeRate) * shares;
+      return settle(bid, 'taker_stop_loss', false, 0, fee, j, rewardAcc, restingTicksCount, qualifyingRestingCount, distFromMidSumPp, midKnownTicksCount, withinBandTicksCount);
     }
   }
 

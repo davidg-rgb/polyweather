@@ -4,6 +4,8 @@
  *   - the MAKER take-profit fills AT the resting limit ($0 taker fee, + rebate) when a later bid lifts it;
  *   - the TAKER stop-loss crosses into the bid (fee paid) — you cannot rest above a falling market (§12);
  *   - the HARD time-stop fires at resolvesAt − N hours (the spec) and flattens as a taker;
+ *   - SAME-TICK TIE: the time-stop adjudicates BEFORE the maker TP and the stop-loss (the pinned
+ *     bracketDecision/daemon precedence — conservative; 2026-07-05 review fix);
  *   - NO LOOK-AHEAD: a huge up-tick AFTER a stop-loss fired must NOT rescue the trade;
  *   - the rebate accounting (maker legs only) and the maker-vs-taker fee asymmetry;
  *   - the panel verdict + ledger + makerExitFrac; totality (junk → executed:false, no throw).
@@ -175,6 +177,63 @@ describe('replayMakerExitEvent', () => {
     expect(replayMakerExitEvent(null as unknown as EventReplayInput, cfg(), RESOLVE_MS).executed).toBe(false);
     const offCity = input(entryTicks());
     expect(replayMakerExitEvent({ ...offCity, city: 'london' }, cfg(), RESOLVE_MS).executed).toBe(false);
+  });
+});
+
+describe('same-tick tie precedence — the HARD time-stop adjudicates FIRST (the pinned bracketDecision/daemon order, 2026-07-05 review fix)', () => {
+  // resolvesAt 2026-06-21T10:00Z, tstop 12h → timeStopMs = 2026-06-20T22:00Z. Entry fills maker at 0.16
+  // (entryTicks); exitLimit = 0.16 + 0.25 = 0.41; slStop = 0.16 − 0.12 (OPENING_DEFAULTS.slDeltaPp) = 0.04.
+  // The pre-fix walk checked the maker TP BEFORE the clock, so a capture gap spanning timeStopMs whose first
+  // post-gap tick had bid ≥ exitLimit was credited as a maker fill — optimistic against BOTH twins
+  // (bracketDecision's "(a) time-stop — clock-only, the dominant backstop"; the daemon's "priority 1", which
+  // CANCELS the resting TP before its taker flatten).
+  const tstopCfg = (over: Partial<MakerExitCfg> = {}) => cfg({ tpDeltaPp: 0.25, tstopHoursBeforeResolve: 12, ...over });
+
+  it('a bid that reaches the TP limit on a tick ALREADY past the time-stop flattens as a TAKER at the bid — never a maker fill', () => {
+    const ticks = [
+      ...entryTicks(),
+      tick('2026-06-20T21:50:00Z', 10, { execBid: 0.18, execAsk: 0.19 }), // before the time-stop → hold
+      tick('2026-06-20T22:10:00Z', 11, { execBid: 0.42, execAsk: 0.43 }), // past 22:00Z AND bid ≥ the ~0.41 limit — the tie
+    ];
+    const t = replayMakerExitEvent(input(ticks), tstopCfg(), RESOLVE_MS);
+    expect(t.exitKind).toBe('taker_time_stop'); // NOT maker_take_profit — the resting sell died at timeStopMs
+    expect(t.isMakerExit).toBe(false);
+    expect(t.exitPrice).toBeCloseTo(0.42, 9); // the realizable bid the taker flatten crosses into
+    expect(t.feeUsd).toBeGreaterThan(0); // taker fee paid — the conservative leg of the tie
+    expect(t.makerFillLatencyTicks).toBeNull(); // never counted into assumption #1 (the maker-fill rate)
+  });
+
+  it('the tie resolves CONSERVATIVELY: the taker time-stop nets strictly less than the pre-fix maker fill would have', () => {
+    const tieTicks = [
+      ...entryTicks(),
+      tick('2026-06-20T21:50:00Z', 10, { execBid: 0.18, execAsk: 0.19 }),
+      tick('2026-06-20T22:10:00Z', 11, { execBid: 0.42, execAsk: 0.43 }),
+    ];
+    // the SAME bid arriving BEFORE the time-stop is a legitimate maker fill at the limit, $0 fee — the control.
+    const preStopTicks = [...entryTicks(), tick('2026-06-20T21:50:00Z', 10, { execBid: 0.42, execAsk: 0.43 })];
+    const tie = replayMakerExitEvent(input(tieTicks), tstopCfg(), RESOLVE_MS);
+    const control = replayMakerExitEvent(input(preStopTicks), tstopCfg(), RESOLVE_MS);
+    expect(control.exitKind).toBe('maker_take_profit');
+    expect(control.feeUsd).toBe(0);
+    expect(tie.exitKind).toBe('taker_time_stop');
+    expect(tie.netPnlUsd).toBeLessThan(control.netPnlUsd); // same exit level, taker fee paid → strictly worse
+  });
+
+  it('a bid at/below the stop on a tick past the time-stop is labeled taker_time_stop (label-only — same price + fee as the stop-loss)', () => {
+    const ticks = [...entryTicks(), tick('2026-06-20T22:10:00Z', 11, { execBid: 0.04, execAsk: 0.05 })];
+    const t = replayMakerExitEvent(input(ticks), tstopCfg({ slDeltaPp: 0.06 }), RESOLVE_MS);
+    expect(t.exitKind).toBe('taker_time_stop'); // priority 1 (the daemon's order), not the stop-loss label
+    expect(t.isMakerExit).toBe(false);
+    expect(t.exitPrice).toBeCloseTo(0.04, 9); // identical price + taker fee — economics unchanged on this leg
+    expect(t.feeUsd).toBeCloseTo(takerFeePerShare(0.04, 0.05) * (t.stakeUsd / t.entryPrice), 9);
+  });
+
+  it('the maker TP still fills normally on a tick BEFORE the time-stop (the ordinary path is untouched)', () => {
+    const ticks = [...entryTicks(), tick('2026-06-20T21:50:00Z', 10, { execBid: 0.45, execAsk: 0.46 })];
+    const t = replayMakerExitEvent(input(ticks), tstopCfg(), RESOLVE_MS);
+    expect(t.exitKind).toBe('maker_take_profit');
+    expect(t.isMakerExit).toBe(true);
+    expect(t.feeUsd).toBe(0);
   });
 });
 
