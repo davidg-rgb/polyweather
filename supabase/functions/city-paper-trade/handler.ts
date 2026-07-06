@@ -34,12 +34,14 @@
  */
 import {
   buildCityPromotionBoard,
-  type CityPromotionCity,
+  type CityPromotionInput,
   type GradeInputRow,
   type PlaceInputs,
   planPlacements,
   planSettlements,
 } from '../../../packages/core/src/index.ts';
+
+type CityPromotionCity = CityPromotionInput['cities'][number];
 import type { DbPort } from '../_shared/db.ts';
 import type { JobCtx, JobStats } from '../_shared/runJob.ts';
 
