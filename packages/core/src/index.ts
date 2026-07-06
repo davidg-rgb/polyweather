@@ -29,6 +29,7 @@ export * from './sim/amsterdam-besttime.ts';
 export * from './sim/city-climatology.ts';
 export * from './sim/stats.ts';
 export * from './sim/entry-watch.ts';
+export * from './sim/city-promotion.ts';
 export * from './sim/wallet-forensics.ts';
 export * from './sim/copy-trade.ts';
 export * from './sim/sports-copytrade.ts';
