@@ -260,6 +260,11 @@ declare
 begin
   perform public.operator_guard();
 
+  -- Serialize concurrent arm writes: the max-2 constraint trigger cannot see uncommitted peers
+  -- under MVCC, so two simultaneous enables could both commit (review LOW, 2026-07-06). The rail
+  -- fails closed even then (preflight blocks on >2), but the lock closes the race at the source.
+  perform pg_advisory_xact_lock(hashtext('city_live_arm_set'));
+
   select * into v_old from public.city_live_arms where city_id = p_city_id;
   v_was := coalesce(v_old.enabled, false);
 
@@ -467,15 +472,20 @@ begin
     round((r->>'stakeUsd')::numeric / bid.best_bid, 4)
   from jsonb_array_elements(coalesce(p_rows, '[]'::jsonb)) r
   cross join lateral (
-    -- the lock-hour best_bid on our predicted bucket: latest in-window [lock, asof) bid (0048 idiom, bid side).
+    -- the SAME snapshot row the sim's locked ask came from (0048 idiom: the latest ASK-bearing
+    -- in-lock-window row) — its bid is the twin's resting limit, so limit and ask share one
+    -- snapshot (spec §2.1 "SAME lock snapshot"; review LOW, 2026-07-06). A null bid on that row
+    -- → no twin (honest skip, outer WHERE). Capped at now() so re-runs never see post-tick rows.
     select ms.best_bid
     from public.market_buckets mb
     join public.market_snapshots ms on ms.bucket_id = mb.id
     where mb.event_id = (r->>'eventId')::uuid
       and mb.bucket_idx = (r->>'bucketIdx')::smallint
-      and ms.best_bid is not null
-      and ms.captured_at >= ((r->>'targetDate')::timestamp + make_interval(hours => (r->>'armHour')::int))     at time zone v_tz
-      and ms.captured_at <  ((r->>'targetDate')::timestamp + make_interval(hours => (r->>'armHour')::int + 1)) at time zone v_tz
+      and ms.best_ask is not null
+      and ms.captured_at >= ((r->>'targetDate')::timestamp + make_interval(hours => (r->>'armHour')::int)) at time zone v_tz
+      and ms.captured_at <  least(
+            ((r->>'targetDate')::timestamp + make_interval(hours => (r->>'armHour')::int + 1)) at time zone v_tz,
+            now())
     order by ms.captured_at desc
     limit 1
   ) bid
@@ -537,25 +547,17 @@ set search_path = public
 as $$
 declare v_count int := 0; v_n int;
 begin
-  -- FILLED twins whose observation finalized → won/lost.
+  -- FILLED twins whose paper bet graded → won/lost. The twin holds the SAME bucket as its paper
+  -- bet, so the bet's own graded outcome IS the twin's outcome — reading it (instead of
+  -- re-deriving the winner from observations) keeps both P&Ls on one settlement basis by
+  -- construction and grades the twin in the same tick the bet grades. (Review LOW, 2026-07-06.)
   with graded as (
-    select t.id,
-           (b.bucket_idx = w.winner_idx) as won,
-           t.shares, t.limit_price, t.stake_usd
+    select t.id, b.won, t.shares, t.limit_price, t.stake_usd
     from public.city_maker_twin t
     join public.city_paper_bets b
       on b.city_id = t.city_id and b.target_date = t.target_date and b.arm_hour = t.arm_hour
-    join public.observations o
-      on o.icao = b.icao and o.date_local = b.target_date and o.finalized_at is not null
-    join lateral (
-      select mb.bucket_idx as winner_idx
-      from public.market_buckets mb
-      where mb.event_id = b.event_id
-        and (mb.low_native  is null or o.tmax_wu_native >= mb.low_native)
-        and (mb.high_native is null or o.tmax_wu_native <= mb.high_native)
-      limit 1
-    ) w on true
     where t.status = 'pending' and t.filled = true
+      and b.status in ('won', 'lost') and b.won is not null
   )
   update public.city_maker_twin t set
     status    = case when g.won then 'won' else 'lost' end,
@@ -564,15 +566,14 @@ begin
   from graded g where t.id = g.id;
   get diagnostics v_n = row_count; v_count := v_count + v_n;
 
-  -- UNFILLED twins whose observation finalized (the market resolved, the maker order never filled) → 'unfilled'.
+  -- UNFILLED twins whose paper bet graded (the market resolved, the maker order never filled) → 'unfilled'.
   with resolved as (
     select t.id
     from public.city_maker_twin t
     join public.city_paper_bets b
       on b.city_id = t.city_id and b.target_date = t.target_date and b.arm_hour = t.arm_hour
-    join public.observations o
-      on o.icao = b.icao and o.date_local = b.target_date and o.finalized_at is not null
     where t.status = 'pending' and t.filled = false
+      and b.status in ('won', 'lost')
   )
   update public.city_maker_twin t set status = 'unfilled', pnl_usd = 0, graded_at = now()
   from resolved r where t.id = r.id;
@@ -631,23 +632,25 @@ begin
         'displayName',    c.display_name,
         'nPlacements',    t.n_placements,
         'twinFilledFrac', case when t.n_placements > 0 then round(t.n_filled::numeric / t.n_placements, 4) end,
-        'takerPnlUsd',    coalesce(tk.taker_pnl, 0),
+        'takerPnlUsd',    coalesce(t.taker_pnl, 0),
         'makerTwinPnlUsd', coalesce(t.maker_pnl, 0)
       ) order by c.slug), '[]'::jsonb)
       from (
+        -- ONE population: taker P&L is summed over exactly the placements that HAVE a twin
+        -- (join on the twin keys), so the taker-vs-maker differential is apples-to-apples.
+        -- An 'unfilled' twin contributes maker 0 while its taker leg counts — that IS the
+        -- fill-rate cost the comparison exists to measure. (Review MEDIUM, 2026-07-06.)
         select mt.city_id,
                count(*)                                          as n_placements,
                count(*) filter (where mt.filled)                 as n_filled,
-               coalesce(sum(mt.pnl_usd) filter (where mt.status in ('won', 'lost')), 0) as maker_pnl
+               coalesce(sum(mt.pnl_usd) filter (where mt.status in ('won', 'lost')), 0)   as maker_pnl,
+               coalesce(sum(b.pnl_usd)  filter (where b.status <> 'pending'), 0)          as taker_pnl
         from public.city_maker_twin mt
+        join public.city_paper_bets b
+          on b.city_id = mt.city_id and b.target_date = mt.target_date and b.arm_hour = mt.arm_hour
         group by mt.city_id
       ) t
       join public.cities c on c.id = t.city_id
-      left join lateral (
-        select coalesce(sum(b.pnl_usd), 0) as taker_pnl
-        from public.city_paper_bets b
-        where b.city_id = t.city_id and b.status <> 'pending'
-      ) tk on true
     )
   ) into v;
 
