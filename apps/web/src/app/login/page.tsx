@@ -5,8 +5,12 @@
  * token for a session cookie; the (dash) layout guard does the allow-list
  * check — a session for any other email still bounces back here.
  */
-import { useState, type ReactElement } from 'react';
+import { useState, useEffect, type ReactElement } from 'react';
 import { browserClient } from '../../lib/supabase-browser.ts';
+
+/** send-link budget — a degraded/DB-loaded auth service can leave signInWithOtp pending; without a
+ *  bound the button just sits in `busy` ("nothing happens", 2026-07-07 report). */
+const SEND_TIMEOUT_MS = 12_000;
 
 export default function LoginPage(): ReactElement {
   const [email, setEmail] = useState('');
@@ -14,20 +18,41 @@ export default function LoginPage(): ReactElement {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  // surface the /auth/confirm failure bounce (?error=confirm) so an invalid/expired magic link is
+  // not a silent no-op back on this page.
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get('error') === 'confirm') {
+      setError('That sign-in link was invalid or expired — request a new one below.');
+    }
+  }, []);
+
   const send = async (): Promise<void> => {
     setBusy(true);
     setError(null);
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       const supabase = browserClient();
-      const { error: e } = await supabase.auth.signInWithOtp({
-        email,
-        options: { emailRedirectTo: `${window.location.origin}/auth/confirm?next=/` },
-      });
-      if (e) setError(e.message);
+      const { error: e } = await Promise.race([
+        supabase.auth.signInWithOtp({
+          email,
+          options: { emailRedirectTo: `${window.location.origin}/auth/confirm?next=/` },
+        }),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error('send-timeout')), SEND_TIMEOUT_MS);
+        }),
+      ]);
+      // a degraded/5xx auth response can carry a BLANK message — never render empty error brackets.
+      if (e) setError(e.message?.trim() || 'Could not reach the sign-in service (it may be busy). Try again in a moment.');
       else setSent(true);
     } catch (e) {
-      setError(String(e));
+      const msg = e instanceof Error ? e.message : String(e);
+      setError(
+        msg === 'send-timeout'
+          ? 'The sign-in service did not respond in time (it may be busy). Try again in a moment.'
+          : msg.trim() || 'Something went wrong sending the link. Try again.',
+      );
     } finally {
+      if (timer) clearTimeout(timer);
       setBusy(false);
     }
   };
