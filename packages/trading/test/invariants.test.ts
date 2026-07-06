@@ -117,8 +117,8 @@ describe('trading boundary invariants (§15)', () => {
     // packages/trading (the executor, the tradeConfig/gate reads, the createClobClient seam). §15's real
     // guarantee is UNCHANGED: the key + the clob client stay inside packages/trading/live.ts (the two
     // grep invariants above still pass — these files never name POLY_PRIVATE_KEY nor import
-    // @polymarket/clob-client). trade-bot-decide.ts (the pure decision spine) + trading-db.ts (the
-    // ScriptDb→TradingDb adapter) import only TYPES + redaction helpers from the package.
+    // @polymarket/clob-client). trade-bot-decide.ts + city-live-decide.ts (the pure decision spines) +
+    // trading-db.ts (the ScriptDb→TradingDb adapter) import only TYPES + redaction/intent-key helpers.
     const importsTrading = /from\s+['"][^'"]*(?:packages\/trading|@weather-edge\/trading)[^'"]*['"]/;
     expect(
       offenders(
@@ -130,6 +130,7 @@ describe('trading boundary invariants (§15)', () => {
           p === 'scripts/trade-bot.ts' ||
           p === 'scripts/trade-smoke.ts' ||
           p === 'scripts/lib/trade-bot-decide.ts' ||
+          p === 'scripts/lib/city-live-decide.ts' ||
           p === 'scripts/lib/trading-db.ts' ||
           p.endsWith('.test.ts'),
       ),

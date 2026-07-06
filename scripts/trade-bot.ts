@@ -43,9 +43,13 @@
 import { pathToFileURL } from 'node:url';
 import {
   executableBid,
+  isDstAwareIana,
+  localHour,
   makerExitCfg,
   normalizeBook,
   parseBotConfig,
+  planPlacements,
+  type PlaceInputs,
   type RawCaptureRow,
   type RawClobBook,
 } from '../packages/core/src/index.ts';
@@ -88,6 +92,15 @@ import {
   type DiscoveredCandidate,
   type LivePosition,
 } from './lib/trade-bot-decide.ts';
+import {
+  applyCityPlan,
+  assembleCityPlaceInput,
+  decideCityTick,
+  isMissingObjectError,
+  pickCityPlacement,
+  type CityArm,
+  type CityPlaceInput,
+} from './lib/city-live-decide.ts';
 import { loadEnv } from './lib/load-env.ts';
 import { makeScriptDb, type ScriptDb } from './lib/script-db.ts';
 import { acquireTradeBotLock, makeTradingDb, type OpenEntryRow, type ScriptTradingDb } from './lib/trading-db.ts';
@@ -574,6 +587,15 @@ export async function tick(
   const plan = decideTick({ mode: d.mode, config, preflight, preflightReadFailed, cfg, now, candidates, positions });
   const applied = await applyPlan(plan, d.executor, d.notify, log, d.ledger, cfg.minOrderSizeShares);
 
+  // CITY-LIVE §3 — the city-taker lane runs AFTER the maker-exit lane, isolated so a city-lane fault never
+  // stalls the maker-exit heartbeat. It shares the TRADE_MODE ladder + the T1 executor; a live post
+  // additionally requires trade_live_preflight('city-taker'). Staged-dark pre-0085 (skips, never throws).
+  try {
+    await runCityLane(d, minOrderSizeShares, now);
+  } catch (e) {
+    log({ msg: 'city-lane.tick_failed', level: 'WARN', error: redactText(e instanceof Error ? `${e.name}: ${e.message}` : String(e)), note: 'city lane isolated — the maker-exit tick/heartbeat is unaffected' });
+  }
+
   const degraded = discoveryDegraded || preflightReadFailed;
   log({
     msg: 'trade-bot.tick',
@@ -597,6 +619,167 @@ export async function tick(
   });
 
   await heartbeat(d, plan.intents.length, applied, degraded);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────
+// CITY-LIVE §3 — the city-taker lane. Continuously-promoted winners are FRONTED by the promotion board;
+// nothing trades until the operator toggles a city Live. This lane faithfully TAKER-replicates the sim:
+// buy the predicted bucket at the ask, at the tested arm hour, hold to resolution — NO exit management.
+// The whole lane is STAGED-DARK until migration 0085 lands (city_live_runner_inputs / the strategy-aware
+// preflight / the strategy ledger column): every RPC read + the ledger write degrade to a logged skip.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────
+
+/** Map one `city_live_runner_inputs()` row (camel or snake) to a `CityArm`. Tolerant + total. */
+function mapCityArm(raw: unknown): CityArm | null {
+  const o = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  const cityId = String(o['cityId'] ?? o['city_id'] ?? '');
+  if (!cityId) return null;
+  const rawHour = o['entryHour'] ?? o['entry_hour'];
+  const entryHour = rawHour == null || !Number.isFinite(Number(rawHour)) ? null : Number(rawHour);
+  return {
+    cityId,
+    slug: String(o['slug'] ?? ''),
+    icao: String(o['icao'] ?? ''),
+    tz: String(o['tz'] ?? o['tzName'] ?? ''),
+    unit: String(o['unit'] ?? 'C'),
+    enabled: o['enabled'] === true,
+    stakeUsd: Number(o['stakeUsd'] ?? o['stake_usd'] ?? 0),
+    entryHour,
+  };
+}
+
+/** Read the enabled city arms. Returns 'absent' when the RPC does not exist yet (pre-0085) — the caller
+ *  then skips the lane silently-but-logged; any other read error is thrown to the caller's WARN handler. */
+export async function readCityRunnerInputs(d: Daemon): Promise<CityArm[] | 'absent'> {
+  try {
+    const rows = await d.db.rpc<{ city_live_runner_inputs: unknown }>('city_live_runner_inputs', {});
+    const env = rows[0]?.city_live_runner_inputs;
+    const list = Array.isArray(env)
+      ? env
+      : Array.isArray((env as { rows?: unknown } | null)?.rows)
+        ? ((env as { rows: unknown[] }).rows)
+        : null;
+    if (list == null) return []; // SQL NULL / shapeless — no arms this tick (the config table may be empty)
+    return list.map(mapCityArm).filter((a): a is CityArm => a !== null);
+  } catch (e) {
+    const msg = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+    if (isMissingObjectError(msg)) return 'absent';
+    throw e;
+  }
+}
+
+/** A city_sim_place_inputs payload = the sim PlaceInputs plus the city echo + the market eventId. */
+type CityPlaceInputsPayload = (PlaceInputs & { eventId: string; cityId: string }) | null;
+
+/** Read `city_sim_place_inputs` for one city as of `now` (p_target defaults to city-local today). null when
+ *  no config/market/quote exists. Throws to the caller's staged-dark handler when the RPC is absent (pre-0085). */
+async function readCitySimPlaceInputs(d: Daemon, cityId: string, now: Date): Promise<CityPlaceInputsPayload> {
+  const rows = await d.db.rpc<{ city_sim_place_inputs: CityPlaceInputsPayload }>('city_sim_place_inputs', {
+    p_city_id: cityId,
+    p_now: now.toISOString(),
+  });
+  return rows[0]?.city_sim_place_inputs ?? null;
+}
+
+/** The strategy-aware live interlock read: `trade_live_preflight('city-taker').ok`. Pre-0085 the 1-arg
+ *  overload is absent → this throws undefined-function and the caller blocks live posts (staged-dark). */
+async function preflightCityTaker(d: Daemon): Promise<boolean> {
+  const rows = await d.db.rpc<{ trade_live_preflight: { ok?: boolean } | null }>('trade_live_preflight', {
+    p_strategy: 'city-taker',
+  });
+  return rows[0]?.trade_live_preflight?.ok === true;
+}
+
+/** One city-lane tick: read arms → reconstruct each in-hour arm's predicted placement (same inputs the sim
+ *  locks) → preflight (live) → decide → apply. Never throws for a staged-dark/absent object — logs + skips. */
+export async function runCityLane(d: Daemon, minOrderSizeShares: number, now: Date): Promise<void> {
+  // 1 · enabled arms (staged-dark tolerant)
+  let armsRes: CityArm[] | 'absent';
+  try {
+    armsRes = await readCityRunnerInputs(d);
+  } catch (e) {
+    log({ msg: 'city-lane.runner_inputs_failed', level: 'WARN', error: redactText(e instanceof Error ? e.message : String(e)) });
+    return;
+  }
+  if (armsRes === 'absent') {
+    log({ msg: 'city-lane.staged_dark', level: 'INFO', note: 'city_live_runner_inputs() absent — migration 0085 not applied; city lane inert this tick' });
+    return;
+  }
+  const enabled = armsRes.filter((a) => a.enabled && a.entryHour != null);
+  if (enabled.length === 0) {
+    log({ msg: 'city-lane.tick', mode: d.mode, arms: 0, placeInputs: 0, intents: 0, note: 'no enabled city arms' });
+    return;
+  }
+
+  // 2 · reconstruct each IN-HOUR arm's predicted placement (the same bucket/ask the sim locks). The cheap
+  //     in-hour gate here avoids hammering city_sim_place_inputs off-hour; decideCityTick re-checks it.
+  const placeInputs: CityPlaceInput[] = [];
+  for (const arm of enabled) {
+    if (!isDstAwareIana(arm.tz)) continue; // decideCityTick surfaces bad_tz
+    let hourNow: number;
+    try {
+      hourNow = localHour(arm.tz, now);
+    } catch {
+      continue;
+    }
+    if (hourNow !== arm.entryHour) continue; // off-hour — decideCityTick surfaces off_hour
+    try {
+      const place = await readCitySimPlaceInputs(d, arm.cityId, now);
+      if (!place) continue;
+      const pick = pickCityPlacement(arm, place, planPlacements);
+      if (!pick) continue;
+      const identity = await d.db.cityBucketIdentity(place.eventId, pick.bucketIdx);
+      const pin = assembleCityPlaceInput(arm.cityId, pick, identity);
+      if (pin) placeInputs.push(pin);
+    } catch (e) {
+      const msg = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+      if (isMissingObjectError(msg)) {
+        log({ msg: 'city-lane.place_inputs_staged_dark', level: 'INFO', cityId: arm.cityId, note: 'city_sim_place_inputs() absent — migration 0085/0070 objects not present; city lane inert' });
+        return; // the RPC is absent for the whole DB — no point trying the other arms this tick
+      }
+      log({ msg: 'city-lane.place_inputs_failed', level: 'WARN', cityId: arm.cityId, error: redactText(msg) });
+    }
+  }
+
+  // 3 · the strategy-aware live interlock (live only). Anything but a clean PASS blocks EVERY city post.
+  let preflightOk: boolean | null = null;
+  if (d.mode === 'live') {
+    try {
+      preflightOk = await preflightCityTaker(d);
+    } catch (e) {
+      preflightOk = false; // absent (pre-0085) or a read error → hold all live city posts
+      const msg = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+      log({ msg: 'city-lane.preflight_unavailable', level: 'WARN', staged_dark: isMissingObjectError(msg), error: redactText(msg), note: "trade_live_preflight('city-taker') unavailable — live city posts held this tick" });
+    }
+  }
+
+  // 4 · the once/day pre-check — OPEN entry intent keys for this mode (the ledger partial-unique is the
+  //     hard stop; this only avoids emitting a duplicate intent). Best-effort: a read failure just skips it.
+  let openIntentKeys = new Set<string>();
+  try {
+    const openEntries = await d.db.listOpenEntryRows(d.mode);
+    openIntentKeys = new Set(openEntries.map((r) => orderIntentKey({ marketId: r.marketId, side: 'BUY', purpose: 'entry', tradeDate: r.tradeDate })));
+  } catch (e) {
+    log({ msg: 'city-lane.open_keys_failed', level: 'WARN', error: redactText(e instanceof Error ? e.message : String(e)) });
+  }
+
+  // 5 · decide + apply
+  const cplan = decideCityTick({ now, mode: d.mode, arms: enabled, placeInputs, openIntentKeys, preflightOk, minOrderSizeShares });
+  const capplied = await applyCityPlan(cplan, d.executor, d.notify, log);
+  log({
+    msg: 'city-lane.tick',
+    mode: d.mode,
+    arms: enabled.length,
+    placeInputs: placeInputs.length,
+    intents: cplan.intents.length,
+    posted: capplied.posted,
+    dryRun: capplied.dryRun,
+    duplicate: capplied.duplicate,
+    stagedDark: capplied.stagedDark,
+    failed: capplied.failed,
+    skips: cplan.skips.length,
+    preflightOk,
+  });
 }
 
 /** Heartbeat — reuse the 0073 `record_bot_tick` idiom (mode-scoped bot_tick_log row) + a structured log.

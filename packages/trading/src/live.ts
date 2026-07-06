@@ -567,7 +567,7 @@ export class MakerExecutor {
     const clientOrderId = this.newId();
     const order = await client.createOrder({ tokenID: req.tokenId, price, size: req.size, side: req.side }, { tickSize: tick, negRisk: req.negRisk ?? true });
 
-    const reserved = await this.ledger.reserveIntent({ mode, intentKey, clientOrderId, marketId: req.marketId, tokenId: req.tokenId, side: req.side, purpose: req.purpose, orderType: 'FAK', price, size: req.size, tradeDate: req.tradeDate });
+    const reserved = await this.ledger.reserveIntent({ mode, intentKey, clientOrderId, marketId: req.marketId, tokenId: req.tokenId, side: req.side, purpose: req.purpose, orderType: 'FAK', price, size: req.size, tradeDate: req.tradeDate, strategy: req.strategy });
     if (reserved === 'exists') {
       return { ...base, status: 'duplicate', clientOrderId: null, orderId: null, limitPrice: price, sizeMatched: 0, reason: 'intent reserved concurrently' };
     }

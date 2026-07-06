@@ -34,6 +34,12 @@ export interface OpenEntryRow {
   tradeDate: string;
 }
 
+/** A predicted bucket's venue identity — the CITY-LIVE lane's (conditionId, tokenYes) for a place. */
+export interface CityBucketIdentity {
+  marketId: string;
+  tokenId: string;
+}
+
 /**
  * `TradingDb` + the daemon-only direct-SQL reads. Structurally a `TradingDb`, so every existing consumer
  * (rpcOrderLedger, loadTradeConfig, preflightLive, the smoke) is untouched.
@@ -47,6 +53,16 @@ export interface ScriptTradingDb extends TradingDb {
    * the scan, and a fully-flattened position plans nothing anyway).
    */
   listOpenEntryRows(mode: TradeMode): Promise<OpenEntryRow[]>;
+
+  /**
+   * The CITY-LIVE lane's bucket-identity read (CITY-LIVE.md §3): the (conditionId, token_yes) of one
+   * predicted bucket, so a live taker entry can faithfully mirror the sim's locked bucket. `city_sim_place_inputs`
+   * gives the bucketIdx + ask but not the venue identity (its ladder is bucketIdx/low/high), so the daemon
+   * resolves it here from `market_buckets` — the same DIRECT-SQL idiom as `listOpenEntryRows` (a daemon read
+   * 0082's RPC surface does not expose). `market_buckets` is table 0004 (always present), so this never
+   * depends on 0085. Returns null when the (event, bucket) pair is unknown.
+   */
+  cityBucketIdentity(eventId: string, bucketIdx: number): Promise<CityBucketIdentity | null>;
 }
 
 /** The trade_date lookback for the open-entry scan — generous vs the 1–2 day position life. */
@@ -95,6 +111,17 @@ export function makeTradingDb(sdb: ScriptDb): ScriptTradingDb {
         [mode],
       );
       return Array.isArray(rows) ? rows : [];
+    },
+    async cityBucketIdentity(eventId: string, bucketIdx: number): Promise<CityBucketIdentity | null> {
+      const rows = await sdb.query<CityBucketIdentity>(
+        `select condition_id as "marketId", token_yes as "tokenId"
+           from public.market_buckets
+          where event_id = $1 and bucket_idx = $2
+          limit 1`,
+        [eventId, bucketIdx],
+      );
+      const r = Array.isArray(rows) ? rows[0] : undefined;
+      return r && r.marketId && r.tokenId ? { marketId: r.marketId, tokenId: r.tokenId } : null;
     },
   };
 }

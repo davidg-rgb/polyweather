@@ -129,7 +129,12 @@ export function rpcOrderLedger(db: TradingDb): OrderLedger {
     },
 
     async reserveIntent(input: ReserveIntentInput): Promise<'reserved' | 'exists'> {
-      const [row] = await db.rpc<{ bot_order_reserve_intent: string }>('bot_order_reserve_intent', {
+      // p_strategy is forwarded ONLY when the caller sets it (the CITY-LIVE taker lane, 'city-taker'):
+      // maker-exit callers omit it, so the 11-arg call stays byte-identical to the pre-0085 RPC (which
+      // has no p_strategy param) and the column defaults to 'maker-exit'. Adding the 12th named arg
+      // against a pre-0085 RPC surfaces as an undefined-function error the city lane tolerates (its rows
+      // stay staged-dark until 0085 recreates the RPC with `p_strategy text default 'maker-exit'`).
+      const args: Record<string, unknown> = {
         p_mode: input.mode,
         p_intent_key: input.intentKey,
         p_client_order_id: input.clientOrderId,
@@ -141,7 +146,9 @@ export function rpcOrderLedger(db: TradingDb): OrderLedger {
         p_price: input.price,
         p_size: input.size,
         p_trade_date: input.tradeDate,
-      });
+      };
+      if (input.strategy != null) args['p_strategy'] = input.strategy;
+      const [row] = await db.rpc<{ bot_order_reserve_intent: string }>('bot_order_reserve_intent', args);
       return row?.bot_order_reserve_intent === 'exists' ? 'exists' : 'reserved';
     },
 

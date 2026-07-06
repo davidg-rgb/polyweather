@@ -157,6 +157,14 @@ export interface ReserveIntentInput {
   price: number;
   size: number;
   tradeDate: string;
+  /**
+   * The strategy that owns this order (the 0085 `live_orders.strategy` column; default 'maker-exit').
+   * OMITTED by every maker-exit caller — the reserve RPC then uses its column default, so the 11-arg
+   * call is byte-identical to the pre-0085 behavior. The CITY-LIVE taker lane sets 'city-taker'; the
+   * binding only forwards `p_strategy` when this is set, so pre-0085 (no such RPC arg) the extra param
+   * surfaces as an undefined-function error the caller tolerates as a staged-dark skip (CITY-LIVE §3).
+   */
+  strategy?: string;
 }
 
 /**
@@ -331,6 +339,11 @@ export interface TakerOrderRequest {
    *  books `feeRateBps/10 000 × avgPrice × sizeMatched` onto the fill's ledger row (live_fills.fee_usd) so
    *  taker exit fees reach the N1 daily-loss kill. Omitted ⇒ $0 recorded (the pre-0084 behavior). */
   feeRateBps?: number;
+  /** CITY-LIVE §3: the strategy tag written to the ledger row (0085 `live_orders.strategy`). The city-taker
+   *  entry lane sets 'city-taker'; every maker-exit exit leaves it undefined (the RPC column-defaults to
+   *  'maker-exit'). Forwarded to `reserveIntent` — pre-0085 the extra RPC arg fails undefined-function and
+   *  the city lane tolerates it as a staged-dark skip. */
+  strategy?: string;
 }
 
 /** The outcome of a place attempt (maker or taker) across all trade modes. */
