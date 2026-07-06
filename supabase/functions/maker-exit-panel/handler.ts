@@ -68,7 +68,16 @@ const PANEL_DAYS = 21;
 const FETCH_CONCURRENCY = 3;
 /** exported for the #20 tripwire test — must OUTLAST the RPC's 40s statement_timeout. */
 export const CITY_TIMEOUT_MS = 45_000;
-const FETCH_BUDGET_MS = 240_000;
+/**
+ * FETCH_BUDGET_MS 240→270 (2026-07-06, second half of the concurrency co-tune): with 5→3 the first
+ * clean tick (16:35Z) eliminated ALL timeouts (cityErrors 24→6, nMarkets 44→78) — the ONLY remaining
+ * drop was 6 BUDGET-SKIPS (cities never claimed before the 240s cutoff). +30s of budget covers ~2 more
+ * 3-way waves (~5–6 cities), clearing the tail. Capped at 270 (not higher): the documented all-hang wall
+ * arithmetic below is budget + 45s tail + 56s writes + 20s bookkeeping ≤ ~400s isolate wall, so the
+ * ceiling is ~279s; 270 keeps a ~9s margin. (jobWallLimitSec=150s only reaps ticks still running at the
+ * :00/:30 health-monitor — a :35 cron tick finishes ~:40, so the isolate wall, not the reaper, is the bound.)
+ */
+const FETCH_BUDGET_MS = 270_000;
 
 /**
  * gate-write degradation floor (2026-07-05 review #8/#10): bot_gate_snapshot is the §9R-E GATE OF RECORD —
@@ -93,15 +102,16 @@ const GATE_WRITE_MAX_CITY_ERRORS = 2;
  * write duplicate rows into the never-pruned §9R-E gate history (bot_gate_snapshot) — unacceptable there,
  * unlike the pruned-and-latest-read panel table.
  *
- * ARITHMETIC — the COMPLETE post-claim chain stays under the ~400s isolate wall with margin to spare:
- *   fetch phase worst case  = FETCH_BUDGET_MS (240s) + one in-flight city's CITY_TIMEOUT_MS tail (45s) = 285s
+ * ARITHMETIC — the COMPLETE post-claim chain stays under the ~400s isolate wall (2026-07-06: budget 240→270):
+ *   fetch phase worst case  = FETCH_BUDGET_MS (270s) + one in-flight city's CITY_TIMEOUT_MS tail (45s) = 315s
  *   (the budget check only stops NEW claims, the city already in flight when the budget trips still runs to
  *   its own timeout).
  *   terminal-write phase worst case = 3 attempts × RECORD_WRITE_TIMEOUT_MS (15s = 45s) + 2 backoffs
  *   (3s + 8s = 11s) = 56s (every attempt hangs to its own timeout — the true worst case, not the common one).
  *   step-4 bookkeeping worst case = 2 × BOOKKEEPING_TIMEOUT_MS (10s) = 20s (both writes hang to their bound).
- *   total = 285s + 56s + 20s = 361s, leaving a ~39s (≈10%) margin under the 400s wall even in the all-hang
- *   case. (convergence-panel has NO step 4, so its chain is 285s + 56s = 341s / ~59s margin.)
+ *   total = 315s + 56s + 20s = 391s, leaving a ~9s margin under the 400s wall even in the all-hang case (the
+ *   common case is ~250–290s, nowhere near it). (convergence-panel has NO step 4 and keeps budget 240, so its
+ *   chain is 285s + 56s = 341s / ~59s margin.)
  */
 const RECORD_WRITE_RETRIES = 2;
 const RECORD_WRITE_BACKOFF_MS = [3_000, 8_000];
