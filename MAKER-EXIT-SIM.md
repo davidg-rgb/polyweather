@@ -1,5 +1,32 @@
 # Maker-Exit Simulation — the convergence edge, tested as a MAKER edge
 
+> **🔬 ROOT CAUSE ESTABLISHED 2026-07-06 — the backtest PASS (+6.7 %) and the live gate KILL (−12.6 %) were never measuring the same thing: SYNTHETIC book vs REAL book.** The operator asked why the two diverge and how to
+> boost it. Traced end-to-end (`scripts/ops/maker-exit-gap-read.ts` — read-only diagnostic):
+> - **The replay engine is IDENTICAL** in both (`replayMakerExitEvent`) — a maker take-profit is credited *iff the
+>   bucket's bid reaches ≥ entry+0.12 before the time-stop*. So the entire gap is in the price series each side feeds it.
+> - **The backtest feeds a SYNTHETIC book.** `sim-maker-exit.ts` → `tune-convergence.ts buildSet(panel,'house_gaussian',1,…)`
+>   builds each bucket's bid/ask from the **calibrated `house_gaussian` forecast ± a modeled spread** (the source labels it
+>   "synthetic (calibrated) book", CAVEAT line). Because `house_gaussian` is a genuinely good forecast, a book centered on
+>   it **converges toward the truth by construction** → the forecast-center bid rises past entry+12pp **49 %** of the time.
+>   The backtest answered *"is our forecast good?"* → yes.
+> - **The live §9R-E gate feeds the REAL Polymarket book** (`convergence_capture_inputs`, real `execBid`). The real market is
+>   **efficient** — it does NOT converge to our forecast. Maker-fill **6.5 %**; the missing 42.5 pts went almost entirely to
+>   the **taker time-stop (41 %→87 %)**, which flattens at **−13.4 %** (the forecast-center bid *drifts flat/down*). It
+>   answered *"does the real price converge to our forecast?"* → **no.**
+> - **NOT a measurement artifact** (all ruled out by the live data): censoring 4.6 % (3/65 open), tick density **104
+>   ticks/event** (dense — fills that happen are seen), 20-min thinning ≈2× (can't manufacture a 7.5× fill gap), open
+>   positions sit **14pp below** the sell limit (nowhere near filling).
+> - **Bottom line: the +6.7 % never existed on real books.** It was an upper bound conditional on the market pricing like
+>   our calibrated forecast — and the live data is the direct proof it doesn't. This is the **same market-efficiency wall**
+>   that killed the other eleven signals, now measured on real books instead of a synthetic one. There is no bug to fix and
+>   no artifact to correct that would "restore" it.
+> - **On adapting to boost it:** the synthetic-book optimum (tp0.12/sl0.20/tstop18h) is meaningless for real books, so the
+>   only honest test is a **real-book re-tune sweep** (`scripts/research/maker-exit-realbook-sweep.ts` — tp 0.02–0.12 ×
+>   time-stop 6–24h × absolute/model targets × wider stops, over the same 45-city panel the gate sees). **Deferred to
+>   overnight low-load** — at US-evening peak every per-city `convergence_capture_inputs` times out (the same DB
+>   degradation starving the gate). Strong prior: **no config clears**, because the failure isn't a tuning miss — the real
+>   price doesn't converge to us. The sweep will confirm or refute empirically once the DB is quiet.
+>
 > **⚡ TWO ENGINE-LEVEL REFINEMENTS ADJUDICATED 2026-07-03 evening (WS-3; full records: `SIGNAL-BACKLOG.md` items 1b + 5, `FINDINGS.md` rows).**
 > **(1) Reward-stacking on the resting TP leg — gate-PASS on this same 844-event panel:** adding Polymarket
 > reward-pool income to the pinned config moves full-panel ciLow **+0.25 % → +2.38 %** at even the
