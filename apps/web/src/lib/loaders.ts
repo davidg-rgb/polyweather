@@ -2114,11 +2114,14 @@ export type TradingLoad =
   | { kind: 'error'; message: string };
 
 /** The undefined-function error class: PGRST202 (PostgREST schema-cache miss) / 42883 (Postgres) / their
- *  message spellings, scoped to the dash_trading symbol so an unrelated missing fn never masquerades. */
-export function isUndefinedFunctionError(message: string): boolean {
+ *  message spellings, scoped to a specific RPC `symbol` (default dash_trading) so an unrelated missing fn never
+ *  masquerades. The optional `symbol` lets the same #22 split guard other staged-dark loaders (getCityLive,
+ *  dash_city_live / migration 0085) without duplicating the classifier. */
+export function isUndefinedFunctionError(message: string, symbol = 'dash_trading'): boolean {
   if (/PGRST202|42883/i.test(message)) return true;
+  const symbolRe = new RegExp(symbol.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
   return (
-    /dash_trading/i.test(message) &&
+    symbolRe.test(message) &&
     /(could not find the function|does not exist|not exist in the schema cache|no function matches)/i.test(message)
   );
 }
@@ -2154,6 +2157,108 @@ export async function getTrading(db: WebDb): Promise<TradingLoad> {
       today: v.today ?? null,
       dryRun: v.dryRun ?? null,
       recentAudit: v.recentAudit ?? [],
+      generatedAt: v.generatedAt ?? null,
+    },
+  };
+}
+
+// --- /trading CITY-LIVE additions (dash_city_live, 0085 — staged DARK) ----------------------------
+// The continuous winner-promotion + operator live-testing surface layered onto /trading (CITY-LIVE.md lane W).
+// dash_city_live() returns an OBJECT { arms, board, twin } (§2): the per-city Live arms, the latest promotion
+// board (front the winners), and the taker-vs-maker paper-twin aggregate. Same staged-dark degradation as
+// getTrading — until migration 0085 is applied the RPC does not exist → { kind: 'not-applied' }; every OTHER
+// failure → { kind: 'error' } (never a false "not applied" diagnosis).
+
+/** One city_live_arms row joined with city identity (dash_city_live.arms) — the per-city toggle surface. */
+export interface CityLiveArm {
+  cityId: string;
+  slug: string;
+  displayName: string;
+  icao: string;
+  unit: string;
+  enabled: boolean;
+  /** jsonb-string-safe numeric (file convention) — the page coerces with num(). */
+  stakeUsd: unknown;
+  entryHourOverride: number | null;
+  /** The advisory promotion status snapshot (PROMOTED/WATCH/…); the toggle is the authorization, not this. */
+  promotedStatus: string | null;
+  enabledAt: string | null;
+  updatedAt: string | null;
+}
+
+/** One promotion-board row (Lane P CityPromotionRow, dash_city_live.board.rows) — the ranked winners. */
+export interface CityLiveBoardRow {
+  cityId: string;
+  slug: string;
+  icao: string;
+  nBets: unknown;
+  nDays: unknown;
+  netPnlUsd: unknown;
+  recommendedHour: number | null;
+  watchConfidence: string;
+  edge: number | null;
+  edgeCiLo: number | null;
+  edgeCiHi: number | null;
+  status: string; // PROMOTED | WATCH | INSUFFICIENT | DEMOTED
+  reasons: string[];
+}
+
+/** Per-city taker-vs-maker paper-twin aggregate (dash_city_live.twin) — the longitudinal maker differential. */
+export interface CityLiveTwin {
+  cityId: string;
+  slug?: string;
+  nPlacements: unknown;
+  twinFilledFrac: unknown;
+  takerPnlUsd: unknown;
+  makerTwinPnlUsd: unknown;
+}
+
+export interface CityLiveView {
+  arms: CityLiveArm[];
+  board: { asOf: string | null; rows: CityLiveBoardRow[] };
+  twin: CityLiveTwin[];
+  generatedAt: string | null;
+}
+
+/** The /trading CITY-LIVE load outcome — the same three-way #22 discrimination as TradingLoad, for 0085. */
+export type CityLiveLoad =
+  | { kind: 'ok'; view: CityLiveView }
+  | { kind: 'not-applied' }
+  | { kind: 'error'; message: string };
+
+interface CityLivePayload {
+  arms?: CityLiveArm[] | null;
+  /** The board arrives as the whole CityPromotionBoard { asOf, rows } — tolerate a bare rows array too. */
+  board?: { asOf?: string | null; rows?: CityLiveBoardRow[] | null } | CityLiveBoardRow[] | null;
+  twin?: CityLiveTwin[] | null;
+  generatedAt?: string | null;
+}
+
+/**
+ * The continuous winner-promotion + Live-arms surface (dash_city_live, 0085) for /trading. RPC-only, one round
+ * trip to the operator-guarded dash_city_live(); mirrors getTrading's staged-dark discrimination (migration
+ * 0085 unapplied → the undefined-function class → { kind: 'not-applied' }; every other failure → { kind:
+ * 'error' }). The board's promotion status is ADVISORY (operator sovereignty — the toggle is the authorization).
+ */
+export async function getCityLive(db: WebDb): Promise<CityLiveLoad> {
+  let v: CityLivePayload | null;
+  try {
+    v = await one<CityLivePayload>(db, 'dash_city_live', {});
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    return isUndefinedFunctionError(message, 'dash_city_live') ? { kind: 'not-applied' } : { kind: 'error', message };
+  }
+  if (!v) return { kind: 'error', message: 'dash_city_live() returned an empty payload' };
+  const rawBoard = v.board;
+  const board = Array.isArray(rawBoard)
+    ? { asOf: null, rows: rawBoard }
+    : { asOf: rawBoard?.asOf ?? null, rows: rawBoard?.rows ?? [] };
+  return {
+    kind: 'ok',
+    view: {
+      arms: v.arms ?? [],
+      board,
+      twin: v.twin ?? [],
       generatedAt: v.generatedAt ?? null,
     },
   };

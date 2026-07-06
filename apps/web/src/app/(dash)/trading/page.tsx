@@ -18,6 +18,8 @@
  */
 import type { ReactElement } from 'react';
 import type {
+  CityLiveTwin,
+  CityLiveView,
   LiveOrder,
   TradeAuditRow,
   TradeConfig,
@@ -26,9 +28,10 @@ import type {
   TradeToday,
   TradingView,
 } from '../../../lib/loaders.ts';
-import { getTrading } from '../../../lib/loaders.ts';
+import { getCityLive, getTrading } from '../../../lib/loaders.ts';
 import { fmtAgo, fmtDate, fmtDateTime, fmtPct, fmtProb, fmtStockholm, fmtUsd, num } from '../../../lib/format.ts';
 import { serverDb } from '../../../lib/supabase.ts';
+import { CityArmsTable, TradeConfigEditor } from '../../../components/trading-controls.tsx';
 
 export const dynamic = 'force-dynamic';
 
@@ -486,6 +489,110 @@ function AuditTable({ rows }: { rows: TradeAuditRow[] }): ReactElement {
   );
 }
 
+// ─── CITY-LIVE (lane W) — winners board + staged-dark degradation (dash_city_live, 0085) ──────────────────
+
+const CITY_STATUS_COLOR: Record<string, string> = {
+  PROMOTED: GREEN,
+  WATCH: AMBER,
+  INSUFFICIENT: MUTED,
+  DEMOTED: RED,
+};
+
+/** The "front the winners" board (dash_city_live.board) — ranked promotion rows + the taker-vs-maker paper twin. */
+function WinnersBoard({ board, twin }: { board: CityLiveView['board']; twin: CityLiveTwin[] }): ReactElement {
+  const rows = board.rows;
+  if (rows.length === 0) {
+    return (
+      <p className="muted">
+        No promotion board yet — the engine fronts ranked winners once the multi-city paper-trade ledger accrues
+        (floors: ≥20 graded bets AND ≥10 distinct days per city).
+      </p>
+    );
+  }
+  const twinByCity = new Map(twin.map((t) => [t.cityId, t]));
+  return (
+    <div className="panel">
+      <p className="muted small" style={{ marginTop: 0 }}>
+        Ranked by the recommended arm&apos;s edge lower-bound (<span className="mono">edgeCiLo</span>) — PROMOTED
+        first. Promotion is <strong>advisory</strong> (the Live toggle below is the authorization; Karachi is a
+        point-estimate winner of a 45-city race — the live toggle test is the real gate). The taker-vs-maker twin
+        columns are the longitudinal paper differential (maker fill is a conservative lower bound).
+        {board.asOf ? (
+          <>
+            {' '}Board <span className="mono">{fmtDateTime(board.asOf)}</span>.
+          </>
+        ) : null}
+      </p>
+      <div className="tbl-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>city</th>
+              <th>status</th>
+              <th className="num">edge</th>
+              <th className="num">edge CI</th>
+              <th className="num">nBets</th>
+              <th className="num">nDays</th>
+              <th className="num">rec hour</th>
+              <th className="num">twin fills</th>
+              <th className="num">taker P&amp;L</th>
+              <th className="num">maker twin P&amp;L</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => {
+              const t = twinByCity.get(r.cityId);
+              const color = CITY_STATUS_COLOR[r.status] ?? MUTED;
+              return (
+                <tr key={r.cityId}>
+                  <td>
+                    {r.slug} <span className="muted small mono">{r.icao}</span>
+                  </td>
+                  <td>
+                    <span className="chip small" style={{ color }} title={(r.reasons ?? []).join(' · ')}>
+                      {r.status}
+                    </span>
+                  </td>
+                  <td className="num" style={{ color: (r.edge ?? 0) >= 0 ? GREEN : RED }}>{fmtPct(r.edge)}</td>
+                  <td className="num small">
+                    {r.edgeCiLo != null && r.edgeCiHi != null ? `[${fmtPct(r.edgeCiLo)}, ${fmtPct(r.edgeCiHi)}]` : '—'}
+                  </td>
+                  <td className="num">{num(r.nBets) ?? 0}</td>
+                  <td className="num">{num(r.nDays) ?? 0}</td>
+                  <td className="num">{r.recommendedHour == null ? '—' : `${r.recommendedHour}:00`}</td>
+                  <td className="num">
+                    {t ? fmtPct(t.twinFilledFrac, 0) : '—'}
+                    {t ? <span className="muted small"> ({num(t.nPlacements) ?? 0})</span> : null}
+                  </td>
+                  <td className="num" style={{ color: (num(t?.takerPnlUsd) ?? 0) >= 0 ? GREEN : RED }}>
+                    {t ? signedUsd(t.takerPnlUsd) : '—'}
+                  </td>
+                  <td className="num" style={{ color: (num(t?.makerTwinPnlUsd) ?? 0) >= 0 ? GREEN : RED }}>
+                    {t ? signedUsd(t.makerTwinPnlUsd) : '—'}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+/** The CITY-LIVE staged-dark state — dash_city_live() (migration 0085) not applied yet. Distinct from an error. */
+function CityLiveNotApplied(): ReactElement {
+  return (
+    <div className="info-banner" style={{ borderLeftColor: AMBER }}>
+      <strong style={{ color: AMBER }}>0085 NOT APPLIED.</strong> The{' '}
+      <span className="mono">dash_city_live()</span> RPC does not exist on this database yet — migration{' '}
+      <span className="mono">0085_city_live.sql</span> is <strong>merged-dark, not applied</strong>. The winners board
+      and the per-city Live arms light up the moment the operator applies 0085. Applying it seeds the arms surface
+      DARK (nothing enabled), so nothing arms on apply.
+    </div>
+  );
+}
+
 // ─── page ────────────────────────────────────────────────────────────────────
 
 export default async function TradingPage(): Promise<ReactElement> {
@@ -498,6 +605,10 @@ export default async function TradingPage(): Promise<ReactElement> {
 
   const view = load.view;
   const { config, preflight } = view;
+  // The CITY-LIVE surface (0085) degrades INDEPENDENTLY of 0082 — its own staged-dark / error split, so applying
+  // 0082 first (already true on prod) still renders the full console with a "0085 not applied" note for the
+  // promotion sections until 0085 lands.
+  const cityLive = await getCityLive(db);
 
   return (
     <div className="ams-dash">
@@ -564,6 +675,40 @@ export default async function TradingPage(): Promise<ReactElement> {
         </p>
         <AuditTable rows={view.recentAudit} />
       </div>
+
+      <h2>Trade config control</h2>
+      {config ? (
+        <TradeConfigEditor config={config} />
+      ) : (
+        <p className="muted">No config row to edit.</p>
+      )}
+
+      <h2>Winners board — front the winners</h2>
+      {cityLive.kind === 'ok' ? (
+        <WinnersBoard board={cityLive.view.board} twin={cityLive.view.twin} />
+      ) : cityLive.kind === 'not-applied' ? (
+        <CityLiveNotApplied />
+      ) : (
+        <div className="info-banner" style={{ borderLeftColor: RED }}>
+          <strong style={{ color: RED }}>City-live console temporarily unavailable.</strong> The{' '}
+          <span className="mono">dash_city_live()</span> RPC exists but the call failed —{' '}
+          <span className="mono">{cityLive.message}</span>. Not the &ldquo;0085 not applied&rdquo; state; retry shortly.
+        </div>
+      )}
+
+      <h2>City Live arms</h2>
+      <p className="muted small" style={{ marginTop: 0 }}>
+        Manual per-city Live toggle (envelope: <strong>$5/day per city, max 2 enabled</strong>, both SQL-enforced).
+        The toggle is the authorization — nothing trades until the daemon runs live AND{' '}
+        <span className="mono">trade_live_preflight(&apos;city-taker&apos;)</span> passes.
+      </p>
+      {cityLive.kind === 'ok' ? (
+        <CityArmsTable arms={cityLive.view.arms} />
+      ) : cityLive.kind === 'not-applied' ? (
+        <p className="muted small">City Live arms unlock when migration 0085 is applied.</p>
+      ) : (
+        <p className="muted small">City Live arms temporarily unavailable — retry shortly.</p>
+      )}
 
       <p className="muted small" style={{ marginTop: '1rem' }}>
         Read-only analytics over the operator-guarded <span className="mono">dash_trading()</span> RPC (migration

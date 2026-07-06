@@ -12,6 +12,35 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('../src/lib/supabase.ts', () => ({ serverDb: async () => ({}) }));
+// The CITY-LIVE (lane W) forms are client components (components/trading-controls.tsx) that call useRouter — stub
+// next/navigation so renderToStaticMarkup can drive the page's full tree (incl. the config editor + arms table).
+vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh: () => {} }) }));
+
+// dash_city_live (0085) fixture — 2 cities enabled (Singapore + Karachi) so the arms table renders its at-cap
+// lockout, plus a 3rd unenabled city (Amsterdam) whose toggle must be disabled. Board + taker-vs-maker twin.
+const CITY_LIVE = {
+  arms: [
+    { cityId: 'c-sing', slug: 'singapore', displayName: 'Singapore', icao: 'WSSS', unit: 'C', enabled: true, stakeUsd: '5.00', entryHourOverride: 12, promotedStatus: 'PROMOTED', enabledAt: '2026-07-06T09:00:00Z', updatedAt: '2026-07-06T09:00:00Z' },
+    { cityId: 'c-kar', slug: 'karachi', displayName: 'Karachi', icao: 'OPKC', unit: 'C', enabled: true, stakeUsd: '5.00', entryHourOverride: null, promotedStatus: 'PROMOTED', enabledAt: '2026-07-06T09:00:00Z', updatedAt: '2026-07-06T09:00:00Z' },
+    { cityId: 'c-ams', slug: 'amsterdam', displayName: 'Amsterdam', icao: 'EHAM', unit: 'C', enabled: false, stakeUsd: '5.00', entryHourOverride: null, promotedStatus: 'WATCH', enabledAt: null, updatedAt: '2026-07-06T09:00:00Z' },
+  ],
+  board: {
+    asOf: '2026-07-06T09:05:00Z',
+    rows: [
+      { cityId: 'c-kar', slug: 'karachi', icao: 'OPKC', nBets: 42, nDays: 15, netPnlUsd: '40.41', recommendedHour: 12, watchConfidence: 'sufficient', edge: 0.061, edgeCiLo: 0.012, edgeCiHi: 0.11, status: 'PROMOTED', reasons: ['eligible'] },
+      { cityId: 'c-ams', slug: 'amsterdam', icao: 'EHAM', nBets: 6, nDays: 5, netPnlUsd: '3.10', recommendedHour: null, watchConfidence: 'insufficient', edge: 0.03, edgeCiLo: null, edgeCiHi: null, status: 'WATCH', reasons: ['nDays 5 < 10'] },
+    ],
+  },
+  twin: [
+    { cityId: 'c-kar', slug: 'karachi', nPlacements: 42, twinFilledFrac: 0.71, takerPnlUsd: '40.41', makerTwinPnlUsd: '52.10' },
+  ],
+  generatedAt: '2026-07-06T09:05:00Z',
+};
+// A single-enabled variant — proves the lockout is NOT engaged below 2 enabled cities.
+const CITY_LIVE_ONE = {
+  ...CITY_LIVE,
+  arms: CITY_LIVE.arms.map((a) => (a.slug === 'karachi' ? { ...a, enabled: false } : a)),
+};
 
 const FIXTURE = {
   config: {
@@ -57,7 +86,10 @@ const FIXTURE = {
 describe('/trading page renders', () => {
   it('renders end-to-end with the populated LIVE fixture and surfaces every section', async () => {
     vi.resetModules();
-    vi.doMock('../src/lib/loaders.ts', () => ({ getTrading: async () => ({ kind: 'ok', view: FIXTURE }) }));
+    vi.doMock('../src/lib/loaders.ts', () => ({
+      getTrading: async () => ({ kind: 'ok', view: FIXTURE }),
+      getCityLive: async () => ({ kind: 'ok', view: CITY_LIVE }),
+    }));
     const { default: TradingPage } = await import('../src/app/(dash)/trading/page.tsx');
     const html = renderToStaticMarkup(await TradingPage());
 
@@ -102,6 +134,23 @@ describe('/trading page renders', () => {
     expect(html).toContain('Dry-run shadow rail'); // h2
     expect(html).toContain('37'); // dry-run total
     expect(html).toContain('service_role'); // audit changed_by
+
+    // (a) CITY-LIVE — the editable trade_config input table (section a)
+    expect(html).toContain('Trade config control');
+    expect(html).toContain('trade_config_set'); // the operator RPC named in the editor blurb
+    expect(html).toContain('save 0 changes'); // the Save button, no pending edits at first render
+
+    // (b) CITY-LIVE — the winners board (section b): status badges + edge/nBets/nDays/rec-hour + the twin columns
+    expect(html).toContain('Winners board'); // h2
+    expect(html).toContain('front the winners');
+    expect(html).toContain('karachi');
+    expect(html).toContain('PROMOTED'); // status badge
+    expect(html).toContain('maker twin'); // taker-vs-maker twin column header
+
+    // (c) CITY-LIVE — the arms table (section c): the confirm-arming caption + the at-cap lockout (2 enabled)
+    expect(html).toContain('City Live arms'); // h2
+    expect(html).toContain('of real capital when the daemon runs live'); // the arming warning copy
+    expect(html).toContain('2 cities already enabled'); // Amsterdam's toggle is disabled — the lockout title
   });
 
   it('renders the CLEAR verdict + KILL-TRIPPED meter branches', async () => {
@@ -114,7 +163,10 @@ describe('/trading page renders', () => {
         checks: { ...FIXTURE.preflight.checks, gatePass: true, override: false, overrideReason: null, todayLossUsd: '26.00' },
       },
     };
-    vi.doMock('../src/lib/loaders.ts', () => ({ getTrading: async () => ({ kind: 'ok', view: HOT }) }));
+    vi.doMock('../src/lib/loaders.ts', () => ({
+      getTrading: async () => ({ kind: 'ok', view: HOT }),
+      getCityLive: async () => ({ kind: 'ok', view: CITY_LIVE }),
+    }));
     const { default: TradingPage } = await import('../src/app/(dash)/trading/page.tsx');
     const html = renderToStaticMarkup(await TradingPage());
     expect(html).toContain('interlock permits live entries'); // ok === true CLEAR verdict
@@ -147,7 +199,11 @@ describe('/trading page renders', () => {
       recentAudit: [],
       generatedAt: '2026-07-05T00:00:00Z',
     };
-    vi.doMock('../src/lib/loaders.ts', () => ({ getTrading: async () => ({ kind: 'ok', view: EMPTY }) }));
+    // 0082 applied (config off, empty) BUT 0085 not applied → the CITY-LIVE sections degrade INDEPENDENTLY.
+    vi.doMock('../src/lib/loaders.ts', () => ({
+      getTrading: async () => ({ kind: 'ok', view: EMPTY }),
+      getCityLive: async () => ({ kind: 'not-applied' }),
+    }));
     const { default: TradingPage } = await import('../src/app/(dash)/trading/page.tsx');
     const html = renderToStaticMarkup(await TradingPage());
     expect(html).toContain('MODE OFF');
@@ -155,11 +211,18 @@ describe('/trading page renders', () => {
     expect(html).toContain('No open LIVE orders.');
     expect(html).toContain('No open LIVE positions.');
     expect(html).toContain('No config changes recorded.');
+    // the config editor (0082) still renders; only the winners board + arms (0085) show the dark note.
+    expect(html).toContain('Trade config control');
+    expect(html).toContain('0085 NOT APPLIED');
+    expect(html).toContain('City Live arms unlock when migration 0085 is applied');
   });
 
   it("renders the explicit \"0082 NOT APPLIED\" empty-state ONLY for { kind: 'not-applied' } (day-one state)", async () => {
     vi.resetModules();
-    vi.doMock('../src/lib/loaders.ts', () => ({ getTrading: async () => ({ kind: 'not-applied' }) }));
+    vi.doMock('../src/lib/loaders.ts', () => ({
+      getTrading: async () => ({ kind: 'not-applied' }),
+      getCityLive: async () => ({ kind: 'not-applied' }),
+    }));
     const { default: TradingPage } = await import('../src/app/(dash)/trading/page.tsx');
     const html = renderToStaticMarkup(await TradingPage());
     expect(html).toContain('Trading activation console');
@@ -172,6 +235,7 @@ describe('/trading page renders', () => {
     vi.resetModules();
     vi.doMock('../src/lib/loaders.ts', () => ({
       getTrading: async () => ({ kind: 'error', message: 'rpc dash_trading failed: upstream request timeout' }),
+      getCityLive: async () => ({ kind: 'error', message: 'unused — page early-returns on the 0082 error' }),
     }));
     const { default: TradingPage } = await import('../src/app/(dash)/trading/page.tsx');
     const html = renderToStaticMarkup(await TradingPage());
@@ -180,5 +244,17 @@ describe('/trading page renders', () => {
     expect(html).toContain('upstream request timeout'); // the error text is surfaced for the operator
     expect(html).not.toContain('0082 NOT APPLIED'); // the false diagnosis must be gone
     expect(html).not.toContain('merged-dark, not applied');
+  });
+
+  it('does NOT engage the arms lockout when fewer than 2 cities are enabled', async () => {
+    vi.resetModules();
+    vi.doMock('../src/lib/loaders.ts', () => ({
+      getTrading: async () => ({ kind: 'ok', view: FIXTURE }),
+      getCityLive: async () => ({ kind: 'ok', view: CITY_LIVE_ONE }),
+    }));
+    const { default: TradingPage } = await import('../src/app/(dash)/trading/page.tsx');
+    const html = renderToStaticMarkup(await TradingPage());
+    expect(html).toContain('City Live arms'); // the section still renders
+    expect(html).not.toContain('2 cities already enabled'); // only 1 enabled → toggles NOT locked
   });
 });

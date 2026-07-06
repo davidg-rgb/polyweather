@@ -420,6 +420,119 @@ export async function adminExportPredictions(req: Request, deps: ApiDeps): Promi
   return new Response(csv, { status: 200, headers: { 'Content-Type': 'text/csv' } });
 }
 
+// --- [POST] /api/admin/trading/config — trade_config_set passthrough (11 args, CITY-LIVE lane W) --------
+// The operator-guarded config write behind /trading (migration 0082 §6). We TYPE-validate the eleven params
+// then PASS THEM THROUGH verbatim — every VALUE constraint (the §9R $25 ceiling, positivity, the ≤1 kill
+// fraction, the mode enum, the 60-day active_until cap) is a DB CHECK / RAISE, so an out-of-range write RAISES
+// in Postgres and we surface that message VERBATIM (spec §4.1). null = "leave unchanged"; the explicit clear
+// flags null out city_allowlist / active_until (a null param can't disambiguate "leave" from "clear").
+const TRADE_MODES = new Set(['off', 'dry-run', 'live']);
+
+export async function adminTradingConfig(req: Request, deps: ApiDeps): Promise<Response> {
+  const denied = await requireOperator(deps);
+  if (denied) return denied;
+  const body = await readBody(req);
+
+  const details: string[] = [];
+  // Optional finite-number param: absent (undefined/null) → null (leave unchanged); present-but-non-number → 400.
+  const optNum = (v: unknown, name: string): number | null => {
+    if (v === undefined || v === null) return null;
+    if (typeof v !== 'number' || !Number.isFinite(v)) {
+      details.push(`${name} must be a finite number`);
+      return null;
+    }
+    return v;
+  };
+
+  const mode = body['mode'];
+  if (mode !== undefined && mode !== null && (typeof mode !== 'string' || !TRADE_MODES.has(mode))) {
+    details.push("mode must be 'off'|'dry-run'|'live'");
+  }
+  const stake = optNum(body['stakePerBuyUsd'], 'stakePerBuyUsd');
+  const perPosition = optNum(body['perPositionCapUsd'], 'perPositionCapUsd');
+  const perMarket = optNum(body['perMarketCapUsd'], 'perMarketCapUsd');
+  const totalConcurrent = optNum(body['totalConcurrentCapUsd'], 'totalConcurrentCapUsd');
+  const dailyLossKill = optNum(body['dailyLossKillUsd'], 'dailyLossKillUsd');
+  const dailyLossKillFrac = optNum(body['dailyLossKillFrac'], 'dailyLossKillFrac');
+
+  const activeUntil = body['activeUntil'];
+  if (activeUntil !== undefined && activeUntil !== null && (typeof activeUntil !== 'string' || !DATE_RE.test(activeUntil))) {
+    details.push('activeUntil must be YYYY-MM-DD');
+  }
+  const allowlist = body['cityAllowlist'];
+  if (
+    allowlist !== undefined && allowlist !== null &&
+    (!Array.isArray(allowlist) || !allowlist.every((x) => typeof x === 'string'))
+  ) {
+    details.push('cityAllowlist must be an array of strings');
+  }
+  if (details.length > 0) return json(400, { error: 'ERR_VALIDATION', details });
+
+  try {
+    const [r] = await deps.db.rpc<{ trade_config_set: { config: Record<string, unknown> } }>('trade_config_set', {
+      p_mode: typeof mode === 'string' ? mode : null,
+      p_stake_per_buy_usd: stake,
+      p_per_position_cap_usd: perPosition,
+      p_per_market_cap_usd: perMarket,
+      p_total_concurrent_cap_usd: totalConcurrent,
+      p_daily_loss_kill_usd: dailyLossKill,
+      p_daily_loss_kill_frac: dailyLossKillFrac,
+      p_city_allowlist: Array.isArray(allowlist) ? allowlist : null,
+      p_active_until: typeof activeUntil === 'string' ? activeUntil : null,
+      p_clear_city_allowlist: body['clearCityAllowlist'] === true,
+      p_clear_active_until: body['clearActiveUntil'] === true,
+    });
+    return json(200, { ok: true, config: r?.trade_config_set?.config ?? null });
+  } catch (e) {
+    // A DB CHECK / RAISE (the §9R ceiling, positivity, kill-fraction, the 60-day cap) — surfaced VERBATIM so the
+    // operator sees the exact guardrail that fired. `details` (not `message`) so errText() renders it (post.ts).
+    return json(400, { error: 'ERR_DB_CHECK', details: [e instanceof Error ? e.message : String(e)] });
+  }
+}
+
+// --- [POST] /api/admin/trading/city-arm — city_live_arm_set passthrough (CITY-LIVE lane W) -------------
+// The per-city Live toggle write behind /trading (migration 0085 §2). TYPE-validate then pass through; the
+// envelope (stake > 0 AND ≤ 5, entry_hour 0..23) is a DB CHECK and the max-2-enabled hard stop is a constraint
+// trigger — both RAISE in Postgres, and we surface that message VERBATIM (spec §4.3). Enabling a city arms real
+// capital when the daemon runs live, so the client fronts a confirmation dialog before it ever posts enabled=true.
+export async function adminCityArm(req: Request, deps: ApiDeps): Promise<Response> {
+  const denied = await requireOperator(deps);
+  if (denied) return denied;
+  const body = await readBody(req);
+
+  const details: string[] = [];
+  const cityId = body['cityId'];
+  const enabled = body['enabled'];
+  const stake = body['stakeUsd'];
+  const entryHour = body['entryHour'];
+
+  if (typeof cityId !== 'string' || !UUID_RE.test(cityId)) details.push('cityId must be a UUID');
+  if (typeof enabled !== 'boolean') details.push('enabled must be a boolean');
+  // Type only — the 0<stake≤5 envelope is the DB CHECK (surfaced verbatim below), not re-encoded here.
+  if (typeof stake !== 'number' || !Number.isFinite(stake)) details.push('stakeUsd must be a finite number');
+  if (
+    entryHour !== undefined && entryHour !== null &&
+    (typeof entryHour !== 'number' || !Number.isInteger(entryHour))
+  ) {
+    details.push('entryHour must be an integer 0..23 or null');
+  }
+  if (details.length > 0) return json(400, { error: 'ERR_VALIDATION', details });
+
+  try {
+    const [r] = await deps.db.rpc<{ city_live_arm_set: { row: Record<string, unknown> } }>('city_live_arm_set', {
+      p_city_id: cityId,
+      p_enabled: enabled,
+      p_stake_usd: stake,
+      p_entry_hour: entryHour ?? null,
+    });
+    return json(200, { ok: true, row: r?.city_live_arm_set?.row ?? null });
+  } catch (e) {
+    // The max-2-enabled constraint trigger (a state conflict → 409) or the stake/entry-hour CHECK — surfaced
+    // VERBATIM. `details` so errText() renders the exact RAISE text for the operator.
+    return json(409, { error: 'ERR_DB_CHECK', details: [e instanceof Error ? e.message : String(e)] });
+  }
+}
+
 // --- [GET] /api/health — the out-of-band uptime probe (R-18); NO auth ---------------
 export async function healthCheck(_req: Request, deps: ApiDeps): Promise<Response> {
   try {
