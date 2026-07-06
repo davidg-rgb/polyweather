@@ -54,7 +54,18 @@ const PANEL_DAYS = 21;
  * fires only on a transport-level hang — behind which no live DB statement remains, so the freed worker slot
  * no longer stacks a 6th statement on the pool.
  */
-const FETCH_CONCURRENCY = 5;
+/**
+ * FETCH_CONCURRENCY 5→3 (2026-07-06): after the pg_net outage recovered, EIGHT consecutive ticks
+ * degraded (cityErrors 10–25, gate write skipped) and did NOT self-heal over ~6h. Measured the cause:
+ * a single-city `convergence_capture_inputs` is ~6.5s UNCONTENDED (DB idle, 0 running jobs), but
+ * `pg_stat_statements` showed a mean of 18.4s / max 39.6s under the 5-way pool — i.e. the 5 concurrent
+ * heavy reads SELF-CONTEND on Micro compute, ballooning per-call latency past the 45s CITY_TIMEOUT
+ * (timeout-dominant: the 15:35Z tick was 14 timeouts + 10 budget-skips). Lowering to 3 concurrent keeps
+ * per-call latency near the ~6.5s floor, so all 45 cities clear well inside the unchanged 240s budget
+ * (~15 waves × ~12s ≈ 190s) with few timeouts — the fix targets the root cause (self-contention), not
+ * the symptom. Budget + CITY_TIMEOUT unchanged → wall-clock envelope and the #20 tripwire are untouched.
+ */
+const FETCH_CONCURRENCY = 3;
 /** exported for the #20 tripwire test — must OUTLAST the RPC's 40s statement_timeout. */
 export const CITY_TIMEOUT_MS = 45_000;
 const FETCH_BUDGET_MS = 240_000;
