@@ -5,10 +5,10 @@
  *
  * The maker-price rule (deliverable #1): a resting BUY must sit STRICTLY BELOW the best ask and a
  * resting SELL STRICTLY ABOVE the best bid, snapped to the tick grid — so the order can never cross
- * and pay taker fees. Price is the ONLY maker guarantee: the pinned `@polymarket/clob-client@4.22.8`
- * has NO post_only flag anywhere (its `postOrder` 3rd positional is `deferExec` — verified against the
- * installed dist; the research report's §9.2 post_only claim was resolved against the different
- * `clob-client-v2` package and does NOT apply to v4).
+ * and pay taker fees. Price is the ONLY maker guarantee we USE: `@polymarket/clob-client-v2` (C75) does
+ * expose a real post_only (postOrder's 3rd positional; deferExec the 4th), but we post 2-arg and pass
+ * neither, so price stays the sole enforcement — byte-for-byte the behavior the shadow week measured.
+ * Adopting v2's post_only is a gated future lever, not switched on here.
  */
 import { ClobShapeError, normalizeBook, type RawClobBook } from '@weather-edge/core';
 import type {
@@ -287,12 +287,12 @@ const mapMakerLeg = (v: unknown, idx: number): VenueTradeMakerLeg => {
  * concern — a well-formed but truncated page parses fine here; `tradesResponseTruncated` (§11.1) is what
  * flags it so the sell-truth read degrades instead of under-counting.
  *
- * ⚠ VENUE SEMANTICS (verified against the installed @polymarket/clob-client@4.22.8 Trade type): the
- * record is TAKER-centric — top-level `side`/`size`/`price` describe the TAKER order; `trader_side`
- * says which side WE were; `maker_orders[]` carries the per-leg maker fills (own side, own
- * `matched_amount`, own maker_address). For this maker-first strategy nearly every fill of ours is a
- * MAKER leg, so a missing/unrecognized `trader_side` FAILS LOUD — coercing it would invert our side
- * attribution (a filled maker BUY entry arrives as a side='SELL' trade).
+ * ⚠ VENUE SEMANTICS (field-verified 1:1 against the installed @polymarket/clob-client-v2@1.0.8 `Trade`
+ * type — C75; unchanged from v4): the record is TAKER-centric — top-level `side`/`size`/`price` describe
+ * the TAKER order; `trader_side` says which side WE were; `maker_orders[]` carries the per-leg maker fills
+ * (own side, own `matched_amount`, own maker_address). For this maker-first strategy nearly every fill of
+ * ours is a MAKER leg, so a missing/unrecognized `trader_side` FAILS LOUD — coercing it would invert our
+ * side attribution (a filled maker BUY entry arrives as a side='SELL' trade).
  */
 export function parseTrades(raw: unknown): VenueTrade[] {
   const arr = extractTradesArray(raw);
@@ -483,7 +483,7 @@ const HEADER_SECRET_RE = /(POLY[-_](?:API[-_]?KEY|PASSPHRASE|SIGNATURE|SECRET|AD
 const KV_SECRET_RE = /\b(signature|secret|passphrase|api[-_ ]?key|private[-_ ]?key|authorization|bearer)\b["']?\s*[:=]\s*["']?[^\s"',;}]{6,}/gi;
 const LONG_HEX_RE = /0x[0-9a-fA-F]{64,}/g;
 // C74: the Polymarket L2 CLOB creds by SHAPE — for when they land WITHOUT a redactable label (a bare value
-// in an error/config dump or a logged creds object, e.g. clob-client's console.error of the axios error).
+// in an error/config dump or a logged creds object, e.g. a leaky client's console.error of an axios error).
 // The apiKey + passphrase are UUIDs; the secret + the L2 `POLY_SIGNATURE` are base64/base64url ending in `=`
 // padding. Both shapes are disjoint from what must SURVIVE for debuggability: a UUID has hyphens (an
 // address / order-id / decimal tokenId never does), and the base64 matcher REQUIRES `=` padding (40-hex

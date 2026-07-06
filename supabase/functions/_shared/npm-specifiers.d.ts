@@ -13,4 +13,4 @@
  */
 declare module 'npm:@supabase/supabase-js@2';
 declare module 'npm:ethers@5';
-declare module 'npm:@polymarket/clob-client@4';
+declare module 'npm:@polymarket/clob-client-v2@1';

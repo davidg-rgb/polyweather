@@ -130,8 +130,8 @@ The optional write-path proof (operator-run only, **costs nothing**):
 TRADE_MODE=live pnpm tsx scripts/trade-smoke.ts --live-smoke
 ```
 
-`--live-smoke` places ONE resting maker BUY FAR below market (maker-ness is price-enforced — the pinned
-clob-client v4 has no `post_only` flag) and cancels it immediately (CLOB
+`--live-smoke` places ONE resting maker BUY FAR below market (maker-ness is price-enforced — clob-client-v2's
+real `post_only` is deliberately NOT passed) and cancels it immediately (CLOB
 place/cancel is gasless; the order never fills). **`TRADE_MODE=live` is ALWAYS required — the env mode gate is
 never bypassable** (lens LOW-4). On top of that the probe needs `trade_live_preflight()` to PASS, OR
 `--i-know-no-preflight`, which bypasses **only the preflight** for that cancel-immediately probe (a loud WARN
@@ -155,24 +155,29 @@ WARN — expected. Success signature: [1] creds derived · [2] funder recognized
 order posted far below market then `canceled OK`, 0 open orders left. Nothing fills, nothing costs (CLOB
 place/cancel is gasless).
 
-> **2026-07-06 — live-smoke run + two follow-ups (C74).** The operator ran the `--live-smoke` write-path probe.
-> Steps 1–3 PASSED (L2 creds derived, funder recognized, dry-run payload built); **step 4 was REJECTED by the
-> venue with `400 {"error":"invalid order version, please use the latest clob-client"}` — nothing rested
-> (`getOpenOrders` = 0).** Two outcomes:
-> 1. **The 400 is NOT fixed yet, and it is NOT a version bump.** Root cause is the Polymarket **CLOB V2 exchange
->    cutover (~2026-04-28)**: the EIP-712 order domain version was bumped 1→2 with new exchange contracts, and
->    the ENTIRE `@polymarket/clob-client` line (our pinned v4.22.8 AND the latest 5.8.1) still signs V1 orders →
->    same 400. The real fix is a package swap to `@polymarket/clob-client-v2` (a signing-seam redesign), tracked
->    as its own lane. **Re-running `--live-smoke` before that lands will STILL 400** (steps 1–3 keep passing) —
->    the write path stays unproven until the v2 migration ships.
-> 2. **Credential leak on the step-4 error path — FIXED (this commit).** On the 400, clob-client's own HTTP
->    helper `console.error`s the full axios error INCLUDING `config.headers` — the L2 auth trio POLY_API_KEY /
+> **2026-07-06 — live-smoke run, root cause, and the v2 fix (C74 diagnosed → C75 built).** The operator ran the
+> `--live-smoke` write-path probe. Steps 1–3 PASSED (L2 creds derived, funder recognized, dry-run payload built);
+> **step 4 was REJECTED by the venue with `400 {"error":"invalid order version, please use the latest
+> clob-client"}` — nothing rested (`getOpenOrders` = 0).** Root cause + resolution:
+> 1. **Root cause — the Polymarket CLOB V2 exchange cutover (~2026-04-28), NOT a version bump.** The EIP-712 order
+>    domain version was bumped 1→2 with new exchange contracts, and the ENTIRE old `@polymarket/clob-client` line
+>    (our former pin v4.22.8 AND the latest 5.8.1) still signs V1 orders → the 400. **FIXED (C75): the trading rail
+>    is now on `@polymarket/clob-client-v2` (1.0.8).** v2's `createOrder` resolves the order version from the live
+>    CLOB `/version` endpoint (post-cutover = 2) and signs a V2 order (EIP-712 Exchange domain version "2"), so the
+>    invalid-order-version 400 no longer applies. **Re-running `--live-smoke` on the v2 client is the outstanding
+>    write-path proof — step 4 is now expected to POST-then-cancel OK** (steps 1–3 unchanged). Note: v2 exposes a
+>    real `post_only` flag, but the smoke and the daemon deliberately do NOT pass it — maker-ness stays
+>    price-enforced; adopting v2 `post_only` is a candidate ONLY after a live fill first proves the migration (it
+>    would change fill semantics vs the running shadow week).
+> 2. **Credential leak on the step-4 error path — FIXED (C74).** On the 400, the OLD v4 clob-client's HTTP helper
+>    `console.error`d the full axios error INCLUDING `config.headers` — the L2 auth trio POLY_API_KEY /
 >    POLY_PASSPHRASE / POLY_SIGNATURE — which bypassed every one of the smoke's `redactText` catch paths and
->    printed the creds to the operator's terminal. The live client is now wrapped at the `bootstrapClobClient`
->    seam in a redacting console guard (`withRedactedConsole` / `redactConsoleClient`), and `redactText` also
->    masks the L2 cred SHAPES (uuid apiKey/passphrase + base64 secret/signature). A re-run is now SAFE (still
->    400s, no longer leaks). **If that terminal session was captured anywhere, ROTATE the L2 CLOB creds** —
->    they are derivable/regenerable via `createOrDeriveApiKey` and are NOT the wallet signing key.
+>    printed the creds to the operator's terminal. The live client is wrapped at the `bootstrapClobClient` seam in
+>    a redacting console guard (`withRedactedConsole` / `redactConsoleClient`), and `redactText` also masks the L2
+>    cred SHAPES (uuid apiKey/passphrase + base64 secret/signature). (clob-client-v2 no longer console-logs on
+>    error at all — grep-verified — so the acute leak is doubly closed; the wrapper stays as defense-in-depth.)
+>    **If that terminal session was captured anywhere, ROTATE the L2 CLOB creds** — they are derivable/regenerable
+>    via `createOrDeriveApiKey` and are NOT the wallet signing key.
 
 ---
 
@@ -220,7 +225,7 @@ regardless of the prod whale-noise pause. A missing webhook never silences a saf
 - **Sold-truth accounting (venue trades as the sell floor).** Per position each tick, the daemon sums OUR
   SELL fills for the token from the venue's trade log (`getTrades` — the same evidence read the startup
   reconcile uses) and floors the position's `soldSize` with it. The trade record is **TAKER-centric**
-  (verified against the installed clob-client v4.22.8): the top-level `side`/`size` describe the TAKER
+  (field-verified against the installed clob-client-v2@1.0.8; the Trade shape is unchanged from v4): the top-level `side`/`size` describe the TAKER
   order; `trader_side` says which side we were, and our maker fills (the strategy's dominant case) are
   `maker_orders[]` legs attributed by our on-chain maker address. An unattributable maker SELL leg
   degrades the read (sells held) rather than guessing. This is what makes "how much have we already

@@ -424,8 +424,8 @@ describe('redaction — never surfaces signing/auth material (MEDIUM-4)', () => 
     expect(redactText(`funder ${addr}`)).toContain(addr);
   });
 
-  it('C74: a synthetic clob-client error dump carrying the L2 creds/signature comes out fully redacted', () => {
-    // the exact object @polymarket/clob-client's http-helper console.errors on a venue 400 — request
+  it('C74: a synthetic leaky-client error dump carrying the L2 creds/signature comes out fully redacted', () => {
+    // the kind of object a leaky client's http-helper would console.error on a venue 400 — request
     // config.headers (the L2 auth trio) INCLUDED — plus a logged creds object with the base64 secret.
     const apiKey = '3f2a1b7c-9d4e-4a6b-8c1d-2e3f4a5b6c7d'; // uuid apiKey
     const passphrase = 'a1b2c3d4-e5f6-4788-9a0b-1c2d3e4f5a6b'; // uuid passphrase

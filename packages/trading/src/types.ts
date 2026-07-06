@@ -86,13 +86,13 @@ export interface FillRpcResult {
 //
 // These extend the Phase-A taker rail above so the tuned MAKER-EXIT strategy (MAKER-EXIT-SIM.md:
 // maker GTC entry + resting maker TP + taker FAK stop/time-stop) can run end-to-end. The SDK call
-// surface here is grounded in `research/REPORT-clob-bracket-execution.md` PLUS a re-verification
-// against the INSTALLED `@polymarket/clob-client@4.22.8` dist (the report's §9 resolved some surfaces
-// against the different `clob-client-v2@1.0.6` package): order types GTC/GTD/FOK/FAK (§1); the v4 SDK
-// has NO post_only anywhere — maker-ness is enforced BY PRICE alone (`makerLimitPrice`), and
-// `postOrder`'s 3rd positional is `deferExec`, never passed; NO server-side client-order-id —
-// idempotency is OUR own DB ledger (§5); no atomic amend — reprice = cancel-then-repost the remainder
-// (§3); partial fills are tracked via cumulative `size_matched` (§4).
+// surface here is re-verified against the INSTALLED `@polymarket/clob-client-v2@1.0.8` dist (C75 — the
+// migration off the venue-dead V1 `@polymarket/clob-client`): order types GTC/GTD/FOK/FAK (§1); v2 DOES
+// expose a real `post_only` (postOrder's 3rd positional, deferExec the 4th) but we post 2-arg and pass
+// NEITHER, so maker-ness stays enforced BY PRICE alone (`makerLimitPrice`) exactly as the shadow week
+// measured; NO server-side client-order-id — idempotency is OUR own DB ledger (§5); no atomic amend —
+// reprice = cancel-then-repost the remainder (§3); partial fills are tracked via cumulative `size_matched`
+// (§4). v2's Trade record is byte-for-byte the same taker-centric shape (trader_side + maker_orders[]).
 // ───────────────────────────────────────────────────────────────────────────────────────────────────
 
 /** The venue's four order types (research report §1). Maker-eligible: GTC/GTD. Taker: FOK/FAK. */
@@ -241,7 +241,7 @@ export interface CancelResult {
 }
 
 /**
- * One maker leg of a venue trade record (`Trade.maker_orders[]`, installed SDK v4.22.8). The venue's
+ * One maker leg of a venue trade record (`Trade.maker_orders[]`, installed SDK clob-client-v2@1.0.8). The venue's
  * trade record is TAKER-centric — when WE were the maker, OUR fill is one (or more) of these legs:
  * `side` is the LEG's own side and `size` its `matched_amount`; `makerAddress` identifies whose leg it
  * is (the on-chain maker/funder address — legs from OTHER makers matched in the same taker order can
@@ -258,7 +258,7 @@ export interface VenueTradeMakerLeg {
 }
 
 /**
- * A parsed venue trade/fill row (`getTrades`, installed SDK v4.22.8 `Trade`) — the reconcile evidence
+ * A parsed venue trade/fill row (`getTrades`, installed SDK clob-client-v2@1.0.8 `Trade`) — the reconcile evidence
  * read + the daemon's sell-truth floor. ⚠ TAKER-CENTRIC record: the top-level `side`/`size`/`price`
  * describe the TAKER order; `traderSide` says which side WE were. Our maker fills (this strategy's
  * dominant case — resting entries + TPs) live in `makerOrders[]` with per-leg side/size. NEVER read
@@ -349,8 +349,9 @@ export interface OrderPlacementResult {
   side: OrderSide;
   purpose: OrderPurpose;
   orderType: OrderType;
-  /** the MAKER posture marker (true for resting entry/TP intents). ⚠ observability only: the pinned
-   *  clob-client v4 has NO post_only wire flag — maker-ness is enforced entirely by `makerLimitPrice`. */
+  /** the MAKER posture marker (true for resting entry/TP intents). ⚠ observability only: clob-client-v2
+   *  DOES have a post_only wire flag but we do NOT pass it (C75) — maker-ness is enforced entirely by
+   *  `makerLimitPrice`, so this stays a local marker, not a venue flag. */
   postOnly: boolean;
   limitPrice: number | null;
   size: number;

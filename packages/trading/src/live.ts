@@ -48,23 +48,27 @@ import type {
   TradingDb,
 } from './types.ts';
 
-/** The slice of @polymarket/clob-client the Phase-A taker executor touches. */
+/** The slice of @polymarket/clob-client-v2 the Phase-A taker executor touches. */
 export interface ClobClientish {
   getTickSize(tokenID: string): Promise<number | string>;
   createOrder(
     args: { tokenID: string; price: number; size: number; side: 'BUY' | 'SELL' },
     options: { tickSize: number; negRisk: boolean },
   ): Promise<unknown>;
-  /** ⚠ the 3rd positional in the PINNED @polymarket/clob-client@4.22.8 is `deferExec` (deferred
-   *  settlement), NOT a post-only flag — v4 has NO post_only anywhere in its dist (verified; the
-   *  research report's §9.2 post_only claim was resolved against the different `clob-client-v2`
-   *  package). NEVER pass `true` here: maker-ness is enforced entirely BY PRICE (`makerLimitPrice`).
-   *  The response's `success`/`errorMsg` fields distinguish a CLEAN VENUE REJECTION (success=false,
-   *  request processed, no order created → safe to free the intent) from a transport throw or a
-   *  shapeless response (order state UNKNOWN → the intent must be held for reconcile — HIGH-A). */
+  /** ⚠ ARG ORDER IS v2 (C75): `postOrder(order, orderType, postOnly?, deferExec?)` — v2's 3rd positional is
+   *  a REAL `postOnly`, its 4th is `deferExec` (the SWAP from v4, whose 3rd was `deferExec` and which had
+   *  no post_only at all). We call this **2-ARG ONLY and pass NEITHER**: maker-ness stays enforced entirely
+   *  BY PRICE (`makerLimitPrice`), byte-for-byte the behavior the shadow week measured. Adopting v2's real
+   *  `postOnly` is a DELIBERATE future lever — it changes fill semantics (a crossing "maker" order would be
+   *  rejected instead of taking) and must not silently diverge from the shadow week, so it is gated on a
+   *  live fill first proving the migration (see MakerExecutor.place / docs §5). The response's
+   *  `success`/`errorMsg` fields distinguish a CLEAN VENUE REJECTION (success=false, request processed, no
+   *  order created → safe to free the intent) from a transport throw or a shapeless response (order state
+   *  UNKNOWN → the intent must be held for reconcile — HIGH-A). */
   postOrder(
     order: unknown,
     orderType: OrderType,
+    postOnly?: boolean,
     deferExec?: boolean,
   ): Promise<{ orderID?: string; success?: boolean; errorMsg?: string }>;
   getOrder(orderID: string): Promise<{
@@ -113,12 +117,13 @@ function envVar(name: string): string | undefined {
 }
 
 /**
- * clob-client's HTTP helper console.error()s the FULL axios error — request config included, which
- * carries the transient L1 auth headers (POLY_ADDRESS + the timestamped POLY_SIGNATURE) — on the
- * EXPECTED 400 inside createOrDeriveApiKey's derive→create fallback. No key material, but auth
- * headers do not belong in daemon logs (C51 hygiene follow-up). Scope-silence the console for
- * exactly one awaited call; failures still THROW loudly through the normal ExecutionError paths.
- * Restoration is finally-guaranteed. Concurrency caveat: console is process-global, so unrelated
+ * Scope-silence the console for exactly one awaited call — used around the bootstrap `createOrDeriveApiKey`.
+ * In the old V1 clob-client this suppressed its HTTP helper's `console.error` of the FULL axios error
+ * (request config included — the transient L1 auth headers POLY_ADDRESS / POLY_SIGNATURE) on the EXPECTED
+ * derive→create 400 fallback (C51 hygiene). clob-client-v2 no longer logs on error (its errorHandling
+ * returns `{error,status}` silently — C75), so this is now DEFENSE-IN-DEPTH: any console noise emitted
+ * during the one-shot bootstrap is dropped. Failures still THROW loudly through the normal ExecutionError
+ * paths. Restoration is finally-guaranteed. Concurrency caveat: console is process-global, so unrelated
  * lines emitted DURING the awaited call are also dropped — acceptable for the one-shot bootstrap.
  */
 export async function suppressConsoleDuring<T>(fn: () => Promise<T>): Promise<T> {
@@ -136,14 +141,15 @@ export async function suppressConsoleDuring<T>(fn: () => Promise<T>): Promise<T>
 }
 
 /**
- * A REDACTING sibling of `suppressConsoleDuring` (C74 credential-leak hardening). Where suppress DROPS all
- * console output for one awaited call, this FORWARDS it — but each argument is first passed through
- * `redactText`, so credential material a DEPENDENCY prints stays masked. The load-bearing case:
- * @polymarket/clob-client's HTTP helper `console.error`s the FULL axios error — request `config.headers`
- * INCLUDED — on any venue 4xx (its `errorHandling`), which carries the L2 auth headers POLY_API_KEY /
- * POLY_PASSPHRASE / POLY_SIGNATURE. That console.error bypasses every one of OUR redactText catch paths, so
- * the ONLY way to mask it is to intercept the console around the call. The operator still sees the status +
- * venue-error text; only the secrets become `…REDACTED`.
+ * A REDACTING sibling of `suppressConsoleDuring` (C74 credential-leak hardening; C75 v2). Where suppress
+ * DROPS all console output for one awaited call, this FORWARDS it — but each argument is first passed through
+ * `redactText`, so credential material a DEPENDENCY prints stays masked. This was introduced to close the
+ * acute v4 leak (the old V1 clob-client's HTTP helper `console.error`d the FULL axios error — request
+ * `config.headers` INCLUDED, i.e. the L2 auth trio POLY_API_KEY / POLY_PASSPHRASE / POLY_SIGNATURE —
+ * bypassing every one of OUR redactText catch paths). clob-client-v2 no longer logs on error, so the wrapper
+ * is now DEFENSE-IN-DEPTH: any console path (a future dep, a v2 change, our own code) that ever prints an
+ * error object carrying the L2 creds is masked here. The operator still sees the status + venue-error text;
+ * only the secrets become `…REDACTED`.
  *
  * Concurrency-safe by DEPTH-COUNTING a single global install: the first entrant saves + installs the
  * redacting console, nested/concurrent entrants reuse it, and the console is restored ONLY when the last
@@ -186,13 +192,15 @@ export async function withRedactedConsole<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 /**
- * Wrap a live CLOB client so EVERY venue-touching call runs inside `withRedactedConsole` (C74). This is the
- * single chokepoint: clob-client's own error logging fires on ANY venue 4xx from postOrder / cancel / the
- * authed reads — not only the paths WE catch — so wrapping the client at the `bootstrapClobClient` seam
- * protects the daemon (`trade-bot.ts`), the `execute-bet` LiveExecutor, AND the operator smoke at once with
- * no per-call-site change. Only the known async venue methods are proxied (an allowlist), so non-function
- * properties and `this`/state pass through untouched and the method's RETURN value is unchanged — redaction
- * is log-only, never a behavior change on the order path.
+ * Wrap a live CLOB client so EVERY venue-touching call runs inside `withRedactedConsole` (C74/C75). This is
+ * the single chokepoint for the credential-log defense: if any error logging (the old v4 client's own, a
+ * future dep, or our code) ever fires on a venue 4xx from postOrder / cancel / the authed reads — not only
+ * the paths WE catch — wrapping the client at the `bootstrapClobClient` seam masks it across the daemon
+ * (`trade-bot.ts`), the `execute-bet` LiveExecutor, AND the operator smoke at once, with no per-call-site
+ * change. (clob-client-v2 itself no longer logs on error, so today this is defense-in-depth.) Only the known
+ * async venue methods are proxied (an allowlist), so non-function properties and `this`/state pass through
+ * untouched and the method's RETURN value is unchanged — redaction is log-only, never a behavior change on
+ * the order path.
  */
 const REDACTED_CLIENT_METHODS: ReadonlySet<string> = new Set([
   'getTickSize', 'createOrder', 'createMarketOrder', 'postOrder', 'postOrders', 'getOrder', 'getOpenOrders',
@@ -213,10 +221,20 @@ export function redactConsoleClient<C extends object>(client: C): C {
 }
 
 /**
- * Production client factory: ClobClient(host, chainId=137, signer from
- * POLY_PRIVATE_KEY, creds via createOrDeriveApiKey). Dynamic non-literal
- * specifiers: resolved by Deno at run time, invisible to tsc/Node — nothing
- * is installed until the live phase actually deploys it.
+ * Production client factory: `@polymarket/clob-client-v2` ClobClient (options object — host, chain=137,
+ * ethers signer from POLY_PRIVATE_KEY, creds via createOrDeriveApiKey, signatureType, funderAddress).
+ *
+ * WHY v2 (C75): the venue's CLOB V2 exchange cutover (~2026-04-28) bumped the EIP-712 order domain version
+ * 1→2; the whole old `@polymarket/clob-client` line signs V1 orders and the venue now 400s them
+ * ("invalid order version"). v2 resolves the order version at RUNTIME — `createOrder` calls
+ * `resolveVersion()`→`getVersion()` (cached; defaults to 2) so it signs a V2 order, and `postOrder`
+ * self-heals on an `order_version_mismatch` response (`resolveVersion(true)`) so a future V2→V3 bump
+ * re-resolves without a code change. That dynamic resolution IS the fix.
+ *
+ * The ethers@5 Wallet stays a valid v2 signer: v2's `ClobSigner` union feature-detects `_signTypedData`
+ * (the EthersSigner branch) — no viem needed on our side. sigType 2 === `SignatureTypeV2.POLY_GNOSIS_SAFE`
+ * (unchanged numeric from v4). Dynamic non-literal specifiers stay so tsc/Node never eager-resolve them
+ * (§15: the client + key live only here); Deno resolves the npm: specifier at run time.
  */
 async function bootstrapClobClient(): Promise<{
   client: MakerClobClientish;
@@ -232,28 +250,39 @@ async function bootstrapClobClient(): Promise<{
     throw new ExecutionError('ERR_NO_KEY', 'POLY_PRIVATE_KEY missing from execute-bet function secrets');
   }
   // Runtime-aware specifiers: Deno (Edge Functions) resolves npm: at run time; Node (the local daemon/smoke,
-  // pnpm tsx) needs the bare installed packages (workspace deps of @weather-edge/trading). Both stay
+  // pnpm tsx) needs the bare installed package (a workspace dep of @weather-edge/trading). Both stay
   // NON-LITERAL dynamic imports so tsc never tries to resolve them (§15: the client exists only here).
   const isDeno = (globalThis as { Deno?: unknown }).Deno != null;
   const ethersSpec = isDeno ? 'npm:ethers@5' : 'ethers';
-  const clobSpec = isDeno ? 'npm:@polymarket/clob-client@4' : '@polymarket/clob-client';
+  const clobSpec = isDeno ? 'npm:@polymarket/clob-client-v2@1' : '@polymarket/clob-client-v2';
   const { Wallet } = (await import(ethersSpec)) as { Wallet: new (k: string) => { address?: string } };
+  // v2's constructor is an OPTIONS OBJECT (chain not chainId, funderAddress not funder, signatureType). The
+  // numeric fields are cast so tsc need not resolve v2's Chain / SignatureTypeV2 enums (137 === Chain.POLYGON,
+  // 2 === SignatureTypeV2.POLY_GNOSIS_SAFE).
   const { ClobClient } = (await import(clobSpec)) as {
-    ClobClient: new (host: string, chainId: number, signer: unknown, creds?: unknown, sigType?: number, funder?: string) => MakerClobClientish & {
-      createOrDeriveApiKey(): Promise<unknown>;
-    };
+    ClobClient: new (opts: {
+      host: string;
+      chain: number;
+      signer: unknown;
+      creds?: unknown;
+      signatureType?: number;
+      funderAddress?: string;
+    }) => MakerClobClientish & { createOrDeriveApiKey(): Promise<unknown> };
   };
   const signer = new Wallet(key);
   const sigType = Number(envVar('POLY_SIGNATURE_TYPE') ?? 0);
   const funder = envVar('POLY_FUNDER_ADDRESS');
-  const bootstrap = new ClobClient('https://clob.polymarket.com', 137, signer, undefined, sigType, funder);
+  const host = 'https://clob.polymarket.com';
+  const bootstrap = new ClobClient({ host, chain: 137, signer, signatureType: sigType, funderAddress: funder });
   // The 400-fallback inside this call is EXPECTED (derive→create) — see suppressConsoleDuring.
   const creds = await suppressConsoleDuring(() => bootstrap.createOrDeriveApiKey());
-  // C74: wrap the live client at the seam so clob-client's own error logging (it console.errors the FULL
-  // axios error — request auth headers included — on any venue 4xx) can never leak the L2 creds. Every
-  // venue call then runs inside withRedactedConsole; covers the daemon AND the smoke through one chokepoint.
+  // C74/C75: wrap the live client at the seam in the redacting console guard — DEFENSE-IN-DEPTH. v2's
+  // http-helper returns {error,status} WITHOUT logging, so the acute v4 leak (its errorHandling
+  // console.error'd the full axios error, auth headers included) is removed BY the upgrade itself; the
+  // wrapper stays so any console path that ever prints an error object carrying the L2 creds is masked
+  // through one chokepoint (daemon + smoke). Redaction is log-only; order values pass through untouched.
   const client = redactConsoleClient(
-    new ClobClient('https://clob.polymarket.com', 137, signer, creds, sigType, funder),
+    new ClobClient({ host, chain: 137, signer, creds, signatureType: sigType, funderAddress: funder }),
   );
   const funderSet = funder != null && funder !== '';
   return { client, creds, sigType, funderSet, address: (funderSet ? funder : signer.address) ?? null };
@@ -383,8 +412,9 @@ export class LiveExecutor implements TradeExecutor {
 // adjudication).
 //
 // Extends the dormant taker rail above with: (1) MAKER placement (resting GTC/GTD, maker-ness enforced
-// BY PRICE — BUY strictly below best ask, SELL strictly above best bid; the pinned clob-client v4 has
-// NO post_only flag, so price is the ONLY guarantee); (2) the order lifecycle (cancel / cancel-all-for-market / list /
+// BY PRICE — BUY strictly below best ask, SELL strictly above best bid; clob-client-v2 DOES expose a real
+// post_only but we do NOT pass it (C75 decision), so price remains the ONLY guarantee, unchanged from the
+// shadow week); (2) the order lifecycle (cancel / cancel-all-for-market / list /
 // fill-poll with partial-fill accounting / cancel-then-repost reprice / startup reconcile); (3)
 // MODE-SCOPED DB-ledger idempotency — a retry or crash-restart NEVER double-places, and a failure
 // AFTER a successful post NEVER frees the intent key: the row stays 'placed' and a needs-reconcile
@@ -440,8 +470,9 @@ export class MakerExecutor {
   /**
    * Post a resting MAKER order for the tuned strategy (entry or take-profit). The limit is re-priced to
    * sit strictly inside the spread (never crosses → never pays taker fees), then posted GTC/GTD — the
-   * price IS the maker guarantee (v4 SDK has no post_only; the result's `postOnly` field is a posture
-   * marker only). Idempotent per (mode, market|side|purpose|date): an OPEN intent is never re-placed.
+   * price IS the maker guarantee. (clob-client-v2 exposes a real post_only, but we post 2-arg and do NOT
+   * pass it — C75; the result's `postOnly` field stays a posture marker only.) Idempotent per
+   * (mode, market|side|purpose|date): an OPEN intent is never re-placed.
    */
   async place(req: MakerOrderRequest): Promise<OrderPlacementResult> {
     const mode = this.mode;
@@ -588,8 +619,9 @@ export class MakerExecutor {
       feeRateBps > 0 ? round6((feeRateBps / 10_000) * avgPrice * sizeMatched) : 0;
     try {
       postAttempted = true;
-      // ⚠ NEVER a 3rd positional: in the pinned v4 SDK it is `deferExec` (an unintended venue flag),
-      // NOT post_only — which v4 does not support at all. Maker-ness is enforced by price upstream.
+      // ⚠ 2-ARG ONLY: v2's postOrder is (order, orderType, postOnly?, deferExec?). We pass NEITHER extra —
+      // maker-ness is enforced by price upstream, and adopting v2's real post_only is a gated future lever
+      // (C75 decision), not switched on here. postOrder self-heals an order_version_mismatch internally.
       const posted = await client.postOrder(order, orderType);
       orderId = posted?.orderID;
       if (!orderId) {

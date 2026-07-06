@@ -7,7 +7,7 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@polymarket/clob-client": "^4.22.8",
+    "@polymarket/clob-client-v2": "^1.0.8",
     "@weather-edge/core": "workspace:*",
     "ethers": "^5.8.0"
   }

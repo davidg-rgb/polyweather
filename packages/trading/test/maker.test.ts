@@ -179,14 +179,14 @@ describe('MakerExecutor.place — maker pricing + mode + idempotency', () => {
     expect(r).toMatchObject({ mode: 'live', status: 'placed', orderId: '0xORDER', limitPrice: 0.18, postOnly: true, orderType: 'GTC', sizeMatched: 0 });
   });
 
-  it('CALL-SHAPE LOCK: postOrder gets exactly (order, orderType) — NEVER a 3rd positional (it is deferExec in the pinned v4 SDK, not post_only; v4 has no post_only at all)', async () => {
+  it('CALL-SHAPE LOCK: postOrder gets exactly (order, orderType) — NEVER a 3rd/4th positional (v2 arg order is (order, orderType, postOnly?, deferExec?); we adopt NEITHER, maker-ness stays price-enforced — C75)', async () => {
     const client = mockClient();
     const exec = new MakerExecutor(deps('live', client, mockLedger().ledger));
     await exec.place(req);
     const call = (client.postOrder as Mock).mock.calls[0]!;
     expect(call).toHaveLength(2);
     expect(call[1]).toBe('GTC');
-    expect(call[2]).toBeUndefined(); // deferExec must never be sent
+    expect(call[2]).toBeUndefined(); // postOnly (v2's 3rd) must never be sent — price is the maker guarantee
   });
 
   it('live SELL take-profit rests strictly above best bid', async () => {
@@ -462,7 +462,7 @@ describe('MakerExecutor.place — maker pricing + mode + idempotency', () => {
 });
 
 describe('MakerExecutor.placeTaker — FAK exit leg', () => {
-  it('live: FAK, worst-price snapped, no 3rd postOrder positional (deferExec never sent)', async () => {
+  it('live: FAK, worst-price snapped, no 3rd postOrder positional (v2 postOnly/deferExec never sent)', async () => {
     const client = mockClient({ getOrder: vi.fn(async () => ({ status: 'matched', original_size: '74', size_matched: '74', price: '0.31' })) });
     const { ledger } = mockLedger();
     const exec = new MakerExecutor(deps('live', client, ledger));

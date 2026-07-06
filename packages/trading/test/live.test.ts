@@ -172,7 +172,8 @@ describe('suppressConsoleDuring (C51 bootstrap-hygiene follow-up)', () => {
     console.error = spy; // stand-in for the daemon's real sink — must NOT be hit from inside
     try {
       const out = await suppressConsoleDuring(async () => {
-        // what clob-client does on the expected derive→create 400 fallback
+        // synthetic bootstrap noise — the old v4 client console.error'd its derive→create 400; v2 no
+        // longer logs (C75), so this is a stand-in and suppress drops it either way
         console.error('axios error with POLY_ADDRESS/POLY_SIGNATURE headers');
         console.log('request config dump');
         return 'creds';
@@ -205,7 +206,8 @@ describe('withRedactedConsole + redactConsoleClient (C74 credential-leak hardeni
   const apiKey = '3f2a1b7c-9d4e-4a6b-8c1d-2e3f4a5b6c7d';
   const passphrase = 'a1b2c3d4-e5f6-4788-9a0b-1c2d3e4f5a6b';
   const signature = 'q7r8s9t0u1v2_w3x4-y5z6A7B8C9D0E1F2G3H4I5J6K7L8M9N0=';
-  // exactly what @polymarket/clob-client's http-helper console.errors on a venue 400 (headers INCLUDED)
+  // the kind of object a LEAKY client would console.error on a venue 400 (headers INCLUDED) — the old v4
+  // clob-client did exactly this; the wrapper must mask it regardless of source (v2 no longer logs — C75)
   const credLine = (): string =>
     JSON.stringify({ status: 400, config: { headers: { POLY_API_KEY: apiKey, POLY_PASSPHRASE: passphrase, POLY_SIGNATURE: signature } } });
   const noSecrets = (printed: string): void => {
@@ -271,7 +273,7 @@ describe('withRedactedConsole + redactConsoleClient (C74 credential-leak hardeni
       creds: { marker: '0xORDERID' },
       plain: 'kept',
       async postOrder(): Promise<{ orderID: string }> {
-        // stand-in for clob-client's errorHandling console.error on a 400 — bypasses OUR catch paths
+        // stand-in for a leaky client that console.errors creds on a 400 — bypasses OUR catch paths
         console.error('[CLOB Client] request error', credLine());
         return { orderID: this.creds.marker }; // reads `this` → proves target binding survives the proxy
       },

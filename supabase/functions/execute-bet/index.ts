@@ -20,7 +20,7 @@ const GEOBLOCK_URL = 'https://docs.polymarket.com/api-reference/geoblock.md';
 // non-literal lookups against it. Keep in lockstep with live.ts.
 const eszipNpmHints = () => [
   import('npm:ethers@5'),
-  import('npm:@polymarket/clob-client@4'),
+  import('npm:@polymarket/clob-client-v2@1'),
 ];
 void eszipNpmHints;
 
