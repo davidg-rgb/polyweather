@@ -11,6 +11,15 @@
  *   GRADE  — any pending bet (any city) whose observation has finalized resolves win/loss + P&L (net of
  *            fee) via planSettlements (core), written by city_sim_settle.
  *
+ * CITY-LIVE.md §2 EXTENSION (migration 0085, staged DARK): alongside PLACE/GRADE the tick maintains the
+ * longitudinal MAKER-ENTRY PAPER TWIN and the promotion board — ALL best-effort and DEPLOY-ORDER-SAFE, so a
+ * fn deployed before 0085 is applied still places + grades byte-identically (the city-live RPCs are wrapped;
+ * an undefined-function/table error marks the extension dark and skips the rest, never breaking the tick):
+ *   1. after PLACE  — rest a maker twin at the lock-hour best_bid for each new placement (city_maker_twin_place)
+ *   2. each tick    — conservative fill detection: a later ask ≤ the resting bid fills it (city_maker_twin_detect_fills)
+ *   3. after GRADE  — grade filled twins at $0 maker fee; unfilled-at-resolution twins → 'unfilled' (city_maker_twin_grade)
+ *   4. after GRADE  — compute buildCityPromotionBoard from city_sim_bets_for_promotion() and record it (best-effort)
+ *
  * Schedule 10:00 UTC: every active city's last arm (14:00 local for WSSS=06:00 / OPKC=09:00 UTC) has
  * passed, so each arm is placed with its as-of-hour odds and yesterday's pending bets grade once truth
  * lands. NOT trading — see CLAUDE.md. NO KNMI floor-truth (EHAM-only); market grading drives the P&L.
@@ -24,11 +33,14 @@
  * migration 0081 has been applied yet.
  */
 import {
+  buildCityPromotionBoard,
+  type CityPromotionCity,
   type GradeInputRow,
   type PlaceInputs,
   planPlacements,
   planSettlements,
 } from '../../../packages/core/src/index.ts';
+import type { DbPort } from '../_shared/db.ts';
 import type { JobCtx, JobStats } from '../_shared/runJob.ts';
 
 export interface CityPaperTradeDeps {
@@ -48,6 +60,18 @@ interface ActiveConfig {
 
 /** A place_inputs payload carries the standard PlaceInputs plus the city echo fields. */
 type CityPlaceInputs = (PlaceInputs & { cityId: string; icao: string; unit: string; stakeUsd: number }) | null;
+
+/**
+ * The undefined-function/table error class (mirrors apps/web loaders.ts isUndefinedFunctionError, plus 42P01
+ * undefined_table): PGRST202 (PostgREST schema-cache miss) / 42883 / 42P01 (Postgres) / their prose spellings.
+ * Used to detect that migration 0085 has NOT been applied yet so the CITY-LIVE extension degrades silently.
+ */
+export function isUndefinedObjectError(message: string): boolean {
+  if (/PGRST202|42883|42P01/i.test(message)) return true;
+  return /(could not find the function|does not exist|not exist in the schema cache|no function matches|undefined table)/i.test(
+    message,
+  );
+}
 
 /**
  * Tolerantly read the active-config list across the THREE shapes city_sim_active_configs can arrive in —
@@ -72,10 +96,32 @@ function readActiveConfigs(cfgRows: unknown[]): ActiveConfig[] {
 export async function cityPaperTrade(ctx: JobCtx, deps: CityPaperTradeDeps): Promise<JobStats> {
   const { db, log } = ctx;
 
+  // --- CITY-LIVE (0085) best-effort wrapper: deploy-order-safe. On an undefined-function/table error the
+  // extension is marked DARK (0085 unapplied) and every subsequent city-live call short-circuits; any OTHER
+  // error is logged and swallowed too (the maker twin + board are measurement-only and must NEVER break the
+  // core PLACE/GRADE loop — CITY-LIVE.md §2 "board write best-effort; must not break placing/grading").
+  let cityLiveDark = false;
+  const cityLive = async <T>(label: string, fn: () => Promise<T>): Promise<T | undefined> => {
+    if (cityLiveDark) return undefined;
+    try {
+      return await fn();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (isUndefinedObjectError(msg)) {
+        cityLiveDark = true;
+        log('city-live extension not applied (0085 dark) — skipping maker twin + promotion board', { label });
+      } else {
+        log('city-live extension step failed (best-effort, ignored)', { label, error: msg });
+      }
+      return undefined;
+    }
+  };
+
   // --- PLACE: each active city's due arms ---------------------------------------------------------
   const cfgRows = await db.rpc<unknown>('city_sim_active_configs', {});
   const configs = readActiveConfigs(cfgRows);
   let placedTotal = 0;
+  let twinPlaced = 0;
   const placedByCity: Record<string, number> = {};
 
   for (const cfg of configs) {
@@ -98,7 +144,23 @@ export async function cityPaperTrade(ctx: JobCtx, deps: CityPaperTradeDeps): Pro
     placedByCity[cfg.slug] = n;
     placedTotal += n;
     if (n > 0) log('placed paper bets', { city: cfg.slug, placed: n, arms: toRecord.map((r) => r.armHour) });
+
+    // CITY-LIVE §2.1: rest a maker twin at the lock-hour best_bid for each placement (idempotent). The RPC
+    // recomputes the in-lock-hour bid from the SAME window the ask was locked in; skips buckets with no bid.
+    const twin = await cityLive('twin-place', () =>
+      db.rpc<{ city_maker_twin_place: number }>('city_maker_twin_place', {
+        p_city_id: cfg.cityId,
+        p_rows: toRecord,
+      }),
+    );
+    twinPlaced += Number(twin?.[0]?.city_maker_twin_place ?? 0);
   }
+
+  // CITY-LIVE §2.2: conservative maker-fill detection each tick (a later ask ≤ the resting bid fills it).
+  const detect = await cityLive('twin-detect', () =>
+    db.rpc<{ city_maker_twin_detect_fills: number }>('city_maker_twin_detect_fills', {}),
+  );
+  const twinFilled = Number(detect?.[0]?.city_maker_twin_detect_fills ?? 0);
 
   // --- GRADE: pending bets (all cities) whose truth landed ----------------------------------------
   // The RPC returns { rows: GradeInputRow[] } (wrapped, the 0044 trap — supabasePort misreads a bare array
@@ -116,7 +178,39 @@ export async function cityPaperTrade(ctx: JobCtx, deps: CityPaperTradeDeps): Pro
     log('graded paper bets', { graded, candidates: pending.length });
   }
 
-  const stats = { cities: configs.length, placed: placedTotal, placedByCity, gradeCandidates: pending.length, graded };
+  // CITY-LIVE §2.3: grade filled twins at $0 maker fee; unfilled-at-resolution twins → 'unfilled'.
+  const twinGradeRes = await cityLive('twin-grade', () =>
+    db.rpc<{ city_maker_twin_grade: number }>('city_maker_twin_grade', {}),
+  );
+  const twinGraded = Number(twinGradeRes?.[0]?.city_maker_twin_grade ?? 0);
+
+  // CITY-LIVE §2.4: compute the promotion board from the graded ledger (+ previous board for prevStatus) and
+  // record it. Best-effort — a board failure must not break placing/grading.
+  const boardRowId = await cityLive('board', async () => {
+    const bpRows = await db.rpc<{ city_sim_bets_for_promotion: { rows: CityPromotionCity[] } }>(
+      'city_sim_bets_for_promotion',
+      {},
+    );
+    const cities = bpRows[0]?.city_sim_bets_for_promotion?.rows ?? [];
+    const board = buildCityPromotionBoard({ asOf: deps.now.toISOString(), cities });
+    const rec = await db.rpc<{ city_promotion_record: number }>('city_promotion_record', { p_view: board });
+    const id = Number(rec[0]?.city_promotion_record ?? 0);
+    log('recorded promotion board', { rows: board.rows.length, boardId: id });
+    return id;
+  });
+
+  const stats = {
+    cities: configs.length,
+    placed: placedTotal,
+    placedByCity,
+    gradeCandidates: pending.length,
+    graded,
+    twinPlaced,
+    twinFilled,
+    twinGraded,
+    boardRecorded: boardRowId != null,
+    cityLiveDark,
+  };
   log('city-paper-trade complete', stats);
   return stats;
 }

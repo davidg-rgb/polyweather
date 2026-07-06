@@ -349,6 +349,18 @@ describe('migrations 0001–0010', () => {
       // synthetic $0-proceeds SELL) + dash_maker_exit_history additively carrying cityErrors per point.
       // No table/cron change (count stays 29). Twin: trading-hardening.test.ts.
       '0084_trading_hardening.sql',
+      // 0085 = CITY-LIVE (continuous winner promotion + operator per-city live-testing rail), staged DARK:
+      // city_live_arms (per-city Live toggle; $5/day CHECK + max-2 constraint trigger — the §9R-ceiling idiom) +
+      // city_live_audit (append-only per-field trail) + city_maker_twin (the longitudinal maker-entry PAPER twin,
+      // fill-detected conservatively, graded at $0 maker fee) + city_promotion_board (Lane P board snapshots) +
+      // live_orders.strategy ALTER (the city lane's 'city-taker' rows beside 'maker-exit' in the one ledger) +
+      // the operator surface (city_live_arms_get / city_live_arm_set / dash_city_live) + the runner/engine surface
+      // (city_live_runner_inputs / city_sim_bets_for_promotion / city_promotion_record / the three
+      // city_maker_twin_* handler helpers) + the STRATEGY-AWARE trade_live_preflight(text) overload ('city-taker'
+      // branch; the no-arg fn delegates to 'maker-exit', byte-equivalent to the post-0084 body). No cron/edge fn
+      // (the city-paper-trade cron + edge fn already exist from 0070; the handler EXTENSION is operator-deployed;
+      // count stays 29). Twin: city-live.test.ts. CITY-LIVE.md §2.
+      '0085_city_live.sql',
     ]);
   });
 });
@@ -380,6 +392,7 @@ describe('unique / natural keys (§7, §15)', () => {
     ['intraday_advances', ['icao', 'date_local', 'local_hour']],
     ['nowcast_lift', ['icao', 'local_hour']],
     ['backfill_progress', ['script', 'scope']],
+    ['city_maker_twin', ['city_id', 'target_date', 'arm_hour']], // 0085 — one maker twin per (city, day, arm)
   ];
 
   for (const [table, cols, opts] of expectations) {
@@ -821,6 +834,9 @@ describe('0034: internal-RPC lockdown — anon/authenticated revoked except the 
     'trade_config_set',  // 0082: operator-guarded trade_config write (self-guards via operator_guard, like every operator_* RPC)
     'trade_gate_override_set',  // 0082 F1: operator-guarded EXPIRING interlock override write (self-guards)
     'trade_gate_override_clear',  // 0082 F1: operator-guarded override clear (expires active rows in place; self-guards)
+    'dash_city_live',  // 0085: /trading CITY-LIVE winners board + arms + maker-twin operator read
+    'city_live_arms_get',  // 0085: /trading per-city Live toggle table operator read (operator_guard)
+    'city_live_arm_set',  // 0085: operator-guarded per-city Live toggle write (self-guards via operator_guard)
     'go_live_gate_inputs',
     'operator_halt', 'operator_resume', 'operator_update_config', 'operator_verify_station',
     'operator_set_champion', 'operator_skip_bet', 'operator_manual_bet',

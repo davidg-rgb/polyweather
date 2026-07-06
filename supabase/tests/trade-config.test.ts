@@ -1057,7 +1057,9 @@ describe('0082 §9 — the six bot_order_* RPCs (the T1 OrderLedger contract)', 
   it('all seven ledger RPCs are service-role ONLY (anon + authenticated revoked)', async () => {
     const sigs = [
       'public.bot_order_by_intent(text, text)',
-      'public.bot_order_reserve_intent(text, text, text, text, text, text, text, text, numeric, numeric, date)',
+      // 0085 CITY-LIVE: reserve_intent was DROP+RECREATED with a trailing p_strategy (default 'maker-exit',
+      // writing live_orders.strategy) — the 0054 no-overload idiom; the old 11-arg signature is gone.
+      'public.bot_order_reserve_intent(text, text, text, text, text, text, text, text, numeric, numeric, date, text)',
       'public.bot_order_record_placed(text, text)',
       // 0084 #17/#19: record_fill was DROP+RECREATED with a trailing p_fee_usd (the 0054 no-overload idiom).
       'public.bot_order_record_fill(text, numeric, numeric, text, numeric)',
