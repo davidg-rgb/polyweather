@@ -1911,9 +1911,9 @@ interface GooglePaperPayload {
 /**
  * The Google-picks-bucket forward-paper overview (dash_google_paper, 0086) for the /convergence page (the
  * operator's "Test 2"). The page reads the latest snapshot the google-paper-panel Edge tick computed (a pure
- * taker strategy on Google's predicted bucket: buy execAsk < 0.18, TP execBid ≥ 0.30, SL execBid ≤ 0.15, else
- * hold-to-resolution). Degrades to null (not a thrown 500) if the RPC errors so the page can deploy ahead of the
- * 0086 RPC.
+ * taker strategy on Google's predicted bucket: buy execAsk < 0.15, no stop-loss, hold-to-resolution as the floor,
+ * with five take-profit exit variants {0.30..0.50} compared over that same fixed entry). Degrades to null (not a
+ * thrown 500) if the RPC errors so the page can deploy ahead of the 0086 RPC.
  */
 export async function getGooglePaper(db: WebDb): Promise<GooglePaperFeed | null> {
   let v: GooglePaperPayload | null;

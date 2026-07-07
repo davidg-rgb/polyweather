@@ -3,9 +3,10 @@
  * (the operator's "Test 2"; the taker twin of sim/opening-bracket-replay.ts).
  *
  * THE STRATEGY (exact). Across ALL capture-universe cities, per FRESH daily-Tmax market: buy the bucket the
- * latest GOOGLE forecast points at when its taker ask crosses cheap (execAsk < askMax, 0.18); take profit when
- * that bucket's execBid re-rates to/above tpAbs (0.30); stop-loss when its execBid falls to/below slAbs (0.15);
- * else HOLD to resolution ($1 if the bought bucket wins, $0 else). Taker entry + taker exits. NO time-stop.
+ * latest GOOGLE forecast points at when its taker ask crosses cheap (execAsk ≤ askMax, 0.15); take profit when
+ * that bucket's execBid re-rates to/above tpAbs; OPTIONALLY stop-loss when its execBid falls to/below slAbs (only
+ * when slAbs > 0 — a slAbs ≤ 0 sentinel DISABLES the stop-loss so the position simply HOLDS to resolution); else
+ * HOLD to resolution ($1 if the bought bucket wins, $0 else). Taker entry + taker exit. NO time-stop.
  *
  * WHAT IT IS vs opening-bracket-replay. Same ingest (buildEvents), the same fresh-universe grouping, the same
  * pessimistic taker fill (paperFill) + fee curve (takerFeePerShare), the same NO-LOOK-AHEAD exit walk and the
@@ -52,11 +53,13 @@ export interface GoogleBracketCfg {
   cities: string[];
   /** per-position $ stake (a pure taker test — depth-UNgated, matching the exact strategy spec). */
   perPositionUsd: number;
-  /** ENTER when the Google-predicted bucket's execAsk is strictly below this (0.18). */
+  /** ENTER when the Google-predicted bucket's execAsk is strictly below this (0.15 — the cheap-entry floor). */
   askMax: number;
-  /** TAKE PROFIT when that bucket's execBid is at or above this ABSOLUTE level (0.30). */
+  /** TAKE PROFIT when that bucket's execBid is at or above this ABSOLUTE level (0.30 canonical; the panel also
+   *  sweeps {0.30..0.50}). */
   tpAbs: number;
-  /** STOP LOSS when that bucket's execBid is at or below this ABSOLUTE level (0.15). */
+  /** STOP LOSS when that bucket's execBid is at or below this ABSOLUTE level. A sentinel value ≤ 0 DISABLES the
+   *  stop-loss entirely (the position holds to resolution as its floor) — the frozen "Test 2" default is no SL. */
   slAbs: number;
   /** additive pessimistic taker slippage on the entry fill (mirrors OpeningCfg.paperSlippage). */
   paperSlippage: number;
@@ -64,13 +67,22 @@ export interface GoogleBracketCfg {
   takerFeeRate: number;
 }
 
-/** the frozen defaults — the exact "Test 2" thresholds. cities is filled per-run by the handler. */
+/**
+ * the frozen defaults — the exact "Test 2" thresholds. cities is filled per-run by the handler.
+ *
+ * askMax 0.15: OPERATOR-FLAGGED interpretation. The operator wrote "Entry point at >15c"; the whole strategy is
+ * buy-cheap→sell-higher (TP exits 0.30–0.50), so this reads as the 15¢ CHEAP-ENTRY threshold — buy only when the
+ * ask is BELOW 15¢ (execAsk < 0.15), not above. Flagged here so a later operator correction is a one-line change.
+ *
+ * slAbs 0: the no-SL sentinel (≤ 0 disables the stop-loss; the position holds to resolution as its floor). The
+ * panel sweeps five TP-only exit variants {0.30..0.50}; 0.30 is the canonical/headline variant.
+ */
 export const GOOGLE_DEFAULTS: GoogleBracketCfg = {
   cities: [],
   perPositionUsd: 20,
-  askMax: 0.18,
+  askMax: 0.15,
   tpAbs: 0.3,
-  slAbs: 0.15,
+  slAbs: 0,
   paperSlippage: 0.01,
   takerFeeRate: 0.05,
 };
@@ -143,8 +155,9 @@ const NOT_EXECUTED = (reason: string): BracketTrade => ({
  *  1. ENTER at the FIRST tick whose Google-predicted bucket carries a live execAsk in (0, askMax).
  *  2. FILL as a taker at that ask (worse-of stored/live == the same tick's ask, + pessimistic slippage) — reuses
  *     paperFill's taker branch verbatim (one source of truth for the fill/fee model).
- *  3. EXIT (absolute, no look-ahead): from the NEXT tick, sell the moment execBid ≥ tpAbs (take-profit) or
- *     execBid ≤ slAbs (stop-loss); taker fee on the exit leg. No time-stop.
+ *  3. EXIT (absolute, no look-ahead): from the NEXT tick, sell the moment execBid ≥ tpAbs (take-profit) or —
+ *     ONLY when slAbs > 0 — execBid ≤ slAbs (stop-loss); a slAbs ≤ 0 sentinel disables the stop-loss so an
+ *     unfired position just holds to resolution. Taker fee on the exit leg. No time-stop.
  *  4. SETTLE a position still open at series end at the resolution winner ($1/$0, no fee), else mark to the last
  *     realizable execBid (mtm_unresolved / mtm_grading_mismatch).
  *
@@ -163,14 +176,14 @@ export function replayGoogleBracket(
   const ticks = input.ticks;
   const bIdx = predictedBucketIdx;
 
-  // ── (1) entry: first tick whose predicted bucket has a live, cheap (< askMax) executable ask ───────────
+  // ── (1) entry: first tick whose predicted bucket has a live, cheap (≤ askMax) executable ask ───────────
   let entryIdx = -1;
   let entryBucket: OpeningBucket | undefined;
   let entryAsk = NaN;
   for (let i = 0; i < ticks.length; i++) {
     const b = bucketOf(ticks[i]!, bIdx);
     const ask = b?.execAsk ?? null;
-    if (b && fin(ask) && ask > 0 && ask < cfg.askMax) {
+    if (b && fin(ask) && ask > 0 && ask <= cfg.askMax) {
       entryIdx = i;
       entryBucket = b;
       entryAsk = ask;
@@ -219,6 +232,8 @@ export function replayGoogleBracket(
   const bestReachableBid = Number.isFinite(best) ? best : NaN;
 
   // ── (3) absolute bracket exit walk — starts at the NEXT tick, breaks at first firing (NO LOOK-AHEAD) ────
+  //    the stop-loss leg is ONLY armed when slAbs > 0; a slAbs ≤ 0 sentinel means "no SL, hold to resolution".
+  const slActive = fin(cfg.slAbs) && cfg.slAbs > 0;
   let exited = false;
   let exitIdx = -1;
   let exitPrice = NaN;
@@ -229,14 +244,15 @@ export function replayGoogleBracket(
     const mark = bucketOf(ticks[j]!, bIdx)?.execBid ?? null;
     if (!fin(mark)) continue;
     lastBid = mark;
-    if (mark >= cfg.tpAbs || mark <= cfg.slAbs) {
+    const tpHit = mark >= cfg.tpAbs;
+    const slHit = slActive && mark <= cfg.slAbs;
+    if (tpHit || slHit) {
       const fee = takerFeePerShare(mark, cfg.takerFeeRate) * shares; // taker sell into the bid
       exitPrice = mark;
       netPnlUsd = shares * mark - fee - stakeUsd - entryFee;
-      exitReason =
-        mark >= cfg.tpAbs
-          ? `take_profit:execBid ${mark.toFixed(4)} ≥ ${cfg.tpAbs}`
-          : `stop_loss:execBid ${mark.toFixed(4)} ≤ ${cfg.slAbs}`;
+      exitReason = tpHit
+        ? `take_profit:execBid ${mark.toFixed(4)} ≥ ${cfg.tpAbs}`
+        : `stop_loss:execBid ${mark.toFixed(4)} ≤ ${cfg.slAbs}`;
       exited = true;
       exitIdx = j;
       break;

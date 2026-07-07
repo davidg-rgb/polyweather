@@ -7,7 +7,9 @@
  * strategy, by REUSING the tested google-bucket replay engine (one source of truth for "what would we do"):
  *
  *   1. logged potential ENTRIES — every fresh market whose Google-predicted bucket was buyable cheap
- *      (execAsk < askMax), with the taker fill and the absolute-bracket EXIT (TP/SL/hold-to-resolution) + net P&L.
+ *      (execAsk < askMax), with the taker fill and the canonical absolute take-profit EXIT (tpAbs 0.30, no SL,
+ *      else hold-to-resolution) + net P&L. The ENTRY is held FIXED; a side-car block sweeps FIVE TP-only exit
+ *      variants {0.30..0.50} over that same entry so the operator can read which exit is most favourable.
  *   2. per-day CHANCES — markets considered vs entered per station-local target day + the fire rate.
  *   3. a FICTIVE MONEY TRACKER — the fixed per-position stake per entry + the running paper P&L (equity curve).
  *   4. the §9R-E gate progress toward a verdict (≥40 markets / ≥6 cities / ≥7 days, clustered CI, zero-skill MC),
@@ -119,6 +121,38 @@ export interface GoogleGate {
   zeroSkillPassRate: number;
 }
 
+/**
+ * One take-profit exit variant in the side-by-side comparison. The ENTRY is held FIXED across all variants
+ * (buy execAsk < askMax, no SL); only the TP level moves — so the entered population (nTrades) is IDENTICAL
+ * across variants by construction, and only the exit mix (nTpHit vs nHeldToResolution) + P&L differ.
+ */
+export interface GoogleTpVariant {
+  /** the take-profit level for this variant (execBid ≥ tpAbs sells). */
+  tpAbs: number;
+  /** executed trades — identical across all variants (entry depends only on askMax). */
+  nTrades: number;
+  /** of those, how many exited via take-profit (monotone non-increasing as tpAbs rises — harder to reach). */
+  nTpHit: number;
+  /** how many instead settled at resolution (win or lose) — the hold-to-resolution floor (no SL). */
+  nHeldToResolution: number;
+  /** total net paper P&L across all trades (realized + open marks). */
+  netPnlUsd: number;
+  /** net paper P&L over REALIZED (non-open) trades only — the gate-comparable figure. */
+  realizedPnlUsd: number;
+  /** mean net return across executed trades. */
+  meanNetReturn: number;
+  /** realized wins / realized count. */
+  winRate: number;
+}
+
+/** The exit-variant comparison block: five TP-only variants over the SAME fixed entry population. */
+export interface GoogleTpComparison {
+  /** entered markets — IDENTICAL for every variant by construction (surfaced so the page can assert it). */
+  nEntered: number;
+  /** one entry per TP level, ascending (0.30 → 0.50); 0.30 is the canonical/headline variant. */
+  variants: GoogleTpVariant[];
+}
+
 export interface GoogleView {
   days: number;
   cities: string[];
@@ -139,9 +173,19 @@ export interface GoogleView {
   perDay: GooglePerDay[];
   money: GoogleMoney;
   gate: GoogleGate;
+  /** the five-TP-variant exit comparison over the SAME fixed entry (the operator wants the most-favourable exit). */
+  tpComparison: GoogleTpComparison;
   /** per-city input-fetch errors on the Edge tick that produced this view (the handler overrides the 0 default). */
   cityErrors: number;
 }
+
+/**
+ * The five take-profit exit levels the panel sweeps side-by-side over the SAME fixed entry (execAsk < askMax,
+ * no SL). 0.30 is the canonical/headline variant that drives the single-config entries/money/per-day/gate.
+ */
+export const GOOGLE_TP_VARIANTS = [0.3, 0.35, 0.4, 0.45, 0.5] as const;
+/** index of the canonical (headline) variant within GOOGLE_TP_VARIANTS — tpAbs 0.30. */
+const CANONICAL_TP_IDX = 0;
 
 /** the §9R-E sufficiency bars — imported from the engine (single source of truth; openingVerdict enforces them). */
 const GATE = { minMarkets: GATE_MIN_MARKETS, minCities: GATE_MIN_CITIES, minDistinctDays: GATE_MIN_DISTINCT_DAYS };
@@ -193,6 +237,21 @@ export function buildGoogleView(
   let nGoogleEvents = 0;
   let nNoGoogleEvents = 0;
 
+  // per-TP-variant accumulators (same order as GOOGLE_TP_VARIANTS). The ENTRY is fixed across variants, so the
+  // executed set — and thus nTrades — is identical; only the exit mix + P&L differ. realized-vs-open split is
+  // kept so realizedPnlUsd / winRate mirror the gate's "closed net profit only" convention.
+  const variantAcc = GOOGLE_TP_VARIANTS.map((tpAbs) => ({
+    tpAbs,
+    nTrades: 0,
+    nTpHit: 0,
+    nHeldToResolution: 0,
+    netPnlUsd: 0,
+    realizedPnlUsd: 0,
+    sumReturn: 0,
+    nRealized: 0,
+    nWins: 0,
+  }));
+
   for (const e of considered) {
     const g = googleByEvent.get(e.eventId);
     if (!g || g.tmaxC == null) {
@@ -207,7 +266,32 @@ export function buildGoogleView(
     if (predIdx == null) continue; // Google present but its forecast couldn't be bucketed (junk ladder)
     nGoogleEvents++;
 
-    const t = replayGoogleBracket(e, predIdx, cfg);
+    // replay the SAME fixed entry (execAsk < askMax, SL disabled) against every TP-only exit variant. The entry
+    // is TP-independent, so the executed population is identical across variants by construction.
+    const variantTrades = GOOGLE_TP_VARIANTS.map((tpAbs) =>
+      replayGoogleBracket(e, predIdx, { ...cfg, tpAbs, slAbs: 0 }),
+    );
+
+    // fold each executed variant into its accumulator (exit mix: TP-hit vs held-to-resolution vs open-marked).
+    for (let vi = 0; vi < GOOGLE_TP_VARIANTS.length; vi++) {
+      const vt = variantTrades[vi]!;
+      if (!vt.executed || !Number.isFinite(vt.netPnlUsd) || !Number.isFinite(vt.netReturn)) continue;
+      const acc = variantAcc[vi]!;
+      const vk = exitKindOf(vt.exitReason);
+      acc.nTrades++;
+      acc.sumReturn += vt.netReturn;
+      acc.netPnlUsd += vt.netPnlUsd;
+      if (vk === 'take_profit') acc.nTpHit++;
+      if (vk === 'resolution_win' || vk === 'resolution_lose') acc.nHeldToResolution++;
+      if (vk !== 'open_marked') {
+        acc.nRealized++;
+        acc.realizedPnlUsd += vt.netPnlUsd;
+        if (vt.netPnlUsd > 0) acc.nWins++;
+      }
+    }
+
+    // the CANONICAL (tpAbs 0.30) variant drives the existing single-config sections (entries/money/per-day/gate).
+    const t = variantTrades[CANONICAL_TP_IDX]!;
     if (!t.executed || !Number.isFinite(t.netPnlUsd) || !Number.isFinite(t.netReturn)) continue;
     const kind = exitKindOf(t.exitReason);
     const native = g.unit === 'F' ? cToF(g.tmaxC) : g.tmaxC;
@@ -240,6 +324,21 @@ export function buildGoogleView(
       });
     }
   }
+
+  // ── the five-TP-variant exit comparison (same fixed entry population; only the TP level moves) ─────────────
+  const tpComparison: GoogleTpComparison = {
+    nEntered: entries.length,
+    variants: variantAcc.map((a) => ({
+      tpAbs: a.tpAbs,
+      nTrades: a.nTrades,
+      nTpHit: a.nTpHit,
+      nHeldToResolution: a.nHeldToResolution,
+      netPnlUsd: a.netPnlUsd,
+      realizedPnlUsd: a.realizedPnlUsd,
+      meanNetReturn: a.nTrades > 0 ? a.sumReturn / a.nTrades : 0,
+      winRate: a.nRealized > 0 ? a.nWins / a.nRealized : 0,
+    })),
+  };
   entries.sort((a, b) => (a.targetDate < b.targetDate ? -1 : a.targetDate > b.targetDate ? 1 : a.city.localeCompare(b.city)));
 
   // ── per-day chances: considered (gm-excluded fresh events) vs entered, per target day ─────────────────
@@ -326,6 +425,7 @@ export function buildGoogleView(
     perDay,
     money,
     gate,
+    tpComparison,
     cityErrors: 0, // pure default; the google-paper-panel Edge handler overrides with the tick's real count
   };
 }

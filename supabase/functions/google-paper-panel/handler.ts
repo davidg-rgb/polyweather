@@ -5,8 +5,9 @@
  *   1. pull the RAW fresh-allowlist capture series + the venue resolution map + the per-event latest Google
  *      forecast PER CITY (google_paper_inputs, service-role), through a bounded worker pool.
  *   2. run the PURE Google-bucket replay view (buildGoogleView → replayGoogleBracket over the frozen "Test 2"
- *      thresholds: buy execAsk < 0.18, TP execBid ≥ 0.30, SL execBid ≤ 0.15, else hold-to-resolution — a taker
- *      strategy on the bucket Google's forecast points at).
+ *      thresholds: buy execAsk < 0.15, NO stop-loss, hold-to-resolution as the floor — with FIVE take-profit exit
+ *      variants {0.30..0.50} swept over the SAME fixed entry so the operator can compare which exit is most
+ *      favourable; the canonical tpAbs 0.30 variant headlines. A taker strategy on the bucket Google points at).
  *   3. store the small view (record_google_paper) — the page reads only that snapshot.
  *
  * SCOPE = the live `bot.cities` CAPTURE universe (~45 cities), NOT the 10-city §9R TRADABLE allowlist: the

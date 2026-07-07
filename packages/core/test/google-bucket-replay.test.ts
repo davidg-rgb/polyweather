@@ -3,9 +3,10 @@
  *
  * Pins the decisive properties: googleBucketIdx maps a °C forecast to the ladder bucket (°C direct / °F
  * converted / FLOOR semantics / tails / junk → null); entry fires ONLY when the predicted bucket's execAsk is
- * strictly below askMax (0.18); each absolute exit (take-profit ≥ 0.30 / stop-loss ≤ 0.15); hold-to-resolution
- * settlement (win $1 / lose $0 / unresolved mark); a null predicted idx → executed:false 'no_google'; and —
- * load-bearing — NO LOOK-AHEAD (a huge up-tick AFTER a stop-loss must not rescue the trade). Pure + total.
+ * strictly below askMax (0.15 — the cheap-entry floor); take-profit ≥ tpAbs; the stop-loss is OPT-IN (fires only
+ * when slAbs > 0, a slAbs ≤ 0 sentinel disables it → hold-to-resolution); hold-to-resolution settlement (win $1 /
+ * lose $0 / unresolved mark); a null predicted idx → executed:false 'no_google'; and — load-bearing — NO
+ * LOOK-AHEAD (a huge up-tick AFTER a stop-loss must not rescue the trade). Pure + total.
  */
 import { describe, expect, it } from 'vitest';
 import {
@@ -21,7 +22,10 @@ import type { OpeningBucket } from '../src/sim/opening-convergence.ts';
 // ── fixtures ─────────────────────────────────────────────────────────────────────────────────────────
 const TZ = 'Europe/Amsterdam';
 const DATE = '2026-07-01';
+/** default cfg — the frozen "Test 2" (askMax 0.15, tpAbs 0.30, slAbs 0 = NO stop-loss). */
 const cfg: GoogleBracketCfg = { ...GOOGLE_DEFAULTS, cities: ['amsterdam'] };
+/** a cfg with the stop-loss ARMED (slAbs 0.15 > 0) — used to prove the SL leg still fires when opted in. */
+const slCfg: GoogleBracketCfg = { ...cfg, slAbs: 0.15 };
 
 const mkB = (idx: number, over: Partial<OpeningBucket> = {}): OpeningBucket => ({
   idx,
@@ -68,8 +72,8 @@ const ev = (over: Partial<EventReplayInput> = {}): EventReplayInput => ({
   ...over,
 });
 
-/** the entry tick — idx2 priced cheap (execAsk 0.17 < askMax 0.18). */
-const entry = (capturedAt = T0): ReplayTick => tk(capturedAt, 0.2, { execAsk: 0.17, execBid: 0.1 });
+/** the entry tick — idx2 priced cheap (execAsk 0.14 < askMax 0.15). */
+const entry = (capturedAt = T0): ReplayTick => tk(capturedAt, 0.2, { execAsk: 0.14, execBid: 0.1 });
 
 // ── 1 · googleBucketIdx — °C direct, °F converted, FLOOR semantics, tails, junk ─────────────────────────
 
@@ -112,19 +116,25 @@ describe('googleBucketIdx — Google °C forecast → ladder bucket idx', () => 
   });
 });
 
-// ── 2 · entry gating (execAsk strictly below askMax) ────────────────────────────────────────────────────
+// ── 2 · entry gating (execAsk at or below askMax — inclusive) ──────────────────────────────────────────
 
 describe('replayGoogleBracket — entry gating', () => {
-  it('enters at the first tick whose predicted bucket ask is strictly below askMax (0.18)', () => {
+  it('enters at the first tick whose predicted bucket ask is at or below askMax (0.15)', () => {
     const trade = replayGoogleBracket(ev({ ticks: [entry(), tk(T1, 0.3, { execBid: 0.35 })] }), 2, cfg);
     expect(trade.executed).toBe(true);
     expect(trade.isMaker).toBe(false); // pure taker
     expect(trade.entryLabel).toBe('16°C');
-    expect(trade.entryPrice).toBeCloseTo(0.18, 9); // 0.17 ask + 0.01 pessimistic slippage
+    expect(trade.entryPrice).toBeCloseTo(0.15, 9); // 0.14 ask + 0.01 pessimistic slippage
   });
 
-  it('never enters when the ask never drops below askMax (0.18 is NOT < 0.18 — strict)', () => {
-    const trade = replayGoogleBracket(ev({ ticks: [tk(T0, 0.2, { execAsk: 0.18, execBid: 0.1 })] }), 2, cfg);
+  it('enters when the ask is exactly askMax (0.15 ≤ 0.15 — inclusive)', () => {
+    const trade = replayGoogleBracket(ev({ ticks: [tk(T0, 0.2, { execAsk: 0.15, execBid: 0.1 }), tk(T1, 0.3, { execBid: 0.35 })] }), 2, cfg);
+    expect(trade.executed).toBe(true);
+    expect(trade.entryPrice).toBeCloseTo(0.16, 9); // 0.15 ask + 0.01 pessimistic slippage
+  });
+
+  it('never enters when the ask stays above askMax (0.2 > 0.15)', () => {
+    const trade = replayGoogleBracket(ev({ ticks: [tk(T0, 0.2, { execAsk: 0.2, execBid: 0.1 })] }), 2, cfg);
     expect(trade.executed).toBe(false);
     expect(trade.exitReason).toBe('never_enterable');
   });
@@ -145,20 +155,32 @@ describe('replayGoogleBracket — absolute bracket exits', () => {
     expect(trade.netReturn).toBeGreaterThan(0);
   });
 
-  it('stop_loss: sells at the execBid that reaches slAbs (0.15)', () => {
-    const trade = replayGoogleBracket(ev({ ticks: [entry(), tk(T1, 0.3, { execBid: 0.1 })] }), 2, cfg);
+  it('stop_loss fires ONLY when armed (slAbs > 0): sells at the execBid that reaches slAbs (0.15)', () => {
+    const trade = replayGoogleBracket(ev({ ticks: [entry(), tk(T1, 0.3, { execBid: 0.1 })] }), 2, slCfg);
     expect(trade.exitReason.startsWith('stop_loss')).toBe(true);
     expect(trade.exitPrice).toBeCloseTo(0.1, 9);
     expect(trade.netReturn).toBeLessThan(0);
   });
 
+  it('slAbs ≤ 0 DISABLES the stop-loss: a bid far below the SL level holds to resolution, never stops', () => {
+    // default cfg (slAbs 0). A brutal 0.05 bid would stop under slCfg, but with the no-SL sentinel the position
+    // simply holds to resolution — the hold-to-resolution floor is the ONLY downside close (the "Test 2" spec).
+    const trade = replayGoogleBracket(
+      ev({ ticks: [entry(), tk(T1, 0.3, { execBid: 0.05 })], resolution: { winnerIdx: 9, gradingMismatch: false } }),
+      2,
+      cfg,
+    );
+    expect(trade.exitReason.startsWith('stop_loss')).toBe(false);
+    expect(trade.exitReason).toBe('resolution_settle:lose');
+  });
+
   it('the ENTRY-tick bid never self-triggers — exits are evaluated from the NEXT tick only', () => {
-    // entry tick idx2 bid 0.10 (≤ slAbs) but the ONLY later tick holds at 0.20 → no exit → settles, not an
-    // instant same-tick stop. (Guards the "cross-the-spread bid is not a sell signal" design choice.)
+    // slCfg (SL armed at 0.15): entry tick idx2 bid 0.10 (≤ slAbs) but the ONLY later tick holds at 0.20 → no
+    // exit → settles, not an instant same-tick stop. (Guards "cross-the-spread bid is not a sell signal".)
     const trade = replayGoogleBracket(
       ev({ ticks: [entry(), tk(T1, 0.3, { execBid: 0.2 })], resolution: { winnerIdx: 2, gradingMismatch: false } }),
       2,
-      cfg,
+      slCfg,
     );
     expect(trade.exitReason).toBe('resolution_settle:win');
   });
@@ -200,12 +222,12 @@ describe('replayGoogleBracket — NO LOOK-AHEAD', () => {
       ev({
         ticks: [
           entry(),
-          tk(T1, 0.3, { execBid: 0.1 }), // stop-loss fires here (≤ 0.15)
+          tk(T1, 0.3, { execBid: 0.1 }), // stop-loss fires here (≤ 0.15, SL armed via slCfg)
           tk(T2, 0.4, { execBid: 0.9 }), // a later 0.90 up-tick — must NOT change the realized exit
         ],
       }),
       2,
-      cfg,
+      slCfg,
     );
     expect(trade.exitReason.startsWith('stop_loss')).toBe(true);
     expect(trade.exitPrice).toBeCloseTo(0.1, 9);
@@ -227,12 +249,12 @@ describe('replayGoogleBracket — totality + googleCfg', () => {
     expect(replayGoogleBracket(junk, 2, cfg).executed).toBe(false);
   });
 
-  it('googleCfg pins the run cities and keeps the frozen thresholds', () => {
+  it('googleCfg pins the run cities and keeps the frozen thresholds (entry 0.15, TP 0.30, no SL)', () => {
     const c = googleCfg(['amsterdam', 'paris']);
     expect(c.cities).toEqual(['amsterdam', 'paris']);
-    expect(c.askMax).toBe(0.18);
+    expect(c.askMax).toBe(0.15);
     expect(c.tpAbs).toBe(0.3);
-    expect(c.slAbs).toBe(0.15);
+    expect(c.slAbs).toBe(0); // the no-SL sentinel — the stop-loss is disabled in the frozen "Test 2"
     expect(googleCfg([]).cities).toEqual(GOOGLE_DEFAULTS.cities); // empty → the default scope
   });
 });

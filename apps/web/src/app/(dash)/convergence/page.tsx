@@ -3,16 +3,18 @@
  *
  * Surfaces a PURE taker strategy driven only by Google's predicted bucket: across all capture-universe cities,
  * per fresh daily-Tmax market, buy the bucket Google's daily-max forecast points at when its taker ask is cheap
- * (execAsk < 0.18), take profit when its execBid re-rates to ≥ 0.30, stop-loss when it falls to ≤ 0.15, else HOLD
- * to resolution. The page shows the logged potential ENTRIES + their EXITS, per-day CHANCES, Google COVERAGE, a
- * FICTIVE MONEY TRACKER, and the §9R-E gate progress.
+ * (execAsk < 0.15 — the operator-flagged cheap-entry floor), take profit when its execBid re-rates to ≥ tpAbs,
+ * NO stop-loss, else HOLD to resolution. The ENTRY is held FIXED and FIVE take-profit exits {0.30..0.50} are
+ * compared side-by-side (the operator wants the most-favourable exit). The page shows the logged potential
+ * ENTRIES + their EXITS, the exit-variant COMPARISON, per-day CHANCES, Google COVERAGE, a FICTIVE MONEY TRACKER,
+ * and the §9R-E gate progress.
  *
  * Read-only analytics over the google-paper-panel snapshot (Edge tick, every 15 min, migration 0086). NOT a
  * trade and NOT capital — the bot rail is paper/DORMANT (FINDINGS.md). Google is a ~1-week FORWARD SEED
  * (35/45 cities, ~7 resolved days), so the gate below reads INSUFFICIENT for weeks — that is expected.
  */
 import type { ReactElement } from 'react';
-import type { GoogleEntry, GooglePerDay, GoogleView } from '@weather-edge/core';
+import type { GoogleEntry, GooglePerDay, GoogleTpVariant, GoogleView } from '@weather-edge/core';
 import { EquityChart } from '../../../components/EquityChart.tsx';
 import { fmtAgo, fmtDate, fmtDateTime, fmtPct, fmtProb, fmtStockholm, fmtUsd, num } from '../../../lib/format.ts';
 import { getGooglePaper } from '../../../lib/loaders.ts';
@@ -238,6 +240,56 @@ function EntriesTable({ rows }: { rows: GoogleEntry[] }): ReactElement {
   );
 }
 
+/** Exit-variant comparison: five TP levels over the SAME fixed entry — the operator's "most-favourable exit" read. */
+function TpComparisonTable({ view }: { view: GoogleView }): ReactElement {
+  const variants: GoogleTpVariant[] = view.tpComparison?.variants ?? [];
+  if (variants.length === 0) return <p className="muted">No exit-variant data yet.</p>;
+  // flag the most-favourable variant by total net paper P&L (ties resolve to the lowest TP level).
+  let bestIdx = -1;
+  let bestNet = Number.NEGATIVE_INFINITY;
+  variants.forEach((v, i) => {
+    if (v.nTrades > 0 && v.netPnlUsd > bestNet) {
+      bestNet = v.netPnlUsd;
+      bestIdx = i;
+    }
+  });
+  return (
+    <div className="tbl-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th>take-profit</th>
+            <th className="num">trades</th>
+            <th className="num">TP-hit</th>
+            <th className="num">held</th>
+            <th className="num">net P&amp;L</th>
+            <th className="num">mean return</th>
+            <th className="num">win%</th>
+          </tr>
+        </thead>
+        <tbody>
+          {variants.map((v, i) => (
+            <tr key={v.tpAbs}>
+              <td className="mono small">
+                {fmtProb(v.tpAbs)}
+                {i === bestIdx ? (
+                  <span className="chip small" style={{ marginLeft: '0.4rem', color: GREEN }}>★ best</span>
+                ) : null}
+              </td>
+              <td className="num">{v.nTrades}</td>
+              <td className="num">{v.nTpHit}</td>
+              <td className="num">{v.nHeldToResolution}</td>
+              <td className="num" style={{ color: pnlColor(v.netPnlUsd) }}>{signedUsd(v.netPnlUsd)}</td>
+              <td className="num" style={{ color: pnlColor(v.meanNetReturn) }}>{signedPct(v.meanNetReturn)}</td>
+              <td className="num">{v.nTrades > 0 ? fmtPct(v.winRate, 0) : '—'}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 // ─── page ────────────────────────────────────────────────────────────────────
 
 export default async function ConvergencePage(): Promise<ReactElement> {
@@ -275,8 +327,8 @@ export default async function ConvergencePage(): Promise<ReactElement> {
         The operator&apos;s &ldquo;Test 2&rdquo;: a <strong>pure taker</strong> strategy driven only by Google
         Weather&apos;s predicted bucket. Across all capture cities, per fresh daily-Tmax market: buy the
         Google-predicted bucket when its ask is cheap (<span className="mono">execAsk &lt; {fmtProb(view.askMax)}</span>),
-        take profit when its bid re-rates to <span className="mono">≥ {fmtProb(view.tpAbs)}</span>, stop-loss at{' '}
-        <span className="mono">≤ {fmtProb(view.slAbs)}</span>, else HOLD to resolution. This is the forward{' '}
+        then compare <strong>five take-profit exits</strong> (<span className="mono">bid ≥ 0.30 … 0.50</span>) over that
+        same fixed entry — <strong>no stop-loss</strong>, HOLD to resolution as the floor. This is the forward{' '}
         <strong>paper measurement</strong> made legible — logged potential entries, their exits, per-day chances,
         Google coverage, and a <strong>fictive</strong> money tracker (fixed {fmtUsd(m.perEntryStakeUsd, 0)} stake per
         entry). <strong>Not a trade, not capital</strong> — the bot rail is paper/DORMANT; the §9R-E gate governs any GO.
@@ -297,6 +349,19 @@ export default async function ConvergencePage(): Promise<ReactElement> {
       <div className="panel" style={{ marginTop: '1rem' }}>
         <div className="cap" style={{ marginBottom: '0.25rem' }}>Cumulative paper P&amp;L by target day (realized + marked-open)</div>
         <EquityChart dates={equityDates} series={equitySeries} width={760} height={240} />
+      </div>
+
+      <h2>Exit-variant comparison</h2>
+      <div className="panel">
+        <p className="muted small" style={{ marginTop: 0 }}>
+          The SAME fixed cheap entry (buy <span className="mono">execAsk &lt; {fmtProb(view.askMax)}</span>, no
+          stop-loss), compared across five take-profit exits. The entry population is identical across variants by
+          construction — <strong>{view.tpComparison?.nEntered ?? 0} entered</strong> markets each — so only the exit
+          mix and P&amp;L differ. <span className="mono">held</span> = settled at resolution (the hold-to-resolution
+          floor when TP never hits). The <span style={{ color: GREEN }}>★ best</span> row is the highest net paper
+          P&amp;L. <strong>Fictive</strong>, not a trade.
+        </p>
+        <TpComparisonTable view={view} />
       </div>
 
       <h2>Google coverage</h2>
@@ -323,7 +388,8 @@ export default async function ConvergencePage(): Promise<ReactElement> {
         <p className="muted small" style={{ marginTop: 0 }}>
           {view.entries.length} entries the Google-bucket rule fired in the window. Each shows the{' '}
           <strong>Google °C</strong> forecast, the <strong>predicted bucket</strong> it picked (the temperature the
-          bet opened on), the taker entry, the absolute-bracket exit, and the net paper P&amp;L at the{' '}
+          bet opened on), the taker entry, the <strong>canonical</strong> take-profit exit (TP {fmtProb(view.tpAbs)},
+          no SL — see the exit-variant comparison above for all five), and the net paper P&amp;L at the{' '}
           {fmtUsd(m.perEntryStakeUsd, 0)} stake.
         </p>
         {feed?.generatedAt ? (
@@ -338,8 +404,8 @@ export default async function ConvergencePage(): Promise<ReactElement> {
       <p className="muted small" style={{ marginTop: '1rem' }}>
         Read-only analytics over the <span className="mono">google_paper_panel</span> snapshot (google-paper-panel
         Edge tick, every 15 min). Engine: <span className="mono">core/sim/google-bucket-view</span> — a pure taker
-        replay on the bucket Google&apos;s daily-max forecast points at (buy execAsk &lt; {fmtProb(view.askMax)}, TP
-        execBid ≥ {fmtProb(view.tpAbs)}, SL execBid ≤ {fmtProb(view.slAbs)}, else hold-to-resolution). Bot rail
+        replay on the bucket Google&apos;s daily-max forecast points at (buy execAsk &lt; {fmtProb(view.askMax)}, five
+        take-profit exits 0.30–0.50 over that fixed entry, no stop-loss, else hold-to-resolution). Bot rail
         paper/DORMANT; no capital until the §9R-E gate PASSes. Source: <span className="mono">FINDINGS.md</span>.
       </p>
     </div>
