@@ -145,6 +145,54 @@ describe('replayGoogleBracket — entry gating', () => {
   });
 });
 
+// ── 2b · purchase window (opening → resolvesAt − minHoursToResolution, default 16h) ──────────────────────
+describe('replayGoogleBracket — purchase window (16h before resolution)', () => {
+  const RES = '2026-07-02T00:00:00.000Z'; // cutoff = RES − 16h = 2026-07-01T08:00:00Z
+  const inWindow = '2026-07-01T03:00:00.000Z'; // 21h before RES → allowed
+  const beforeCutoff2 = '2026-07-01T04:00:00.000Z';
+  const afterCutoff = '2026-07-01T20:00:00.000Z'; // 4h before RES → inside the final 16h → excluded
+
+  it('enters a cheap tick that is ≥16h before resolution', () => {
+    const trade = replayGoogleBracket(
+      ev({ ticks: [tk(inWindow, 0.2, { execAsk: 0.14, execBid: 0.1 }), tk(beforeCutoff2, 0.3, { execBid: 0.35 })] }),
+      2, cfg, RES,
+    );
+    expect(trade.executed).toBe(true);
+    expect(trade.exitReason.startsWith('take_profit')).toBe(true);
+  });
+
+  it('does NOT enter a cheap tick inside the final 16h — reason cheap_after_cutoff', () => {
+    const trade = replayGoogleBracket(ev({ ticks: [tk(afterCutoff, 0.2, { execAsk: 0.14, execBid: 0.1 })] }), 2, cfg, RES);
+    expect(trade.executed).toBe(false);
+    expect(trade.exitReason).toBe('cheap_after_cutoff');
+  });
+
+  it('skips a post-cutoff cheap tick even when an earlier in-window tick was NOT cheap → cheap_after_cutoff', () => {
+    const trade = replayGoogleBracket(
+      ev({ ticks: [tk(inWindow, 0.2, { execAsk: 0.2, execBid: 0.1 }), tk(afterCutoff, 0.2, { execAsk: 0.14, execBid: 0.1 })] }),
+      2, cfg, RES,
+    );
+    expect(trade.executed).toBe(false);
+    expect(trade.exitReason).toBe('cheap_after_cutoff');
+  });
+
+  it('gate INACTIVE when resolvesAt is null (unknown) — enters even inside the final 16h', () => {
+    const trade = replayGoogleBracket(
+      ev({ ticks: [tk(afterCutoff, 0.2, { execAsk: 0.14, execBid: 0.1 }), tk('2026-07-01T21:00:00.000Z', 0.3, { execBid: 0.35 })] }),
+      2, cfg, null,
+    );
+    expect(trade.executed).toBe(true);
+  });
+
+  it('gate INACTIVE when minHoursToResolution is 0', () => {
+    const trade = replayGoogleBracket(
+      ev({ ticks: [tk(afterCutoff, 0.2, { execAsk: 0.14, execBid: 0.1 }), tk('2026-07-01T21:00:00.000Z', 0.3, { execBid: 0.35 })] }),
+      2, { ...cfg, minHoursToResolution: 0 }, RES,
+    );
+    expect(trade.executed).toBe(true);
+  });
+});
+
 // ── 3 · the two absolute exits + hold-to-resolution ─────────────────────────────────────────────────────
 
 describe('replayGoogleBracket — absolute bracket exits', () => {

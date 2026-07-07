@@ -65,6 +65,12 @@ export interface GoogleBracketCfg {
   paperSlippage: number;
   /** the weather taker fee rate the paper model charges on entry + both exit legs. */
   takerFeeRate: number;
+  /** PURCHASE WINDOW (operator rule): only ENTER at a tick that is at least this many hours BEFORE resolution
+   *  (resolvesAt). The window is [opening, resolvesAt − minHoursToResolution]; a cheap ask inside the final N
+   *  hours is NOT enterable — near resolution every LOSING bucket decays cheap, so a cheap ask there is a loser,
+   *  not an edge. 0 DISABLES the gate; it is also inactive when the event's resolvesAt is unknown (null). The
+   *  frozen "Test 2" default is 16h. */
+  minHoursToResolution: number;
 }
 
 /**
@@ -85,6 +91,7 @@ export const GOOGLE_DEFAULTS: GoogleBracketCfg = {
   slAbs: 0,
   paperSlippage: 0.01,
   takerFeeRate: 0.05,
+  minHoursToResolution: 16,
 };
 
 /** GOOGLE_DEFAULTS with the run's capture-universe cities pinned in (falls back to the empty default scope). */
@@ -152,7 +159,11 @@ const NOT_EXECUTED = (reason: string): BracketTrade => ({
 /**
  * Replay ONE market's Google-bucket taker trade. Pure + total.
  *
- *  1. ENTER at the FIRST tick whose Google-predicted bucket carries a live execAsk in (0, askMax).
+ *  1. ENTER at the FIRST tick whose Google-predicted bucket carries a live execAsk in (0, askMax) AND that sits
+ *     inside the PURCHASE WINDOW [opening, resolvesAt − cfg.minHoursToResolution] — a cheap ask inside the final
+ *     N hours is skipped (near resolution the losers all decay cheap). The gate is inactive when `resolvesAt` is
+ *     null (unknown) or cfg.minHoursToResolution ≤ 0; a bucket that was cheap ONLY past the cutoff reports
+ *     exitReason 'cheap_after_cutoff' (vs 'never_enterable' = never cheap at all) so the window's effect is visible.
  *  2. FILL as a taker at that ask (worse-of stored/live == the same tick's ask, + pessimistic slippage) — reuses
  *     paperFill's taker branch verbatim (one source of truth for the fill/fee model).
  *  3. EXIT (absolute, no look-ahead): from the NEXT tick, sell the moment execBid ≥ tpAbs (take-profit) or —
@@ -168,6 +179,7 @@ export function replayGoogleBracket(
   input: EventReplayInput,
   predictedBucketIdx: number | null,
   cfg: GoogleBracketCfg,
+  resolvesAt: string | null = null,
 ): BracketTrade {
   if (!input || !Array.isArray(input.ticks) || input.ticks.length === 0) return NOT_EXECUTED('no_ticks');
   if (predictedBucketIdx == null || !Number.isFinite(predictedBucketIdx) || predictedBucketIdx < 0) {
@@ -176,21 +188,36 @@ export function replayGoogleBracket(
   const ticks = input.ticks;
   const bIdx = predictedBucketIdx;
 
-  // ── (1) entry: first tick whose predicted bucket has a live, cheap (≤ askMax) executable ask ───────────
+  // ── purchase-window cutoff: entries allowed only in [opening, resolvesAt − minHoursToResolution]. Near
+  //    resolution every LOSING bucket decays cheap, so a cheap ask in the final hours is a loser, not an edge
+  //    (operator rule). Gate inactive when resolvesAt is unknown or minHoursToResolution ≤ 0. ────────────────
+  const resolveMs = resolvesAt != null ? new Date(resolvesAt).getTime() : NaN;
+  const gateActive = fin(cfg.minHoursToResolution) && cfg.minHoursToResolution > 0 && Number.isFinite(resolveMs);
+  const cutoffMs = gateActive ? resolveMs - cfg.minHoursToResolution * 3_600_000 : Number.POSITIVE_INFINITY;
+
+  // ── (1) entry: first tick whose predicted bucket has a live, cheap (≤ askMax) executable ask AND is in-window ─
   let entryIdx = -1;
   let entryBucket: OpeningBucket | undefined;
   let entryAsk = NaN;
+  let cheapAfterCutoff = false; // a cheap ask existed, but only past the window → excluded by the min-hours rule
   for (let i = 0; i < ticks.length; i++) {
     const b = bucketOf(ticks[i]!, bIdx);
     const ask = b?.execAsk ?? null;
     if (b && fin(ask) && ask > 0 && ask <= cfg.askMax) {
+      if (gateActive) {
+        const tMs = new Date(ticks[i]!.capturedAt).getTime();
+        if (!Number.isFinite(tMs) || tMs > cutoffMs) {
+          if (Number.isFinite(tMs)) cheapAfterCutoff = true; // genuinely inside the final N hours
+          continue;
+        }
+      }
       entryIdx = i;
       entryBucket = b;
       entryAsk = ask;
       break;
     }
   }
-  if (entryIdx < 0 || !entryBucket) return NOT_EXECUTED('never_enterable');
+  if (entryIdx < 0 || !entryBucket) return NOT_EXECUTED(cheapAfterCutoff ? 'cheap_after_cutoff' : 'never_enterable');
 
   // ── (2) taker fill at the cheap ask (reuse paperFill's taker branch) ───────────────────────────────────
   const candidate: EntryCandidate = {

@@ -218,6 +218,15 @@ export function buildGoogleView(
   );
   const events = buildEvents(caps, resMap);
 
+  // resolvesAt per event (constant per event; first non-null among its captures) — the purchase-window anchor
+  // for replayGoogleBracket's [opening, resolvesAt − minHoursToResolution] entry gate. buildEvents drops it.
+  const resolvesAtByEvent = new Map<string, string>();
+  for (const r of caps) {
+    if (r?.eventId == null || r.resolvesAt == null) continue;
+    const key = String(r.eventId);
+    if (!resolvesAtByEvent.has(key)) resolvesAtByEvent.set(key, String(r.resolvesAt));
+  }
+
   // googleByEvent (eventId → the latest Google forecast + the city's native unit). tmaxC null ⇒ no feed.
   const googleByEvent = new Map<string, { tmaxC: number | null; unit: Unit }>();
   for (const g of Array.isArray(google) ? google : []) {
@@ -268,8 +277,9 @@ export function buildGoogleView(
 
     // replay the SAME fixed entry (execAsk < askMax, SL disabled) against every TP-only exit variant. The entry
     // is TP-independent, so the executed population is identical across variants by construction.
+    const resolvesAt = resolvesAtByEvent.get(e.eventId) ?? null;
     const variantTrades = GOOGLE_TP_VARIANTS.map((tpAbs) =>
-      replayGoogleBracket(e, predIdx, { ...cfg, tpAbs, slAbs: 0 }),
+      replayGoogleBracket(e, predIdx, { ...cfg, tpAbs, slAbs: 0 }, resolvesAt),
     );
 
     // fold each executed variant into its accumulator (exit mix: TP-hit vs held-to-resolution vs open-marked).
