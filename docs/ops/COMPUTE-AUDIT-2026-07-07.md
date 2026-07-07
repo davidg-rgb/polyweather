@@ -41,14 +41,22 @@ Forecasting pipeline: `discover-markets`, `poll-markets` (*/5), `fetch-actuals`,
 `health-monitor`, `daily-digest`, `bot-tick-log-prune`, `job-run-details-retention`,
 `opening-captures-prune`. **19 jobs remain (was 29).**
 
-## Still open (not done — data left intact per operator scope)
-- **`opening_captures` is still 1.37 GB.** `opening-capture` is now unscheduled so it stops growing;
-  `opening-captures-prune` (daily 03:30) will drain it over time. To reclaim the ~1.3 GB working set
-  immediately, prune to a recent window (operator's call — it's the `/convergence` + `/maker-exit`
-  historical depth).
-- **Local dry-run daemon (`scripts/trade-bot.ts`)** is now inert — `opening-capture` is dead so it
-  discovers 0 candidates. Harmless (dry-run, local, 0 capital), but pointless post-KILL. Stop it when
-  convenient: kill its PID tree (was 91824/94988/95132).
+## Done (2026-07-07, C95/C96 — the footprint reclaim)
+- **`opening_captures`: 1.37 GB → 75 MB** (95% reclaimed). Sequence: (1) dumped the raw order book
+  (bid/ask/depth per bucket — the ONE thing the price-path archive lacks) locally to
+  `scripts/research/out/opening-captures-archive/` (208 gzipped-NDJSON shards, **319,434 rows / 475
+  events / 569 MB**, keyset-chunked + verified rows/events == live table); (2) **aggressive prune**
+  (`prune-opening-captures.ts --preflight dump --resolved-age-days 2 --execute`) gated on the VERIFIED
+  dump's event set — deleted **301,608 rows / 344 resolved events**, keeping the recent ~2-day window
+  (17,826 rows / 131 events; nothing reads it live — the dashboards read the `convergence_panel` /
+  `maker_exit_panel` snapshot tables, not `opening_captures`); (3) `VACUUM (FULL, ANALYZE)` (18.5 s,
+  exclusive lock blocked nothing since capture crons are unscheduled) → total 1370 MB → **75 MB**
+  (heap 51 MB → 2.9 MB, TOAST 1266 MB → 70 MB). Raw bid/ask preserved locally; forecasting pipeline
+  (`forecast_snapshots` 363k / `model_stats` 6.5k / `observations` 40k) untouched.
+- **Local dry-run daemon (`scripts/trade-bot.ts`)** — STOPPED (C94; PIDs 91824/94988/95132 → 0). Inert
+  post-KILL (`opening-capture` dead → 0 candidates). **Do NOT relaunch** — intentional stop.
+
+## Still open
 - Edge functions for the killed crons are left deployed (serverless — $0 at rest, nothing invokes them).
 
 ## Re-enable (idempotent — `cron.schedule` upserts by jobname)
