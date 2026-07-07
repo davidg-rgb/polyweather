@@ -17,20 +17,21 @@ interval excluding a tradable margin. The one edge that demonstrably exists in t
 external sharp's, +$25.4k) is **pure microstructure** — resting cheap maker bids, collecting the
 rebate, across enormous breadth — and is **non-followable and non-replicable** from where we sit.
 
-> **One live exception, opened 2026-06-27 (does NOT reverse the above).** Every signal *that died at its gate*
-> is dead. But the 12th lever — **opening convergence** — survived its cheap gate and is now **under forward
-> test** (the last row below): the edge would live specifically in the *uninformed flat-open window*, the one
-> place this system never measured because it's narrow and time-critical. It is being measured forward by an
-> autonomous paper-first bot; **no capital until a frozen net-profit gate PASSes**, and a hard go/no-go spike
-> can still kill it cheaply. **Update 2026-06-28: the flat-open *premise* is now FALSIFIED** — the first
-> full-universe capture (51,880 snapshots / 147 markets / 45 cities / 26h) shows weather markets list
-> pre-informed (**0 of 147** flat at first sight), so the lever has pivoted OFF the dead flat-open buy and ONTO
-> a hold-to-resolution / bracket variant — whose entry rule reduces to the forecast-vs-market bet already
-> falsified 7× (negative prior; verdict from `opening-resolution-score.ts` ~2026-07-06). The efficiency verdict
-> stands for everything tested; this is the single remaining thing not yet resolved. **Update 2026-07-03: the
-> Phase-0.5 spike gate formally adjudicated the flat-open entry — NO-GO (0/325 seeded events, Wilson CI
-> [0%, 1%]); the surviving form is solely the maker-exit variant under the live forward paper loop, whose
-> corrected-archive backtest PASSes marginally (see the 2026-07-03 note below the table).**
+> **The 12th lever is now closed too — resolved KILL 2026-07-07. The "one live exception" is gone; all twelve
+> signals are dead.** Opening convergence (opened 2026-06-27) was the one signal that survived its cheap gate and
+> earned a real forward test — the edge would have lived in the *uninformed flat-open window*, the one place this
+> system never measured. It is now decided on both fronts. (1) The flat-open **premise was falsified**: the first
+> full-universe capture (51,880 snapshots / 147 markets / 45 cities) found **0 of 147** flat at list, and the
+> pre-registered Phase-0.5 spike gate returned **NO-GO (0/325 seeded events, Wilson CI [0%, 1%])** — books list
+> pre-informed. (2) Its sole surviving form — the **maker-exit variant** (enter at the first enterable tick, take
+> profit as a resting maker) — **KILLs on the live forward paper gate**: mean net **−12.6%**, 95% CI
+> **[−21.6%, −3.5%]** (the whole interval negative), on **62 markets / 26 cities / 7 distinct days**,
+> `makerFillRate` **0.065** vs the backtest's 49.0%. The backtest's marginal PASS (+6.7%) was an artifact of a
+> **synthetic `house_gaussian`-centered book that converges to the forecast by construction**; the **real
+> Polymarket book is efficient and does not converge to us**, so the resting maker leg that carried the entire
+> backtest edge almost never filled live (`MAKER-EXIT-SIM.md` root-cause banner). **No capital was ever risked; the
+> rail stays DORMANT with no scoped exception pending.** (Full close: the 2026-07-07 block below the table; re-open
+> criteria: `SIGNAL-BACKLOG.md` §13.)
 
 | Signal tested | Can we beat the market with it? | Verdict |
 |---|---|---|
@@ -46,7 +47,7 @@ rebate, across enormous breadth — and is **non-followable and non-replicable**
 | Complete-set structural arb (forecast-free) | No — fee-walled; raw book inconsistent ~16% of the time but the `takerOnly` fee > the residual mispricing (0.37%/0.06% of instants clear; live 0/107) | COMPLETE-SET-ARB.md (the 8th signal) |
 | Copy-trading the top **SPORTS** sharps (adjacent, off-weather) | No — volume machines' edge regresses to ≈0 (follower negative at every lag×spread); high-ROI specialists' "100% win / PASS" is survivorship + a non-executable book-sweep mark. **fishalive re-test 2026-06-29 (operator-flagged $9M/new account): the $9M is REAL realized cash (Σredeem $13.28M − Σbuy $4.28M, reconciles to the user-pnl curve at 0.74%) — but it is 100% ONE pre-match bet on ONE game (Spain fails to beat Cape Verde, 2026-06-15; 9¢ "No" + 45¢ −2.5 spread, $4.28M staked, 100% pre-kickoff, 0 wash). The in-play-sweep mechanism was wrong; the lever is MORE dead — n=1, no samplable/copyable edge, wallet dormant since.** | SPORTS-TRADERS.md §9–§10 (the 9th signal) |
 | Cross-venue RV: same day on Kalshi (NWS-CLI) vs Polymarket (Wunderground) | **No — CAPACITY-walled** — a real quoted cross-venue price gap exists (6/7 city-days net-positive), but TRUE both-book depth shows the cumulative synthetic fills at only **1–10 contracts** (thin tail legs); winFrac over *executable* wins = **0**. Quoted edge ≠ capturable money; same structural-wall class as the 8th | CROSS-VENUE-SPIKE.md (the 10th signal) |
-| **Opening convergence: buy the forecast-center cheap, sell into the convergence on brackets** | **⚠ FLAT-OPEN PREMISE FALSIFIED 2026-06-28 → pivoted to hold-to-resolution, under forward test** — first full-universe capture (51,880 snapshots / 147 markets / 45 cities / 26h): markets do **not** open flat — **0/147** flat at first sight, **3/51,880** captures ever; even caught ≤1h from the true Gamma listing (45 markets, min age ~0.6 min) the peak bucket is median **27%** / min **19.5%**, never the ~9–12% the thesis needs (the 11-bucket book lists pre-informed). The forecast IS available (**97%** seeded → R-13 was never the blocker) and convergence IS real + directional (peak **+16pp** first→last, **117/147** up), so the lever pivots onto the **hold-to-resolution / bracket** variant — but that entry rule reduces to the forecast-vs-market bet falsified 7× (at the center, market ask **0.40 ≈** our prob **0.39**, −1.7pp, a coin flip), so the prior is negative. Measured forward by `opening-resolution-score.ts`; verdict pending resolved markets (~2026-07-06). No capital until the frozen §9R-E net-profit gate PASSes | OPENING-CONVERGENCE-HANDOFF.md + the 2026-06-28 memory (the 12th signal) |
+| **Opening convergence: buy the forecast-center cheap, sell into the convergence on brackets** | **No — KILL, forward-confirmed 2026-07-07 (the twelfth and final signal).** The flat-open premise was falsified (0/147 flat at list; Phase-0.5 spike **NO-GO**, 0/325, Wilson CI [0%,1%]); the sole surviving form — the **maker-exit variant** — backtested a marginal PASS (+6.7%) but that PASS was a **synthetic forecast-centered book converging by construction**. On the **real efficient book** the live forward paper gate KILLs: mean net **−12.6%**, CI **[−21.6%, −3.5%]**, **62 mkts / 26 cities / 7 days**, `makerFillRate` **0.065** vs backtest 49.0%, rebate $0, net −$168 — the resting-maker leg that carried the whole backtest edge almost never fills live. Same market-efficiency wall, now measured on a real book. **Investigation CLOSED — twelve of twelve dead.** | OPENING-CONVERGENCE-HANDOFF.md · MAKER-EXIT-SIM.md · FINDINGS.md 2026-07-07 close (the 12th signal) |
 
 **On REC-1 (the one un-run maker lever, tested 2026-06-23).** After the maker-rebate reframe (net profit by
 *any* mechanism), the last distinct lever was: can WE *learn* which cheap buckets to rest on (vs. mirroring the
@@ -272,6 +273,27 @@ genuinely out-of-market information.
 > [+2.4%, +12.6%]). The 21st day (07-02) joins after post-outage grading catches up. Unchanged: backtest ≠ GO;
 > the live forward paper loop is the gate of record.
 
+> **↳ NEW 2026-07-07 — the live forward maker-exit paper gate KILLs; the 12th signal joins the other eleven.
+> INVESTIGATION CLOSED — twelve of twelve signals now dead.** The forward gate of record (`/maker-exit`,
+> `dash_maker_exit()`, `POST-FABLE-HANDOFF.md`) rendered a settled **KILL** on the last real panel reads: mean net
+> **−12.6%**, 95% CI **[−21.6%, −3.5%]** (the *whole* interval negative, not merely ciLow ≤ 0), on **62 markets /
+> 26 cities / 7 distinct days** — above the frozen sufficiency floor (≥40 / ≥6 / ≥7). `makerFillRate` **0.065**
+> (backtest 49.0% — the fill rate collapsed ~7.5×), `realizedRebateUsd` **$0**, winFrac **0.27**, total net
+> **−$168**. The backtest's marginal PASS (+6.7%, CI [+0.3%, +12.0%], `MAKER-EXIT-SIM.md`) did **not** replicate,
+> and the mechanism is now proven rather than inferred: the backtest replayed a **SYNTHETIC `house_gaussian`-centered
+> book that converges to the forecast by construction** (49% maker fills); the live gate replays the **REAL
+> Polymarket book, which is efficient and does not converge to our forecast** (6.5% fills). The one leg that carried
+> the entire backtest edge — the resting maker take-profit (+$1,543 on 187 fills at 100% win) — almost never fired
+> live, and exits fell to the structurally-negative taker time-stop (−13.4% avg). This is the **same
+> market-efficiency wall that killed the other eleven signals, now measured on a real book instead of a synthetic
+> one** — there is no bug to fix and no artifact to correct that would "restore" the +6.7% (`MAKER-EXIT-SIM.md`
+> root-cause banner, 2026-07-06). Rail **DORMANT**, unchanged from every prior signal. **No capital was ever
+> risked** — the entire forward loop ran paper-only (`POST-FABLE-HANDOFF.md` boundary; the operator funds/keys/
+> authorizes, Claude never trades). *Recording note:* the durable clean gate-row write was infra-blocked for ~2 days
+> by Supabase-Micro saturation at US-evening peak (every panel tick degraded, cErr > 2 → the gate correctly refused
+> to auto-write to `bot_gate_snapshot`); with the verdict settled and robust across city/date subsets, the operator
+> authorized recording it directly (2026-07-07). Re-open criteria: `SIGNAL-BACKLOG.md` §13.
+
 ---
 
 ## The question, precisely
@@ -480,6 +502,7 @@ instrument the system is strong, and *that* is the product:
 | Backlog #4 extreme-day tail calibration — **KILL, sign-reversed** (2026-07-03: tail gap −1.73pp, CI [−2.77, −0.69], n=281 far-tail bets / 236 extreme days — the market OVERPRICES far tails on extreme days; the behavioral underpricing hypothesis is backwards, consistent with the §12 cheap-longshot family) | `SIGNAL-BACKLOG.md` | item 4 |
 | Backlog #12 CITY-SCAN — all-45-city historical city-sim replay — **TWO ENROLLMENT CANDIDATES (analytics selection, no capital): ankara/14h + houston/14h** (2026-07-03, pre-registered TRAIN ≤06-24 selection via the entry-watch shrinkage LB / TEST ≥06-25 confirmation: ankara LB +3.6pp n=11 → TEST +$44.88; houston LB +3.1pp n=11 → TEST +$12.04; munich/16h + buenos-aires/14h fail TEST net, helsinki/15h fails TRAIN LB. **POOLED ROI negative at EVERY entry hour** (−11.4pp @14h → −101.9pp @19h; late-hour collapse partly the locked fixed-bucket bet rule) — the mechanism-A pooled-efficiency prior re-confirmed; surviving heterogeneity is thin and every TEST CI straddles 0 at n=7–8 → the scan SELECTS, the live paper loop CONFIRMS. Two bit-identical independent runs + one adversarial lens; 3 findings adjudicated, none candidate-changing — incl. 296 TRAIN-only frozen-seed look-ahead bets, measured conservative (each touched top-5 cell IMPROVES without them; TEST holdout 100% clean). Enrollment SQL staged in SIGNAL-BACKLOG §12 — operator decision; live refs karachi/singapore/amsterdam do NOT clear the TRAIN bar in this window) | `SIGNAL-BACKLOG.md` | item 12 |
 | Backlog #1b reward-stacking on the maker-exit sell leg — **gate-PASS on the 844-event/21-day backtest** (2026-07-03: full-panel ciLow +0.25%→+2.38% at the conservative 0.05 pool-share floor; TRAIN+TEST both independently PASS from share 0.10; reward delta exactly linear in share. CAVEAT: pool share is UNMEASURED — per-market pool $67/day is a derived average of real 06-24 observations ($66–$226 range); one-sided partial credit (Qtwo/3) modeled per 1a. Backtest cannot resolve the share — only a forward/live read can. Does NOT alter the forward gate of record; if anything the live paper loop's income is understated by excluding rewards) | `SIGNAL-BACKLOG.md` | item 1b |
+| **12th signal — opening-convergence maker-exit — forward gate KILL, closed 2026-07-07** (live paper gate mean net −12.6%, CI [−21.6%,−3.5%], 62 mkts / 26 cities / 7 days, makerFillRate 0.065 vs backtest 49.0%, rebate $0, net −$168; the backtest +6.7% PASS was a synthetic `house_gaussian` book converging by construction — the real efficient book does not, so the resting-maker leg almost never fills live. Same efficiency wall, real book. No capital risked; recorded via operator override after ~2 days of Micro-saturation blocking the clean write) | `FINDINGS.md` (2026-07-07 close) · `MAKER-EXIT-SIM.md` (root-cause banner) | `SIGNAL-BACKLOG.md` item 13 |
 
 ---
 

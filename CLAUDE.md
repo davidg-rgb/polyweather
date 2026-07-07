@@ -86,6 +86,17 @@ dashboard, TypeScript monorepo (`packages/core|io|trading`, `supabase/functions`
 > override). **The forward paper §9R-E gate is UNCHANGED as the gate of record (INSUFFICIENT 6-of-7 days at build
 > close, first 07-05 entries open) — no capital before a frozen PASS; the boundary holds (operator funds/keys/
 > authorizes; Claude never trades, never touches credentials).**
+>
+> **↳ UPDATE 2026-07-07 — the forward maker-exit paper gate KILLS → the 12th signal's last surviving form is closed; ALL TWELVE signals are now dead (`FINDINGS.md`). Investigation CLOSED.**
+> The live gate rendered a settled **KILL** on **62 markets / 26 cities / 7 distinct days** (above the ≥40/≥6/≥7 floor): mean net **−12.6%**, 95% CI
+> **[−21.6%, −3.5%]** (the whole interval negative), `makerFillRate` **0.065** (backtest 49.0%), rebate $0, net −$168. Mechanism proven, not inferred: the
+> backtest replayed a SYNTHETIC `house_gaussian`-centered book that converges to the forecast by construction; the live gate replays the REAL efficient
+> Polymarket book, which does not — so the resting-maker take-profit leg that carried the whole backtest edge almost never fills live (`MAKER-EXIT-SIM.md`
+> root-cause banner). **No capital was ever risked.** The durable clean gate-row write was infra-blocked ~2 days by Supabase-Micro saturation at peak (every
+> tick degraded → the gate correctly refused to auto-write); verdict settled + robust across subsets → operator-authorized direct recording 2026-07-07. Rail
+> (`packages/trading`, the `bets` surface) stays **DORMANT** with **no scoped exception pending** — reopen only per `SIGNAL-BACKLOG.md` §13. The product is
+> fully the analytics/insight value now; the forward instruments (`/maker-exit`, `/paper-trade`, `/amsterdam`, `/replica`, `/data`, `/efficiency`) keep
+> running as analytics regardless of this verdict.
 
 - Hosted Supabase ref: `lenysiqxihsmxljvyybt` (eu-north-1) · Prod: `weather-edge-two.vercel.app`
 - Canonical docs: **`FINDINGS.md`** (the R&D verdict — start here: is there a tradable edge? no, and why),

@@ -795,6 +795,33 @@ expected to survive.
 >   | buenos-aires/14h | 10 | +$13.25 | +2.7pp | 8 | −$6.77 | 62.5% | [−9.4, +37.9] |
 >   | helsinki/15h | 11 | +$88.00 | −0.1pp | 7 | +$44.23 | 57.1% | [−16.0, +59.6] |
 
+## 13. Maker-exit forward gate — CLOSED 2026-07-07, KILL (the 12th and final signal)
+
+The 12th signal's sole surviving form — the opening-convergence **maker-exit variant** (enter at the first
+enterable tick, not the falsified flat open; take profit as a resting maker) — reached its verdict on the **live
+forward paper gate** (`/maker-exit`, `dash_maker_exit()`, the gate of record). Settled **KILL**: 62 markets /
+26 cities / 7 distinct days (above the frozen ≥40/≥6/≥7 sufficiency floor); mean net **−12.6%**, 95% CI
+**[−21.6%, −3.5%]** (the whole interval negative); `makerFillRate` **0.065** vs the backtest's 49.0%;
+`realizedRebateUsd` **$0**; winFrac **0.27**; total net **−$168**.
+
+The backtest's marginal PASS (+6.7%, CI [+0.3%, +12.0%], `MAKER-EXIT-SIM.md`) did NOT replicate — and the
+mechanism is proven, not inferred (`MAKER-EXIT-SIM.md` root-cause banner, 2026-07-06): the backtest replayed a
+**synthetic `house_gaussian`-centered book that converges to the forecast by construction** (49% maker fills); the
+live gate replays the **real Polymarket book, which is efficient and does not converge to our forecast** (6.5%
+fills). The resting maker take-profit — the leg that carried the entire backtest edge (+$1,543 on 187 fills at
+100% win) — almost never fired live, and exits fell to the structurally-negative taker time-stop (−13.4% avg).
+Same market-efficiency wall as the other eleven signals, now measured on a real book. No capital was ever risked;
+recorded via operator override (2026-07-07) after ~2 days of Supabase-Micro saturation blocked the durable clean
+gate-row write.
+
+**Re-open requires a measured, understood mechanism change to the maker-fill rate** (not a lucky window) that
+plausibly moves realized fills back toward the 40–49% band the backtest needed — e.g. a documented queue-position
+or depth-provisioning change — because the backtest edge existed even at rebate 0, so **fill-rate restoration is
+the necessary condition**. A materially higher realized rebate or `qualifyingTickFrac` (both read 0 through the
+entire forward window) strengthen the case but cannot substitute for it. **Do NOT re-open on a backtest re-tune
+alone** — the live gate is definitionally the higher bar, and a backtest tune was exactly what produced the
+synthetic-book false-positive this KILL corrects.
+
 ## What NOT to do
 
 Don't build items 5–10 before items 1–4 resolve — 1–4 are all read-only analysis over data that
