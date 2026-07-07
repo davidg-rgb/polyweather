@@ -6,7 +6,30 @@
 > to **establish that we can actually purchase at each relevant hour**. This is the answer, on REAL executable
 > book data. Boundary intact: no capital moved, no key touched — this is analysis of record.
 
-## TL;DR
+---
+
+## ⛔ CORRECTION (2026-07-07, same session) — the conclusion below is WRONG; realized forward paper data reverses it
+
+The "buy cheap early (11:00), not 14:00" conclusion in the original TL;DR is **backwards**, and the realized
+forward paper P&L (`city_paper_bets`, ~22–25 real bets/hour since 06-29) proves it. **Karachi 11:00 net −$29.73
+(win 36%); Karachi 14:00 net +$23.76 (win 96%).**
+
+**The error:** this analysis assumed accuracy is *constant across hours* (~51%). It is NOT — for the strategy the
+system actually runs (paper sim + live city-taker lane), the predicted bucket is the **running-max floor**, which
+becomes *observed* as the day heats up. Accuracy climbs from ~36% at 11:00 (a forecast-only guess) to ~96% at
+14:00 (the day's high is already in the books, cutover at `forecast_max_hour`=12). The cheap early ask reflects
+genuine uncertainty; the expensive late ask reflects near-certainty the market only slightly underprices. `EV =
+accuracy/price − 1` is right, but the accuracy must be the **hour-varying floor accuracy**, not a flat 51%.
+
+**What survives:** the real-book **ask-by-hour and purchasability** tables below are correct and useful (the book
+IS deep 01:00–15:00, gone 16:00–23:00; execAsk is a $20-probe upper bound). What's wrong is applying flat accuracy
+→ the EV column and the 11:00 recommendation. **The correct best hours (realized): Karachi 13–14, Houston 15,
+Singapore 15, Ankara 16** — which validates the board's `recommendedHour`. See `city-best-hour/summary.md` +
+the realized-P&L-by-hour analysis. **14:00 was the right live hour, not a mistake.**
+
+---
+
+## TL;DR (SUPERSEDED — see the correction above)
 
 1. **Accuracy does not vary by hour.** Our bucket is picked once per day; the hit rate is **event-level, 51.0%
    (l0, n=49)**. The per-hour hit-rate wobble in the MID analysis is *survivorship* (some markets resolve before
