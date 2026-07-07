@@ -11,7 +11,9 @@ import { GOOGLE_DEFAULTS, type GoogleBracketCfg } from '../src/sim/google-bucket
 import { buildGoogleView, GOOGLE_TP_VARIANTS, type RawGooglePrediction } from '../src/sim/google-bucket-view.ts';
 import type { RawBucket, RawCaptureRow } from '../src/sim/opening-bracket-ingest.ts';
 
-const cfg: GoogleBracketCfg = { ...GOOGLE_DEFAULTS, cities: ['amsterdam'] };
+// pins askMax 0.15 + excludeFahrenheit false so the existing 0.14-ask °C fixtures are insulated from the
+// production default changes (askMax 0.12, °C-only). The new defaults are asserted directly in the suites below.
+const cfg: GoogleBracketCfg = { ...GOOGLE_DEFAULTS, askMax: 0.15, excludeFahrenheit: false, cities: ['amsterdam'] };
 const TZ = 'Europe/Amsterdam';
 const DATE = '2026-07-01';
 
@@ -249,5 +251,48 @@ describe('buildGoogleView — grading_mismatch is excluded everywhere (one popul
     expect(v.nFreshEvents).toBe(1);
     expect(v.nGoogleEvents).toBe(1);
     expect(v.gate.nMarkets).toBe(1);
+  });
+});
+
+// ── °C-only mode: US °F markets are excluded (excludeFahrenheit) ──────────────────────────────────────────
+describe('buildGoogleView — °C-only mode excludes US °F markets', () => {
+  // a °F ladder (US market): Google 34°C = 93.2°F floors to 93 → idx2 ('92-93°F') is the predicted bucket.
+  const fLadder = (center: Partial<RawBucket> = {}): RawBucket[] => [
+    bucket(0, '89°F or below'),
+    bucket(1, '90-91°F'),
+    bucket(2, '92-93°F', center),
+    bucket(3, '94-95°F'),
+    bucket(4, '96°F or higher'),
+  ];
+  const fRow = (eventId: string, capturedAt: string, age: number, center: Partial<RawBucket> = {}): RawCaptureRow => ({
+    ...row(eventId, capturedAt, age, center),
+    city: 'dallas',
+    buckets: fLadder(center),
+  });
+  // a °F market that WOULD enter (cheap 0.11 ask, bucketable forecast) but for the °C-only filter.
+  const fEvent: RawCaptureRow[] = [
+    fRow('FAHR', '2026-07-01T08:00:00.000Z', 0.2, { execAsk: 0.11, execBid: 0.1 }),
+    fRow('FAHR', '2026-07-01T08:00:30.000Z', 0.3, { execAsk: 0.11, execBid: 0.35 }),
+  ];
+  const cEvent: RawCaptureRow[] = [
+    row('CELS', '2026-07-01T08:00:00.000Z', 0.2, { execAsk: 0.11, execBid: 0.1 }),
+    row('CELS', '2026-07-01T08:00:30.000Z', 0.3, { execAsk: 0.11, execBid: 0.35 }),
+  ];
+  const google: RawGooglePrediction[] = [{ eventId: 'FAHR', tmaxC: 34, unit: 'F', tz: TZ }, gp('CELS')];
+
+  it('excludeFahrenheit ON: the °F market is skipped (nExcludedFahrenheit), only the °C market trades', () => {
+    const v = buildGoogleView([...fEvent, ...cEvent], [], google, { ...cfg, excludeFahrenheit: true, askMax: 0.12 });
+    expect(v.excludeFahrenheit).toBe(true);
+    expect(v.nExcludedFahrenheit).toBe(1);
+    expect(v.nGoogleEvents).toBe(1); // only the °C market is actionable
+    expect(v.entries.map((e) => e.eventId)).toEqual(['CELS']);
+  });
+
+  it('excludeFahrenheit OFF: the °F market IS entered — proving the °C-only filter is what excludes it', () => {
+    const v = buildGoogleView([...fEvent, ...cEvent], [], google, { ...cfg, excludeFahrenheit: false, askMax: 0.12 });
+    expect(v.excludeFahrenheit).toBe(false);
+    expect(v.nExcludedFahrenheit).toBe(0);
+    expect(v.nGoogleEvents).toBe(2);
+    expect(v.entries.map((e) => e.eventId).sort()).toEqual(['CELS', 'FAHR']);
   });
 });

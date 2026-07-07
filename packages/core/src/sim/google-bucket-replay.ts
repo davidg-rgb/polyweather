@@ -2,8 +2,9 @@
  * core/sim/google-bucket-replay — the PURE taker replay engine for the GOOGLE-PICKS-BUCKET forward paper panel
  * (the operator's "Test 2"; the taker twin of sim/opening-bracket-replay.ts).
  *
- * THE STRATEGY (exact). Across ALL capture-universe cities, per FRESH daily-Tmax market: buy the bucket the
- * latest GOOGLE forecast points at when its taker ask is in the cheap band (askMin ≤ execAsk ≤ askMax, 0.10–0.15); take profit when
+ * THE STRATEGY (exact). Across the °C capture-universe cities (US °F markets excluded — see excludeFahrenheit),
+ * per FRESH daily-Tmax market: buy the bucket the latest GOOGLE forecast points at when its taker ask is in the
+ * cheap band (askMin ≤ execAsk ≤ askMax, 0.10–0.12); take profit when
  * that bucket's execBid re-rates to/above tpAbs; OPTIONALLY stop-loss when its execBid falls to/below slAbs (only
  * when slAbs > 0 — a slAbs ≤ 0 sentinel DISABLES the stop-loss so the position simply HOLDS to resolution); else
  * HOLD to resolution ($1 if the bought bucket wins, $0 else). Taker entry + taker exit. NO time-stop.
@@ -74,31 +75,46 @@ export interface GoogleBracketCfg {
    *  not an edge. 0 DISABLES the gate; it is also inactive when the event's resolvesAt is unknown (null). The
    *  frozen "Test 2" default is 16h. */
   minHoursToResolution: number;
+  /** °C-ONLY buy-side filter (operator-set 2026-07-07): when true the strategy SKIPS US °F markets entirely. In
+   *  the forward sweep the °F cohort went 0/6 while °C went 8/18 — dropping °F was the single biggest P&L lever
+   *  (baseline −$62 → °C-only +$63). Prime suspect: a °C→°F FLOOR-vs-NWS-ROUNDING bucket-mapping artifact (a
+   *  forecast like 31.0°C → 87.8°F floors to the "86-87°F" bucket, but the rounded 88°F resolves "88-89°F") — an
+   *  investigation is open; if it proves fixable this filter is reverted and °F is re-included. This is a
+   *  VIEW-level filter (buildGoogleView reads it via each event's native unit); replayGoogleBracket IGNORES it —
+   *  the engine is unit-agnostic and replays whatever bucket idx it is handed. */
+  excludeFahrenheit: boolean;
 }
 
 /**
  * the frozen defaults — the exact "Test 2" thresholds. cities is filled per-run by the handler.
  *
- * ENTRY BAND [askMin, askMax] = [0.10, 0.15] (operator-set 2026-07-07): buy only when the Google bucket's
- * executable ask is between 10¢ and 15¢ — cheap enough to have upside, but not a near-zero longshot (< 10¢ buckets
- * are hopeless losers converging to 0). The whole strategy is buy-cheap→sell-higher (TP exits 0.30–0.50).
+ * ENTRY BAND [askMin, askMax] = [0.10, 0.12] (operator-set 2026-07-07, tightened from 0.15): buy only when the
+ * Google bucket's executable ask is between 10¢ and 12¢. The offline buy/sell sweep found the 12–15¢ slice is
+ * disproportionately losers — tightening the ceiling to 12¢ improved realized P&L (all-cities −$88 → +$73 at the
+ * same TP), and the cheaper entries carry a bigger convergence multiple. The whole strategy is
+ * buy-cheap→sell-higher (TP exits 0.30–0.50); < 10¢ buckets are hopeless longshots converging to 0.
+ *
+ * excludeFahrenheit TRUE (operator-set 2026-07-07): °C-only mode — skip US °F markets (the 0/6 cohort; see the
+ * field doc). The offline optimum was °C-only + band ≤12¢ (+$136 realized / 47% win vs the −$62 baseline).
  *
  * minHoursToResolution 20 (operator-set 2026-07-07, was 16): the purchase window CLOSES 20h before resolution —
  * no buys in the final 20h, where the losers all decay cheap.
  *
  * slAbs 0: the no-SL sentinel (≤ 0 disables the stop-loss; the position holds to resolution as its floor). The
- * panel sweeps five TP-only exit variants {0.30..0.50}; 0.30 is the canonical/headline variant.
+ * panel sweeps five TP-only exit variants {0.30..0.50}; 0.30 is the canonical/headline variant — the sweep
+ * confirmed 0.28–0.30 is the peak (lower TP sells winners too cheap; a taker SL self-triggers on the spread).
  */
 export const GOOGLE_DEFAULTS: GoogleBracketCfg = {
   cities: [],
   perPositionUsd: 20,
   askMin: 0.1,
-  askMax: 0.15,
+  askMax: 0.12,
   tpAbs: 0.3,
   slAbs: 0,
   paperSlippage: 0.01,
   takerFeeRate: 0.05,
   minHoursToResolution: 20,
+  excludeFahrenheit: true,
 };
 
 /** GOOGLE_DEFAULTS with the run's capture-universe cities pinned in (falls back to the empty default scope). */

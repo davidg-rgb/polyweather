@@ -22,8 +22,10 @@ import type { OpeningBucket } from '../src/sim/opening-convergence.ts';
 // ── fixtures ─────────────────────────────────────────────────────────────────────────────────────────
 const TZ = 'Europe/Amsterdam';
 const DATE = '2026-07-01';
-/** default cfg — the frozen "Test 2" (askMax 0.15, tpAbs 0.30, slAbs 0 = NO stop-loss). */
-const cfg: GoogleBracketCfg = { ...GOOGLE_DEFAULTS, cities: ['amsterdam'] };
+/** default cfg for the gating fixtures — pins askMax 0.15 so the 0.14/0.15-ask fixtures exercise the ≤ askMax
+ *  entry gate at a valid in-band value. The PRODUCTION default (askMax 0.12, °C-only) is asserted separately in
+ *  the googleCfg test below; replayGoogleBracket is unit-agnostic, so excludeFahrenheit is irrelevant here. */
+const cfg: GoogleBracketCfg = { ...GOOGLE_DEFAULTS, askMax: 0.15, cities: ['amsterdam'] };
 /** a cfg with the stop-loss ARMED (slAbs 0.15 > 0) — used to prove the SL leg still fires when opted in. */
 const slCfg: GoogleBracketCfg = { ...cfg, slAbs: 0.15 };
 
@@ -312,14 +314,31 @@ describe('replayGoogleBracket — totality + googleCfg', () => {
     expect(replayGoogleBracket(junk, 2, cfg).executed).toBe(false);
   });
 
-  it('googleCfg pins the run cities and keeps the frozen thresholds (entry band 0.10–0.15, TP 0.30, no SL, 20h window)', () => {
+  it('googleCfg pins the run cities and keeps the frozen thresholds (entry band 0.10–0.12, TP 0.30, no SL, 20h window, °C-only)', () => {
     const c = googleCfg(['amsterdam', 'paris']);
     expect(c.cities).toEqual(['amsterdam', 'paris']);
     expect(c.askMin).toBe(0.1);
-    expect(c.askMax).toBe(0.15);
+    expect(c.askMax).toBe(0.12); // tightened from 0.15 (operator-set 2026-07-07): buy only 10–12¢
     expect(c.tpAbs).toBe(0.3);
     expect(c.slAbs).toBe(0); // the no-SL sentinel — the stop-loss is disabled in the frozen "Test 2"
     expect(c.minHoursToResolution).toBe(20); // purchase window closes 20h before resolution
+    expect(c.excludeFahrenheit).toBe(true); // °C-only: US °F markets excluded (operator-set 2026-07-07)
     expect(googleCfg([]).cities).toEqual(GOOGLE_DEFAULTS.cities); // empty → the default scope
+  });
+
+  it('the production default band [0.10, 0.12] rejects a 0.14 ask the old 0.15 ceiling would have taken', () => {
+    // the tightened band: a 0.14 ask is now ABOVE the 0.12 ceiling → never enters (the 12–15¢ slice the sweep
+    // found was disproportionately losers). googleCfg carries the real production default (askMax 0.12).
+    const prodCfg = googleCfg(['amsterdam']);
+    const above = replayGoogleBracket(ev({ ticks: [tk(T0, 0.2, { execAsk: 0.14, execBid: 0.1 })] }), 2, prodCfg);
+    expect(above.executed).toBe(false);
+    expect(above.exitReason).toBe('never_enterable');
+    // but a 0.11 ask (inside [0.10, 0.12]) still enters and can take profit.
+    const inBand = replayGoogleBracket(
+      ev({ ticks: [tk(T0, 0.2, { execAsk: 0.11, execBid: 0.08 }), tk(T1, 0.3, { execBid: 0.35 })] }),
+      2, prodCfg,
+    );
+    expect(inBand.executed).toBe(true);
+    expect(inBand.exitReason.startsWith('take_profit')).toBe(true);
   });
 });

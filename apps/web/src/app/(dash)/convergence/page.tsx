@@ -145,7 +145,23 @@ function CoveragePanel({ view }: { view: GoogleView }): ReactElement {
           <div className="big" style={{ color: view.nNoGoogleEvents > 0 ? AMBER : undefined }}>{view.nNoGoogleEvents}</div>
           <div className="sub">forward seed still filling in</div>
         </div>
+        {view.excludeFahrenheit ? (
+          <div className="tile">
+            <div className="cap">°F excluded</div>
+            <div className="big" style={{ color: view.nExcludedFahrenheit > 0 ? AMBER : undefined }}>{view.nExcludedFahrenheit}</div>
+            <div className="sub">US °F markets · °C-only mode</div>
+          </div>
+        ) : null}
       </div>
+      {view.excludeFahrenheit ? (
+        <p className="muted small" style={{ marginTop: '0.5rem' }}>
+          <strong>°C-only mode</strong> (operator-set): US °F markets are excluded from the strategy. In the offline
+          buy/sell sweep the °F cohort went 0/6 while °C went 8/18 — dropping °F was the biggest P&amp;L lever. Prime
+          suspect is a °C→°F floor-vs-rounding bucket-mapping artifact (a 31.0°C → 87.8°F forecast floors to
+          &ldquo;86-87°F&rdquo; but the rounded 88°F resolves &ldquo;88-89°F&rdquo;); an investigation is open — if it
+          proves fixable, °F is re-included.
+        </p>
+      ) : null}
       {view.citiesNoGoogle.length > 0 ? (
         <p className="muted small" style={{ marginTop: '0.5rem' }}>
           <strong>No Google data yet</strong> for {view.citiesNoGoogle.length} cit
@@ -325,8 +341,8 @@ export default async function ConvergencePage(): Promise<ReactElement> {
       </h1>
       <p className="muted small">
         The operator&apos;s &ldquo;Test 2&rdquo;: a <strong>pure taker</strong> strategy driven only by Google
-        Weather&apos;s predicted bucket. Across all capture cities, per fresh daily-Tmax market: buy the
-        Google-predicted bucket when its ask is cheap (<span className="mono">execAsk &lt; {fmtProb(view.askMax)}</span>),
+        Weather&apos;s predicted bucket. Across the <strong>°C</strong> capture cities{view.excludeFahrenheit ? ' (US °F markets excluded — °C-only)' : ''}, per fresh daily-Tmax market: buy the
+        Google-predicted bucket when its ask is cheap (<span className="mono">{fmtProb(view.askMin)} ≤ execAsk ≤ {fmtProb(view.askMax)}</span>),
         then compare <strong>five take-profit exits</strong> (<span className="mono">bid ≥ 0.30 … 0.50</span>) over that
         same fixed entry — <strong>no stop-loss</strong>, HOLD to resolution as the floor. This is the forward{' '}
         <strong>paper measurement</strong> made legible — logged potential entries, their exits, per-day chances,

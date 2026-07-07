@@ -157,9 +157,12 @@ export interface GoogleView {
   days: number;
   cities: string[];
   /** the live thresholds this view replayed (surfaced so the page shows the config). */
+  askMin: number;
   askMax: number;
   tpAbs: number;
   slAbs: number;
+  /** °C-only mode: when true, US °F markets were excluded from the strategy (see nExcludedFahrenheit). */
+  excludeFahrenheit: boolean;
   perEntryStakeUsd: number;
   /** fresh markets considered in the window (the entry-rule denominator, gm-excluded). */
   nFreshEvents: number;
@@ -167,6 +170,8 @@ export interface GoogleView {
   nGoogleEvents: number;
   /** fresh markets with NO Google forecast (Google is a ~1-week forward seed; ~10/45 cities have no feed). */
   nNoGoogleEvents: number;
+  /** °F markets that HAD a Google forecast but were skipped by the °C-only filter (0 when excludeFahrenheit is off). */
+  nExcludedFahrenheit: number;
   /** the cities whose fresh markets lacked a Google forecast this window (rendered "no Google data"). */
   citiesNoGoogle: string[];
   entries: GoogleEntry[];
@@ -245,6 +250,7 @@ export function buildGoogleView(
   const citiesNoGoogle = new Set<string>();
   let nGoogleEvents = 0;
   let nNoGoogleEvents = 0;
+  let nExcludedFahrenheit = 0;
 
   // per-TP-variant accumulators (same order as GOOGLE_TP_VARIANTS). The ENTRY is fixed across variants, so the
   // executed set — and thus nTrades — is identical; only the exit mix + P&L differ. realized-vs-open split is
@@ -267,6 +273,12 @@ export function buildGoogleView(
       // no Google feed for this market — it simply cannot be a Google-bucket trade (never a crash).
       nNoGoogleEvents++;
       citiesNoGoogle.add(e.city);
+      continue;
+    }
+    if (cfg.excludeFahrenheit && g.unit === 'F') {
+      // °C-only mode (operator-set): US °F markets went 0/6 in the forward sweep (floor-vs-rounding bucket-mapping
+      // suspect). Excluded from the strategy — counted here for transparency, never entered/scored.
+      nExcludedFahrenheit++;
       continue;
     }
     // the ladder labels are constant per event; use the first tick that carries buckets.
@@ -423,13 +435,16 @@ export function buildGoogleView(
   return {
     days: 0, // set by the caller (the RPC window) — kept here for shape completeness
     cities: cfg.cities,
+    askMin: cfg.askMin,
     askMax: cfg.askMax,
     tpAbs: cfg.tpAbs,
     slAbs: cfg.slAbs,
+    excludeFahrenheit: cfg.excludeFahrenheit,
     perEntryStakeUsd: cfg.perPositionUsd,
     nFreshEvents: considered.length,
     nGoogleEvents,
     nNoGoogleEvents,
+    nExcludedFahrenheit,
     citiesNoGoogle: [...citiesNoGoogle].sort(),
     entries,
     perDay,
