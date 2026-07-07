@@ -1,0 +1,173 @@
+/**
+ * dump-opening-captures against PGlite (the real migration chain) + a temp output dir.
+ *
+ * Pins the properties the C95 order-book archive stands on: (1) a keyset dump reads EVERY row exactly once and
+ * writes gzipped NDJSON shards whose union is the whole table (rowsWritten == count(*), distinctEvents ==
+ * count(distinct event_id)); (2) the raw bid/ask survives — a shard line's `buckets` carries the per-bucket
+ * bestBid/bestAsk losslessly; (3) the dump is RESUMABLE — a partial run (maxBatches) leaves done=false with a
+ * cursor, and a re-run completes coverage with NO double-counting; (4) verifyDump's index-only re-walk agrees
+ * with the manifest.
+ */
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { gunzipSync } from 'node:zlib';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import type { PGlite } from '@electric-sql/pglite';
+import { freshDb } from '../../supabase/tests/harness.ts';
+import { toPgliteParam } from '../lib/pglite-param.ts';
+import type { ScriptDb } from '../lib/script-db.ts';
+import { dumpTable, fetchBatchAdaptive, MIN_BATCH_ROWS, readManifest, verifyDump } from './dump-opening-captures.ts';
+
+let db: PGlite;
+let sdb: ScriptDb;
+let outDir: string;
+
+const TOTAL_A = 7;
+const TOTAL_B = 5;
+
+async function seedEvent(slug: string): Promise<string> {
+  await db.query(
+    `insert into cities (slug, display_name, country_code, unit, tz, region, first_seen, last_seen)
+     values ($1, $1, 'NL', 'C', 'Europe/Amsterdam', 'europe-west', now(), now()) on conflict (slug) do nothing`,
+    [slug],
+  );
+  const ev = await db.query<{ id: string }>(
+    `insert into market_events (poly_event_id, slug, city_id, target_date, unit, ladder_ok)
+     select 'pe-' || $1, 'ev-' || $1, id, current_date - 30, 'C', true from cities where slug = $1 returning id`,
+    [slug],
+  );
+  return ev.rows[0]!.id;
+}
+
+/** Seed n captures whose `buckets` jsonb carries a real bestBid/bestAsk per bucket (the thing not in the price-path archive). */
+async function seedCaptures(eventId: string, slug: string, n: number): Promise<void> {
+  for (let i = 0; i < n; i++) {
+    await db.query(
+      `insert into opening_captures
+         (captured_at, event_id, city, target_date, tz_name, hours_since_listing, peak_mid, is_flat_open,
+          house_seeded, buckets, ev_vol24h, neg_risk)
+       values (now() - make_interval(days => 28) + make_interval(mins => $3::int * 10), $1, $2, current_date - 30,
+          'Europe/Amsterdam', 0.5, 0.12, true, true,
+          $4::jsonb, 9000, true)`,
+      [eventId, slug, i, [{ idx: 0, bestBid: 0.09 + i / 100, bestAsk: 0.16 + i / 100 }]],
+    );
+  }
+}
+
+beforeAll(async () => {
+  db = await freshDb();
+  sdb = {
+    query: async <T,>(sql: string, params: unknown[] = []): Promise<T[]> =>
+      (await db.query<T>(sql, params.map(toPgliteParam))).rows,
+    end: async () => {},
+  };
+  outDir = mkdtempSync(join(tmpdir(), 'oc-dump-'));
+  const a = await seedEvent('dump-a');
+  const b = await seedEvent('dump-b');
+  await seedCaptures(a, 'dump-a', TOTAL_A);
+  await seedCaptures(b, 'dump-b', TOTAL_B);
+});
+
+afterAll(async () => {
+  await db?.close();
+  rmSync(outDir, { recursive: true, force: true });
+});
+
+function shardLines(dir: string): Record<string, unknown>[] {
+  return readdirSync(dir)
+    .filter((f) => f.endsWith('.ndjson.gz'))
+    .sort()
+    .flatMap((f) => gunzipSync(readFileSync(join(dir, f))).toString('utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l) as Record<string, unknown>));
+}
+
+describe('dump-opening-captures — keyset coverage / bid-ask fidelity / resume / verify', () => {
+  it('dumps every row exactly once across shards, with distinct-event accounting', async () => {
+    const m = await dumpTable(sdb, { outDir, batchRows: 3 }); // batch 3 forces 12 → multiple shards
+    expect(m.done).toBe(true);
+    expect(m.rowsWritten).toBe(TOTAL_A + TOTAL_B);
+    expect(m.distinctEvents).toBe(2);
+    expect(m.shards.length).toBeGreaterThan(1); // 12 rows / batch 3 ⇒ ≥4 shards
+
+    const lines = shardLines(outDir);
+    expect(lines.length).toBe(TOTAL_A + TOTAL_B);
+    const ids = lines.map((r) => String(r['id']));
+    expect(new Set(ids).size).toBe(ids.length); // no row written twice
+  });
+
+  it('preserves the raw bestBid/bestAsk inside each capture (the archive-gap payload)', () => {
+    const lines = shardLines(outDir);
+    for (const row of lines) {
+      const buckets = row['buckets'] as { idx: number; bestBid: number; bestAsk: number }[];
+      expect(Array.isArray(buckets)).toBe(true);
+      expect(typeof buckets[0]!.bestBid).toBe('number');
+      expect(typeof buckets[0]!.bestAsk).toBe('number');
+      expect(buckets[0]!.bestAsk).toBeGreaterThan(buckets[0]!.bestBid);
+    }
+  });
+
+  it('verifyDump agrees with the manifest (rows + distinct events)', async () => {
+    const v = await verifyDump(sdb, outDir, 4);
+    expect(v.rowsMatch).toBe(true);
+    expect(v.eventsMatch).toBe(true);
+    expect(v.dbRows).toBe(TOTAL_A + TOTAL_B);
+    expect(v.dbEvents).toBe(2);
+  });
+
+  it('is resumable — a partial run leaves a cursor, a re-run completes with no double-count', async () => {
+    const resumeDir = mkdtempSync(join(tmpdir(), 'oc-dump-resume-'));
+    try {
+      const partial = await dumpTable(sdb, { outDir: resumeDir, batchRows: 3, maxBatches: 1 });
+      expect(partial.done).toBe(false);
+      expect(partial.rowsWritten).toBe(3); // exactly one batch
+      expect(partial.lastId).not.toBeNull();
+
+      const finished = await dumpTable(sdb, { outDir: resumeDir, batchRows: 3 }); // resumes from the manifest cursor
+      expect(finished.done).toBe(true);
+      expect(finished.rowsWritten).toBe(TOTAL_A + TOTAL_B); // completed, not doubled
+      expect(finished.distinctEvents).toBe(2);
+
+      const lines = shardLines(resumeDir);
+      expect(lines.length).toBe(TOTAL_A + TOTAL_B);
+      expect(new Set(lines.map((r) => String(r['id']))).size).toBe(TOTAL_A + TOTAL_B);
+      expect(readManifest(resumeDir)!.done).toBe(true);
+    } finally {
+      rmSync(resumeDir, { recursive: true, force: true });
+    }
+  });
+
+  it('fetchBatchAdaptive shrinks on statement timeout, retries a malformed (post-cancel) result, and recovers', async () => {
+    const good = [{ cursor_id: '42', event_id: 'e1', row: { id: 42 } }];
+    const script: (() => unknown)[] = [
+      () => { throw Object.assign(new Error('canceling statement due to statement timeout'), { code: '57014' }); },
+      () => [{ row: { id: 1 } }], // malformed: missing cursor_id (the post-cancel dirty-connection case)
+      () => good,
+    ];
+    let calls = 0;
+    const fakeDb: ScriptDb = {
+      query: async <T,>(): Promise<T[]> => script[calls++]!() as T[],
+      end: async () => {},
+    };
+    const slept: number[] = [];
+    const res = await fetchBatchAdaptive(fakeDb, null, 1000, MIN_BATCH_ROWS, () => {}, async (ms) => { slept.push(ms); });
+    expect(res.rows).toEqual(good);
+    expect(res.batch).toBe(500); // halved once by the timeout
+    expect(calls).toBe(3); // timeout → malformed → good
+    expect(slept.length).toBe(2); // one backoff per retry
+  });
+
+  it('fetchBatchAdaptive gives up after repeated failures at the floor (surfaces for resume)', async () => {
+    const alwaysTimeout: ScriptDb = {
+      query: async <T,>(): Promise<T[]> => { throw Object.assign(new Error('timeout'), { code: '57014' }); },
+      end: async () => {},
+    };
+    await expect(fetchBatchAdaptive(alwaysTimeout, null, MIN_BATCH_ROWS, MIN_BATCH_ROWS, () => {}, async () => {})).rejects.toThrow();
+  });
+
+  it('a completed manifest is idempotent — a re-run without --force writes nothing new', async () => {
+    const before = readManifest(outDir)!;
+    const again = await dumpTable(sdb, { outDir, batchRows: 3 });
+    expect(again.rowsWritten).toBe(before.rowsWritten);
+    expect(again.shards.length).toBe(before.shards.length);
+  });
+});

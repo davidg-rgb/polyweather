@@ -120,6 +120,24 @@ describe('prune-opening-captures — candidates / pre-flight / batched delete', 
     expect(Number(n!.n)).toBe(12); // 7 + 3 + 2 — nothing deleted
   });
 
+  it('dump pre-flight (keyOf=eventId against a Set) gates on the dumped event set, not the price-path archive', async () => {
+    const cands = await findCandidates(sdb); // [oldEv]
+    const keyOf = (c: { eventId: string }) => c.eventId;
+    // event NOT in the dumped set → missing (no dumped rows, no delete)
+    expect(preflightArchive(cands, new Set<string>(), keyOf).ok).toBe(false);
+    // event present in the dumped set → passes (this is how the aggressive C95 prune clears sub-25-day events)
+    const ok = preflightArchive(cands, new Set([oldEv.id]), keyOf);
+    expect(ok.ok).toBe(true);
+    expect(ok.missing).toEqual([]);
+  });
+
+  it('findCandidates honors an aggressive resolved-age override (the recent event becomes a candidate)', async () => {
+    // stock 25d → only oldEv; age 1 → oldEv (30d) AND recentEv (5d), but never the unresolved openEv.
+    const aggressive = await findCandidates(sdb, 1);
+    expect(new Set(aggressive.map((c) => c.eventId))).toEqual(new Set([oldEv.id, recentEv.id]));
+    expect(aggressive.map((c) => c.eventId)).not.toContain(openEv.id);
+  });
+
   it('executePrune (passing pre-flight) deletes in ≤batchRows statements and leaves every other event intact', async () => {
     const cands = await findCandidates(sdb);
     const pre = preflightArchive(cands, indexArchive(archiveDir)); // the file written by the pre-flight test

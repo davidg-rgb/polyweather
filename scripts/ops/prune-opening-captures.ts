@@ -11,12 +11,20 @@
  * DRY-RUN BY DEFAULT: prints per-event candidate counts + a stored-bytes estimate (pg_column_size on the
  * TOASTed `buckets` — the compressed on-disk payload, no detoast) and exits. `--execute` re-runs the
  * pre-flight, REFUSES if any candidate is un-archived, then deletes in PK-keyed batches (≤5000 rows per
- * statement, so no single statement runs long). Operator-gated + DB-heavy: run OFF the :35 maker-exit-panel
- * tick window, and follow with VACUUM ANALYZE (printed as a reminder — the deleted TOAST space is only
- * reusable after a vacuum, and the collector shows autovacuum has not kept up post-incident).
+ * statement, so no single statement runs long). Operator-gated + DB-heavy: run OFF any heavy DB window,
+ * and follow with VACUUM ANALYZE (printed as a reminder — the deleted TOAST space is only reusable after a
+ * vacuum, and the collector shows autovacuum has not kept up post-incident).
  *
- * Run: pnpm tsx scripts/ops/prune-opening-captures.ts             # dry-run (default; read-only)
- *      pnpm tsx scripts/ops/prune-opening-captures.ts --execute   # delete (archive pre-flight enforced)
+ * C95 AGGRESSIVE MODE (the 12th signal is CLOSED — the 21-day panel window is moot): pass
+ * `--preflight dump --resolved-age-days N` to prune far below the stock 25 days, gated on the VERIFIED
+ * opening_captures dump (dump-opening-captures.ts). The dump is the ONLY archive that carries the raw bid/ask
+ * AND covers 100% of events, so the price-path archive's coverage gaps for recently-resolved events no longer
+ * block the reclaim. Safety chain: dump → `--verify` (stamps manifest.verified) → prune `--preflight dump`.
+ *
+ * Run: pnpm tsx scripts/ops/prune-opening-captures.ts                                      # dry-run, stock 25d, price-path archive
+ *      pnpm tsx scripts/ops/prune-opening-captures.ts --execute                            # delete (archive pre-flight enforced)
+ *      pnpm tsx scripts/ops/prune-opening-captures.ts --preflight dump --resolved-age-days 1           # dry-run, aggressive, dump-gated
+ *      pnpm tsx scripts/ops/prune-opening-captures.ts --preflight dump --resolved-age-days 1 --execute # delete, aggressive, dump-gated
  */
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -24,6 +32,7 @@ import { parseArgs } from 'node:util';
 import { loadEnv } from '../lib/load-env.ts';
 import { makeScriptDb, type ScriptDb } from '../lib/script-db.ts';
 import { indexArchive } from '../research/tune-convergence.ts';
+import { OUT_ROOT as DUMP_ROOT, readDumpedEventIds, readManifest } from './dump-opening-captures.ts';
 
 const ARCHIVE_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', 'research', 'out', 'market-history');
 
@@ -66,12 +75,23 @@ export async function findCandidates(db: ScriptDb, resolvedAgeDays = RESOLVED_AG
   );
 }
 
-/** MANDATORY pre-flight: every candidate's full price path must be archived locally. No archive file, no delete. */
+/**
+ * MANDATORY pre-flight: every candidate's data must be archived locally. No archive file, no delete.
+ *
+ * `keyOf` extracts the candidate's lookup key and `archiveIdx` is any `{ has(key) }` index:
+ *   - default (price-path archive): key = polyEventId, index = indexArchive(market-history) — the sim substrate.
+ *   - dump mode: key = eventId, index = the verified opening_captures dump's event set — the ONLY archive that
+ *     carries the raw bid/ask, and covers 100% of events (so an aggressive sub-25-day prune is safe).
+ */
 export function preflightArchive(
   candidates: PruneCandidate[],
-  archiveIdx: Map<string, string>,
+  archiveIdx: { has(key: string): boolean },
+  keyOf: (c: PruneCandidate) => string | null = (c) => c.polyEventId,
 ): { ok: boolean; missing: PruneCandidate[] } {
-  const missing = candidates.filter((c) => !c.polyEventId || !archiveIdx.has(c.polyEventId));
+  const missing = candidates.filter((c) => {
+    const k = keyOf(c);
+    return !k || !archiveIdx.has(k);
+  });
   return { ok: missing.length === 0, missing };
 }
 
@@ -108,17 +128,49 @@ export async function executePrune(
 
 const mb = (bytes: number): string => `${(bytes / 1024 ** 2).toFixed(1)} MB`;
 
+/**
+ * Resolve the pre-flight index + key extractor for the chosen mode.
+ *   'archive' (default) — the price-path sim archive, keyed by polyEventId (the stock 25-day guard).
+ *   'dump'              — the VERIFIED opening_captures dump's event set, keyed by eventId. This is the ONLY
+ *                         archive carrying the raw bid/ask, and it covers 100% of events, so it safely unlocks
+ *                         an aggressive sub-25-day prune of the CLOSED signal. Refuses unless the dump manifest
+ *                         is present, done, AND verified (dump → --verify → prune is the safety chain).
+ */
+function resolvePreflight(mode: 'archive' | 'dump', dumpDir: string): {
+  idx: { has(key: string): boolean };
+  keyOf: (c: PruneCandidate) => string | null;
+  label: string;
+} {
+  if (mode === 'dump') {
+    const m = readManifest(dumpDir);
+    if (!m?.done) throw new Error(`--preflight dump: no COMPLETED dump at ${dumpDir} — run dump-opening-captures.ts first`);
+    if (!m.verified) throw new Error(`--preflight dump: the dump at ${dumpDir} is not verified — run \`dump-opening-captures.ts --verify\` first`);
+    return { idx: readDumpedEventIds(dumpDir), keyOf: (c) => c.eventId, label: `verified dump event set (${dumpDir})` };
+  }
+  return { idx: indexArchive(ARCHIVE_ROOT), keyOf: (c) => c.polyEventId, label: `price-path archive (${ARCHIVE_ROOT})` };
+}
+
 async function main(): Promise<void> {
-  const { values } = parseArgs({ options: { execute: { type: 'boolean', default: false } } });
+  const { values } = parseArgs({
+    options: {
+      execute: { type: 'boolean', default: false },
+      'resolved-age-days': { type: 'string' },
+      preflight: { type: 'string', default: 'archive' },
+      'dump-dir': { type: 'string' },
+    },
+  });
   loadEnv();
-  const archiveIdx = indexArchive(ARCHIVE_ROOT);
+  const mode = values.preflight === 'dump' ? 'dump' : 'archive';
+  const ageDays = values['resolved-age-days'] ? Number(values['resolved-age-days']) : RESOLVED_AGE_DAYS;
+  const dumpDir = values['dump-dir'] ?? DUMP_ROOT;
+  const { idx, keyOf, label } = resolvePreflight(mode, dumpDir);
   const db = makeScriptDb();
   try {
-    const candidates = await findCandidates(db);
+    const candidates = await findCandidates(db, ageDays);
     const totRows = candidates.reduce((s, c) => s + Number(c.nRows), 0);
     const totBytes = candidates.reduce((s, c) => s + Number(c.bytesEst), 0);
 
-    console.log(`prune-opening-captures — events resolved ≥ ${RESOLVED_AGE_DAYS} days ago still carrying ticks:`);
+    console.log(`prune-opening-captures — events resolved ≥ ${ageDays} days ago still carrying ticks (pre-flight: ${label}):`);
     for (const c of candidates) {
       console.log(
         `  ${c.targetDate}  ${c.city.padEnd(14)} resolved ${c.resolvedAt}  ${String(c.nRows).padStart(5)} rows  ` +
@@ -127,19 +179,23 @@ async function main(): Promise<void> {
     }
     console.log(`TOTAL: ${candidates.length} events · ${totRows} capture rows · ~${mb(totBytes)} stored buckets payload`);
 
-    const pre = preflightArchive(candidates, archiveIdx);
+    const pre = preflightArchive(candidates, idx, keyOf);
     if (!pre.ok) {
-      console.log(`\n⛔ PRE-FLIGHT FAIL — ${pre.missing.length} candidate(s) NOT in the local archive (${ARCHIVE_ROOT}):`);
-      for (const c of pre.missing) console.log(`  MISSING ${c.targetDate} ${c.city} ${c.polyEventId ?? '(no poly_event_id)'}`);
-      console.log('No archive file, no delete. Re-pull the archive (backfill-market-history --full-series) and re-run.');
+      console.log(`\n⛔ PRE-FLIGHT FAIL — ${pre.missing.length} candidate(s) NOT in the ${mode === 'dump' ? 'dump' : 'local archive'}:`);
+      for (const c of pre.missing) console.log(`  MISSING ${c.targetDate} ${c.city} ${mode === 'dump' ? c.eventId : (c.polyEventId ?? '(no poly_event_id)')}`);
+      console.log(
+        mode === 'dump'
+          ? 'No dumped rows for this event, no delete. Re-run the dump + --verify and re-run.'
+          : 'No archive file, no delete. Re-pull the archive (backfill-market-history --full-series) and re-run.',
+      );
       if (values.execute) process.exitCode = 1;
       return;
     }
-    console.log(`✅ pre-flight: all ${candidates.length} candidate events present in the local archive.`);
+    console.log(`✅ pre-flight: all ${candidates.length} candidate events present in the ${mode === 'dump' ? 'verified dump' : 'local archive'}.`);
 
     if (!values.execute) {
       console.log('\nDRY-RUN (default) — nothing deleted. Re-run with --execute to delete.');
-      console.log('Schedule OFF the :35 maker-exit-panel tick window (RUNBOOK / FASTTRACK hard rule 1).');
+      console.log('Schedule OFF any heavy DB window (RUNBOOK / FASTTRACK hard rule 1).');
       return;
     }
 
