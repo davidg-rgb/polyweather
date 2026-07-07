@@ -29,6 +29,7 @@ import type {
   DailyRow,
   EdgeRow,
   EntryWatchResult,
+  GoogleView,
   LockedBuy,
   MakerExitView,
   ReplicaStrategy,
@@ -1885,6 +1886,39 @@ export async function getConvergence(db: WebDb): Promise<ConvergenceFeed | null>
   let v: ConvergencePayload | null;
   try {
     v = await one<ConvergencePayload>(db, 'dash_convergence', {});
+  } catch {
+    return null;
+  }
+  if (!v) return null;
+  return { generatedAt: v.generatedAt ?? null, view: v.view ?? null };
+}
+
+// --- /convergence (Google-picks-bucket panel) — Google forward-paper overview (dash_google_paper, 0086) -----
+
+/** The Google-picks-bucket snapshot feed: the latest computed view + when the Edge tick produced it. */
+export interface GooglePaperFeed {
+  /** when the google-paper-panel Edge tick produced the snapshot (null if none captured yet). */
+  generatedAt: string | null;
+  /** the computed view (entries / per-day / money tracker / gate / Google coverage); null until the first tick. */
+  view: GoogleView | null;
+}
+
+interface GooglePaperPayload {
+  generatedAt: string | null;
+  view: GoogleView | null;
+}
+
+/**
+ * The Google-picks-bucket forward-paper overview (dash_google_paper, 0086) for the /convergence page (the
+ * operator's "Test 2"). The page reads the latest snapshot the google-paper-panel Edge tick computed (a pure
+ * taker strategy on Google's predicted bucket: buy execAsk < 0.18, TP execBid ≥ 0.30, SL execBid ≤ 0.15, else
+ * hold-to-resolution). Degrades to null (not a thrown 500) if the RPC errors so the page can deploy ahead of the
+ * 0086 RPC.
+ */
+export async function getGooglePaper(db: WebDb): Promise<GooglePaperFeed | null> {
+  let v: GooglePaperPayload | null;
+  try {
+    v = await one<GooglePaperPayload>(db, 'dash_google_paper', {});
   } catch {
     return null;
   }

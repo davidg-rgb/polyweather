@@ -361,6 +361,10 @@ describe('migrations 0001–0010', () => {
       // (the city-paper-trade cron + edge fn already exist from 0070; the handler EXTENSION is operator-deployed;
       // count stays 29). Twin: city-live.test.ts. CITY-LIVE.md §2.
       '0085_city_live.sql',
+      // 0086: Google-picks-bucket forward-paper panel — new google_paper_panel table + record_google_paper +
+      // google_paper_inputs + dash_google_paper + a google-paper-panel */15 cron (count 29 → 30). Replaces what
+      // the /convergence page renders (the 0069 convergence machinery stays intact until cutover). GoogleView.
+      '0086_google_paper.sql',
     ]);
   });
 });
@@ -826,6 +830,7 @@ describe('0034: internal-RPC lockdown — anon/authenticated revoked except the 
     'dash_cross_venue',  // 0062: cross-venue (Kalshi↔Polymarket) RV panel operator read
     'dash_data',  // 0065: /data forecast-accuracy-by-market operator read
     'dash_convergence',  // 0069: /convergence opening-convergence forward-paper overview operator read
+    'dash_google_paper',  // 0086: /convergence (replaced) Google-picks-bucket forward-paper operator read
     'dash_city_sim',  // 0070: /paper-trade multi-city paper-trade head-to-head operator read
     'dash_maker_exit',  // 0073: /maker-exit forward maker-exit paper loop operator read
     'dash_maker_exit_history',  // 0079: /maker-exit assumptions-over-time sparkline read (gate-day instrumentation)
@@ -971,8 +976,10 @@ describe('pg_cron registrations (§7.22, W11)', () => {
       'city-paper-trade':         '0 10 * * *',
       // 0073: forward maker-exit paper view snapshot (http_post edge-fn job; W11-checked).
       'maker-exit-panel':         '*/15 * * * *',
+      // 0086: Google-picks-bucket forward-paper view snapshot (http_post edge-fn job; W11-checked).
+      'google-paper-panel':       '*/15 * * * *',
     };
-    expect(jobs.length).toBe(29);
+    expect(jobs.length).toBe(30);
     for (const j of jobs) {
       expect(j.schedule, `schedule for ${j.jobname}`).toBe(expected[j.jobname]);
     }

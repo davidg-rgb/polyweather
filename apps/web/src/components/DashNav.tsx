@@ -29,7 +29,7 @@ export const DASH_NAV: ReadonlyArray<readonly [string, string]> = [
   ['/', 'overview'], // the analytics front door — forecast skill vs. market (reference idiom)
   ['/efficiency', 'efficiency'], // THE VERDICT — the falsified-lever proof (reference idiom)
   ...(INCLUDE_SIGNALS ? ([['/signals', 'signals']] as const) : []), // the verdict explorer — flagship (N1)
-  ['/convergence', 'convergence'], // the 12th signal — opening-convergence forward-paper (dash_convergence)
+  ['/convergence', 'google'], // "Test 2" — Google-picks-bucket taker forward-paper panel (dash_google_paper)
   ['/maker-exit', 'maker-exit'], // the maker-exit variant — first +EV config (dash_maker_exit)
   ['/trading', 'trading'], // LIVE-RAIL activation + risk console (dash_trading, 0082 staged dark)
   ['/amsterdam', 'amsterdam'], // the one-accurate-city paper-trade head-to-head
