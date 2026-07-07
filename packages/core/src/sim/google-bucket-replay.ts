@@ -77,11 +77,15 @@ export interface GoogleBracketCfg {
   minHoursToResolution: number;
   /** °C-ONLY buy-side filter (operator-set 2026-07-07): when true the strategy SKIPS US °F markets entirely. In
    *  the forward sweep the °F cohort went 0/6 while °C went 8/18 — dropping °F was the single biggest P&L lever
-   *  (baseline −$62 → °C-only +$63). Prime suspect: a °C→°F FLOOR-vs-NWS-ROUNDING bucket-mapping artifact (a
-   *  forecast like 31.0°C → 87.8°F floors to the "86-87°F" bucket, but the rounded 88°F resolves "88-89°F") — an
-   *  investigation is open; if it proves fixable this filter is reverted and °F is re-included. This is a
-   *  VIEW-level filter (buildGoogleView reads it via each event's native unit); replayGoogleBracket IGNORES it —
-   *  the engine is unit-agnostic and replays whatever bucket idx it is handed. */
+   *  (baseline −$62 → °C-only +$63). ROOT-CAUSED (GOOGLE-FAHRENHEIT-INVESTIGATION.md, 2026-07-07): NOT a fixable
+   *  code bug — genuine Google forecast inaccuracy. Google systematically UNDER-forecasts US airport highs (a cold
+   *  bias, |offset| ~1.4 buckets, 14% bucket accuracy); the too-cold pick never re-rates to the TP and decays to
+   *  $0 (ZERO °F take-profits). The °C→°F floor-vs-round artifact is real but marginal — swapping floor→round
+   *  leaves °F accuracy unchanged at 14%, so it does NOT rescue °F. Exclusion stands on forecast-quality grounds.
+   *  (Same investigation, separate finding: floor→round DOES help the °C cohort 6%→23% bucket accuracy — a
+   *  possible one-line googleBucketIdx win, pending OOS validation.) This is a VIEW-level filter (buildGoogleView
+   *  reads it via each event's native unit); replayGoogleBracket IGNORES it — the engine is unit-agnostic and
+   *  replays whatever bucket idx it is handed. */
   excludeFahrenheit: boolean;
 }
 

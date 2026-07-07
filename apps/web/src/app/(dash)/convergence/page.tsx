@@ -156,10 +156,10 @@ function CoveragePanel({ view }: { view: GoogleView }): ReactElement {
       {view.excludeFahrenheit ? (
         <p className="muted small" style={{ marginTop: '0.5rem' }}>
           <strong>°C-only mode</strong> (operator-set): US °F markets are excluded from the strategy. In the offline
-          buy/sell sweep the °F cohort went 0/6 while °C went 8/18 — dropping °F was the biggest P&amp;L lever. Prime
-          suspect is a °C→°F floor-vs-rounding bucket-mapping artifact (a 31.0°C → 87.8°F forecast floors to
-          &ldquo;86-87°F&rdquo; but the rounded 88°F resolves &ldquo;88-89°F&rdquo;); an investigation is open — if it
-          proves fixable, °F is re-included.
+          buy/sell sweep the °F cohort went 0/6 while °C went 8/18 — dropping °F was the biggest P&amp;L lever.{' '}
+          <strong>Root-caused</strong>: not a rounding bug but genuine Google forecast inaccuracy — a systematic
+          <strong> cold bias</strong> for US airport highs (~14% bucket accuracy), so the too-cold pick never re-rates
+          to the take-profit and decays to $0 (zero °F take-profits). Exclusion is justified on forecast quality.
         </p>
       ) : null}
       {view.citiesNoGoogle.length > 0 ? (
