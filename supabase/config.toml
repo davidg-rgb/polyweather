@@ -89,3 +89,6 @@ verify_jwt = false
 
 [functions.maker-exit-panel]
 verify_jwt = false
+
+[functions.google-paper-panel]
+verify_jwt = false
