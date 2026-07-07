@@ -3,7 +3,7 @@
  * (the operator's "Test 2"; the taker twin of sim/opening-bracket-replay.ts).
  *
  * THE STRATEGY (exact). Across ALL capture-universe cities, per FRESH daily-Tmax market: buy the bucket the
- * latest GOOGLE forecast points at when its taker ask crosses cheap (execAsk ≤ askMax, 0.15); take profit when
+ * latest GOOGLE forecast points at when its taker ask is in the cheap band (askMin ≤ execAsk ≤ askMax, 0.10–0.15); take profit when
  * that bucket's execBid re-rates to/above tpAbs; OPTIONALLY stop-loss when its execBid falls to/below slAbs (only
  * when slAbs > 0 — a slAbs ≤ 0 sentinel DISABLES the stop-loss so the position simply HOLDS to resolution); else
  * HOLD to resolution ($1 if the bought bucket wins, $0 else). Taker entry + taker exit. NO time-stop.
@@ -53,7 +53,10 @@ export interface GoogleBracketCfg {
   cities: string[];
   /** per-position $ stake (a pure taker test — depth-UNgated, matching the exact strategy spec). */
   perPositionUsd: number;
-  /** ENTER when the Google-predicted bucket's execAsk is strictly below this (0.15 — the cheap-entry floor). */
+  /** ENTER only when the execAsk is AT OR ABOVE this (0.10) — the cheap-entry FLOOR that excludes near-zero
+   *  longshots (a bucket priced < 10¢ is a hopeless loser converging to 0, not a value entry). */
+  askMin: number;
+  /** ENTER only when the execAsk is at or below this (0.15) — the cheap-entry CEILING. Entry band = [askMin, askMax] = [10¢, 15¢]. */
   askMax: number;
   /** TAKE PROFIT when that bucket's execBid is at or above this ABSOLUTE level (0.30 canonical; the panel also
    *  sweeps {0.30..0.50}). */
@@ -76,9 +79,12 @@ export interface GoogleBracketCfg {
 /**
  * the frozen defaults — the exact "Test 2" thresholds. cities is filled per-run by the handler.
  *
- * askMax 0.15: OPERATOR-FLAGGED interpretation. The operator wrote "Entry point at >15c"; the whole strategy is
- * buy-cheap→sell-higher (TP exits 0.30–0.50), so this reads as the 15¢ CHEAP-ENTRY threshold — buy only when the
- * ask is BELOW 15¢ (execAsk < 0.15), not above. Flagged here so a later operator correction is a one-line change.
+ * ENTRY BAND [askMin, askMax] = [0.10, 0.15] (operator-set 2026-07-07): buy only when the Google bucket's
+ * executable ask is between 10¢ and 15¢ — cheap enough to have upside, but not a near-zero longshot (< 10¢ buckets
+ * are hopeless losers converging to 0). The whole strategy is buy-cheap→sell-higher (TP exits 0.30–0.50).
+ *
+ * minHoursToResolution 20 (operator-set 2026-07-07, was 16): the purchase window CLOSES 20h before resolution —
+ * no buys in the final 20h, where the losers all decay cheap.
  *
  * slAbs 0: the no-SL sentinel (≤ 0 disables the stop-loss; the position holds to resolution as its floor). The
  * panel sweeps five TP-only exit variants {0.30..0.50}; 0.30 is the canonical/headline variant.
@@ -86,12 +92,13 @@ export interface GoogleBracketCfg {
 export const GOOGLE_DEFAULTS: GoogleBracketCfg = {
   cities: [],
   perPositionUsd: 20,
+  askMin: 0.1,
   askMax: 0.15,
   tpAbs: 0.3,
   slAbs: 0,
   paperSlippage: 0.01,
   takerFeeRate: 0.05,
-  minHoursToResolution: 16,
+  minHoursToResolution: 20,
 };
 
 /** GOOGLE_DEFAULTS with the run's capture-universe cities pinned in (falls back to the empty default scope). */
@@ -159,7 +166,7 @@ const NOT_EXECUTED = (reason: string): BracketTrade => ({
 /**
  * Replay ONE market's Google-bucket taker trade. Pure + total.
  *
- *  1. ENTER at the FIRST tick whose Google-predicted bucket carries a live execAsk in (0, askMax) AND that sits
+ *  1. ENTER at the FIRST tick whose Google-predicted bucket carries a live execAsk in the band [askMin, askMax] AND that sits
  *     inside the PURCHASE WINDOW [opening, resolvesAt − cfg.minHoursToResolution] — a cheap ask inside the final
  *     N hours is skipped (near resolution the losers all decay cheap). The gate is inactive when `resolvesAt` is
  *     null (unknown) or cfg.minHoursToResolution ≤ 0; a bucket that was cheap ONLY past the cutoff reports
@@ -195,15 +202,15 @@ export function replayGoogleBracket(
   const gateActive = fin(cfg.minHoursToResolution) && cfg.minHoursToResolution > 0 && Number.isFinite(resolveMs);
   const cutoffMs = gateActive ? resolveMs - cfg.minHoursToResolution * 3_600_000 : Number.POSITIVE_INFINITY;
 
-  // ── (1) entry: first tick whose predicted bucket has a live, cheap (≤ askMax) executable ask AND is in-window ─
+  // ── (1) entry: first tick whose predicted bucket has a live ask in the band [askMin, askMax] AND is in-window ─
   let entryIdx = -1;
   let entryBucket: OpeningBucket | undefined;
   let entryAsk = NaN;
-  let cheapAfterCutoff = false; // a cheap ask existed, but only past the window → excluded by the min-hours rule
+  let cheapAfterCutoff = false; // a band-priced ask existed, but only past the window → excluded by the min-hours rule
   for (let i = 0; i < ticks.length; i++) {
     const b = bucketOf(ticks[i]!, bIdx);
     const ask = b?.execAsk ?? null;
-    if (b && fin(ask) && ask > 0 && ask <= cfg.askMax) {
+    if (b && fin(ask) && ask > 0 && ask >= cfg.askMin && ask <= cfg.askMax) {
       if (gateActive) {
         const tMs = new Date(ticks[i]!.capturedAt).getTime();
         if (!Number.isFinite(tMs) || tMs > cutoffMs) {

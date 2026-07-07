@@ -139,29 +139,44 @@ describe('replayGoogleBracket — entry gating', () => {
     expect(trade.exitReason).toBe('never_enterable');
   });
 
+  it('never enters when the ask is BELOW askMin (0.08 < 0.10 — a near-zero longshot, excluded)', () => {
+    const trade = replayGoogleBracket(ev({ ticks: [tk(T0, 0.2, { execAsk: 0.08, execBid: 0.05 })] }), 2, cfg);
+    expect(trade.executed).toBe(false);
+    expect(trade.exitReason).toBe('never_enterable');
+  });
+
+  it('enters when the ask is exactly askMin (0.10 ≥ 0.10 — inclusive band floor)', () => {
+    const trade = replayGoogleBracket(
+      ev({ ticks: [tk(T0, 0.2, { execAsk: 0.1, execBid: 0.08 }), tk(T1, 0.3, { execBid: 0.35 })] }),
+      2, cfg,
+    );
+    expect(trade.executed).toBe(true);
+    expect(trade.entryPrice).toBeGreaterThan(0);
+  });
+
   it('a null / negative predicted idx (no Google data) → executed:false no_google', () => {
     expect(replayGoogleBracket(ev({ ticks: [entry()] }), null, cfg).exitReason).toBe('no_google');
     expect(replayGoogleBracket(ev({ ticks: [entry()] }), -1, cfg).exitReason).toBe('no_google');
   });
 });
 
-// ── 2b · purchase window (opening → resolvesAt − minHoursToResolution, default 16h) ──────────────────────
-describe('replayGoogleBracket — purchase window (16h before resolution)', () => {
-  const RES = '2026-07-02T00:00:00.000Z'; // cutoff = RES − 16h = 2026-07-01T08:00:00Z
-  const inWindow = '2026-07-01T03:00:00.000Z'; // 21h before RES → allowed
-  const beforeCutoff2 = '2026-07-01T04:00:00.000Z';
-  const afterCutoff = '2026-07-01T20:00:00.000Z'; // 4h before RES → inside the final 16h → excluded
+// ── 2b · purchase window (opening → resolvesAt − minHoursToResolution, default 20h) ──────────────────────
+describe('replayGoogleBracket — purchase window (20h before resolution)', () => {
+  const RES = '2026-07-02T00:00:00.000Z'; // default cutoff = RES − 20h = 2026-07-01T04:00:00Z
+  const inWindow = '2026-07-01T03:00:00.000Z'; // 21h before RES → allowed (before the 20h cutoff)
+  const exitTick = '2026-07-01T03:30:00.000Z';
+  const afterCutoff = '2026-07-01T20:00:00.000Z'; // 4h before RES → inside the final 20h → excluded
 
-  it('enters a cheap tick that is ≥16h before resolution', () => {
+  it('enters a band-priced tick before the window cutoff (≥20h before resolution)', () => {
     const trade = replayGoogleBracket(
-      ev({ ticks: [tk(inWindow, 0.2, { execAsk: 0.14, execBid: 0.1 }), tk(beforeCutoff2, 0.3, { execBid: 0.35 })] }),
+      ev({ ticks: [tk(inWindow, 0.2, { execAsk: 0.14, execBid: 0.1 }), tk(exitTick, 0.3, { execBid: 0.35 })] }),
       2, cfg, RES,
     );
     expect(trade.executed).toBe(true);
     expect(trade.exitReason.startsWith('take_profit')).toBe(true);
   });
 
-  it('does NOT enter a cheap tick inside the final 16h — reason cheap_after_cutoff', () => {
+  it('does NOT enter a band-priced tick inside the final 20h — reason cheap_after_cutoff', () => {
     const trade = replayGoogleBracket(ev({ ticks: [tk(afterCutoff, 0.2, { execAsk: 0.14, execBid: 0.1 })] }), 2, cfg, RES);
     expect(trade.executed).toBe(false);
     expect(trade.exitReason).toBe('cheap_after_cutoff');
@@ -297,12 +312,14 @@ describe('replayGoogleBracket — totality + googleCfg', () => {
     expect(replayGoogleBracket(junk, 2, cfg).executed).toBe(false);
   });
 
-  it('googleCfg pins the run cities and keeps the frozen thresholds (entry 0.15, TP 0.30, no SL)', () => {
+  it('googleCfg pins the run cities and keeps the frozen thresholds (entry band 0.10–0.15, TP 0.30, no SL, 20h window)', () => {
     const c = googleCfg(['amsterdam', 'paris']);
     expect(c.cities).toEqual(['amsterdam', 'paris']);
+    expect(c.askMin).toBe(0.1);
     expect(c.askMax).toBe(0.15);
     expect(c.tpAbs).toBe(0.3);
     expect(c.slAbs).toBe(0); // the no-SL sentinel — the stop-loss is disabled in the frozen "Test 2"
+    expect(c.minHoursToResolution).toBe(20); // purchase window closes 20h before resolution
     expect(googleCfg([]).cities).toEqual(GOOGLE_DEFAULTS.cities); // empty → the default scope
   });
 });
