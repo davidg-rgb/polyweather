@@ -342,7 +342,8 @@ export default async function ConvergencePage(): Promise<ReactElement> {
       <p className="muted small">
         The operator&apos;s &ldquo;Test 2&rdquo;: a <strong>pure taker</strong> strategy driven only by Google
         Weather&apos;s predicted bucket. Across the <strong>°C</strong> capture cities{view.excludeFahrenheit ? ' (US °F markets excluded — °C-only)' : ''}, per fresh daily-Tmax market: buy the
-        Google-predicted bucket when its ask is cheap (<span className="mono">{fmtProb(view.askMin)} ≤ execAsk ≤ {fmtProb(view.askMax)}</span>),
+        Google-predicted bucket when its ask is cheap (<span className="mono">{fmtProb(view.askMin)} ≤ execAsk ≤ {fmtProb(view.askMax)}</span>)
+        {view.maxEntryAgeH > 0 ? <> and the market is <strong>≤ {view.maxEntryAgeH}h</strong> old (later entries are adverse-selected losers)</> : null},
         then compare <strong>five take-profit exits</strong> (<span className="mono">bid ≥ 0.30 … 0.50</span>) over that
         same fixed entry — <strong>no stop-loss</strong>, HOLD to resolution as the floor. This is the forward{' '}
         <strong>paper measurement</strong> made legible — logged potential entries, their exits, per-day chances,

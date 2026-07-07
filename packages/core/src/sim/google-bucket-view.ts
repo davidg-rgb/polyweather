@@ -163,6 +163,8 @@ export interface GoogleView {
   slAbs: number;
   /** °C-only mode: when true, US °F markets were excluded from the strategy (see nExcludedFahrenheit). */
   excludeFahrenheit: boolean;
+  /** max entry age in hours since listing (buy window closes this long after the market opens; 0 = disabled). */
+  maxEntryAgeH: number;
   perEntryStakeUsd: number;
   /** fresh markets considered in the window (the entry-rule denominator, gm-excluded). */
   nFreshEvents: number;
@@ -440,6 +442,7 @@ export function buildGoogleView(
     tpAbs: cfg.tpAbs,
     slAbs: cfg.slAbs,
     excludeFahrenheit: cfg.excludeFahrenheit,
+    maxEntryAgeH: cfg.maxEntryAgeH,
     perEntryStakeUsd: cfg.perPositionUsd,
     nFreshEvents: considered.length,
     nGoogleEvents,

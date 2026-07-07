@@ -64,6 +64,7 @@ const PINNED_CFG: GoogleBracketCfg = {
   takerFeeRate: 0.05,
   minHoursToResolution: 20,
   excludeFahrenheit: false,
+  maxEntryAgeH: 0, // age gate DISABLED for this analysis — reproduce the original band-[0.15] °F headline at any age
 };
 
 const pct = (num: number, den: number): string =>

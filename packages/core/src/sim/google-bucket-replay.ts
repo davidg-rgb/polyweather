@@ -87,6 +87,14 @@ export interface GoogleBracketCfg {
    *  reads it via each event's native unit); replayGoogleBracket IGNORES it — the engine is unit-agnostic and
    *  replays whatever bucket idx it is handed. */
   excludeFahrenheit: boolean;
+  /** MAX ENTRY AGE (operator-set 2026-07-08): only ENTER when the first in-band cheap tick is at most this many
+   *  hours since the market LISTED (hoursSinceListing). A bucket still cheap late in a market's life has usually
+   *  been priced AWAY from Google's pick (adverse selection) — the collected data shows the 24–48h-old-entry
+   *  cohort is 33% win / net-negative vs 60% / net-positive for ≤24h. 0 (or ≤0) DISABLES the gate; it is also
+   *  inactive for a tick with an unknown (non-finite) age. Complements minHoursToResolution (which gates off the
+   *  RESOLUTION end and goes inactive when resolvesAt is null — this gate still bites there). NB: the ≤24h edge is
+   *  TINY-n (5 realized entries, no CI) — this runs it FORWARD as the gate of record, it is not yet proven. */
+  maxEntryAgeH: number;
 }
 
 /**
@@ -104,6 +112,11 @@ export interface GoogleBracketCfg {
  * minHoursToResolution 20 (operator-set 2026-07-07, was 16): the purchase window CLOSES 20h before resolution —
  * no buys in the final 20h, where the losers all decay cheap.
  *
+ * maxEntryAgeH 24 (operator-set 2026-07-08): the buy window OPENS at listing and CLOSES 24h after — no buys once
+ * the market is > 24h old. On the collected data the 24–48h-old-entry cohort was 33% win / net-negative vs 60% /
+ * net-positive for ≤24h (adverse selection: a still-cheap late bucket has been priced away from Google's pick).
+ * TINY-n (5 realized ≤24h entries, no CI) — run FORWARD as the gate of record, NOT yet a proven edge.
+ *
  * slAbs 0: the no-SL sentinel (≤ 0 disables the stop-loss; the position holds to resolution as its floor). The
  * panel sweeps five TP-only exit variants {0.30..0.50}; 0.30 is the canonical/headline variant — the sweep
  * confirmed 0.28–0.30 is the peak (lower TP sells winners too cheap; a taker SL self-triggers on the spread).
@@ -119,6 +132,7 @@ export const GOOGLE_DEFAULTS: GoogleBracketCfg = {
   takerFeeRate: 0.05,
   minHoursToResolution: 20,
   excludeFahrenheit: true,
+  maxEntryAgeH: 24,
 };
 
 /** GOOGLE_DEFAULTS with the run's capture-universe cities pinned in (falls back to the empty default scope). */
@@ -194,10 +208,13 @@ const NOT_EXECUTED = (reason: string): BracketTrade => ({
  * Replay ONE market's Google-bucket taker trade. Pure + total.
  *
  *  1. ENTER at the FIRST tick whose Google-predicted bucket carries a live execAsk in the band [askMin, askMax] AND that sits
- *     inside the PURCHASE WINDOW [opening, resolvesAt − cfg.minHoursToResolution] — a cheap ask inside the final
- *     N hours is skipped (near resolution the losers all decay cheap). The gate is inactive when `resolvesAt` is
- *     null (unknown) or cfg.minHoursToResolution ≤ 0; a bucket that was cheap ONLY past the cutoff reports
- *     exitReason 'cheap_after_cutoff' (vs 'never_enterable' = never cheap at all) so the window's effect is visible.
+ *     inside the PURCHASE WINDOW [opening, resolvesAt − cfg.minHoursToResolution] AND is at most cfg.maxEntryAgeH
+ *     hours old (hoursSinceListing) — a cheap ask inside the final N hours before resolution is skipped (losers
+ *     decay cheap there), and a cheap ask once the market is already > maxEntryAgeH old is skipped (adverse
+ *     selection). The resolution gate is inactive when `resolvesAt` is null or minHoursToResolution ≤ 0; the age
+ *     gate is inactive when maxEntryAgeH ≤ 0 or the tick age is non-finite. Reasons distinguish the cause:
+ *     'cheap_after_cutoff' (only cheap inside the final N hours), 'cheap_but_too_old' (only cheap past the age
+ *     cap), 'never_enterable' (never cheap at all) — so each gate's effect is visible.
  *  2. FILL as a taker at that ask (worse-of stored/live == the same tick's ask, + pessimistic slippage) — reuses
  *     paperFill's taker branch verbatim (one source of truth for the fill/fee model).
  *  3. EXIT (absolute, no look-ahead): from the NEXT tick, sell the moment execBid ≥ tpAbs (take-profit) or —
@@ -228,12 +245,16 @@ export function replayGoogleBracket(
   const resolveMs = resolvesAt != null ? new Date(resolvesAt).getTime() : NaN;
   const gateActive = fin(cfg.minHoursToResolution) && cfg.minHoursToResolution > 0 && Number.isFinite(resolveMs);
   const cutoffMs = gateActive ? resolveMs - cfg.minHoursToResolution * 3_600_000 : Number.POSITIVE_INFINITY;
+  // MAX-ENTRY-AGE gate (operator-set): reject a first-cheap tick older than maxEntryAgeH hours since listing.
+  const ageGateActive = fin(cfg.maxEntryAgeH) && cfg.maxEntryAgeH > 0;
 
-  // ── (1) entry: first tick whose predicted bucket has a live ask in the band [askMin, askMax] AND is in-window ─
+  // ── (1) entry: first tick whose predicted bucket has a live ask in the band [askMin, askMax], is in the
+  //        purchase window (≥ minHoursToResolution before resolution) AND is young enough (≤ maxEntryAgeH) ──────
   let entryIdx = -1;
   let entryBucket: OpeningBucket | undefined;
   let entryAsk = NaN;
   let cheapAfterCutoff = false; // a band-priced ask existed, but only past the window → excluded by the min-hours rule
+  let cheapButTooOld = false; // a band-priced ask existed in-window, but only after the market was > maxEntryAgeH old
   for (let i = 0; i < ticks.length; i++) {
     const b = bucketOf(ticks[i]!, bIdx);
     const ask = b?.execAsk ?? null;
@@ -245,13 +266,22 @@ export function replayGoogleBracket(
           continue;
         }
       }
+      if (ageGateActive) {
+        const age = ticks[i]!.hoursSinceListing;
+        if (!fin(age) || age > cfg.maxEntryAgeH) {
+          if (fin(age)) cheapButTooOld = true; // cheap, but the market was already > maxEntryAgeH old
+          continue;
+        }
+      }
       entryIdx = i;
       entryBucket = b;
       entryAsk = ask;
       break;
     }
   }
-  if (entryIdx < 0 || !entryBucket) return NOT_EXECUTED(cheapAfterCutoff ? 'cheap_after_cutoff' : 'never_enterable');
+  if (entryIdx < 0 || !entryBucket) {
+    return NOT_EXECUTED(cheapAfterCutoff ? 'cheap_after_cutoff' : cheapButTooOld ? 'cheap_but_too_old' : 'never_enterable');
+  }
 
   // ── (2) taker fill at the cheap ask (reuse paperFill's taker branch) ───────────────────────────────────
   const candidate: EntryCandidate = {

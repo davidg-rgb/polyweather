@@ -211,6 +211,43 @@ describe('replayGoogleBracket — purchase window (20h before resolution)', () =
   });
 });
 
+// ── 2c · max-entry-age gate (buy window closes 24h after listing; cfg inherits maxEntryAgeH 24) ─────────
+describe('replayGoogleBracket — max-entry-age gate (≤24h since listing)', () => {
+  // tk(capturedAt, age, center) sets hoursSinceListing = age. No resolvesAt passed → the resolution gate is off,
+  // so ONLY the age gate can reject here.
+  it('enters a cheap tick that is young enough (age 10 ≤ 24)', () => {
+    const trade = replayGoogleBracket(
+      ev({ ticks: [tk(T0, 10, { execAsk: 0.11, execBid: 0.1 }), tk(T1, 10.5, { execBid: 0.35 })] }),
+      2, cfg,
+    );
+    expect(trade.executed).toBe(true);
+    expect(trade.exitReason.startsWith('take_profit')).toBe(true);
+  });
+
+  it('does NOT enter when the only cheap tick is older than the cap (age 30 > 24) → cheap_but_too_old', () => {
+    const trade = replayGoogleBracket(ev({ ticks: [tk(T0, 30, { execAsk: 0.11, execBid: 0.1 })] }), 2, cfg);
+    expect(trade.executed).toBe(false);
+    expect(trade.exitReason).toBe('cheap_but_too_old');
+  });
+
+  it('skips a too-old cheap tick even when an earlier tick was NOT cheap → cheap_but_too_old', () => {
+    const trade = replayGoogleBracket(
+      ev({ ticks: [tk(T0, 10, { execAsk: 0.2, execBid: 0.1 }), tk(T1, 30, { execAsk: 0.11, execBid: 0.1 })] }),
+      2, cfg,
+    );
+    expect(trade.executed).toBe(false);
+    expect(trade.exitReason).toBe('cheap_but_too_old');
+  });
+
+  it('gate INACTIVE when maxEntryAgeH ≤ 0 — a 30h-old cheap tick still enters', () => {
+    const trade = replayGoogleBracket(
+      ev({ ticks: [tk(T0, 30, { execAsk: 0.11, execBid: 0.1 }), tk(T1, 30.5, { execBid: 0.35 })] }),
+      2, { ...cfg, maxEntryAgeH: 0 },
+    );
+    expect(trade.executed).toBe(true);
+  });
+});
+
 // ── 3 · the two absolute exits + hold-to-resolution ─────────────────────────────────────────────────────
 
 describe('replayGoogleBracket — absolute bracket exits', () => {
@@ -324,6 +361,7 @@ describe('replayGoogleBracket — totality + googleCfg', () => {
     expect(c.slAbs).toBe(0); // the no-SL sentinel — the stop-loss is disabled in the frozen "Test 2"
     expect(c.minHoursToResolution).toBe(20); // purchase window closes 20h before resolution
     expect(c.excludeFahrenheit).toBe(true); // °C-only: US °F markets excluded (operator-set 2026-07-07)
+    expect(c.maxEntryAgeH).toBe(24); // buy window closes 24h after listing (operator-set 2026-07-08)
     expect(googleCfg([]).cities).toEqual(GOOGLE_DEFAULTS.cities); // empty → the default scope
   });
 
