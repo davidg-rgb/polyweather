@@ -36,7 +36,7 @@ import {
 } from './opening-convergence.ts';
 import { takerFeePerShare } from '../fees.ts';
 import { parseBucketLabel, winningBucket } from '../buckets.ts';
-import { cToF } from '../units.ts';
+import { cToF, wuRound } from '../units.ts';
 import type { Unit } from '../types.ts';
 import type { EventReplayInput, ReplayTick, BracketTrade } from './opening-bracket-replay.ts';
 
@@ -137,11 +137,18 @@ function bucketOf(tick: ReplayTick, idx: number): OpeningBucket | undefined {
 
 /**
  * Google's forecast is always °C (parseGoogleDailyMax). Convert to the city's NATIVE unit (°F cities: cToF),
- * FLOOR to the whole degree, then find the ladder bucket that whole-degree lands in (winningBucket, the same
- * whole-degree containment the market/WU grade uses). Returns the bucket's `idx` (NOT the array position), or
- * null when the forecast can't be bucketed (empty/garbage ladder, an unparseable label, or a ladder gap). Pure
- * + total (never throws). NB: the FLOOR (not wuRound) is the deliberate "Test 2" spec — a single-line change
- * here would swap it for round-half-up if the operator later prefers WU-rounding semantics.
+ * ROUND-HALF-UP to the whole degree (wuRound — the SAME rounding the venue uses to grade the actual daily high;
+ * cf. amsterdam.ts "the market grades on wuRound(...)"), then find the ladder bucket that whole degree lands in
+ * (winningBucket). Returns the bucket's `idx` (NOT the array position), or null when the forecast can't be
+ * bucketed (empty/garbage ladder, an unparseable label, or a ladder gap). Pure + total (never throws).
+ *
+ * ROUNDING — wuRound, not Math.floor (2026-07-08, GOOGLE-FAHRENHEIT-INVESTIGATION.md). Was Math.floor; swapped to
+ * wuRound for GRADING-CONSISTENCY. The venue rounds the actual high half-up, so flooring the forecast picked one
+ * bucket too COLD whenever the native value sat at ≥ x.5 (frequent for °C, since cToF and Google's one-decimal °C
+ * scatter the fractional part). The swap lifts the °C cohort's bucket accuracy 6% → 23% (realized +$13 → +$108
+ * in-sample) and is a WASH for °F (14% either way — °F loses to Google's genuine cold bias, not the rounding, so
+ * this does NOT re-open °F). Isolated to the Google-bucket panel (DORMANT analytics; googleBucketIdx has no other
+ * caller). In-sample n is small — treat the °C P&L as directional, the grading-consistency as the real reason.
  */
 export function googleBucketIdx(buckets: OpeningBucket[], tmaxC: number, unit: Unit): number | null {
   if (!Array.isArray(buckets) || buckets.length === 0 || !fin(tmaxC)) return null;
@@ -154,7 +161,7 @@ export function googleBucketIdx(buckets: OpeningBucket[], tmaxC: number, unit: U
     return null; // an unparseable ladder label ⇒ cannot bucket (fail closed — never guess a temperature)
   }
   const native = unit === 'F' ? cToF(tmaxC) : tmaxC;
-  const deg = Math.floor(native);
+  const deg = wuRound(native);
   try {
     const pos = winningBucket(defs, deg);
     return ordered[pos]!.idx;

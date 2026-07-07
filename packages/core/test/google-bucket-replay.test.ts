@@ -2,7 +2,7 @@
  * Tests for core/sim/google-bucket-replay — the PURE Google-picks-bucket taker replay engine ("Test 2").
  *
  * Pins the decisive properties: googleBucketIdx maps a °C forecast to the ladder bucket (°C direct / °F
- * converted / FLOOR semantics / tails / junk → null); entry fires ONLY when the predicted bucket's execAsk is
+ * converted / round-half-up (wuRound) semantics / tails / junk → null); entry fires ONLY when the predicted bucket's execAsk is
  * strictly below askMax (0.15 — the cheap-entry floor); take-profit ≥ tpAbs; the stop-loss is OPT-IN (fires only
  * when slAbs > 0, a slAbs ≤ 0 sentinel disables it → hold-to-resolution); hold-to-resolution settlement (win $1 /
  * lose $0 / unresolved mark); a null predicted idx → executed:false 'no_google'; and — load-bearing — NO
@@ -95,10 +95,11 @@ describe('googleBucketIdx — Google °C forecast → ladder bucket idx', () => 
     mkB(4, { label: '96°F or higher' }),
   ];
 
-  it('°C city: floors to the whole degree and finds the containing bucket', () => {
-    expect(googleBucketIdx(cLadder, 16.7, 'C')).toBe(2); // floor 16 → 16°C
+  it('°C city: rounds half-up (wuRound) to the whole degree and finds the containing bucket', () => {
+    expect(googleBucketIdx(cLadder, 16.4, 'C')).toBe(2); // wuRound 16.4 → 16 → 16°C (rounds DOWN below .5)
+    expect(googleBucketIdx(cLadder, 16.7, 'C')).toBe(3); // wuRound 16.7 → 17 → 17°C (rounds UP at/above .5)
     expect(googleBucketIdx(cLadder, 15.0, 'C')).toBe(1);
-    expect(googleBucketIdx(cLadder, 15.9, 'C')).toBe(1); // FLOOR (not round): 15.9 → 15, not 16
+    expect(googleBucketIdx(cLadder, 15.9, 'C')).toBe(2); // ROUND-half-up (not floor): 15.9 → 16, not 15
   });
 
   it('°C tails: below the low tail / above the high tail resolve to the tail buckets', () => {
@@ -106,9 +107,9 @@ describe('googleBucketIdx — Google °C forecast → ladder bucket idx', () => 
     expect(googleBucketIdx(cLadder, 25.0, 'C')).toBe(4);
   });
 
-  it('°F city: converts °C→°F, floors, then buckets (34°C = 93.2°F → 92-93°F)', () => {
-    expect(googleBucketIdx(fLadder, 34, 'F')).toBe(2);
-    expect(googleBucketIdx(fLadder, 35, 'F')).toBe(3); // 95.0°F → 94-95°F
+  it('°F city: converts °C→°F, rounds half-up, then buckets (34°C = 93.2°F → 92-93°F)', () => {
+    expect(googleBucketIdx(fLadder, 34, 'F')).toBe(2); // cToF 93.2 → wuRound 93 → 92-93°F
+    expect(googleBucketIdx(fLadder, 35, 'F')).toBe(3); // cToF 95.0 → wuRound 95 → 94-95°F
   });
 
   it('returns null (never throws) on junk: empty ladder, unparseable label, or NaN forecast', () => {
