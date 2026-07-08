@@ -57,7 +57,13 @@ _Claude keeps this block current every cycle. It is the whole status in 20 secon
     all 12 dead signals. No new tradable edge found. Faint cheap-band +EV is INSUFFICIENT (decision #2 above).
   - **Delivered:** 3 reusable, tested instruments — `source-selector.ts` (+12 tests) + `fahrenheit-source-test.ts`
     (forecast-match) + `fahrenheit-source-pnl.ts` (P&L) — that will catch a °F edge if one ever appears forward.
-- **Latest headline (C6, operator-requested stop-loss + sweep):** decomposed 3 configs × 6 entry bands on the
+- **Latest headline (C7, operator-requested full entry×exit grid):** the PURE FLIP (buy cheap / sell higher /
+  never hold to resolution / dump at last bid if the target never fills) — full grid buy {5,10,15,20,25¢} × sell
+  {15..50¢}. **EVERY one of 24 cells loses.** Best by ROI = buy 25¢/sell 30¢ (71% win, −$267, −16.6%); by net$ =
+  buy 15¢/sell 20¢ (60% win, −$261, −22.7%). Mechanism: flip caps winner gain at the small (X−E) spread while
+  non-completers dump near $0 → break-even needs >80% completion, market gives ≤71%. **Strictly worse than
+  holding** (not-holding forfeits the $1 on the ~9.5% true winners). No profitable entry/exit exists — efficient.
+- **(prior C6 headline) stop-loss + sweep:** decomposed 3 configs × 6 entry bands on the
   real book. **Widening the entry to 10–20¢ HELPS (−7.6% → −1.1%, 57.7% win — near break-even); the stop-loss
   below 10¢ HURTS (~$35/band worse — it cuts volatile buckets that dip then recover to 30¢); removing the 24h
   window is CATASTROPHIC (−26% to −31% — late falling-knife entries, ~80% stop out).** Best variant found = buy
@@ -311,3 +317,11 @@ readiness, so that *if* WS-A finds edge, the executor that would place those bid
   30¢ TP); removing the 24h window is CATASTROPHIC (C: −26% to −31% — late falling-knife entries, ~80% stop out).**
   Best variant = 10–20¢ / 24h / no-SL / sell-30¢ = −1.1% (still a small loss; efficient). Appended to the results
   doc; typecheck clean, committed.
+- **C7 (2026-07-08) — WS-A, operator full entry x exit grid (pure flip, never hold):** built
+  `scripts/research/fahrenheit-blend-grid.ts` — buy first ask in a band around E, sell (maker) at X, DUMP at last
+  bid if X never fills (no resolution payout, per "not hold to finish"). Grid {5,10,15,20,25c} x {15..50c} on the
+  real book, no look-ahead. **All 24 cells negative.** Best ROI buy 25c/sell 30c (71% win, -$267, -16.6%); best
+  net buy 15c/sell 20c (60% win, -$261, -22.7%). Mechanism: capped flip gain vs near-$0 dumps -> needs >80%
+  completion, market gives <=71%; strictly worse than holding (forfeits the $1 on the ~9.5% true winners). Grid +
+  matrices appended to the results doc; typecheck clean, committed. **WS-A exhausted — no °F entry/exit is
+  profitable; the market is efficient.**

@@ -112,3 +112,43 @@ Across the sweep (10–15¢ → 10–20¢): **A** improves −7.6% → **−1.1%
 **Net:** the two new levers both make it worse; only the entry-widening (the third change) helps. The closest to
 profitable in any variant is **buy 10–20¢, keep the 24h window, NO stop-loss, sell at 30¢ → −1.1% ROI, 57.7%
 win** — still a (small) loss. The °F market remains efficient; no configuration tips it positive.
+
+---
+
+## Full ENTRY x EXIT grid — the pure flip, never hold to resolution (`fahrenheit-blend-grid.ts`)
+
+Operator ask: find the best entry and exit, with the only rule being **buy cheap, sell slightly higher, never
+hold to finish.** Model: buy the first tick the predicted bucket's ask lands in a band centred on E; sell (maker
+limit) the first tick the bid reaches X; **if X never fills before resolution, DUMP at the last bid — no $1/$0
+payout is collected.** Grid entry {5,10,15,20,25c} x exit {15,20,25,30,40,50c}, real book, no look-ahead.
+
+**NET $ on $10 positions** (rows = buy ~Ec, cols = sell @ Xc):
+
+| buy\sell | 15c | 20c | 25c | 30c | 40c | 50c |
+|---|---|---|---|---|---|---|
+| **5c**  | -$383 | -$277 | -$288 | -$423 | -$450 | -$470 |
+| **10c** | -$457 | -$390 | -$463 | -$480 | -$554 | -$537 |
+| **15c** | . | **-$261** | -$310 | -$328 | -$432 | -$439 |
+| **20c** | . | . | -$320 | -$294 | -$347 | -$274 |
+| **25c** | . | . | . | **-$267** | -$333 | -$302 |
+
+**WIN %** (net-positive trades):
+
+| buy\sell | 15c | 20c | 25c | 30c | 40c | 50c |
+|---|---|---|---|---|---|---|
+| **5c**  | 20% | 18% | 15% | 10% | 7% | 6% |
+| **10c** | 40% | 34% | 23% | 18% | 13% | 13% |
+| **15c** | . | 60% | 45% | 37% | 23% | 19% |
+| **20c** | . | . | 63% | 54% | 38% | 33% |
+| **25c** | . | . | . | **71%** | 49% | 40% |
+
+**Best cells:** by ROI = **buy 25c / sell 30c -> 71% win, -$267 on 161 trades, -16.6% ROI**; by net$ = buy 15c /
+sell 20c -> 60% win, -$261, -22.7%. **Every one of the 24 cells loses.**
+
+**Why every flip loses:** the flip **caps the winner gain at the small (X-E) spread** while every non-completer
+**dumps near $0**. Break-even needs flip-completion ~= 1/(1 + (X/E - 1)): buy 25c/sell 30c needs **83%**, buy
+15c/sell 20c needs **75%** — the efficient market delivers only 71% / 60%. No cell clears its own bar. And it is
+**strictly worse than holding to resolution** (-7.6% .. -1.1% above): *not holding* forfeits the $1 on the ~9.5%
+of buckets that genuinely win, and those big wins are what kept the hold-to-resolution loss small. **Conclusion:
+no profitable entry/exit exists for the flip — buying cheap and selling slightly higher on the °F markets loses
+in every combination, because the market prices these buckets efficiently.**
