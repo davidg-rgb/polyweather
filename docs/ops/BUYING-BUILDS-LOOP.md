@@ -57,9 +57,11 @@ _Claude keeps this block current every cycle. It is the whole status in 20 secon
     all 12 dead signals. No new tradable edge found. Faint cheap-band +EV is INSUFFICIENT (decision #2 above).
   - **Delivered:** 3 reusable, tested instruments — `source-selector.ts` (+12 tests) + `fahrenheit-source-test.ts`
     (forecast-match) + `fahrenheit-source-pnl.ts` (P&L) — that will catch a °F edge if one ever appears forward.
-- **Latest headline:** WS-A answered — the °F "best source" is the house blend (88% vs Google 61%), but even the
-  blend doesn't beat the °F market (efficient, CIs straddle 0). Pivoting to **WS-D** (compute: the depth-capture
-  v2 bundle + refreshed audit — the biggest win) and WS-B/WS-C.
+- **Latest headline (C5, operator-requested replay):** the house-blend **buy 10–15¢ / sell 30¢** °F play,
+  replayed on the real per-tick book (`market_snapshots`, all °F cities): **42 positions, 42.9% win-rate, net
+  −$32 maker / −$46 taker (ROI −7.6% / −11%)** — loses, narrowly (break-even 44.6%). Cheap house-favored buckets
+  pop (43% touch 30¢) but win only **9.5%** at resolution → adverse selection, efficiently priced; the 30¢ TP
+  helps 4× vs holding (−$133) but can't reach +EV. Full deliverable: **`FAHRENHEIT-BLEND-REPLAY-RESULTS.md`**.
 
 ---
 
@@ -289,3 +291,10 @@ readiness, so that *if* WS-A finds edge, the executor that would place those bid
   (the one forward win) in the operator block. Surfaced 2 optional items (drop `market_rewards` 140 MB; remove 8
   dead-signal edge fns) + 1 open Q (retire `opening-capture` post-v2). **No live change made** (correct — nothing
   safe to shed). Next: WS-B (evaluate the live Google panel numbers) / WS-C (/trading bid-logic code eval).
+- **C5 (2026-07-08) — WS-A, operator-requested refined replay:** built `scripts/research/fahrenheit-blend-replay.ts`
+  — the house-blend (`house_gaussian` earliest-forecast argmax) **buy 10–15¢ within 24h of live / sell at 30¢**
+  play, replayed on the real per-tick book (`market_snapshots`, all °F cities, full life, no look-ahead). **42
+  positions / 10 cities, avg entry 13.4¢; 42.9% win-rate; net −$32 maker / −$46 taker (ROI −7.6% / −11%)** —
+  loses, narrowly (break-even 44.6%). Counterfactual: cheap buckets win only 9.5% at resolution; hold-to-
+  resolution nets −$133 (−32%), so the 30¢ TP helps 4× but stays −EV. Adverse selection, efficiently priced.
+  Wrote **`FAHRENHEIT-BLEND-REPLAY-RESULTS.md`** (the operator deliverable). Typecheck clean, committed.
