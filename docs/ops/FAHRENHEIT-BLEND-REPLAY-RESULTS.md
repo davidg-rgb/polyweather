@@ -80,3 +80,35 @@ cheap buckets are cheap for a reason (they win 9.5% of the time). This aligns wi
 (`BUYING-BUILDS-LOOP.md`): the blend is far more *accurate* on °F than Google (88% vs 61% within-1), but that
 accuracy is already in the price. No capital is warranted. If anything is worth a forward look it's the *exit*
 insight — the 30¢ TP beats holding by 4× — but that improves a losing play, it doesn't make it a winner.
+
+---
+
+## Follow-up (2026-07-08): stop-loss + entry-ceiling sweep, no time limit — `fahrenheit-blend-sweep.ts`
+
+Operator iteration: **add a stop-loss below 10¢**, **sweep the entry ceiling 15→20¢**, **remove the 24h entry
+window**. I decomposed it into three configs × six bands on the same real book (no look-ahead), so each lever's
+marginal effect is visible. Stop-loss = when the **mid** falls under 10¢, dump at the prevailing bid (taker);
+TP = sell at 30¢ (maker); hold-to-resolution fallback.
+
+| Config (entry 10–20¢ shown) | N | win% | net | ROI |
+|---|---|---|---|---|
+| **A — no stop-loss, 24h window** (baseline + wider entry) | 71 | **57.7%** | **−$7.55** | **−1.1%** |
+| B — + stop-loss (mid<10¢), 24h window | 71 | 46.5% | −$36.05 | −5.1% |
+| C — + stop-loss + **no** time limit *(the full request)* | 146 | 30.1% | −$375.15 | −25.7% |
+
+Across the sweep (10–15¢ → 10–20¢): **A** improves −7.6% → **−1.1%**; **B** −16.4% → −5.1%; **C** −31.0% → −25.7%.
+
+**What each lever does:**
+- **Widening the entry ceiling (15→20¢) HELPS** — the single best result in the whole exercise is **A at 10–20¢:
+  57.7% win, −1.1% ROI (near break-even).** Wider band catches more early-cheap winners (TP 18→41).
+- **The stop-loss (below 10¢) HURTS** (~$35/band worse): these °F buckets are volatile and frequently dip below
+  10¢ *transiently before recovering to the 30¢ TP*. The stop cuts those would-be winners at a low bid — it loses
+  more from cutting recoveries than it saves from cutting losers early. A 10¢ stop is also far too tight under a
+  10–20¢ entry (it fires on noise).
+- **Removing the 24h window is CATASTROPHIC** (−26% to −31%): with no window, "first in-band ask ever" enters
+  **late** (avg **27h** vs 9h) — buying buckets that were expensive early and *decayed* into 10–20¢ (falling
+  knives). Combined with the stop, **~80% get stopped out**.
+
+**Net:** the two new levers both make it worse; only the entry-widening (the third change) helps. The closest to
+profitable in any variant is **buy 10–20¢, keep the 24h window, NO stop-loss, sell at 30¢ → −1.1% ROI, 57.7%
+win** — still a (small) loss. The °F market remains efficient; no configuration tips it positive.

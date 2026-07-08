@@ -57,7 +57,13 @@ _Claude keeps this block current every cycle. It is the whole status in 20 secon
     all 12 dead signals. No new tradable edge found. Faint cheap-band +EV is INSUFFICIENT (decision #2 above).
   - **Delivered:** 3 reusable, tested instruments — `source-selector.ts` (+12 tests) + `fahrenheit-source-test.ts`
     (forecast-match) + `fahrenheit-source-pnl.ts` (P&L) — that will catch a °F edge if one ever appears forward.
-- **Latest headline (C5, operator-requested replay):** the house-blend **buy 10–15¢ / sell 30¢** °F play,
+- **Latest headline (C6, operator-requested stop-loss + sweep):** decomposed 3 configs × 6 entry bands on the
+  real book. **Widening the entry to 10–20¢ HELPS (−7.6% → −1.1%, 57.7% win — near break-even); the stop-loss
+  below 10¢ HURTS (~$35/band worse — it cuts volatile buckets that dip then recover to 30¢); removing the 24h
+  window is CATASTROPHIC (−26% to −31% — late falling-knife entries, ~80% stop out).** Best variant found = buy
+  **10–20¢, keep 24h window, NO stop-loss, sell 30¢ = −1.1%** — still a small loss; nothing tips positive.
+  Appended to `FAHRENHEIT-BLEND-REPLAY-RESULTS.md`; engine `fahrenheit-blend-sweep.ts`.
+- **(prior C5 headline) operator replay:** the house-blend **buy 10–15¢ / sell 30¢** °F play,
   replayed on the real per-tick book (`market_snapshots`, all °F cities): **42 positions, 42.9% win-rate, net
   −$32 maker / −$46 taker (ROI −7.6% / −11%)** — loses, narrowly (break-even 44.6%). Cheap house-favored buckets
   pop (43% touch 30¢) but win only **9.5%** at resolution → adverse selection, efficiently priced; the 30¢ TP
@@ -298,3 +304,10 @@ readiness, so that *if* WS-A finds edge, the executor that would place those bid
   loses, narrowly (break-even 44.6%). Counterfactual: cheap buckets win only 9.5% at resolution; hold-to-
   resolution nets −$133 (−32%), so the 30¢ TP helps 4× but stays −EV. Adverse selection, efficiently priced.
   Wrote **`FAHRENHEIT-BLEND-REPLAY-RESULTS.md`** (the operator deliverable). Typecheck clean, committed.
+- **C6 (2026-07-08) — WS-A, operator iteration (stop-loss + entry sweep + no time limit):** built
+  `scripts/research/fahrenheit-blend-sweep.ts` — decomposed into 3 configs × 6 entry ceilings (10–15..10–20¢) on
+  the real book, each lever isolated. **Findings: widening the entry HELPS (A: −7.6%→−1.1%, 57.7% win at 10–20¢);
+  the stop-loss below 10¢ HURTS (~$35/band worse — cuts volatile buckets that dip below 10¢ then recover to the
+  30¢ TP); removing the 24h window is CATASTROPHIC (C: −26% to −31% — late falling-knife entries, ~80% stop out).**
+  Best variant = 10–20¢ / 24h / no-SL / sell-30¢ = −1.1% (still a small loss; efficient). Appended to the results
+  doc; typecheck clean, committed.
