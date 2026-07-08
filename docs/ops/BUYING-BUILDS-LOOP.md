@@ -19,7 +19,17 @@
 
 _Claude keeps this block current every cycle. It is the whole status in 20 seconds._
 
-- **On fire?** No. Prod healthy; probes light (stat views + small counts, no TOAST scans).
+- **▶ NEXT SESSION (post-/clear, operator-driven):** two open exploration threads —
+  **(1) keep exploring the °F/°C bidding play:** WS-A on °F is EXHAUSTED (no profitable entry/exit — every flip
+  cell loses, hold-to-resolution best was −1.1% at 10–20¢; efficient). Open follow-ups: run the same
+  `fahrenheit-blend-grid.ts` shape on the **°C markets** (bigger/1041 resolved, maybe less efficient) for
+  contrast, and grid the **hold-to-resolution** frontier (entry × TP-vs-hold) to pin the true edge — the engines
+  (`fahrenheit-blend-{replay,sweep,grid}.ts` + `source-selector.ts`) generalize by unit. **(2) evaluate the
+  GOOGLE CONVERGENCE PLAY (WS-B, not yet started):** read the live `google-paper-panel` (`/convergence`) accrual +
+  §9R-E gate numbers; is the °C Google play showing any edge; would `google-entry-window.ts` / TP-variant tuning
+  move it; and land the depth-capture v2 eval (staged bundle below). Start by reading this doc + the cycle log.
+- **On fire?** No. Prod healthy; probes light (stat views + small counts, no TOAST scans). Loop wound down for a
+  manual fresh-context restart (2026-07-08); 21 commits on the branch, tree clean, nothing pushed/deployed.
 - **Branch / state:** `loop/2026-07-08-buying-builds` off `main @ 2491598` (6 depth-capture-v2 commits still
   local/unpushed) + 4 loop commits. **Suite 3006 green / typecheck clean** (C2 added the WS-A selector +12 tests).
 - **Staged, awaiting your yes/no (operator-gated — Claude will not apply):**
