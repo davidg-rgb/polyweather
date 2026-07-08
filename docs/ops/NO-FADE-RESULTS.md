@@ -71,3 +71,49 @@ The NO-fade is the **mirror image of the (already-dead) YES convergence play, an
 extra flip penalty.** No tradable edge on the negative side, in any city, at 50–70¢ → 80¢. Consistent with all 12
 dead signals + WS-A: the book is efficient in both directions. Engine kept (`no-fade.ts`) — it will catch a NO
 edge if one ever appears forward, but the strong prior (now measured) is that none exists.
+
+---
+
+## Buy × Sell GRID (operator follow-up) — every combination loses, no profitable cell
+
+Swept the full entry-band × exit-target surface (`scripts/research/no-fade-grid.ts`, 478,640 ticks / 1,084
+markets, all ±3 buckets). Cell = **city-clustered mean net-return** through `openingVerdict`; a robustly-profitable
+cell needs **ciLow > 0**.
+
+**FLIP grid** (buy NO in band ↓, maker-sell NO at target →; dump at last bid if never reached):
+
+| buy \ sell | 70¢ | 75¢ | 80¢ | 85¢ | 90¢ | 95¢ | **HOLD** |
+|---|---|---|---|---|---|---|---|
+| **35¢** | −46.7% | −44.7% | −42.3% | −40.1% | −38.6% | −37.6% | −11.6% |
+| **45¢** | −42.3% | −41.2% | −39.6% | −38.5% | −37.0% | −36.1% | −14.1% |
+| **55¢** | −30.6% | −31.3% | −31.2% | −30.6% | −29.4% | −28.8% | −9.5% |
+| **65¢** | — | −20.5% | −21.4% | −21.9% | −21.3% | −21.2% | −6.4% |
+| **75¢** | — | — | — | −16.7% | −16.7% | −17.2% | −5.4% |
+| **85¢** | — | — | — | — | — | −12.9% | **−4.8%** |
+
+**Every one of the ~27 cells is a §9R-E KILL. NET-PROFITABLE cells (ciLow > 0): NONE.**
+
+**Best cell: buy NO 85¢ / HOLD to resolution = −4.8%, CI [−6.0%, −3.6%]** — still a decisive KILL. Ranked best:
+
+| buy | sell | n | city-clustered mean | 95% CI | §9R-E |
+|---|---|---|---|---|---|
+| 85¢ | hold | 1081 | **−4.8%** | [−6.0%, −3.6%] | KILL |
+| 75¢ | hold | 1077 | −5.4% | [−6.5%, −4.3%] | KILL |
+| 65¢ | hold | 1075 | −6.4% | [−8.3%, −4.4%] | KILL |
+| 85¢ | 95¢ | 1081 | −12.9% | [−14.5%, −11.2%] | KILL |
+
+**Two monotonic patterns explain the whole surface:**
+
+1. **HOLD always beats FLIP** — at every entry band, holding to resolution beats every flip target (e.g. buy 85¢:
+   hold −4.8% vs the best flip −12.9%). The flip caps the winner's gain and dumps the losers, forfeiting the
+   resolution value; this is the *exact* C7 flip-mechanics death, now confirmed universal on the NO side.
+2. **Buying NO EXPENSIVE is least-bad; buying NO CHEAP is worst.** buy-85¢-hold −4.8% → buy-45¢-hold −14.1%.
+   Buying NO at 85¢ (== YES 15¢, a longshot bucket) is a near-fair fee-only bet the bucket won't win — it wins
+   ~85% but the margin is thin and the taker fee + residual adverse selection make it −4.8%. Buying NO cheap
+   (45¢ == YES 55¢, a *favorite*) fades buckets that actually win ~half the time → deep loss.
+
+**Bottom line: there is no net-profitable buy/sell combination anywhere on the NO surface.** The least-losing is
+"sell insurance on near-certain no's and hold" (buy 85¢/hold, −4.8%) — which is just the taker fee + adverse
+selection eating a fair bet. The market is efficient across the *entire* NO price × exit grid. (Same top-of-book
+caveat: real depth only makes every cell worse. The MCP sizing query hit the Micro's 8s statement timeout — the
+478k-row pull was done via the direct tsx connection, one plain join, no strain.)
