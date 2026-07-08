@@ -20,11 +20,11 @@
 _Claude keeps this block current every cycle. It is the whole status in 20 seconds._
 
 - **▶ NEXT SESSION (post-/clear, operator-driven):** two open exploration threads —
-  **(1) keep exploring the °F/°C bidding play:** WS-A on °F is EXHAUSTED (no profitable entry/exit — every flip
-  cell loses, hold-to-resolution best was −1.1% at 10–20¢; efficient). Open follow-ups: run the same
-  `fahrenheit-blend-grid.ts` shape on the **°C markets** (bigger/1041 resolved, maybe less efficient) for
-  contrast, and grid the **hold-to-resolution** frontier (entry × TP-vs-hold) to pin the true edge — the engines
-  (`fahrenheit-blend-{replay,sweep,grid}.ts` + `source-selector.ts`) generalize by unit. **(2) GOOGLE CONVERGENCE
+  **(1) °F/°C bidding play — °F EXHAUSTED, °C DONE (C9); ONE ungated lead:** every °F flip cell loses (hold best
+  −1.1%); **°C flip also all-lose** (best 25¢/30¢ −16.8%), BUT the °C **hold-to-resolution 20¢ band is +1.1%
+  (+$50 / 447 mkts)** — the first non-negative hold across °F/°C, still a RAW ungated point estimate. **▶ C10 =
+  gate it: run the °C 20¢-hold band through `openingVerdict`/§9R-E (city-clustered ciLow>0 + zero-skill MC<5%);**
+  strong prior it straddles 0 → efficient. Engine `fahrenheit-blend-grid.ts` is now `--unit F|C` (generalizes). **(2) GOOGLE CONVERGENCE
   PLAY (WS-B — FIRST read done C8):** `/convergence` is LIVE + accruing (89 snaps, */15 firing, cityErrors 0), but
   the §9R-E gate is **INSUFFICIENT_DATA (5/40 markets, 2/7 days)** and the early **+163% ROI is one lucky market**
   (mexico-city held-to-resolution = 83% of P&L; ex-it +$28 on 4) → **noise; no tuning justified until it accrues**
@@ -351,3 +351,16 @@ readiness, so that *if* WS-A finds edge, the executor that would place those bid
   correctly; let the forward gate arbitrate; do NOT act on the early +163%.** Docs-only cycle (no code change).
   Next-best: WS-A °C contrast grid (reuse `fahrenheit-blend-grid.ts` by unit), or design the depth-capture-v2
   parity check (both GREEN); WS-B tuning is blocked until the panel accrues.
+- **C9 (2026-07-08) — WS-A °C contrast (operator follow-up #1):** Unit-parameterized `fahrenheit-blend-grid.ts`
+  (`--unit F|C`; the °F run reproduces C7 byte-for-byte → faithful refactor) + added the **hold-to-resolution
+  frontier** per entry band (the reference the flip must beat; `winning_bucket_idx` was already fetched). **°C
+  (1045 mkts / 34 cities): the pure FLIP is dead too** — all 24 cells lose (best 25¢/30¢ 70% win −$934 −16.8%,
+  ≈ °F's −16.6%; same capped-gain-vs-$0-dump mechanism). **But the HOLD-to-resolution frontier is marginally
+  NON-negative at the 20¢ band: +$50 / +1.1% ROI on 447 markets** (25¢ −0.8%) — the **first non-negative hold
+  across °F/°C** (°F best hold was −1.1%, C6); °C is slightly less efficient at the ~20¢ hold. **NOT AN EDGE YET:**
+  a raw ungated +1.1% (+$50 on $4,470) — not clustered, not null-tested; strong prior the city-clustered CI
+  straddles 0. Appended to `FAHRENHEIT-BLEND-REPLAY-RESULTS.md`; **suite 3006 green, typecheck clean, committed
+  (cdebff7)**. Light DB (per-bucket `market_snapshots` reads, no TOAST). **▶ C10 = run the °C 20¢-hold band through
+  the §9R-E gate** (`openingVerdict`: city-clustered ciLow>0 + zero-skill sign-flip MC<5%) — only a clustered
+  ciLow>0 promotes it, else it joins the efficient graveyard. (Nice reuse: this is exactly what the new
+  `betting-market-analytics` skill / `analytics.py gate` was built to adjudicate.)
