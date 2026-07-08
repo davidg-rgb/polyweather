@@ -25,11 +25,12 @@ _Claude keeps this block current every cycle. It is the whole status in 20 secon
   mean **−4.13%**, CI [−26.5%, +18.3%] straddles 0 → **KILL** (the +1.1% was dollar-weighting concentration; per
   city the typical city loses; winFrac 21% is expected for a longshot so `ciLow` is the binding criterion). No 13th
   signal. Reusable: `fahrenheit-blend-grid.ts --unit F|C` + `hold-band-gate.ts`.
-  **(1b) NO-FADE (negative convergence, operator-directed, C11) — also KILL:** buy NO 50–70¢ on ±3 buckets, flip
-  at ≥80¢, all 45 cities → every variant §9R-E KILL with an **entirely-negative** CI (flip −20 to −22%, even hold
-  −6%). Adverse selection (cheap-NO = the likely winners) + flip penalty; the NO mirror of the dead YES play.
-  `NO-FADE-RESULTS.md` / `no-fade.ts`. **▶ C12 = depth-capture-v2 PARITY-CHECK design (WS-B∩WS-D, GREEN — biggest
-  compute win, unblocks the staged deploy), or WS-C /trading bid-logic code eval.** **(2) GOOGLE CONVERGENCE
+  **(1b) NO-FADE (negative convergence, operator-directed, C11–C12) — EXHAUSTED, no edge:** the full buy×sell GRID
+  (entry 35–85¢ × exit 70–95¢ + hold, 478k ticks / all 45 cities) → **every one of ~27 cells §9R-E KILLs; ZERO have
+  ciLow>0.** Best = buy NO 85¢/HOLD −4.8% [−6.0,−3.6] (still KILL). HOLD always beats FLIP (C7 mechanics); buying NO
+  expensive is least-bad (fee-only fair bet), cheap-NO fades favorites (−14 to −47%). Market efficient across the
+  entire NO surface. `NO-FADE-RESULTS.md` / `no-fade{,-grid}.ts`. **▶ C13 = depth-capture-v2 PARITY-CHECK design
+  (WS-B∩WS-D, GREEN — biggest compute win, unblocks the staged deploy), or WS-C /trading bid-logic code eval.** **(2) GOOGLE CONVERGENCE
   PLAY (WS-B — FIRST read done C8):** `/convergence` is LIVE + accruing (89 snaps, */15 firing, cityErrors 0), but
   the §9R-E gate is **INSUFFICIENT_DATA (5/40 markets, 2/7 days)** and the early **+163% ROI is one lucky market**
   (mexico-city held-to-resolution = 83% of P&L; ex-it +$28 on 4) → **noise; no tuning justified until it accrues**
@@ -392,3 +393,14 @@ readiness, so that *if* WS-A finds edge, the executor that would place those bid
   same way — no 13th signal.** Deliverable `NO-FADE-RESULTS.md`; **suite 3006 green, typecheck clean, committed
   (dd4eb98)**. DB: one chunky 530k-row internal join, returned fine (sized first, no strain). **▶ C12 =
   depth-capture-v2 parity-check design (WS-B∩WS-D) or WS-C /trading bid-logic eval.**
+- **C12 (2026-07-08) — OPERATOR-DIRECTED: NO-fade buy×sell GRID → every cell KILLs, no profitable combination:**
+  Built `scripts/research/no-fade-grid.ts` — swept the full NO entry-band (35–85¢) × exit-target (70–95¢) surface +
+  the HOLD reference, gating each cell through the city-clustered `openingVerdict`. **478,640 ticks / 1,084 mkts /
+  45 cities. ALL ~27 cells KILL; ZERO have ciLow>0.** Best = **buy NO 85¢ / HOLD = −4.8% [−6.0%, −3.6%]** (still
+  KILL). Two monotone patterns: (a) **HOLD always beats FLIP** (flip caps upside + dumps losers = C7 mechanics,
+  universal on NO); (b) **buying NO EXPENSIVE is least-bad** (fee-only fair bet on a near-certain no) while buying
+  NO CHEAP fades favorites (−14% to −47%). Market efficient across the ENTIRE NO surface. Appended `NO-FADE-RESULTS.md`
+  §grid; **suite 3006 green, typecheck clean, committed (f0e230b)**. DB note: the MCP sizing query hit the Micro's
+  **8s statement timeout** (heavy window fn) → did the 478k pull via the direct tsx conn (one plain join, no strain);
+  avoid DB-side window/distinct aggregations on the Micro via MCP. **▶ C13 = depth-capture-v2 parity-check design
+  (WS-B∩WS-D, GREEN) or WS-C /trading bid-logic eval** — WS-A + the NO-fade surface are both fully exhausted.
