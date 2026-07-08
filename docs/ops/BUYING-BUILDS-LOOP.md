@@ -29,8 +29,11 @@ _Claude keeps this block current every cycle. It is the whole status in 20 secon
   (entry 35–85¢ × exit 70–95¢ + hold, 478k ticks / all 45 cities) → **every one of ~27 cells §9R-E KILLs; ZERO have
   ciLow>0.** Best = buy NO 85¢/HOLD −4.8% [−6.0,−3.6] (still KILL). HOLD always beats FLIP (C7 mechanics); buying NO
   expensive is least-bad (fee-only fair bet), cheap-NO fades favorites (−14 to −47%). Market efficient across the
-  entire NO surface. `NO-FADE-RESULTS.md` / `no-fade{,-grid}.ts`. **▶ C13 = depth-capture-v2 PARITY-CHECK design
-  (WS-B∩WS-D, GREEN — biggest compute win, unblocks the staged deploy), or WS-C /trading bid-logic code eval.** **(2) GOOGLE CONVERGENCE
+  entire NO surface. `NO-FADE-RESULTS.md` / `no-fade{,-grid}.ts`.
+  **(1c) WS-C /trading bid-logic eval (C13):** `order-intent.ts` maker never-cross + idempotency + fail-safe mode +
+  fail-loud parsers are all SOUND + thoroughly tested; fixed one latent asymmetry (`takerLimitPrice` now clamps to
+  `[tick,1−tick]` like the maker path). Rail stays DORMANT. **▶ C14 = continue WS-C (`live.ts` MakerExecutor) OR
+  depth-capture-v2 PARITY-CHECK design (WS-B∩WS-D, GREEN — biggest compute win, unblocks the staged deploy).** **(2) GOOGLE CONVERGENCE
   PLAY (WS-B — FIRST read done C8):** `/convergence` is LIVE + accruing (89 snaps, */15 firing, cityErrors 0), but
   the §9R-E gate is **INSUFFICIENT_DATA (5/40 markets, 2/7 days)** and the early **+163% ROI is one lucky market**
   (mexico-city held-to-resolution = 83% of P&L; ex-it +$28 on 4) → **noise; no tuning justified until it accrues**
@@ -404,3 +407,12 @@ readiness, so that *if* WS-A finds edge, the executor that would place those bid
   **8s statement timeout** (heavy window fn) → did the 478k pull via the direct tsx conn (one plain join, no strain);
   avoid DB-side window/distinct aggregations on the Micro via MCP. **▶ C13 = depth-capture-v2 parity-check design
   (WS-B∩WS-D, GREEN) or WS-C /trading bid-logic eval** — WS-A + the NO-fade surface are both fully exhausted.
+- **C13 (2026-07-08) — WS-C: /trading bid-logic eval (`order-intent.ts`) — SOUND + one hardening:** Evaluated the
+  pure per-market bid core (rail stays DORMANT — code-eval only). **The maker never-cross guarantee
+  (`makerLimitPrice`, snap-to-grid + strictly-inside-book + reject) + `orderIntentKey` idempotency +
+  `resolveTradeMode` fail-safe-to-dry-run + the fail-loud CLOB parsers are all CORRECT and thoroughly tested**
+  (~59 tests: at-ask/bid, 1-tick floors, fine/coarse grids, fp drift). Found + fixed ONE asymmetry:
+  `takerLimitPrice` did NOT clamp to `[tick,1−tick]` (unlike makerLimitPrice) → a near-boundary worst-price
+  gridUp→1.0 / gridDown→0 (off-grid, venue-rejected). Latent today (entries cap 20%, stops sit inside) but hardened
+  by construction +5 boundary tests. **suite 3007 green, typecheck clean, committed (ec762c6)**. **▶ C14 = continue
+  WS-C (`live.ts` MakerExecutor place/reprice/reconcile + `planPlacements`) OR depth-capture-v2 parity-check design.**
