@@ -32,19 +32,28 @@ _Claude keeps this block current every cycle. It is the whole status in 20 secon
   entire NO surface. `NO-FADE-RESULTS.md` / `no-fade{,-grid}.ts`.
   **(1c) WS-C /trading bid-logic eval (C13):** `order-intent.ts` maker never-cross + idempotency + fail-safe mode +
   fail-loud parsers are all SOUND + thoroughly tested; fixed one latent asymmetry (`takerLimitPrice` now clamps to
-  `[tick,1−tick]` like the maker path). Rail stays DORMANT. **▶ C14 = continue WS-C (`live.ts` MakerExecutor) OR
-  depth-capture-v2 PARITY-CHECK design (WS-B∩WS-D, GREEN — biggest compute win, unblocks the staged deploy).** **(2) GOOGLE CONVERGENCE
+  `[tick,1−tick]` like the maker path). Rail stays DORMANT. **(1d) depth-capture-v2 PARITY CHECK done (C14, WS-B∩WS-D):**
+  the deploy's load-bearing de-risk is now OFFLINE-PROVEN — new `supabase/tests/google-repoint-parity.test.ts` shows
+  the depth-path RPC drives `buildGoogleView` to a byte-identical panel decision vs the `opening_captures` path on a
+  shared event (entry/TP-exit/P&L/gate/TP-grid all equal; guard proves both sources truly exercised). Correctly
+  scoped away from the documented population difference (depth cohort smaller by discover cadence — a live-forward
+  property). **This raises operator confidence to apply the staged 0089/0088 bundle.** **▶ C15 = WS-C (`live.ts`
+  MakerExecutor + `planPlacements` code-eval)** — the last GREEN buying-build thread. **(2) GOOGLE CONVERGENCE
   PLAY (WS-B — FIRST read done C8):** `/convergence` is LIVE + accruing (89 snaps, */15 firing, cityErrors 0), but
   the §9R-E gate is **INSUFFICIENT_DATA (5/40 markets, 2/7 days)** and the early **+163% ROI is one lucky market**
   (mexico-city held-to-resolution = 83% of P&L; ex-it +$28 on 4) → **noise; no tuning justified until it accrues**
-  (~1.7 realized/day → ~24 days to the 40-market gate). Remaining WS-B lever = design the depth-capture-v2 **parity
-  check** (GREEN) + tighten the staged deploy bundle. Start by reading this doc + the cycle log.
+  (~1.7 realized/day → ~24 days to the 40-market gate). The depth-capture-v2 parity check (C14) is DONE; remaining
+  WS-B levers are the operator deploy (staged) + forward accrual. Start by reading this doc + the cycle log.
 - **On fire?** No. Prod healthy; probes light (stat views + small counts, no TOAST scans). Loop wound down for a
   manual fresh-context restart (2026-07-08); 21 commits on the branch, tree clean, nothing pushed/deployed.
 - **Branch / state:** `loop/2026-07-08-buying-builds` off `main @ 2491598` (6 depth-capture-v2 commits still
-  local/unpushed) + 4 loop commits. **Suite 3006 green / typecheck clean** (C2 added the WS-A selector +12 tests).
+  local/unpushed) + 12 loop commits (latest `d0898b0`). **Suite 3014 green / typecheck clean** (C14 added the
+  cross-path parity test +7).
 - **Staged, awaiting your yes/no (operator-gated — Claude will not apply):**
   - **★ depth-capture v2 deploy** (WS-D's one real compute win — built + tested + committed, NOT deployed).
+    **NOW PARITY-PROVEN OFFLINE (C14):** `google-repoint-parity.test.ts` proves the cutover is behavior-preserving
+    (depth path ≡ opening path on the panel decision), so applying `0088` is de-risked — the only forward unknown
+    left is the DOCUMENTED population sparsity (depth's fresh cohort smaller by discover cadence; levers in §6.3).
     Sequence (full detail + verify + rollback in `DEPTH-CAPTURE-V2-HANDOFF.md` §6, re-verified current today +
     cross-checked in `COMPUTE-AUDIT-2026-07-08.md`): **apply `0089` then `0088`** (MCP `apply_migration`) →
     **redeploy `discover-markets` + `depth-capture` edge fns** → let `market_depth` accrue ≥1 day → verify +
@@ -416,3 +425,18 @@ readiness, so that *if* WS-A finds edge, the executor that would place those bid
   gridUp→1.0 / gridDown→0 (off-grid, venue-rejected). Latent today (entries cap 20%, stops sit inside) but hardened
   by construction +5 boundary tests. **suite 3007 green, typecheck clean, committed (ec762c6)**. **▶ C14 = continue
   WS-C (`live.ts` MakerExecutor place/reprice/reconcile + `planPlacements`) OR depth-capture-v2 parity-check design.**
+- **C14 (2026-07-08) — WS-B∩WS-D: depth-capture-v2 CROSS-PATH parity check (the deploy's load-bearing de-risk):**
+  The handoff makes the parity check a POST-deploy step (§6.3) — but the "does `market_depth` reproduce the panel
+  vs `opening_captures`" question is answerable OFFLINE. Built `supabase/tests/google-repoint-parity.test.ts`: seed
+  ONE shared fresh °C event into BOTH sources with an IDENTICAL ladder + exec trajectory, run both RPCs
+  (`google_paper_inputs` depth path, threshold forced; `google_paper_inputs_opening` fallback), feed each through
+  `buildGoogleView`, assert the panel DECISION is byte-identical — entry bucket, taker fill, take-profit exit, P&L,
+  money tracker, §9R-E gate counts/verdict, the 5-TP variant grid, coverage counts. **Non-vacuous:** a guard test
+  proves BOTH sources were truly exercised (depth nulls peakMid/isFlatOpen/houseSeeded; opening carries the stored
+  0.5/true) — not the fallback twice; both fire exactly 1 realized take-profit. **Correctly SCOPED:** isolates the
+  shape/anchor/complete-ladder parity (what a pre-deploy test CAN prove) from the DOCUMENTED population difference
+  (depth's fresh cohort is smaller by discover cadence — that's a live-forward property, not a regression). Catches
+  any SQL key-name/anchor/ladder regression in the rewritten `0088` before the operator applies it. **suite 3014
+  green (+7), typecheck clean, committed (d0898b0)**. No DB touch (pure PGlite). **▶ C15 = WS-C (`live.ts`
+  MakerExecutor + `planPlacements` code-eval) — the last GREEN buying-build thread; WS-A exhausted, WS-B tuning
+  blocked on accrual, WS-D lean (07-07 cull holding), depth-v2 now parity-proven + staged for the operator.**
