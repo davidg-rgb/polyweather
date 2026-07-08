@@ -19,9 +19,9 @@
 
 _Claude keeps this block current every cycle. It is the whole status in 20 seconds._
 
-- **On fire?** No. Prod healthy; probes were light (stat views only, no TOAST scans).
-- **Branch / state:** `loop/2026-07-08-buying-builds` @ `b44f4e9` off `main @ 2491598` (6 depth-capture-v2
-  commits still local/unpushed). Suite/typecheck: not yet re-run this loop (no product code touched in C0–C1).
+- **On fire?** No. Prod healthy; probes light (stat views + small counts, no TOAST scans).
+- **Branch / state:** `loop/2026-07-08-buying-builds` off `main @ 2491598` (6 depth-capture-v2 commits still
+  local/unpushed) + 4 loop commits. **Suite 3006 green / typecheck clean** (C2 added the WS-A selector +12 tests).
 - **Staged, awaiting your yes/no (operator-gated — Claude will not apply):**
   - _(none yet — will list one-command bundles here: migrations, edge-fn deploys, the WS-A forward panel)_
 - **Decisions I need from you:** _(none yet — a deploy-autonomy flip is offered in chat; default = staged.)_
@@ -32,8 +32,14 @@ _Claude keeps this block current every cycle. It is the whole status in 20 secon
   **Storage:** `market_snapshots` **346 MB** (biggest — carries the v1 depth-capture `depth` column that v2's
   `0089` drops), `forecast_snapshots` 279 MB + `bucket_probabilities` 262 MB (forecasting core — keep),
   dead-signal `market_rewards` **140 MB** (prune candidate, operator-gated), `opening_captures` down to 90 MB.
-- **Latest headline:** WS-D confirms the compute case for **landing depth-capture v2** (biggest single win);
-  WS-A grounding (prior Google-°F work) in flight before the source-selector build.
+- **WS-A (Fahrenheit test) progress:** selector **BUILT + tested** (C2). °F universe **sized** (C3 start):
+  **396 resolved °F markets / 11 cities**, all 3 commercial sources cover all 11 cities across ~13 distinct
+  forecast-days — **structurally clears §9R-E** (≥40/≥6/≥7), far bigger than the prior 22-event Google-only
+  window. Per-city coverage is thin (~13 events/city) → expect most cities to honestly fall back to the blend;
+  the selector's frozen TRAIN→OOS gate handles that. **Next (C3): multi-source per-event feed + backtest** —
+  does source-selection beat raw-Google on °F bucket-hit + P&L, OOS?
+- **Latest headline:** WS-D confirms **landing depth-capture v2** is the biggest compute win; WS-A selector is
+  built + green and the °F universe is big enough to give the backtest a real §9R-E verdict (C3 next).
 
 ---
 
@@ -227,3 +233,14 @@ readiness, so that *if* WS-A finds edge, the executor that would place those bid
   `check-source-accuracy.ts`/`source_accuracy` + the `buildGoogleView` injection point, to return the reusable
   pieces + the precise gap before I write the selector. Next (C2): consume that brief → build the per-city
   best-matching-source selector (frozen TRAIN→TEST, must beat raw-Google AND the blend OOS) + tests.
+- **C2 (2026-07-08):** WS-A grounding landed (engine reusable verbatim; `source_accuracy` scores °C-MAE not the
+  °F-ladder metric; injection point = `google-bucket-view.ts:288`; prior verdict warns the naive per-city pick
+  is a false positive). **Built `packages/core/src/sim/source-selector.ts`** — scores each source per city on
+  the ladder-bucket MATCH, picks on TRAIN, validates OOS, overrides raw-Google only when a source beats BOTH
+  raw-Google AND the blend by a margin (else shrinks to blend). **+12 tests, suite 3006 green, typecheck clean.**
+  Committed. NOT DB-wired yet.
+- **C3 (start, 2026-07-08):** Sized the °F universe (light SQL): **396 resolved °F markets / 11 cities**; all 3
+  commercial sources cover 11 cities / ~13 forecast-days → clears §9R-E structurally (the prior investigation's
+  22 was the 21-day Google-only window). Next: build the multi-source per-event feed (harness pulling
+  `source_forecasts` all sources + the calibrated blend, aligned to resolved °F events) → run the selector + the
+  `replayGoogleBracket` backtest → honest verdict: does source-selection beat raw-Google °F, OOS?
