@@ -24,7 +24,12 @@ _Claude keeps this block current every cycle. It is the whole status in 20 secon
   local/unpushed) + 4 loop commits. **Suite 3006 green / typecheck clean** (C2 added the WS-A selector +12 tests).
 - **Staged, awaiting your yes/no (operator-gated — Claude will not apply):**
   - _(none yet — will list one-command bundles here: migrations, edge-fn deploys, the WS-A forward panel)_
-- **Decisions I need from you:** _(none yet — a deploy-autonomy flip is offered in chat; default = staged.)_
+- **Decisions I need from you:**
+  1. **Deploy-autonomy flip** (offered in chat; default = staged — I do not apply migrations/deploy fns).
+  2. **WS-A faint signal:** the blend-centered °F cheap-band (ask ≤12–20¢) showed +0.05–0.06/contract but n=6–23,
+     CI-straddles-0 → INSUFFICIENT. Want a **forward paper panel** to accrue those cheap-band °F blend bets to a
+     real §9R-E verdict (paper-only, staged for you), or **drop it** as efficient-like-everything-else? My read:
+     low priority — the base rate says it regresses to efficient; the °F markets already price the blend.
 - **Compute readings (WS-D, C1, live):** pg_stat_statements window = **since 07-06** (so totals partly
   predate the 07-07 cron cull — read as ranking, not current rate). Top exec-time hog = **`convergence_capture_inputs`
   detoasting `opening_captures`** (848+559 calls, 9–18 s each) — the exact saturation source **depth-capture v2
@@ -32,17 +37,21 @@ _Claude keeps this block current every cycle. It is the whole status in 20 secon
   **Storage:** `market_snapshots` **346 MB** (biggest — carries the v1 depth-capture `depth` column that v2's
   `0089` drops), `forecast_snapshots` 279 MB + `bucket_probabilities` 262 MB (forecasting core — keep),
   dead-signal `market_rewards` **140 MB** (prune candidate, operator-gated), `opening_captures` down to 90 MB.
-- **WS-A (Fahrenheit test) — C3a forecast-match verdict is IN (decisive):** on the full 396-event / 11-city °F
-  universe, scored on the °F **ladder** bucket-match at lead 1 — apples-to-apples (77 events, all 4 sources):
-  **calibrated blend 84% within-1 / 38% exact, vs raw Google 61%/26%, weatherapi 62%, openweathermap 52%.**
-  The frozen per-city selector gives **0/11 cities a commercial-source override** (none beats the blend OOS) →
-  OOS TEST (165 ev): **Google 61% → blend 88% within-1.** **So "Google + best-matching source" = BID THE
-  CALIBRATED BLEND on °F, not raw Google** — which is exactly why raw-Google °F was excluded. Per-city
-  commercial-source picking is noise; the lever is a **blend-centered °F cohort.** **Next (C3b):** does 88%/38%
-  accuracy convert to taker P&L at real °F market prices? (needs the book → offline archive.)
-- **Latest headline:** WS-A found the real °F lever — **bid the house blend, not Google** (88% vs 61% within-1
-  OOS). If P&L (C3b) holds, the deliverable is a blend-centered °F cohort of the Google play (staged for you,
-  paper-first). WS-D: **landing depth-capture v2** remains the biggest compute win.
+- **WS-A (Fahrenheit test) — COMPLETE (honest KILL/INSUFFICIENT), both halves measured:**
+  - **C3a forecast-match:** on the full 396-event/11-city °F universe (ladder bucket-match, lead 1; 77-event
+    apples-to-apples): **calibrated blend 84% within-1 / 38% exact vs raw Google 61%/26%**, weatherapi 62%, owm
+    52%. Frozen selector: **0/11 cities beat the blend OOS** → OOS TEST (165 ev): Google 61% → **blend 88%.**
+    ⇒ "Google + best-matching source" = **bid the blend, not Google** (why raw-Google °F was excluded).
+  - **C3b P&L:** but the blend's °F accuracy is **already priced** — netEV/contract **~0 at every band** (best
+    +0.05–0.06 at ask ≤12–20¢ but n=6–23, **every CI straddles 0**; win% ≈ avgAsk throughout). Google-centered
+    cheap band = **0% wins / 15 bets, CI [−0.071,−0.038]** (the only significant result, a LOSS).
+  - **Verdict:** the °F cohort is **efficient w.r.t. the blend** — accurate but no taker edge, consistent with
+    all 12 dead signals. No new tradable edge found. Faint cheap-band +EV is INSUFFICIENT (decision #2 above).
+  - **Delivered:** 3 reusable, tested instruments — `source-selector.ts` (+12 tests) + `fahrenheit-source-test.ts`
+    (forecast-match) + `fahrenheit-source-pnl.ts` (P&L) — that will catch a °F edge if one ever appears forward.
+- **Latest headline:** WS-A answered — the °F "best source" is the house blend (88% vs Google 61%), but even the
+  blend doesn't beat the °F market (efficient, CIs straddle 0). Pivoting to **WS-D** (compute: the depth-capture
+  v2 bundle + refreshed audit — the biggest win) and WS-B/WS-C.
 
 ---
 
@@ -257,3 +266,10 @@ readiness, so that *if* WS-A finds edge, the executor that would place those bid
   picking** — re-confirms source-accuracy-findings on the real °F bidding metric. Next (C3b): the P&L half —
   replay the blend-bucket bid at real °F market prices (cheap-band entry + hold-to-resolution) off the offline
   archive; does 88%/38% accuracy beat the market's own price? If yes → stage a blend-centered °F cohort panel.
+- **C3b (2026-07-08):** Built `scripts/research/fahrenheit-source-pnl.ts` — pulls the lead-1 entry ask per
+  bucket from `market_snapshots` (persistent, not the pruned stream), replays hold-to-resolution over the full
+  °F universe with the real 5% taker fee + a city-clustered bootstrap 95% CI, sweeping the entry band, blend vs
+  Google. Fixed a `takerFeePerShare(p,rate)` arity bug (was NaN). **Result:** blend-centered netEV/contract ~0
+  everywhere (+0.06@12¢ n=6 … −0.01@50¢), **every CI straddles 0** — win% ≈ avgAsk (efficient). Google cheap
+  band 0%/15 CI [−0.071,−0.038] (a real loss). **WS-A COMPLETE: no tradable °F edge — accurate but priced.**
+  Typecheck clean, committed. **Pivot → WS-D** (depth-capture v2 deploy bundle + refreshed compute audit).
