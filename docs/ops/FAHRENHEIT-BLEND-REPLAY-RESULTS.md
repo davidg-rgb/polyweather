@@ -189,3 +189,30 @@ razor-thin margin that has **not** been clustered or null-tested. Per the frozen
 447 i.i.d. bets — same-day weather correlates), and (b) the **zero-skill sign-flip MC < 5%**. The strong prior is
 the clustered CI straddles zero at +1.1%. **C10 = run the °C 20c-hold band through `openingVerdict` / the §9R-E
 gate; only a clustered ciLow>0 promotes it.** Until then: interesting contrast, not a signal.
+
+### C10 (2026-07-08) — gated: the °C 20¢ hold "edge" is NOISE (KILL). WS-A fully exhausted.
+
+Ran the °C 20¢-hold band (447 markets) through the frozen §9R-E gate (`scripts/research/hold-band-gate.ts` →
+the TS source-of-truth `openingVerdict`, city-clustered CI + zero-skill sign-flip MC + the day-block tightening):
+
+```
+raw: n=447 · 34 cities · 26 days · ROI +1.11% · winFrac 21.03%
+VERDICT: KILL
+  city-clustered mean netReturn  −4.13%   95% CI [−26.52%, +18.27%]  (34 cities, t)
+  zero-skill sign-flip MC 1.90%   ·   DAY-BLOCK day-clustered CI [−24.95%, +50.59%]
+```
+
+**The +1.11% was a dollar-weighting mirage.** Collapse the 447 markets to one mean per city (the independent
+unit — same-day weather correlates, so bets are not i.i.d.) and average equally, and the honest **city-clustered
+mean is −4.13%**, with a 95% CI [−26.5%, +18.3%] straddling zero. The raw +1.1% was carried by a handful of
+lucky cheap winners in a few cities; per-city, the typical city loses. Textbook pseudo-replication — exactly the
+trap the point estimate hides.
+
+*(Note on the winFrac bar: 21% "fails" the §9R-E ≥50% winFrac criterion, but that bar is calibrated for the
+bracket/flip play; a buy-cheap-HOLD longshot **should** win ~21% by design. The binding, meaningful criterion for
+a longshot is the city-clustered `ciLow > 0` — which is −26.5%, decisively failed. The KILL holds on the right
+criterion.)*
+
+**Verdict: no tradable edge in the °C hold either. WS-A is now FULLY EXHAUSTED** — °F and °C, flip and
+hold-to-resolution, every combination is efficient (net of the real taker entry cost). The market prices the
+house-blend's cheap buckets correctly in both units. Consistent with all 12 dead signals; no 13th here.
