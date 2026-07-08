@@ -365,6 +365,13 @@ describe('migrations 0001–0010', () => {
       // google_paper_inputs + dash_google_paper + a google-paper-panel */15 cron (count 29 → 30). Replaces what
       // the /convergence page renders (the 0069 convergence machinery stays intact until cutover). GoogleView.
       '0086_google_paper.sql',
+      // 0087 = the continuous executable-depth LAYER: market_snapshots.depth + record_depth_captures +
+      // depth_capture_targets + a depth-capture */5 cron (count 30 → 31). Nothing reads `depth` yet (staged
+      // cutover) — the Google panel keeps running on 0086/opening_captures. Money-path (poll-markets) untouched.
+      '0087_depth_capture.sql',
+      // 0088 = THE REPOINT: google_paper_inputs rewritten to read market_snapshots.depth (off the revived
+      // opening_captures). No new cron. Applied only after 0087's depth has accrued + parity is verified.
+      '0088_google_paper_repoint.sql',
     ]);
   });
 });
@@ -978,8 +985,10 @@ describe('pg_cron registrations (§7.22, W11)', () => {
       'maker-exit-panel':         '*/15 * * * *',
       // 0086: Google-picks-bucket forward-paper view snapshot (http_post edge-fn job; W11-checked).
       'google-paper-panel':       '*/15 * * * *',
+      // 0087: continuous executable-depth capture for market_snapshots.depth (http_post edge-fn job; W11-checked).
+      'depth-capture':            '*/5 * * * *',
     };
-    expect(jobs.length).toBe(30);
+    expect(jobs.length).toBe(31);
     for (const j of jobs) {
       expect(j.schedule, `schedule for ${j.jobname}`).toBe(expected[j.jobname]);
     }

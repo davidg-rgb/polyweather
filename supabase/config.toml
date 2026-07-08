@@ -92,3 +92,6 @@ verify_jwt = false
 
 [functions.google-paper-panel]
 verify_jwt = false
+
+[functions.depth-capture]
+verify_jwt = false
