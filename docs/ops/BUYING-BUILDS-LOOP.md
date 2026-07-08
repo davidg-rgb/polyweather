@@ -48,20 +48,21 @@ _Claude keeps this block current every cycle. It is the whole status in 20 secon
   (mexico-city held-to-resolution = 83% of P&L; ex-it +$28 on 4) → **noise; no tuning justified until it accrues**
   (~1.7 realized/day → ~24 days to the 40-market gate). The depth-capture-v2 parity check (C14) is DONE; remaining
   WS-B levers are the operator deploy (staged) + forward accrual. Start by reading this doc + the cycle log.
-- **On fire? PARTIAL — a REAL live degradation found + fixed-in-code (C16), operator deploy staged.** A light
-  health probe (2026-07-08 ~20Z) found **~53 job failures/24h, STEADY ~3–4/hr ALL hours** (not a peak spike; C4's
-  "0 fails" read at 14Z missed it): **health-monitor's `data_freshness` RPC ~80% of its */30 ticks + poll-markets'
-  `upsert_market_snapshots` ~5% of its */5 ticks**, both `canceling statement due to statement timeout`. **Root
-  cause:** `data_freshness` (0020) runs `max(captured_at)` over `market_snapshots` (346 MB, hot) + `forecast_snapshots`
-  but NEITHER has a captured_at-leading index → **full seq scan every tick** (no loose index scan), and that repeated
-  346 MB scan contends with poll-markets' upserts on the same table (the money-path 5% is collateral). **Fixed:**
-  migration **`0090`** adds two `captured_at desc` indexes → `max()` becomes an instant index fetch + sheds the scan
-  load. **Prod deploy is money-path-gated + STAGED** (build CONCURRENTLY out-of-band first — see below). Not capital/
-  trading; the money path (poll-markets consensus→edges→recs) is untouched. `/convergence` panel HEALTHY throughout
-  (13-min-fresh, 99 snaps/24h). Probes light (stat views only, DB work STOPPED after the diagnosis per rule 2).
+- **On fire? RESOLVED — the C16 statement-timeout incident is FIXED LIVE (C17, operator-directed "apply 0090").**
+  The incident (found C16): **~53 job failures/24h, STEADY ~3–4/hr ALL hours** — **health-monitor's `data_freshness`
+  RPC ~80% of its */30 ticks + poll-markets' `upsert_market_snapshots` ~5%**, both `statement timeout`. Root cause:
+  `data_freshness` (0020) ran `max(captured_at)` over `market_snapshots` (348 MB) + `forecast_snapshots` (279 MB),
+  neither captured_at-indexed → **full seq scan every tick** + contention with poll-markets on the same table.
+  **FIX APPLIED 2026-07-08 ~20:45Z (operator authorized):** both `captured_at desc` indexes built **CONCURRENTLY**
+  (lock-free — no money-path stall; forecast_snapshots as canary, then market_snapshots), both **valid**, migration
+  **`0090` recorded** in prod history. **PROVEN:** `explain` shows `max(captured_at)` is now an `Index Only Scan …
+  Heap Fetches: 1` (1-row fetch, was a 964k-row seq scan). poll-markets clean `ok` streak; health-monitor's next
+  */30 tick (~21:00Z) is the first post-fix run → the 1-hour wakeup confirms the sustained drop. Money path
+  untouched; `/convergence` HEALTHY throughout. **Rollback if ever needed:** `drop index market_snapshots_captured_idx,
+  forecast_snapshots_captured_idx;`.
 - **Branch / state:** `loop/2026-07-08-buying-builds` off `main @ 2491598` (6 depth-capture-v2 commits still
-  local/unpushed) + 16 loop commits (latest `d7342dd`). **Suite 3018 green / typecheck clean** (C14 +7 parity, C15
-  +3 MakerExecutor guards, C16 +1 freshness-index).
+  local/unpushed) + 18 loop commits (latest `e63bcdd`). **Suite 3018 green / typecheck clean** (C14 +7 parity, C15
+  +3 MakerExecutor guards, C16 +1 freshness-index). **Prod: migration `0090` APPLIED (C17, operator-directed).**
 - **Staged, awaiting your yes/no (operator-gated — Claude will not apply):**
   - **★ depth-capture v2 deploy** (WS-D's one real compute win — built + tested + committed, NOT deployed).
     **NOW PARITY-PROVEN OFFLINE (C14):** `google-repoint-parity.test.ts` proves the cutover is behavior-preserving
@@ -73,16 +74,9 @@ _Claude keeps this block current every cycle. It is the whole status in 20 secon
     parity-check → auto-cutover at ~200 rows. Self-gating; instant rollback = `update config set value='999999999'
     where key='bot.depthCutoverMinRows'`. Moves the Google panel off `opening_captures` + drops the
     `market_snapshots.depth` v1 column.
-  - **★★ 0090 freshness-index fix (C16) — the LIVE-INCIDENT fix; highest priority of the staged items.** Kills the
-    ~80% health-monitor + ~5% poll-markets statement-timeouts. **Money-path-safe sequence (do NOT apply 0090 to prod
-    first — a plain CREATE INDEX locks `market_snapshots` writes = poll-markets stall):**
-    **(1) build both indexes CONCURRENTLY out-of-band, OFF-PEAK** (lock-free; via MCP `execute_sql`, one at a time):
-    `create index concurrently if not exists market_snapshots_captured_idx on public.market_snapshots (captured_at desc);`
-    then `create index concurrently if not exists forecast_snapshots_captured_idx on public.forecast_snapshots (captured_at desc);`
-    **(2) then apply `0090`** (MCP `apply_migration`) — the `if not exists` guards no-op on prod (records it for
-    fresh DBs). **Verify:** `job_runs` failures for `health-monitor`/`poll-markets` drop to ~0 within an hour.
-    **Rollback:** `drop index market_snapshots_captured_idx, forecast_snapshots_captured_idx;` (reverts to the seq
-    scan — no data/behaviour change, only speed).
+  - **✅ 0090 freshness-index fix — DONE (C17, 2026-07-08 ~20:45Z).** Applied the money-path-safe way: both indexes
+    built CONCURRENTLY (lock-free) then migration recorded; proven via `Index Only Scan` EXPLAIN. Nothing left for
+    the operator here. (Was the highest-priority staged item.)
   - _(WS-A faint cheap-band °F forward panel — only if you pick "forward-panel it" in decision #2; not built yet.)_
 - **Decisions I need from you:**
   1. **Deploy-autonomy flip** (offered in chat; default = staged — I do not apply migrations/deploy fns).
@@ -499,3 +493,14 @@ readiness, so that *if* WS-A finds edge, the executor that would place those bid
   FIRST, then apply — a plain CREATE INDEX would lock the hot `market_snapshots`; full sequence + rollback in the
   operator block). Additive; money path untouched. **▶ C17 = confirm the operator ran 0090's index build (fails
   drop to ~0), else all GREEN threads swept → low-cadence fleet/gate/accrual watch.**
+- **C17 (2026-07-08 ~20:45Z) — OPERATOR-DIRECTED: applied migration `0090` (the C16 fix) — incident RESOLVED.**
+  Operator said "apply 0090" → applied it the money-path-safe way (NOT a naive locking `apply_migration`): pre-check
+  (no existing/invalid indexes; ms 348 MB / fs 279 MB; 0090 unrecorded) → built `forecast_snapshots_captured_idx`
+  **CONCURRENTLY** (canary, lock-free) → built `market_snapshots_captured_idx` **CONCURRENTLY** → verified both
+  `indisvalid` → **`explain` proved the fix** (`max(captured_at)` on market_snapshots = `Index Only Scan …
+  Heap Fetches: 1`, was a 964k-row seq scan) → recorded migration `0090` via `apply_migration` (the `if not exists`
+  no-op'd since the indexes existed). poll-markets clean `ok` through the build (lock-free confirmed); health-monitor's
+  next */30 tick (~21:00Z) is the first post-fix run. **This is the loop's FIRST RED action — done under EXPLICIT
+  operator authorization** (the boundary holds: Claude never trades/keys/live-rail, and applies migrations only when
+  the operator directs it). Rollback = drop both indexes. **▶ C18 = confirm the sustained failure drop at the ~21:00Z
+  health-monitor tick (the 1h wakeup lands after it), then resume low-cadence watch — all GREEN build threads swept.**
