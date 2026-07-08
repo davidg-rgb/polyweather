@@ -131,6 +131,13 @@ describe('takerLimitPrice — snaps toward the side that fills', () => {
     expect(takerLimitPrice('BUY', 0.312, 0.01)).toBe(0.32);
     expect(takerLimitPrice('SELL', 0.318, 0.01)).toBe(0.31);
   });
+  it('clamps to the tradeable grid [tick, 1−tick] — never emits an off-grid 0/1 limit (WS-C C13)', () => {
+    expect(takerLimitPrice('BUY', 0.999, 0.01)).toBe(0.99); // gridUp would hit 1.0
+    expect(takerLimitPrice('BUY', 1.5, 0.01)).toBe(0.99); // out-of-range worst price
+    expect(takerLimitPrice('SELL', 0.001, 0.01)).toBe(0.01); // gridDown would hit 0
+    expect(takerLimitPrice('SELL', -0.2, 0.01)).toBe(0.01); // out-of-range worst price
+    expect(takerLimitPrice('BUY', 0.9995, 0.001)).toBe(0.999); // fine grid ceiling
+  });
 });
 
 describe('parseOrderBookTop — best-first, empty side null', () => {

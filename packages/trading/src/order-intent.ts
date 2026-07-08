@@ -103,10 +103,17 @@ export function makerLimitPrice(args: {
   return { ok: true, price };
 }
 
-/** Snap a TAKER worst-price limit to the grid in the direction that still fills: BUY up, SELL down. */
+/**
+ * Snap a TAKER worst-price limit to the grid in the direction that still fills: BUY up, SELL down, then
+ * clamp to the tradeable grid `[tick, 1 − tick]`. The clamp mirrors makerLimitPrice's bound (guarantee by
+ * construction): a raw gridUp of a near-1 worst-price rounds to 1.0 (and gridDown of a near-0 one to 0) —
+ * an off-grid limit the venue rejects. Not currently exercised (entries cap at 20%, stops sit well inside),
+ * but the clamp removes the maker/taker asymmetry so a future near-boundary taker can never emit a bad limit.
+ */
 export function takerLimitPrice(side: OrderSide, worstPrice: number, tick: number): number {
   if (!(tick > 0)) return round6(worstPrice);
-  return side === 'BUY' ? gridUp(worstPrice, tick) : gridDown(worstPrice, tick);
+  const snapped = side === 'BUY' ? gridUp(worstPrice, tick) : gridDown(worstPrice, tick);
+  return round6(Math.min(Math.max(snapped, round6(tick)), round6(1 - tick)));
 }
 
 /**
