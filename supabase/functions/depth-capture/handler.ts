@@ -14,15 +14,16 @@
  *   - DELTA-DEDUPE + HEARTBEAT write gate (§4.2 / finding C) — write only on a meaningful exec move or a heartbeat.
  *   - TWO-SIDED gate (§4.5 / finding E) — an asks-only book gets no row (no exit-less entry).
  *   - GOOGLE_DEFAULTS walk size (§4.7 / finding H) — walk at the size the panel actually replays at, not the bot stake.
- *   - WALL-CLOCK BUDGET + INCREMENTAL CHUNKED FLUSH + honest stats + throw-on-total-write-failure (§4.6 / findings B/D):
- *     a slow/rate-limited tick persists partial depth and never silently reports ok on a swallowed write error; the
- *     depth-staleness deadman (0089) is the secondary net.
+ *   - WALL-CLOCK BUDGET + INCREMENTAL CHUNKED FLUSH + honest stats + write-error escalation (§4.6 / findings B/D,
+ *     R2-2): a slow/rate-limited tick persists whatever it flushed and never silently reports ok on a swallowed
+ *     write error — a TOTAL write failure throws (fails the tick), a PARTIAL one raises a day-deduped WARN (the
+ *     deadman is blind to a partial stall). The depth-staleness deadman (0089) is the secondary net for a total stall.
  *   - CAP logging (§4.2 / finding C) — surface when market_depth_targets truncated (near-resolution buckets dropped).
  *
  * Read-only against Polymarket; no key, no packages/trading, rail-DORMANT-safe. Best-effort on FETCH (an unfetchable
- * book is skipped this tick and re-walked next — a fetch failure never fails the tick). But a WRITE error DOES fail
- * the tick (finding B): the chunks that already succeeded stay flushed, and the failure surfaces via runJob + the
- * depth deadman rather than a silent ok — a partial write failure is still a swallowed error.
+ * book is skipped this tick and re-walked next — a fetch failure never fails the tick). WRITE errors are surfaced,
+ * never swallowed as ok (finding B): a TOTAL write failure fails the tick (CRITICAL); a PARTIAL one (the flushed
+ * chunks persist) raises a day-deduped WARN — the whole-table-max deadman can't see a partial stall (R2-2).
  */
 import {
   normalizeBook,
@@ -214,16 +215,34 @@ export async function depthCapture(ctx: JobCtx, deps: DepthCaptureDeps): Promise
     await flush(toWrite);
   }
 
-  // finding B (extended, review R1-F5): NEVER report ok on ANY swallowed write error — TOTAL or PARTIAL. Every
-  // chunk that already succeeded was flushed incrementally, so the partial depth persists; but a chunk that FAILED
-  // (e.g. the tail near-resolution chunks timing out under Micro saturation while the fresh chunks land) must fail
-  // the tick — else runJob records ok, the deadman sees a fresh whole-table max(captured_at) from the successful
-  // chunks, and the stall is invisible. Throw → runJob marks the tick failed + pages; the next tick re-walks
-  // (freshest-first) and re-attempts the stalled buckets (their heartbeat also forces a re-write).
-  if (writeErrors > 0) {
+  // finding B + review R2-2: distinguish TOTAL from PARTIAL write failure so we neither silently report ok (finding
+  // B) nor over-page (R2-2). The flushed chunks always persist (incremental flush) regardless.
+  //  • TOTAL (rows attempted, none landed) — the v1 silent-ok bug: THROW so runJob fails the tick + pages CRITICAL.
+  //  • PARTIAL (fresh chunks landed, tail chunks failed) — the whole-table-max deadman is BLIND (the fresh chunks
+  //    keep max(captured_at) current), so it must be surfaced, but NOT as a per-tick CRITICAL: freshest-first +
+  //    incremental flush makes tail-chunk timeouts recur every */5 under Micro saturation → 12 un-deduped pages/hour.
+  //    Raise a DAY-DEDUPED WARN (claim_alert dedupes on dedupe_key+day); a transient partial self-heals next tick
+  //    (re-walk freshest-first + the stalled buckets' heartbeat re-write), a sustained one leaves one WARN/day.
+  if (writeErrors > 0 && inserted === 0) {
     throw new Error(
-      `record_market_depth failed on ${writeErrors} of ${writeCalls} chunk(s) — wrote ${inserted} of ${written} rows; depth layer degraded`,
+      `record_market_depth wrote 0 of ${written} rows across ${writeCalls} chunk(s) (${writeErrors} error(s)) — depth layer not accruing`,
     );
+  }
+  if (writeErrors > 0) {
+    try {
+      await db.rpc('claim_alert', {
+        p_kind: 'DEPTH_CAPTURE_PARTIAL_WRITE',
+        p_severity: 'WARN',
+        p_dedupe_key: `depth-partial-write:${capturedAt.slice(0, 10)}`,
+        p_title: 'depth-capture PARTIAL write failure',
+        p_body:
+          `wrote ${inserted} of ${written} rows across ${writeCalls} chunk(s); ${writeErrors} chunk(s) failed ` +
+          `(likely tail near-resolution buckets under DB saturation). Flushed chunks persisted; the whole-table-max ` +
+          `deadman is blind to a partial stall, hence this day-deduped WARN. Check Micro compute if it recurs.`,
+      });
+    } catch (e) {
+      log('partial-write WARN claim_alert failed (non-fatal)', { error: msg(e) });
+    }
   }
 
   const stats: JobStats = {

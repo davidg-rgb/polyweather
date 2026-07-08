@@ -1210,6 +1210,18 @@ describe('depth-capture v2 round-trip (0089/0088, finding I-2) — DepthRow ↔ 
     expect(byBucket[B[2]!]).toBeNull(); // b2 has no depth row yet → null (a first-observation write next tick)
   });
 
+  it('market_depth_targets TRUNCATES at p_limit but total_candidates stays the PRE-limit count (R2-4 / finding C)', async () => {
+    // 3 candidate buckets, p_limit 2 → only 2 rows returned, but count(*) over () (pre-LIMIT) still reports 3, so
+    // the handler's `totalCandidates > returned` cap detection fires. A post-LIMIT count() refactor would return 2
+    // and silently kill the cap-hit signal — this pins the window-count-before-LIMIT semantic against real SQL.
+    const t = await rows<{ bucket_id: string; total_candidates: string }>(
+      tdb,
+      `select bucket_id, total_candidates from public.market_depth_targets(2, 2)`,
+    );
+    expect(t.length).toBe(2);                                          // truncated to p_limit
+    expect(t.every((r) => Number(r.total_candidates) === 3)).toBe(true); // but the pre-cap count is the true 3
+  });
+
   it('a key-name drift silently NULLs the column — which THIS round-trip catches (the guard’s point)', async () => {
     // camelCase execAsk (the rest of the codebase's convention) does NOT match the recordset column exec_ask.
     await tdb.query(
@@ -1232,15 +1244,51 @@ describe('depth-capture v2 round-trip (0089/0088, finding I-2) — DepthRow ↔ 
       `select public.google_paper_inputs(21, array['rt_city']::text[]) as v`,
     ))[0]!.v;
     expect(v.captures).toEqual([]); // opening_captures has no rows → fallback returns empty, not the depth path
-    // R1-F4: a 0/negative threshold is CLAMPED to ≥1, so on a populated table it cuts over (never reads an empty
-    // depth source via `0 < 0`). Here market_depth has rows → the depth path fires (captures non-empty), same as '1'.
-    await tdb.exec(`update public.config set value = '0' where key = 'bot.depthCutoverMinRows'`);
-    const v0 = (await rows<{ v: Record<string, any> }>(
-      tdb,
-      `select public.google_paper_inputs(21, array['rt_city']::text[]) as v`,
-    ))[0]!.v;
-    expect(v0.captures.length).toBeGreaterThan(0); // depth path fired (non-empty), not an empty-source read
     await tdb.exec(`update public.config set value = '1' where key = 'bot.depthCutoverMinRows'`);
+  });
+});
+
+describe('self-gating guard never reads an EMPTY depth source at threshold ≤ 0 (0088, R1-F4/R2-1)', () => {
+  // The distinguishing test the round-trip lacked: EMPTY market_depth + bot.depthCutoverMinRows='0' + a LIVE
+  // opening_captures fresh row. WITH the ≥1 clamp (0088), the guard evaluates `0 < greatest(0,1)=1` → true →
+  // FALLS BACK to opening_captures → captures non-empty. WITHOUT the clamp it would evaluate `0 < 0` → false →
+  // read the empty market_depth → captures []. So this FAILS if the clamp is ever removed (unlike the populated
+  // round-trip case, where both branches take the depth path).
+  let tdb: PGlite;
+  const EVENT = '44444444-4444-4444-4444-444444444444';
+
+  beforeAll(async () => {
+    tdb = await freshDb();
+    const region = (await rows<{ region: string }>(tdb, `select region from public.clusters limit 1`))[0]!.region;
+    const cid = (await rows<{ city_id: string }>(
+      tdb, `select city_id from public.upsert_city('sg_city','SG','US','C','Asia/Singapore',$1)`, [region]))[0]!.city_id;
+    await tdb.query(
+      `insert into public.market_events (id, poly_event_id, slug, kind, city_id, target_date, unit, ladder_ok, first_seen, last_seen)
+       values ($1,'sg_poly','sg-slug','highest',$2, current_date, 'C', true, now(), now())`, [EVENT, cid]);
+    // ONE fresh opening_captures row (hours_since_listing < 1) via the real writer — the fallback source.
+    const nowIso = new Date().toISOString();
+    const cap = {
+      capturedAt: nowIso, eventId: EVENT, city: 'sg_city', targetDate: nowIso.slice(0, 10),
+      tzName: 'Asia/Singapore', createdAtGamma: nowIso, hoursSinceListing: 0.4,
+      isFlatOpen: false, houseSeeded: false, buckets: [{ idx: 0, label: '20°C' }], evVol24h: 1000, negRisk: true,
+    };
+    await tdb.query(`select public.record_opening_captures($1::jsonb)`, [JSON.stringify([cap])]);
+    // depth path is OFF (market_depth empty) and the threshold is 0 — the exact R1-F4 danger configuration.
+    await tdb.exec(
+      `insert into public.config (key,value) values ('bot.depthCutoverMinRows','0')
+       on conflict (key) do update set value = excluded.value`,
+    );
+  });
+  afterAll(async () => { await tdb.close(); });
+
+  it('threshold 0 + empty market_depth → FALLS BACK to opening_captures (not an empty depth read)', async () => {
+    const empty = await rows<{ n: string }>(tdb, `select count(*) as n from public.market_depth`);
+    expect(Number(empty[0]!.n)).toBe(0); // precondition: depth source is empty
+    const v = (await rows<{ v: Record<string, any> }>(
+      tdb, `select public.google_paper_inputs(21, array['sg_city']::text[]) as v`))[0]!.v;
+    // WITHOUT the clamp this would be [] (empty depth path); WITH it, the opening fallback returns the fresh row.
+    expect(v.captures.length).toBe(1);
+    expect(v.captures[0].eventId).toBe(EVENT);
   });
 });
 

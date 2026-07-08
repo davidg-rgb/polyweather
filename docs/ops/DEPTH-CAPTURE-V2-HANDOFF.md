@@ -12,6 +12,12 @@
 > daily `market-depth-prune` (>35d); the self-gating guard clamps `bot.depthCutoverMinRows` to ≥1 (never reads an
 > empty depth source); the write-failure throw now covers PARTIAL failures too (not just total); and the round-trip
 > anchor test now sets `gamma_created_at ≠ first_seen` so it actually detects a finding-A regression.
+> **Round-2 review (fresh SQL/concurrency/parity passes came back CLEAN) applied 3 more fixes:** the write-failure
+> handling now splits TOTAL (throw → CRITICAL) from PARTIAL (a day-deduped WARN, not a per-tick page — R1-F5 over-
+> corrected into alert-fatigue under Micro saturation); the R1-F4 clamp now has a REAL distinguishing test (empty
+> `market_depth` + threshold 0 + a seeded `opening_captures` fresh row → must fall back — verified to FAIL if the
+> clamp is removed); and `market_depth_targets` truncation + the pre-cap `count(*) over ()` is now exercised against
+> real SQL (`p_limit < candidates`). Suite 2993 green, typecheck clean.
 >
 > **Written 2026-07-08.** The v1 depth-capture build shipped (commit `c85158a`) and was live-verified — it **fails**
 (write times out → 0 rows) and a 5-agent adversarial review surfaced **12 confirmed findings**. Operator decision:

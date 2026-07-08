@@ -55,9 +55,11 @@ function makeCtx(opts: {
   ctx: JobCtx;
   deps: DepthCaptureDeps;
   recorded: () => RecordedCall[];
+  alerts: () => Array<Record<string, unknown>>;
   logs: () => Array<{ msg: string; extra?: Record<string, unknown> }>;
 } {
   const calls: RecordedCall[] = [];
+  const alertCalls: Array<Record<string, unknown>> = [];
   const logLines: Array<{ msg: string; extra?: Record<string, unknown> }> = [];
   const failFrom = opts.recordThrows ? 0 : opts.recordFailFrom ?? Number.POSITIVE_INFINITY;
   let recordCallN = 0;
@@ -70,6 +72,10 @@ function makeCtx(opts: {
         const rows = args.p_rows as Array<Record<string, unknown>>;
         calls.push({ p_rows: rows, p_captured_at: args.p_captured_at as string });
         return [{ record_market_depth: rows.length }] as unknown[];
+      }
+      if (fn === 'claim_alert') {
+        alertCalls.push(args);
+        return [{ decision: 'created', alert_id: 'a1' }] as unknown[];
       }
       return [] as unknown[];
     },
@@ -86,7 +92,7 @@ function makeCtx(opts: {
   } as unknown as JobCtx;
   // constant clock → elapsed 0 → the wall-clock budget never trips (deterministic; the budget test overrides it).
   const deps: DepthCaptureDeps = { now: new Date('2026-07-08T08:42:00Z'), fetchJson, clock: opts.clock ?? (() => 0) };
-  return { ctx, deps, recorded: () => calls, logs: () => logLines };
+  return { ctx, deps, recorded: () => calls, alerts: () => alertCalls, logs: () => logLines };
 }
 
 describe('depthCapture (v2)', () => {
@@ -196,16 +202,21 @@ describe('depthCapture (v2)', () => {
     expect(stats.inserted).toBe(60);
   });
 
-  it('THROWS on a total write failure — never silently reports ok (finding B)', async () => {
+  it('THROWS on a TOTAL write failure — never silently reports ok (finding B)', async () => {
     const { ctx, deps } = makeCtx({ recordThrows: true });
-    await expect(depthCapture(ctx, deps)).rejects.toThrow(/depth layer degraded/);
+    await expect(depthCapture(ctx, deps)).rejects.toThrow(/not accruing/);
   });
 
-  it('THROWS on a PARTIAL write failure too — the flushed chunks persist, the failure still surfaces (R1-F5)', async () => {
-    // 130 targets → 3 walk chunks; chunk 0 succeeds (flushed), chunks 1+ throw → writeErrors>0 despite inserted>0.
-    const { ctx, deps, recorded } = makeCtx({ targets: freshTargets(130), recordFailFrom: 1 });
-    await expect(depthCapture(ctx, deps)).rejects.toThrow(/depth layer degraded/);
-    expect(recorded().length).toBe(1);              // the first chunk's write persisted (incremental flush)
-    expect(recorded()[0]!.p_rows.length).toBe(60);  // 60 rows landed before the tail chunks failed
+  it('a PARTIAL write failure does NOT throw — flushed chunks persist + a day-deduped WARN, no per-tick page (R2-2)', async () => {
+    // 130 targets → 3 walk chunks; chunk 0 succeeds (flushed), chunks 1+ throw → writeErrors>0 while inserted>0.
+    const { ctx, deps, recorded, alerts } = makeCtx({ targets: freshTargets(130), recordFailFrom: 1 });
+    const stats = await depthCapture(ctx, deps); // resolves — no throw (would over-page every */5 under saturation)
+    expect(stats.writeErrors).toBe(2);
+    expect(stats.inserted).toBe(60);
+    expect(recorded().length).toBe(1);             // chunk 0's write persisted (incremental flush)
+    const warn = alerts().find((a) => a.p_kind === 'DEPTH_CAPTURE_PARTIAL_WRITE');
+    expect(warn).toBeTruthy();
+    expect(warn!.p_severity).toBe('WARN');
+    expect(String(warn!.p_dedupe_key)).toMatch(/^depth-partial-write:2026-07-08$/); // day-deduped
   });
 });
