@@ -24,9 +24,12 @@ _Claude keeps this block current every cycle. It is the whole status in 20 secon
   efficient net of the real taker cost. The °C 20¢-hold's +1.1% raw ROI was gated (C10) and DIED — city-clustered
   mean **−4.13%**, CI [−26.5%, +18.3%] straddles 0 → **KILL** (the +1.1% was dollar-weighting concentration; per
   city the typical city loses; winFrac 21% is expected for a longshot so `ciLow` is the binding criterion). No 13th
-  signal. Reusable: `fahrenheit-blend-grid.ts --unit F|C` + `hold-band-gate.ts`. **▶ C11 = the depth-capture-v2
-  PARITY-CHECK design (WS-B∩WS-D, GREEN — biggest compute win, unblocks the staged deploy), or WS-C /trading
-  bid-logic code eval.** **(2) GOOGLE CONVERGENCE
+  signal. Reusable: `fahrenheit-blend-grid.ts --unit F|C` + `hold-band-gate.ts`.
+  **(1b) NO-FADE (negative convergence, operator-directed, C11) — also KILL:** buy NO 50–70¢ on ±3 buckets, flip
+  at ≥80¢, all 45 cities → every variant §9R-E KILL with an **entirely-negative** CI (flip −20 to −22%, even hold
+  −6%). Adverse selection (cheap-NO = the likely winners) + flip penalty; the NO mirror of the dead YES play.
+  `NO-FADE-RESULTS.md` / `no-fade.ts`. **▶ C12 = depth-capture-v2 PARITY-CHECK design (WS-B∩WS-D, GREEN — biggest
+  compute win, unblocks the staged deploy), or WS-C /trading bid-logic code eval.** **(2) GOOGLE CONVERGENCE
   PLAY (WS-B — FIRST read done C8):** `/convergence` is LIVE + accruing (89 snaps, */15 firing, cityErrors 0), but
   the §9R-E gate is **INSUFFICIENT_DATA (5/40 markets, 2/7 days)** and the early **+163% ROI is one lucky market**
   (mexico-city held-to-resolution = 83% of P&L; ex-it +$28 on 4) → **noise; no tuning justified until it accrues**
@@ -377,3 +380,15 @@ readiness, so that *if* WS-A finds edge, the executor that would place those bid
   correctly in both units.** Appended to `FAHRENHEIT-BLEND-REPLAY-RESULTS.md §C10`; **suite 3006 green, typecheck
   clean, committed (55a8f47)**. Light DB (per-bucket best_ask reads). **▶ C11 = depth-capture-v2 parity-check
   design (WS-B∩WS-D, GREEN) or WS-C /trading bid-logic code eval** — WS-A is closed, WS-B tuning blocked on accrual.
+- **C11 (2026-07-08) — OPERATOR-DIRECTED: the NO-FADE (negative convergence play) across all cities → KILL:** Built
+  `scripts/research/no-fade.ts` — buy NO 50–70¢ (== YES best_bid 30–50¢) on ±3-neighborhood buckets, flip-sell
+  (maker) at ≥80¢ else dump; HOLD-to-resolution reference; per-market portfolios through the city-clustered
+  `openingVerdict`. **1077 mkts / 45 cities / 26 days, 2766 NO positions. Every variant KILLs with an ENTIRELY-
+  negative CI:** FLIP all ±3 −21.9% [−24.0,−19.8], FLIP neighbors −20.5%, HOLD all −6.6% [−8.4,−4.7], HOLD
+  neighbors −5.9% [−9.3,−2.5] (zsMC 2.7–3.2%). **Mechanism:** adverse selection (NO 50–70¢ self-selects the buckets
+  most likely to actually WIN — entered NO-win only 61–67%, not ~90%) + the flip caps upside/keeps downside (C7
+  redux); even hold loses ~6% (efficient YES ⇒ efficient NO net of taker fee + adverse selection). Caveat:
+  top-of-book only → true depth makes it worse. **The NO side mirrors the dead YES convergence play and dies the
+  same way — no 13th signal.** Deliverable `NO-FADE-RESULTS.md`; **suite 3006 green, typecheck clean, committed
+  (dd4eb98)**. DB: one chunky 530k-row internal join, returned fine (sized first, no strain). **▶ C12 =
+  depth-capture-v2 parity-check design (WS-B∩WS-D) or WS-C /trading bid-logic eval.**
