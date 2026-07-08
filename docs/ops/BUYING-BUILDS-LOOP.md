@@ -48,11 +48,20 @@ _Claude keeps this block current every cycle. It is the whole status in 20 secon
   (mexico-city held-to-resolution = 83% of P&L; ex-it +$28 on 4) → **noise; no tuning justified until it accrues**
   (~1.7 realized/day → ~24 days to the 40-market gate). The depth-capture-v2 parity check (C14) is DONE; remaining
   WS-B levers are the operator deploy (staged) + forward accrual. Start by reading this doc + the cycle log.
-- **On fire?** No. Prod healthy; probes light (stat views + small counts, no TOAST scans). Loop wound down for a
-  manual fresh-context restart (2026-07-08); 21 commits on the branch, tree clean, nothing pushed/deployed.
+- **On fire? PARTIAL — a REAL live degradation found + fixed-in-code (C16), operator deploy staged.** A light
+  health probe (2026-07-08 ~20Z) found **~53 job failures/24h, STEADY ~3–4/hr ALL hours** (not a peak spike; C4's
+  "0 fails" read at 14Z missed it): **health-monitor's `data_freshness` RPC ~80% of its */30 ticks + poll-markets'
+  `upsert_market_snapshots` ~5% of its */5 ticks**, both `canceling statement due to statement timeout`. **Root
+  cause:** `data_freshness` (0020) runs `max(captured_at)` over `market_snapshots` (346 MB, hot) + `forecast_snapshots`
+  but NEITHER has a captured_at-leading index → **full seq scan every tick** (no loose index scan), and that repeated
+  346 MB scan contends with poll-markets' upserts on the same table (the money-path 5% is collateral). **Fixed:**
+  migration **`0090`** adds two `captured_at desc` indexes → `max()` becomes an instant index fetch + sheds the scan
+  load. **Prod deploy is money-path-gated + STAGED** (build CONCURRENTLY out-of-band first — see below). Not capital/
+  trading; the money path (poll-markets consensus→edges→recs) is untouched. `/convergence` panel HEALTHY throughout
+  (13-min-fresh, 99 snaps/24h). Probes light (stat views only, DB work STOPPED after the diagnosis per rule 2).
 - **Branch / state:** `loop/2026-07-08-buying-builds` off `main @ 2491598` (6 depth-capture-v2 commits still
-  local/unpushed) + 14 loop commits (latest `a56d864`). **Suite 3017 green / typecheck clean** (C14 +7 parity, C15
-  +3 MakerExecutor guards).
+  local/unpushed) + 16 loop commits (latest `d7342dd`). **Suite 3018 green / typecheck clean** (C14 +7 parity, C15
+  +3 MakerExecutor guards, C16 +1 freshness-index).
 - **Staged, awaiting your yes/no (operator-gated — Claude will not apply):**
   - **★ depth-capture v2 deploy** (WS-D's one real compute win — built + tested + committed, NOT deployed).
     **NOW PARITY-PROVEN OFFLINE (C14):** `google-repoint-parity.test.ts` proves the cutover is behavior-preserving
@@ -64,6 +73,16 @@ _Claude keeps this block current every cycle. It is the whole status in 20 secon
     parity-check → auto-cutover at ~200 rows. Self-gating; instant rollback = `update config set value='999999999'
     where key='bot.depthCutoverMinRows'`. Moves the Google panel off `opening_captures` + drops the
     `market_snapshots.depth` v1 column.
+  - **★★ 0090 freshness-index fix (C16) — the LIVE-INCIDENT fix; highest priority of the staged items.** Kills the
+    ~80% health-monitor + ~5% poll-markets statement-timeouts. **Money-path-safe sequence (do NOT apply 0090 to prod
+    first — a plain CREATE INDEX locks `market_snapshots` writes = poll-markets stall):**
+    **(1) build both indexes CONCURRENTLY out-of-band, OFF-PEAK** (lock-free; via MCP `execute_sql`, one at a time):
+    `create index concurrently if not exists market_snapshots_captured_idx on public.market_snapshots (captured_at desc);`
+    then `create index concurrently if not exists forecast_snapshots_captured_idx on public.forecast_snapshots (captured_at desc);`
+    **(2) then apply `0090`** (MCP `apply_migration`) — the `if not exists` guards no-op on prod (records it for
+    fresh DBs). **Verify:** `job_runs` failures for `health-monitor`/`poll-markets` drop to ~0 within an hour.
+    **Rollback:** `drop index market_snapshots_captured_idx, forecast_snapshots_captured_idx;` (reverts to the seq
+    scan — no data/behaviour change, only speed).
   - _(WS-A faint cheap-band °F forward panel — only if you pick "forward-panel it" in decision #2; not built yet.)_
 - **Decisions I need from you:**
   1. **Deploy-autonomy flip** (offered in chat; default = staged — I do not apply migrations/deploy fns).
@@ -71,8 +90,16 @@ _Claude keeps this block current every cycle. It is the whole status in 20 secon
      CI-straddles-0 → INSUFFICIENT. Want a **forward paper panel** to accrue those cheap-band °F blend bets to a
      real §9R-E verdict (paper-only, staged for you), or **drop it** as efficient-like-everything-else? My read:
      low priority — the base rate says it regresses to efficient; the °F markets already price the blend.
+- **⚠ Compute readings UPDATED (WS-D, C16, live 2026-07-08 ~20Z):** the C4 "0 failures/24h" was a **14Z (off-peak)
+  read that missed a persistent all-hours failure** — the true picture is **~53 fails/24h** (health-monitor `data_freshness`
+  seq-scan timeouts ~80% + poll-markets `upsert_market_snapshots` ~5%; diagnosed + fixed by `0090`, staged above). The
+  TOAST/opening_captures crisis IS still resolved (`opening_captures` 120 MB / 28.3k rows, bounded by its prune; not
+  re-growing). But the DB is **NOT fully healthy** until `0090`'s indexes land — the `data_freshness` seq scan is a
+  standing load hog. `market_snapshots` 346 MB is the seq-scan victim (0090 indexes it; 0089 drops its sparse v1
+  `depth` col but reclaims little — the 346 MB is real snapshot history under retention). **Below (C4) reading kept
+  for the non-failure parts (fleet/storage), but the "0 failures / no pause warranted" claim is SUPERSEDED by C16:**
 - **Compute readings (WS-D, C4, live 2026-07-08 ~14Z — refreshed audit `COMPUTE-AUDIT-2026-07-08.md`):**
-  **The crisis is RESOLVED and holding.** Fleet = 21 jobs, **0 failures/24h**, DB-side cron time trivial
+  ~~The crisis is RESOLVED and holding.~~ (failure count superseded by C16 above.) Fleet = 21 jobs, DB-side cron time trivial
   (~200s/day). `opening_captures` **bounded at 97 MB / 22.9k rows** by its daily prune (NOT re-growing toward the
   1.2 GB TOAST trap — that trap was the now-unscheduled 45-city panels). Micro not saturated. **No reversible
   cron pause is warranted** (no dead-signal cron still scheduled — 07-07 culled them). **One forward win: land
@@ -459,3 +486,16 @@ readiness, so that *if* WS-A finds edge, the executor that would place those bid
   blocked; WS-C order-intent[C13] + MakerExecutor[C15] both SOUND; WS-D lean + holding). Remaining forward motion is
   operator-gated (deploy the staged depth-v2 bundle) or accrual-gated (the §9R-E gates need forward days). Next best
   = a light periodic re-verify of the live fleet/gate health + `/convergence` accrual, else idle at low cadence.
+- **C16 (2026-07-08) — WS-D: LIVE-INCIDENT found via a health probe + fixed-in-code (migration `0090`):** the
+  session's protocol-step-1 live re-verify (4 light stat reads, no TOAST scans) surfaced a **real degradation the
+  code-only C14/C15 cycles couldn't see**: `job_runs` = **~53 fails/24h, STEADY ~3–4/hr ALL hours** (C4's 14Z read
+  missed it) — **health-monitor `data_freshness` ~80% + poll-markets `upsert_market_snapshots` ~5%**, both
+  `statement timeout`. **Diagnosed OFFLINE** (stopped DB work after the read, rule 2): `data_freshness` (0020) does
+  `max(captured_at)` over `market_snapshots` (346 MB) + `forecast_snapshots`, **neither captured_at-indexed** →
+  full seq scan every */30 tick (no loose index scan over the bucket_id-/icao-leading composites) + contends with
+  poll-markets' upserts on the same table. **Wrote `0090_freshness_indexes.sql`** (two `captured_at desc` indexes →
+  `max()` = instant index fetch + sheds the scan load) + a migrations.test.ts index assertion. **suite 3018 green
+  (+1), typecheck clean, committed (d7342dd)**. **PROD is money-path-gated + STAGED** (build CONCURRENTLY off-peak
+  FIRST, then apply — a plain CREATE INDEX would lock the hot `market_snapshots`; full sequence + rollback in the
+  operator block). Additive; money path untouched. **▶ C17 = confirm the operator ran 0090's index build (fails
+  drop to ~0), else all GREEN threads swept → low-cadence fleet/gate/accrual watch.**
