@@ -24,10 +24,12 @@ _Claude keeps this block current every cycle. It is the whole status in 20 secon
   cell loses, hold-to-resolution best was −1.1% at 10–20¢; efficient). Open follow-ups: run the same
   `fahrenheit-blend-grid.ts` shape on the **°C markets** (bigger/1041 resolved, maybe less efficient) for
   contrast, and grid the **hold-to-resolution** frontier (entry × TP-vs-hold) to pin the true edge — the engines
-  (`fahrenheit-blend-{replay,sweep,grid}.ts` + `source-selector.ts`) generalize by unit. **(2) evaluate the
-  GOOGLE CONVERGENCE PLAY (WS-B, not yet started):** read the live `google-paper-panel` (`/convergence`) accrual +
-  §9R-E gate numbers; is the °C Google play showing any edge; would `google-entry-window.ts` / TP-variant tuning
-  move it; and land the depth-capture v2 eval (staged bundle below). Start by reading this doc + the cycle log.
+  (`fahrenheit-blend-{replay,sweep,grid}.ts` + `source-selector.ts`) generalize by unit. **(2) GOOGLE CONVERGENCE
+  PLAY (WS-B — FIRST read done C8):** `/convergence` is LIVE + accruing (89 snaps, */15 firing, cityErrors 0), but
+  the §9R-E gate is **INSUFFICIENT_DATA (5/40 markets, 2/7 days)** and the early **+163% ROI is one lucky market**
+  (mexico-city held-to-resolution = 83% of P&L; ex-it +$28 on 4) → **noise; no tuning justified until it accrues**
+  (~1.7 realized/day → ~24 days to the 40-market gate). Remaining WS-B lever = design the depth-capture-v2 **parity
+  check** (GREEN) + tighten the staged deploy bundle. Start by reading this doc + the cycle log.
 - **On fire?** No. Prod healthy; probes light (stat views + small counts, no TOAST scans). Loop wound down for a
   manual fresh-context restart (2026-07-08); 21 commits on the branch, tree clean, nothing pushed/deployed.
 - **Branch / state:** `loop/2026-07-08-buying-builds` off `main @ 2491598` (6 depth-capture-v2 commits still
@@ -335,3 +337,17 @@ readiness, so that *if* WS-A finds edge, the executor that would place those bid
   completion, market gives <=71%; strictly worse than holding (forfeits the $1 on the ~9.5% true winners). Grid +
   matrices appended to the results doc; typecheck clean, committed. **WS-A exhausted — no °F entry/exit is
   profitable; the market is efficient.**
+- **C8 (2026-07-08) — WS-B (Google convergence play — FIRST read; was untouched C0–C7):** Light read-only probe
+  (4 small SQL reads, no TOAST scans — DB healthy, not saturated) of the live `google_paper_panel`
+  (`/convergence`) + its §9R-E view. **Panel HEALTHY + accruing:** 89 snapshots, `*/15` firing (latest 13 min old),
+  `cityErrors` 0; universe 45 cities / 90 fresh events / 46 google-seeded / 22 no-google. **Gate =
+  INSUFFICIENT_DATA** — only **5 scored markets / 5 cities / 2 dates** vs the ≥40/≥6/≥7 floor. **The headline
+  +$163 / ROI +163% (winRate 3/5) is small-n NOISE, not a signal:** 83% of it is ONE held-to-resolution winner
+  (mexico-city 07-05 **+$134.62**); the rest = 2 small TP wins (+$35.94 amsterdam, +$34.24 toronto @ execBid≥0.30)
+  + 2 full losses (−$20.88 lucknow, −$20.88 madrid). **Ex-mexico-city: +$28 on 4 markets.** The built-in TP sweep
+  already shows tp=0.30 is the best of {0.30..0.50} (higher TPs forfeit the cheap held-to-resolution winners), so
+  **no tuning is justified at n=5** (would be fitting noise — rule 3/4). Config: buy 10–12¢ / TP 30¢ abs / no SL /
+  ≤24h old. **Accrual ~1.7 realized/day → ~24 days to the 40-market gate.** Verdict: **the play is running
+  correctly; let the forward gate arbitrate; do NOT act on the early +163%.** Docs-only cycle (no code change).
+  Next-best: WS-A °C contrast grid (reuse `fahrenheit-blend-grid.ts` by unit), or design the depth-capture-v2
+  parity check (both GREEN); WS-B tuning is blocked until the panel accrues.
