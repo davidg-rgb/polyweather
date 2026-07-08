@@ -19,12 +19,14 @@
 
 _Claude keeps this block current every cycle. It is the whole status in 20 seconds._
 
-- **▶ NEXT SESSION (post-/clear, operator-driven):** two open exploration threads —
-  **(1) °F/°C bidding play — °F EXHAUSTED, °C DONE (C9); ONE ungated lead:** every °F flip cell loses (hold best
-  −1.1%); **°C flip also all-lose** (best 25¢/30¢ −16.8%), BUT the °C **hold-to-resolution 20¢ band is +1.1%
-  (+$50 / 447 mkts)** — the first non-negative hold across °F/°C, still a RAW ungated point estimate. **▶ C10 =
-  gate it: run the °C 20¢-hold band through `openingVerdict`/§9R-E (city-clustered ciLow>0 + zero-skill MC<5%);**
-  strong prior it straddles 0 → efficient. Engine `fahrenheit-blend-grid.ts` is now `--unit F|C` (generalizes). **(2) GOOGLE CONVERGENCE
+- **▶ NEXT SESSION (post-/clear, operator-driven):** WS-A is CLOSED; the live threads are WS-B/WS-D infra + WS-C code-eval —
+  **(1) °F/°C bidding play — FULLY EXHAUSTED (C10):** °F + °C, flip + hold-to-resolution, EVERY combination is
+  efficient net of the real taker cost. The °C 20¢-hold's +1.1% raw ROI was gated (C10) and DIED — city-clustered
+  mean **−4.13%**, CI [−26.5%, +18.3%] straddles 0 → **KILL** (the +1.1% was dollar-weighting concentration; per
+  city the typical city loses; winFrac 21% is expected for a longshot so `ciLow` is the binding criterion). No 13th
+  signal. Reusable: `fahrenheit-blend-grid.ts --unit F|C` + `hold-band-gate.ts`. **▶ C11 = the depth-capture-v2
+  PARITY-CHECK design (WS-B∩WS-D, GREEN — biggest compute win, unblocks the staged deploy), or WS-C /trading
+  bid-logic code eval.** **(2) GOOGLE CONVERGENCE
   PLAY (WS-B — FIRST read done C8):** `/convergence` is LIVE + accruing (89 snaps, */15 firing, cityErrors 0), but
   the §9R-E gate is **INSUFFICIENT_DATA (5/40 markets, 2/7 days)** and the early **+163% ROI is one lucky market**
   (mexico-city held-to-resolution = 83% of P&L; ex-it +$28 on 4) → **noise; no tuning justified until it accrues**
@@ -364,3 +366,14 @@ readiness, so that *if* WS-A finds edge, the executor that would place those bid
   the §9R-E gate** (`openingVerdict`: city-clustered ciLow>0 + zero-skill sign-flip MC<5%) — only a clustered
   ciLow>0 promotes it, else it joins the efficient graveyard. (Nice reuse: this is exactly what the new
   `betting-market-analytics` skill / `analytics.py gate` was built to adjudicate.)
+- **C10 (2026-07-08) — WS-A gate the °C 20¢-hold lead → KILL; WS-A now FULLY EXHAUSTED:** Built
+  `scripts/research/hold-band-gate.ts` — builds one hold-to-resolution `OpeningMarketResult` per market in a band
+  and runs the TS source-of-truth `openingVerdict` (city-clustered CI + zero-skill sign-flip MC + day-block
+  tightening). **°C 20¢ band (447 mkts / 34 cities / 26 days): VERDICT = KILL.** The C9 **+1.11% raw ROI was a
+  dollar-weighting mirage** — collapse to one mean per city (the independent unit; same-day weather correlates)
+  and the honest **city-clustered mean is −4.13%**, 95% CI [−26.5%, +18.3%] straddles 0; zero-skill MC 1.9%,
+  day-clustered CI [−25.0%, +50.6%]. (winFrac 21% is expected for a buy-cheap-HOLD longshot, so `ciLow>0` is the
+  binding criterion — decisively failed.) **No 13th signal; the market prices the house-blend's cheap buckets
+  correctly in both units.** Appended to `FAHRENHEIT-BLEND-REPLAY-RESULTS.md §C10`; **suite 3006 green, typecheck
+  clean, committed (55a8f47)**. Light DB (per-bucket best_ask reads). **▶ C11 = depth-capture-v2 parity-check
+  design (WS-B∩WS-D, GREEN) or WS-C /trading bid-logic code eval** — WS-A is closed, WS-B tuning blocked on accrual.
