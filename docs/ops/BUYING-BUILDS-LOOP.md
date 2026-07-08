@@ -56,10 +56,10 @@ _Claude keeps this block current every cycle. It is the whole status in 20 secon
   **FIX APPLIED 2026-07-08 ~20:45Z (operator authorized):** both `captured_at desc` indexes built **CONCURRENTLY**
   (lock-free — no money-path stall; forecast_snapshots as canary, then market_snapshots), both **valid**, migration
   **`0090` recorded** in prod history. **PROVEN:** `explain` shows `max(captured_at)` is now an `Index Only Scan …
-  Heap Fetches: 1` (1-row fetch, was a 964k-row seq scan). poll-markets clean `ok` streak; health-monitor's next
-  */30 tick (~21:00Z) is the first post-fix run → the 1-hour wakeup confirms the sustained drop. Money path
-  untouched; `/convergence` HEALTHY throughout. **Rollback if ever needed:** `drop index market_snapshots_captured_idx,
-  forecast_snapshots_captured_idx;`.
+  Heap Fetches: 1` (1-row fetch, was a 964k-row seq scan). **CONFIRMED LIVE (C18, 21:23Z): zero failures since the
+  20:44Z build** — health-monitor's 21:00Z tick ran `ok` (was ~80% failing) + poll-markets 8/8 `ok` (20:45→21:20).
+  Money path untouched; `/convergence` HEALTHY throughout. **Rollback if ever needed:** `drop index
+  market_snapshots_captured_idx, forecast_snapshots_captured_idx;`.
 - **Branch / state:** `loop/2026-07-08-buying-builds` off `main @ 2491598` (6 depth-capture-v2 commits still
   local/unpushed) + 18 loop commits (latest `e63bcdd`). **Suite 3018 green / typecheck clean** (C14 +7 parity, C15
   +3 MakerExecutor guards, C16 +1 freshness-index). **Prod: migration `0090` APPLIED (C17, operator-directed).**
@@ -504,3 +504,10 @@ readiness, so that *if* WS-A finds edge, the executor that would place those bid
   operator authorization** (the boundary holds: Claude never trades/keys/live-rail, and applies migrations only when
   the operator directs it). Rollback = drop both indexes. **▶ C18 = confirm the sustained failure drop at the ~21:00Z
   health-monitor tick (the 1h wakeup lands after it), then resume low-cadence watch — all GREEN build threads swept.**
+- **C18 (2026-07-08 ~21:23Z) — CONFIRMED the 0090 fix landed; incident CLOSED.** Light job_runs read: since the
+  20:44Z index build, **health-monitor's 21:00Z */30 tick ran `ok`** (the first post-fix run — was ~80% failing) and
+  **poll-markets is 8/8 `ok`** (20:45→21:20 */5). Zero failures on either job since the fix → the C16 statement-timeout
+  incident is fully resolved, EXPLAIN proof now backed by live ticks. Docs-only. **▶ ALL threads settled: WS-A
+  exhausted, WS-B parity-proven + accrual-blocked, WS-C sound (C13+C15), WS-D lean + the timeout incident CLOSED
+  (0090 live). Remaining motion is operator-gated (depth-v2 deploy — non-urgent) or §9R-E-accrual-gated (~24 days).
+  → LOW-CADENCE idle watch: periodic light fleet/gate/`/convergence` re-verify; no build work pending.**
