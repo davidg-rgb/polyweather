@@ -19,8 +19,10 @@
  *     depth-staleness deadman (0089) is the secondary net.
  *   - CAP logging (§4.2 / finding C) — surface when market_depth_targets truncated (near-resolution buckets dropped).
  *
- * Read-only against Polymarket; no key, no packages/trading, rail-DORMANT-safe. Best-effort: an unfetchable book →
- * that bucket is skipped this tick (re-walks next), NEVER fails the job.
+ * Read-only against Polymarket; no key, no packages/trading, rail-DORMANT-safe. Best-effort on FETCH (an unfetchable
+ * book is skipped this tick and re-walked next — a fetch failure never fails the tick). But a WRITE error DOES fail
+ * the tick (finding B): the chunks that already succeeded stay flushed, and the failure surfaces via runJob + the
+ * depth deadman rather than a silent ok — a partial write failure is still a swallowed error.
  */
 import {
   normalizeBook,
@@ -212,15 +214,16 @@ export async function depthCapture(ctx: JobCtx, deps: DepthCaptureDeps): Promise
     await flush(toWrite);
   }
 
-  // finding B: NEVER silently report ok on a swallowed write error. A TOTAL write failure (rows attempted, none
-  // landed) is a real failure — throw so runJob marks the tick failed + pages CRITICAL; the deadman is the net.
-  if (writeErrors > 0 && written > 0 && inserted === 0) {
+  // finding B (extended, review R1-F5): NEVER report ok on ANY swallowed write error — TOTAL or PARTIAL. Every
+  // chunk that already succeeded was flushed incrementally, so the partial depth persists; but a chunk that FAILED
+  // (e.g. the tail near-resolution chunks timing out under Micro saturation while the fresh chunks land) must fail
+  // the tick — else runJob records ok, the deadman sees a fresh whole-table max(captured_at) from the successful
+  // chunks, and the stall is invisible. Throw → runJob marks the tick failed + pages; the next tick re-walks
+  // (freshest-first) and re-attempts the stalled buckets (their heartbeat also forces a re-write).
+  if (writeErrors > 0) {
     throw new Error(
-      `record_market_depth wrote 0 of ${written} rows across ${writeCalls} chunk(s) (${writeErrors} error(s)) — depth layer not accruing`,
+      `record_market_depth failed on ${writeErrors} of ${writeCalls} chunk(s) — wrote ${inserted} of ${written} rows; depth layer degraded`,
     );
-  }
-  if (inserted < written) {
-    log('depth write MISMATCH — fewer rows landed than sent (partial write error)', { written, inserted, writeErrors });
   }
 
   const stats: JobStats = {

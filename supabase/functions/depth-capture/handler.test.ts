@@ -48,6 +48,8 @@ function makeCtx(opts: {
   books?: Record<string, ReturnType<typeof rawBook>>;
   throwToken?: string;
   recordThrows?: boolean;
+  /** throw on record_market_depth chunk calls with 0-based index ≥ this (simulate a persistent PARTIAL failure). */
+  recordFailFrom?: number;
   clock?: () => number;
 } = {}): {
   ctx: JobCtx;
@@ -57,12 +59,14 @@ function makeCtx(opts: {
 } {
   const calls: RecordedCall[] = [];
   const logLines: Array<{ msg: string; extra?: Record<string, unknown> }> = [];
+  const failFrom = opts.recordThrows ? 0 : opts.recordFailFrom ?? Number.POSITIVE_INFINITY;
+  let recordCallN = 0;
   const db = {
     getConfigRows: async () => [] as { key: string; value: string }[],
     rpc: async (fn: string, args: Record<string, unknown>) => {
       if (fn === 'market_depth_targets') return (opts.targets ?? freshTargets()) as unknown[];
       if (fn === 'record_market_depth') {
-        if (opts.recordThrows) throw new Error('statement timeout');
+        if (recordCallN++ >= failFrom) throw new Error('statement timeout');
         const rows = args.p_rows as Array<Record<string, unknown>>;
         calls.push({ p_rows: rows, p_captured_at: args.p_captured_at as string });
         return [{ record_market_depth: rows.length }] as unknown[];
@@ -194,6 +198,14 @@ describe('depthCapture (v2)', () => {
 
   it('THROWS on a total write failure — never silently reports ok (finding B)', async () => {
     const { ctx, deps } = makeCtx({ recordThrows: true });
-    await expect(depthCapture(ctx, deps)).rejects.toThrow(/wrote 0 of/);
+    await expect(depthCapture(ctx, deps)).rejects.toThrow(/depth layer degraded/);
+  });
+
+  it('THROWS on a PARTIAL write failure too — the flushed chunks persist, the failure still surfaces (R1-F5)', async () => {
+    // 130 targets → 3 walk chunks; chunk 0 succeeds (flushed), chunks 1+ throw → writeErrors>0 despite inserted>0.
+    const { ctx, deps, recorded } = makeCtx({ targets: freshTargets(130), recordFailFrom: 1 });
+    await expect(depthCapture(ctx, deps)).rejects.toThrow(/depth layer degraded/);
+    expect(recorded().length).toBe(1);              // the first chunk's write persisted (incremental flush)
+    expect(recorded()[0]!.p_rows.length).toBe(60);  // 60 rows landed before the tail chunks failed
   });
 });

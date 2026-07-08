@@ -17,7 +17,8 @@
 --   4. depth_capture_deadman_check — a depth-staleness alarm (like capture_deadman_check) — kills the silent stall.
 --   5. market_events.gamma_created_at + upsert_event rewritten to thread the TRUE Gamma createdAt (§4.3 — kills the
 --      listing-anchor break). Discovery/liveness only — NOT the money-critical edge path.
---   6. Re-arm the depth-capture */5 cron (0087 unscheduled it) + the depth-capture-deadman */10 SQL cron.
+--   6. Re-arm the depth-capture */5 cron (0087 unscheduled it) + the depth-capture-deadman */10 SQL cron + a daily
+--      market-depth retention prune (>35d — the panel reads only 21d; keeps the delta-fed table bounded).
 --
 -- STAGED CUTOVER stays safe: the panel keeps reading opening_captures until real depth accrues — the guard lives in
 -- 0088's rewritten google_paper_inputs (a technical count-guard, not a prose caveat — kills finding J), so applying
@@ -163,8 +164,14 @@ grant  execute on function public.market_depth_targets(int, int) to service_role
 
 -- === 4. depth_capture_deadman_check — a depth-staleness alarm (§4.6 — kills the silent stall) ==========
 -- Like capture_deadman_check (0066): if market_depth has started accruing but its newest row is older than
--- bot.depthStaleMin (default 20 min = 4 missed */5 ticks), page CRITICAL. Only arms once v_n > 0 so a fresh
--- deploy (fn not yet live, no rows) does not false-page. Returns a jsonb OBJECT (port-invariant tripwire safe).
+-- bot.depthStaleMin, page CRITICAL. THRESHOLD (default 70 min) must SIT ABOVE the handler's write HEARTBEAT
+-- (handler.ts HEARTBEAT_MS = 30 min): the layer is DELTA-FED, so a healthy fn writes an UNCHANGED bucket only every
+-- 30 min — a threshold below that (v1 review R1-F1: the initial 20 min) false-pages CRITICAL on a healthy quiet
+-- window (a synchronized longshot cohort that hasn't moved ≥ DEPTH_DELTA). 70 min = >2 heartbeat cycles + tick/skip
+-- slack, so only a genuine stall (fn dead → no writes at all) fires. Keep this comfortably above HEARTBEAT_MS if you
+-- retune either. Arms only once rows exist (v_latest not null) so a fresh deploy (fn not yet live) does not
+-- false-page. Uses max(captured_at) (index-backed) — no unbounded count(*) scan (R1-F3). jsonb OBJECT return
+-- (port-invariant tripwire safe).
 create or replace function public.depth_capture_deadman_check()
 returns jsonb
 language plpgsql
@@ -173,14 +180,13 @@ set search_path = public
 as $$
 declare
   v_latest    timestamptz;
-  v_n         bigint;
-  v_stale_min numeric := coalesce((select value::numeric from config where key = 'bot.depthStaleMin'), 20);
+  v_stale_min numeric := coalesce((select value::numeric from config where key = 'bot.depthStaleMin'), 70);
   v_age_min   numeric;
   v_bucket    int     := floor(extract(epoch from now()) / 1800)::int;  -- 30-min dedupe
   v_alarmed   boolean := false;
 begin
-  select count(*), max(captured_at) into v_n, v_latest from public.market_depth;
-  if v_n > 0 and v_latest is not null then
+  select max(captured_at) into v_latest from public.market_depth;  -- index-backed; no full-table count(*)
+  if v_latest is not null then
     v_age_min := extract(epoch from (now() - v_latest)) / 60;
     if v_age_min > v_stale_min then
       v_alarmed := true;
@@ -193,7 +199,7 @@ begin
     end if;
   end if;
   return jsonb_build_object(
-    'alarmed', v_alarmed, 'rows', v_n, 'latest', v_latest, 'ageMin', v_age_min, 'staleMin', v_stale_min);
+    'alarmed', v_alarmed, 'latest', v_latest, 'ageMin', v_age_min, 'staleMin', v_stale_min);
 end;
 $$;
 
@@ -275,11 +281,17 @@ grant  execute on function public.upsert_event(
   text, text, text, uuid, text, date, text, text, boolean, numeric, numeric, boolean, text[], timestamptz)
   to service_role;
 
--- === 6. crons: re-arm depth-capture (*/5) + the depth-staleness deadman (*/10 SQL) =====================
+-- === 6. crons: re-arm depth-capture (*/5) + the depth-staleness deadman (*/10) + a daily retention prune ===
 -- Same Vault-secret pattern as 0066/0086. 0087 registered `depth-capture` then unscheduled it; re-schedule it
--- here (cron.schedule upserts by name — no duplicate). The deadman is a pure-SQL cron (like the 0066 deadmen).
--- The operator deploys the depth-capture edge fn alongside applying this migration (until then the cron POST 404s
--- harmlessly and market_depth stays empty, so the deadman correctly stays silent).
+-- here (cron.schedule upserts by name — no duplicate). The deadman + prune are pure-SQL crons (like the 0066
+-- deadmen/prunes). The operator deploys the depth-capture edge fn alongside applying this migration (until then the
+-- cron POST 404s harmlessly and market_depth stays empty, so the deadman correctly stays silent).
+--
+-- RETENTION (R1-F3): market_depth is delta-fed but still grows unbounded (~15k–90k rows/day at the 30-min
+-- heartbeat × the near-dated bucket universe) and google_paper_inputs only ever reads the trailing 21 days, while
+-- the sibling capture table opening_captures (0066) has a 90-day prune and v1's depth lived on the DOWNSAMPLED
+-- market_snapshots. Prune > 35 days (comfortable margin over the 21-day window) so the table can't balloon on the
+-- documented-saturated Micro instance.
 do $$
 declare edge_command text;
 begin
@@ -299,5 +311,7 @@ begin
 
   perform cron.schedule('depth-capture', '*/5 * * * *', edge_command);
   perform cron.schedule('depth-capture-deadman', '*/10 * * * *', 'select public.depth_capture_deadman_check();');
+  perform cron.schedule('market-depth-prune', '40 3 * * *',
+    $prune$delete from public.market_depth where captured_at < now() - interval '35 days';$prune$);
 end;
 $$;

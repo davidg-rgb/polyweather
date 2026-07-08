@@ -7,6 +7,11 @@
 > (+ `handler.test.ts`, `pure.test.ts`), `supabase/functions/discover-markets/handler.ts` (gamma anchor thread),
 > `supabase/tests/{migrations,discovery}.test.ts` + `pglite-port.ts`. **All 12 findings addressed** (§3 → the code).
 > The one CARRY-FORWARD CAVEAT (not a defect — a data-availability property of the honest true-anchor): see §6.
+> **Round-1 adversarial review (6 reviewers → per-finding verify) applied 5 fixes:** deadman threshold 20→70 min
+> (must sit above the 30-min write heartbeat, else false CRITICAL pages) + dropped its unbounded `count(*)`; a
+> daily `market-depth-prune` (>35d); the self-gating guard clamps `bot.depthCutoverMinRows` to ≥1 (never reads an
+> empty depth source); the write-failure throw now covers PARTIAL failures too (not just total); and the round-trip
+> anchor test now sets `gamma_created_at ≠ first_seen` so it actually detects a finding-A regression.
 >
 > **Written 2026-07-08.** The v1 depth-capture build shipped (commit `c85158a`) and was live-verified — it **fails**
 (write times out → 0 rows) and a 5-agent adversarial review surfaced **12 confirmed findings**. Operator decision:

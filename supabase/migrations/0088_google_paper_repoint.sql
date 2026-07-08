@@ -148,14 +148,16 @@ declare
   v_cities     text[] := coalesce(p_cities, array[]::text[]);
   -- SELF-GATING cutover guard (finding J): stay on opening_captures until market_depth EXISTS and holds ≥ this many
   -- rows. Config-overridable so the operator can force either path with NO migration (rollback = set it very high).
-  v_min_rows   int    := coalesce((select value::int from config where key = 'bot.depthCutoverMinRows'), 200);
+  -- CLAMPED to ≥ 1 (R1-F4): an operator-set 0/negative would otherwise make `v_depth_n < v_min_rows` false on an
+  -- EMPTY table (0 < 0), reading the empty depth source instead of falling back — the exact invariant this guards.
+  v_min_rows   int    := greatest(coalesce((select value::int from config where key = 'bot.depthCutoverMinRows'), 200), 1);
   v_depth_n    int;
 begin
   -- table-missing (0089 not yet applied) OR under the accrual threshold → the preserved opening_captures path.
   if to_regclass('public.market_depth') is null then
     return public.google_paper_inputs_opening(p_days, p_cities);
   end if;
-  select count(*) into v_depth_n from (select 1 from public.market_depth limit greatest(v_min_rows, 1)) t;
+  select count(*) into v_depth_n from (select 1 from public.market_depth limit v_min_rows) t;
   if v_depth_n < v_min_rows then
     return public.google_paper_inputs_opening(p_days, p_cities);
   end if;

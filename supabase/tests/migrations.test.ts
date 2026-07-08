@@ -376,7 +376,8 @@ describe('migrations 0001–0010', () => {
       // 0089 = the DEPTH-CAPTURE V2 REDESIGN: drops the v1 0087 depth design; adds the dedicated market_depth table
       // + record_market_depth + market_depth_targets + depth_capture_deadman_check + market_events.gamma_created_at
       // (upsert_event rewritten to thread the TRUE Gamma createdAt); re-arms depth-capture */5 + adds the
-      // depth-capture-deadman */10 SQL cron (count 31 → 32). Money-path (poll-markets) untouched. DEPTH-CAPTURE-V2-HANDOFF.md.
+      // depth-capture-deadman */10 + market-depth-prune (daily) SQL crons (count 31 → 33). Money-path (poll-markets)
+      // untouched. DEPTH-CAPTURE-V2-HANDOFF.md.
       '0089_depth_capture_v2.sql',
     ]);
   });
@@ -995,10 +996,12 @@ describe('pg_cron registrations (§7.22, W11)', () => {
       // 0087→0089: continuous executable-depth capture into market_depth (http_post edge-fn job; W11-checked).
       // 0089 re-arms this by name (0087 had unscheduled it) — no duplicate.
       'depth-capture':            '*/5 * * * *',
-      // 0089: depth-staleness alarm (pure-SQL cron like the 0066 deadmen — excluded from W11 below).
+      // 0089: depth-staleness alarm + daily retention prune (pure-SQL crons like the 0066 deadmen/prunes —
+      // excluded from W11 below).
       'depth-capture-deadman':    '*/10 * * * *',
+      'market-depth-prune':       '40 3 * * *',
     };
-    expect(jobs.length).toBe(32);
+    expect(jobs.length).toBe(33);
     for (const j of jobs) {
       expect(j.schedule, `schedule for ${j.jobname}`).toBe(expected[j.jobname]);
     }
@@ -1011,7 +1014,7 @@ describe('pg_cron registrations (§7.22, W11)', () => {
     const jobs = await rows<{ jobname: string; command: string }>(
       db,
       `select jobname, command from cron.job where jobname not in
-        ('snapshot-downsample','opening-capture-deadman','opening-bot-deadman','opening-captures-prune','bot-tick-log-prune','depth-capture-deadman')`,
+        ('snapshot-downsample','opening-capture-deadman','opening-bot-deadman','opening-captures-prune','bot-tick-log-prune','depth-capture-deadman','market-depth-prune')`,
     );
     for (const j of jobs) {
       expect(j.command).toContain(`vault.decrypted_secrets where name = 'cron_secret'`);
@@ -1125,11 +1128,14 @@ describe('depth-capture v2 round-trip (0089/0088, finding I-2) — DepthRow ↔ 
       `select city_id from public.upsert_city('rt_city','RT City','US','C','Europe/Amsterdam',$1)`,
       [region],
     ))[0]!.city_id;
-    // event with a TRUE Gamma listing time = now() → hoursSinceListing ≈ 0 (< 1, fresh), target_date today.
+    // event with gamma_created_at (listing) 30 min ago and first_seen (ingestion) 10 min ago — DELIBERATELY
+    // DIFFERENT (R1-F2): so hoursSinceListing (gamma-anchored) ≈ 0.5h is DISTINGUISHABLE from a first_seen revert
+    // (≈0.17h). Both < 1h so the event stays fresh, but the assertion below now actually detects a finding-A regression.
     await tdb.query(
       `insert into public.market_events (id, poly_event_id, slug, kind, city_id, target_date, unit,
          accepting_orders, ladder_ok, gamma_created_at, first_seen, last_seen, volume24h)
-       values ($1,'rt_poly','rt-slug','highest',$2, current_date, 'C', true, true, now(), now(), now(), 1000)`,
+       values ($1,'rt_poly','rt-slug','highest',$2, current_date, 'C', true, true,
+               now() - interval '30 minutes', now() - interval '10 minutes', now(), 1000)`,
       [EVENT, city_id],
     );
     for (let i = 0; i < 3; i++) {
@@ -1176,8 +1182,9 @@ describe('depth-capture v2 round-trip (0089/0088, finding I-2) — DepthRow ↔ 
     expect(Array.isArray(v.captures)).toBe(true);
     expect(v.captures.length).toBe(1); // one (event, tick)
     const cap = v.captures[0];
-    // TRUE anchor (finding A): hoursSinceListing measured from gamma_created_at, < 1.
-    expect(cap.hoursSinceListing).toBeLessThan(1);
+    // TRUE anchor (finding A): hoursSinceListing measured from gamma_created_at (30 min ago ≈ 0.5h), NOT first_seen
+    // (10 min ago ≈ 0.17h). toBeCloseTo(0.5,1) FAILS under a first_seen revert — the R1-F2 false-green fix.
+    expect(cap.hoursSinceListing).toBeCloseTo(0.5, 1);
     expect(cap.createdAtGamma).not.toBeNull();
     // resolvesAt = target_date 12:00 UTC (the uniform venue rule, kept).
     expect(String(cap.resolvesAt)).toContain('12:00:00');
@@ -1225,6 +1232,68 @@ describe('depth-capture v2 round-trip (0089/0088, finding I-2) — DepthRow ↔ 
       `select public.google_paper_inputs(21, array['rt_city']::text[]) as v`,
     ))[0]!.v;
     expect(v.captures).toEqual([]); // opening_captures has no rows → fallback returns empty, not the depth path
+    // R1-F4: a 0/negative threshold is CLAMPED to ≥1, so on a populated table it cuts over (never reads an empty
+    // depth source via `0 < 0`). Here market_depth has rows → the depth path fires (captures non-empty), same as '1'.
+    await tdb.exec(`update public.config set value = '0' where key = 'bot.depthCutoverMinRows'`);
+    const v0 = (await rows<{ v: Record<string, any> }>(
+      tdb,
+      `select public.google_paper_inputs(21, array['rt_city']::text[]) as v`,
+    ))[0]!.v;
+    expect(v0.captures.length).toBeGreaterThan(0); // depth path fired (non-empty), not an empty-source read
     await tdb.exec(`update public.config set value = '1' where key = 'bot.depthCutoverMinRows'`);
+  });
+});
+
+describe('depth_capture_deadman_check — staleness threshold sits above the write heartbeat (0089, R1-F1/F3)', () => {
+  // market_depth is DELTA-FED: a healthy fn writes an UNCHANGED bucket only every 30 min (handler HEARTBEAT_MS).
+  // So the deadman's staleMin MUST exceed 30 min or it false-pages CRITICAL on a healthy quiet window. This pins
+  // that a 35-min gap (within the heartbeat + margin) does NOT alarm while a 75-min gap (a genuine stall) does.
+  let tdb: PGlite;
+  const EVENT = '33333333-3333-3333-3333-333333333333';
+  const BUCKET = 'd0000000-0000-0000-0000-000000000000';
+
+  beforeAll(async () => {
+    tdb = await freshDb();
+    const region = (await rows<{ region: string }>(tdb, `select region from public.clusters limit 1`))[0]!.region;
+    const cid = (await rows<{ city_id: string }>(
+      tdb, `select city_id from public.upsert_city('dm_city','DM','US','C','Europe/Amsterdam',$1)`, [region]))[0]!.city_id;
+    await tdb.query(
+      `insert into public.market_events (id, poly_event_id, slug, kind, city_id, target_date, unit, ladder_ok, first_seen, last_seen)
+       values ($1,'dm_poly','dm-slug','highest',$2, current_date, 'C', true, now(), now())`, [EVENT, cid]);
+    await tdb.query(
+      `insert into public.market_buckets (id, event_id, bucket_idx, label, condition_id, token_yes, token_no)
+       values ($1,$2,0,'20°C','dc0','dty0','dtn0')`, [BUCKET, EVENT]);
+  });
+  afterAll(async () => { await tdb.close(); });
+
+  const setDepthAgeMin = async (mins: number) => {
+    await tdb.exec(`delete from public.market_depth`);
+    await tdb.query(
+      `insert into public.market_depth (bucket_id, captured_at, best_bid, best_ask, exec_ask, exec_bid)
+       values ($1, now() - ($2 || ' minutes')::interval, 0.10, 0.11, 0.11, 0.10)`, [BUCKET, String(mins)]);
+  };
+  const runDeadman = async () =>
+    (await rows<{ d: Record<string, any> }>(tdb, `select public.depth_capture_deadman_check() as d`))[0]!.d;
+
+  it('empty table (fresh deploy, no rows) → not alarmed, staleMin default 70', async () => {
+    await tdb.exec(`delete from public.market_depth`);
+    const d = await runDeadman();
+    expect(d.alarmed).toBe(false);
+    expect(Number(d.staleMin)).toBe(70);
+    expect(d.latest).toBeNull();
+  });
+
+  it('a 35-min-old newest row (within heartbeat + margin) does NOT alarm — the R1-F1 fix', async () => {
+    await setDepthAgeMin(35);
+    const d = await runDeadman();
+    expect(d.alarmed).toBe(false);   // 35 < 70; a 20-min threshold (the bug) would false-page here
+    expect(Number(d.ageMin)).toBeGreaterThan(30);
+  });
+
+  it('a 75-min-old newest row (a genuine stall past the 70-min threshold) alarms CRITICAL', async () => {
+    await setDepthAgeMin(75);
+    const d = await runDeadman();
+    expect(d.alarmed).toBe(true);
+    expect(Number(d.ageMin)).toBeGreaterThan(70);
   });
 });
