@@ -281,6 +281,26 @@ grant  execute on function public.upsert_event(
   text, text, text, uuid, text, date, text, text, boolean, numeric, numeric, boolean, text[], timestamptz)
   to service_role;
 
+-- === 5.5 Slack allowlist — the two new alert kinds must survive the global Slack pause (R3-1) ============
+-- The prod global Slack pause (config alerts_slack_paused='true') makes claim_alert return 'skip' WITHOUT recording
+-- for any kind NOT in alerts_slack_allow_kinds — so without this, the depth-staleness deadman + the partial-write
+-- WARN would be SILENTLY SUPPRESSED on prod, defeating the very stall-detection this migration adds. Mirror the
+-- 0066:715-729 precedent (which allowlisted the bot safety deadmen for exactly this reason). Idempotent: token
+-- equality (not substring), each kind appended only if absent.
+do $$
+declare
+  v_kinds text := coalesce((select value from config where key = 'alerts_slack_allow_kinds'), 'WHALE_TRADE');
+  v_kind  text;
+begin
+  foreach v_kind in array array['DEPTH_CAPTURE_DEADMAN','DEPTH_CAPTURE_PARTIAL_WRITE'] loop
+    if not (v_kind = any(string_to_array(v_kinds, ','))) then
+      v_kinds := v_kinds || ',' || v_kind;
+    end if;
+  end loop;
+  insert into config (key, value) values ('alerts_slack_allow_kinds', v_kinds)
+    on conflict (key) do update set value = v_kinds, updated_at = now();
+end $$;
+
 -- === 6. crons: re-arm depth-capture (*/5) + the depth-staleness deadman (*/10) + a daily retention prune ===
 -- Same Vault-secret pattern as 0066/0086. 0087 registered `depth-capture` then unscheduled it; re-schedule it
 -- here (cron.schedule upserts by name — no duplicate). The deadman + prune are pure-SQL crons (like the 0066

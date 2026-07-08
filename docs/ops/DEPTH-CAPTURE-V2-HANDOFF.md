@@ -18,6 +18,13 @@
 > `market_depth` + threshold 0 + a seeded `opening_captures` fresh row → must fall back — verified to FAIL if the
 > clamp is removed); and `market_depth_targets` truncation + the pre-cap `count(*) over ()` is now exercised against
 > real SQL (`p_limit < candidates`). Suite 2993 green, typecheck clean.
+> **Round-3 review (final round; 1 confirmed, 1 refuted) applied 1 fix:** the two new alert kinds
+> (`DEPTH_CAPTURE_DEADMAN`, `DEPTH_CAPTURE_PARTIAL_WRITE`) are now appended to `alerts_slack_allow_kinds` in 0089
+> (mirroring the 0066 bot-deadman precedent) — without it the prod global Slack pause (`alerts_slack_paused='true'`)
+> made `claim_alert` return `skip` and silently suppress the deadman, defeating the stall-detection this migration
+> adds. Test asserts both kinds RECORD (not `skip`) while paused. Suite 2994 green, typecheck clean. **The review
+> loop CONVERGED: R1 5 findings → R2 4 (SQL/parity clean) → R3 1 (a real prod-alerting gap) → all fixed; no
+> functional correctness or money-path defect surfaced in any round.**
 >
 > **Written 2026-07-08.** The v1 depth-capture build shipped (commit `c85158a`) and was live-verified — it **fails**
 (write times out → 0 rows) and a 5-agent adversarial review surfaced **12 confirmed findings**. Operator decision:

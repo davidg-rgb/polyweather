@@ -1345,3 +1345,30 @@ describe('depth_capture_deadman_check — staleness threshold sits above the wri
     expect(Number(d.ageMin)).toBeGreaterThan(70);
   });
 });
+
+describe('depth-capture alert kinds survive the global Slack pause (0089, R3-1)', () => {
+  // Under alerts_slack_paused='true' (ON on prod), claim_alert returns 'skip' WITHOUT recording for any kind NOT
+  // in alerts_slack_allow_kinds. 0089 appends the deadman + partial-write kinds to the allowlist so the stall
+  // alarms actually fire on prod — without that, the very safety net this migration adds is silently suppressed.
+  let tdb: PGlite;
+  beforeAll(async () => {
+    tdb = await freshDb();
+    await tdb.exec(
+      `insert into public.config (key,value) values ('alerts_slack_paused','true')
+       on conflict (key) do update set value = 'true'`,
+    );
+  });
+  afterAll(async () => { await tdb.close(); });
+
+  it('DEPTH_CAPTURE_DEADMAN + DEPTH_CAPTURE_PARTIAL_WRITE claim_alert RECORDS (not skip) while paused', async () => {
+    for (const [kind, sev] of [['DEPTH_CAPTURE_DEADMAN', 'CRITICAL'], ['DEPTH_CAPTURE_PARTIAL_WRITE', 'WARN']]) {
+      const decision = (await rows<{ decision: string }>(
+        tdb, `select decision from public.claim_alert($1,$2,$3,'t','b')`, [kind, sev, `${kind}:k`]))[0]!.decision;
+      expect(decision, `${kind} must not be suppressed`).toBe('insert');
+    }
+    // control: a kind NOT on the allowlist IS suppressed while paused (proves the gate is actually active).
+    const control = (await rows<{ decision: string }>(
+      tdb, `select decision from public.claim_alert('NOT_ALLOWLISTED_KIND','WARN','ctrl','t','b')`))[0]!.decision;
+    expect(control).toBe('skip');
+  });
+});
