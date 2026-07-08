@@ -19,6 +19,8 @@ const FN_ARGS: Record<string, string[]> = {
   upsert_event: [
     'p_poly_event_id', 'p_slug', 'p_kind', 'p_city_id', 'p_icao', 'p_target_date', 'p_unit',
     'p_neg_risk_market_id', 'p_accepting', 'p_volume24h', 'p_liquidity', 'p_ladder_ok', 'p_ladder_problems',
+    // 0089: the TRUE Gamma createdAt (default null — the parse-failure caller omits it → SQL NULL positionally).
+    'p_gamma_created_at',
   ],
   upsert_bucket: [
     'p_event_id', 'p_bucket_idx', 'p_label', 'p_low', 'p_high', 'p_poly_market_id',
@@ -190,7 +192,7 @@ export function pglitePort(db: PGlite): DbPort {
       const order = FN_ARGS[fn];
       if (!order) throw new Error(`pglitePort: unknown rpc '${fn}' — add it to FN_ARGS`);
       const params = order.map((name) => {
-        const v = args[name];
+        const v = args[name] ?? null; // an omitted optional arg → SQL NULL positionally (the N9 idiom)
         if (Array.isArray(v)) {
           // arrays of primitives → PG array literal (text[]/uuid[] params);
           // arrays of objects → jsonb payload (e.g. upsert_*_rows p_rows)

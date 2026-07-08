@@ -197,6 +197,10 @@ export async function discoverMarkets(ctx: JobCtx, deps: DiscoverDeps): Promise<
       p_liquidity: parsed.liquidity,
       p_ladder_ok: parsed.ladderProblems.length === 0,
       p_ladder_problems: parsed.ladderProblems,
+      // the TRUE Gamma listing time (0089): the depth-capture repoint's listing anchor for hoursSinceListing.
+      // upsert_event coalesce-keeps the first non-null, so this is forward-only + immutable-once-set. Discovery/
+      // liveness only — NOT the consensus→edges money path.
+      p_gamma_created_at: parsed.createdAt,
     });
     seenPolyIds.push(ev.id);
     if (eventRow!.is_new) {

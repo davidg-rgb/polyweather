@@ -1,8 +1,8 @@
-/** Edge Function entry — depth-capture (the continuous executable-depth layer for market_snapshots, 0087).
+/** Edge Function entry — depth-capture (the continuous executable-depth layer for the `market_depth` table, 0089).
  * Schedule: every 5 min.
  *
- * Walks the TRUE CLOB depth of near-dated live 'highest' buckets and writes the computed depth into
- * market_snapshots.depth (money-path-safe — poll-markets is untouched). Read-only against Polymarket, keyless.
+ * Walks the TRUE CLOB depth of near-dated live 'highest' buckets and writes the computed depth into the dedicated
+ * market_depth table (money-path-safe — poll-markets is untouched). Read-only against Polymarket, keyless.
  */
 import { fetchJson } from '../../../packages/io/src/index.ts';
 import { getServiceDb } from '../_shared/db.ts';
@@ -24,7 +24,7 @@ deno?.serve(async (req: Request) => {
     'depth-capture',
     periodKey,
     req,
-    (ctx) => depthCapture(ctx, { now, fetchJson: (url, init, opts) => fetchJson(url, init, opts) }),
+    (ctx) => depthCapture(ctx, { now, fetchJson: (url, init, opts) => fetchJson(url, init, opts), clock: () => Date.now() }),
     { db },
   );
 });

@@ -1,6 +1,14 @@
 # Depth-capture v2 — full-redesign handoff (execute in a fresh session)
 
-**Written 2026-07-08.** The v1 depth-capture build shipped (commit `c85158a`) and was live-verified — it **fails**
+> **✅ BUILT 2026-07-08 (post-`/clear`).** The v2 redesign below is IMPLEMENTED + fully tested (`pnpm test`
+> 178 files / 2986 green, `pnpm typecheck` clean) and committed on `main` — NOT deployed (operator-gated, boundary
+> intact: Claude never applies migrations/deploys/keys). Files: migration **`0089_depth_capture_v2.sql`** (new),
+> **`0088_google_paper_repoint.sql`** (rewritten — self-gating guard), `supabase/functions/depth-capture/{handler,pure,index}.ts`
+> (+ `handler.test.ts`, `pure.test.ts`), `supabase/functions/discover-markets/handler.ts` (gamma anchor thread),
+> `supabase/tests/{migrations,discovery}.test.ts` + `pglite-port.ts`. **All 12 findings addressed** (§3 → the code).
+> The one CARRY-FORWARD CAVEAT (not a defect — a data-availability property of the honest true-anchor): see §6.
+>
+> **Written 2026-07-08.** The v1 depth-capture build shipped (commit `c85158a`) and was live-verified — it **fails**
 (write times out → 0 rows) and a 5-agent adversarial review surfaced **12 confirmed findings**. Operator decision:
 **full v2 redesign, fix everything**, executed post-`/clear`. This doc is the complete, self-contained spec. A
 fresh Claude should be able to execute it end-to-end. Read it top to bottom before touching anything.
@@ -203,18 +211,39 @@ config flag the operator flips. A prose caveat is not enough.
 
 ## 6. Deploy + verify sequence (operator-gated; Claude never deploys/keys)
 
-1. Apply `0089` (drops v1 depth column/RPCs, creates `market_depth`, adds `gamma_created_at`, re-arms cron) +
-   redeploy `discover-markets` (anchor population) + redeploy the `depth-capture` fn. Harmless — panel still on
-   `opening_captures`.
-2. Let `market_depth` accrue ≥1 day (fresh events + resolutions across cities). Verify: rows growing, `exec_ask`
-   in [0,1], `gamma_created_at` populated, fresh-event count sane, **no statement-timeout errors in pg logs**,
-   Micro not saturating (watch `poll-markets` + the two capture jobs).
-3. Parity check vs the (revived) `opening_captures` path — the rewritten RPC's fresh-event set + entries should be
-   in the same ballpark.
-4. Apply the rewritten `0088` (the cutover). Watch the next `google-paper-panel` snapshot. History resets (fine).
-5. `opening-capture` STAYS (convergence/maker-exit). Do NOT retire it.
+**The cutover is now AUTOMATIC + self-gating (finding J fixed technically, not by prose).** The rewritten `0088`
+`google_paper_inputs` FALLS BACK to `google_paper_inputs_opening` (the preserved 0086 body on the revived
+`opening_captures`) until `market_depth` EXISTS **and** holds ≥ `bot.depthCutoverMinRows` rows (config, default 200).
+So both migrations can be applied together safely — the panel switches source only once real depth has accrued.
 
-Rollback: before `0088`, nothing to undo (additive). After: re-apply `0086`'s `google_paper_inputs` body.
+1. Apply `0089` **then** `0088` (0089 creates `market_depth`; 0088 late-binds it, so this order is cleanest — the
+   `to_regclass` guard also makes 0088 safe in either order). `0089` drops the v1 depth column/RPCs, creates
+   `market_depth` + its RPCs + the depth-staleness deadman, adds `market_events.gamma_created_at`, and re-arms the
+   `depth-capture` */5 + `depth-capture-deadman` */10 crons. **Redeploy `discover-markets`** (populates
+   `gamma_created_at` forward) **and the `depth-capture` edge fn.** Harmless on apply — the panel stays on
+   `opening_captures` until depth crosses the threshold.
+2. Let `market_depth` accrue ≥1 day. Verify: rows growing, `exec_ask` in [0,1], `gamma_created_at` populated on new
+   `market_events`, **no `statement_timeout` errors in pg logs**, the `depth-capture` job `stats` show
+   `capped:false` / `budgetHit:false` / `writeErrors:0` and `inserted == written`, Micro not saturating (watch
+   `poll-markets` + the two capture jobs). Once `market_depth` passes ~200 rows the panel auto-switches to the depth
+   path; the `depth-capture-deadman` arms only after the first rows land (no false page during the deploy window).
+3. **Parity check + the KNOWN CAVEAT (read this).** Compare the depth-path fresh-event set vs the `opening_captures`
+   path. **Expect the depth-path fresh cohort (min `hoursSinceListing < 1`) to be SMALLER.** Why, and why it is
+   CORRECT: v2 anchors `hoursSinceListing` to the TRUE Gamma listing time (`gamma_created_at`, finding A), but
+   `depth-capture` only walks buckets `discover-markets` has already ingested, and `discover` runs 5×/day
+   (`10 2,4,5,11,17`). So a market's first depth row can land a few hours after its true listing → it fails the
+   `< 1h` flat-open gate. `opening-capture` polls Gamma every 2 min, so it catches the true open far more often.
+   **This is honest, not a regression:** v1's `first_seen` anchor made `hoursSinceListing ≈ 0` for everything
+   (near-tautological — the exact finding-A defect). If the forward fresh cohort is too sparse to reach the §9R-E
+   gate (≥40 markets), the operator's levers are (a) increase `discover-markets` cadence, or (b) keep the panel on
+   `opening_captures` — a config flip, no migration: `update config set value='999999999' where key='bot.depthCutoverMinRows'`.
+4. No separate "apply 0088" step — it was applied in (1) and self-gates. When depth crosses the threshold the next
+   `google-paper-panel` snapshot flips to the depth source; history resets (fine).
+5. `opening-capture` STAYS (convergence/maker-exit read `opening_captures` for `houseProb`). Do NOT retire it.
+
+Rollback: instant + no migration — `update config set value='999999999' where key='bot.depthCutoverMinRows'` forces
+the `opening_captures` path immediately. (Or re-`create or replace` `google_paper_inputs` as a thin delegate to
+`google_paper_inputs_opening`.)
 
 ---
 

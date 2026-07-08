@@ -365,13 +365,19 @@ describe('migrations 0001–0010', () => {
       // google_paper_inputs + dash_google_paper + a google-paper-panel */15 cron (count 29 → 30). Replaces what
       // the /convergence page renders (the 0069 convergence machinery stays intact until cutover). GoogleView.
       '0086_google_paper.sql',
-      // 0087 = the continuous executable-depth LAYER: market_snapshots.depth + record_depth_captures +
-      // depth_capture_targets + a depth-capture */5 cron (count 30 → 31). Nothing reads `depth` yet (staged
-      // cutover) — the Google panel keeps running on 0086/opening_captures. Money-path (poll-markets) untouched.
+      // 0087 = the v1 continuous executable-depth LAYER: market_snapshots.depth + record_depth_captures +
+      // depth_capture_targets + a depth-capture */5 cron (count 30 → 31). SUPERSEDED by 0089 (v1 live-FAILED: the
+      // single 800-row write timed out → 0 rows; 12 review findings). Kept in the chain for history; 0089 drops it.
       '0087_depth_capture.sql',
-      // 0088 = THE REPOINT: google_paper_inputs rewritten to read market_snapshots.depth (off the revived
-      // opening_captures). No new cron. Applied only after 0087's depth has accrued + parity is verified.
+      // 0088 = THE REPOINT (v2 rewrite): google_paper_inputs → google_paper_inputs_opening (preserved 0086 body,
+      // the fallback/rollback) + the guarded market_depth path (true gamma_created_at anchor + complete-ladder +
+      // self-gating cutover). No new cron. plpgsql late-binds market_depth (created in 0089) — safe in file order.
       '0088_google_paper_repoint.sql',
+      // 0089 = the DEPTH-CAPTURE V2 REDESIGN: drops the v1 0087 depth design; adds the dedicated market_depth table
+      // + record_market_depth + market_depth_targets + depth_capture_deadman_check + market_events.gamma_created_at
+      // (upsert_event rewritten to thread the TRUE Gamma createdAt); re-arms depth-capture */5 + adds the
+      // depth-capture-deadman */10 SQL cron (count 31 → 32). Money-path (poll-markets) untouched. DEPTH-CAPTURE-V2-HANDOFF.md.
+      '0089_depth_capture_v2.sql',
     ]);
   });
 });
@@ -390,6 +396,7 @@ describe('unique / natural keys (§7, §15)', () => {
     ['market_buckets', ['event_id', 'bucket_idx']],
     ['market_buckets', ['poly_market_id']],
     ['market_snapshots', ['bucket_id', 'captured_at']],
+    ['market_depth', ['bucket_id', 'captured_at']],  // 0089: the dedicated executable-depth store's natural key
     ['bucket_probabilities', ['event_id', 'source', 'inputs_hash']],
     ['model_stats', ['icao', 'model', 'lead_days', 'snapshot_slot']],
     ['model_stats_history', ['icao', 'model', 'lead_days', 'snapshot_slot', 'stats_version']],
@@ -985,10 +992,13 @@ describe('pg_cron registrations (§7.22, W11)', () => {
       'maker-exit-panel':         '*/15 * * * *',
       // 0086: Google-picks-bucket forward-paper view snapshot (http_post edge-fn job; W11-checked).
       'google-paper-panel':       '*/15 * * * *',
-      // 0087: continuous executable-depth capture for market_snapshots.depth (http_post edge-fn job; W11-checked).
+      // 0087→0089: continuous executable-depth capture into market_depth (http_post edge-fn job; W11-checked).
+      // 0089 re-arms this by name (0087 had unscheduled it) — no duplicate.
       'depth-capture':            '*/5 * * * *',
+      // 0089: depth-staleness alarm (pure-SQL cron like the 0066 deadmen — excluded from W11 below).
+      'depth-capture-deadman':    '*/10 * * * *',
     };
-    expect(jobs.length).toBe(31);
+    expect(jobs.length).toBe(32);
     for (const j of jobs) {
       expect(j.schedule, `schedule for ${j.jobname}`).toBe(expected[j.jobname]);
     }
@@ -1001,7 +1011,7 @@ describe('pg_cron registrations (§7.22, W11)', () => {
     const jobs = await rows<{ jobname: string; command: string }>(
       db,
       `select jobname, command from cron.job where jobname not in
-        ('snapshot-downsample','opening-capture-deadman','opening-bot-deadman','opening-captures-prune','bot-tick-log-prune')`,
+        ('snapshot-downsample','opening-capture-deadman','opening-bot-deadman','opening-captures-prune','bot-tick-log-prune','depth-capture-deadman')`,
     );
     for (const j of jobs) {
       expect(j.command).toContain(`vault.decrypted_secrets where name = 'cron_secret'`);
@@ -1089,5 +1099,132 @@ describe('port invariant tripwire (0081) — no no-arg jsonb RPC returns a TOP-L
       return bad;
     });
     expect(offenders).toEqual([]);
+  });
+});
+
+describe('depth-capture v2 round-trip (0089/0088, finding I-2) — DepthRow ↔ market_depth ↔ google_paper_inputs', () => {
+  // The class the finding names: record_market_depth's jsonb_to_recordset matches by key NAME, so a handler key
+  // rename silently NULLs the column (bug B's cousin) — invisible to typecheck AND to the arg-recording handler
+  // test. This exercises the REAL SQL end-to-end: a handler-shaped row inserts via record_market_depth and reads
+  // back through the rewritten google_paper_inputs with exec prices intact, the COMPLETE ladder (finding F), and
+  // the TRUE gamma_created_at anchor (finding A) — plus the self-gating cutover guard (finding J).
+  let tdb: PGlite;
+  const EVENT = '11111111-1111-1111-1111-111111111111';
+  const B = [
+    'b0000000-0000-0000-0000-000000000000',
+    'b1111111-1111-1111-1111-111111111111',
+    'b2222222-2222-2222-2222-222222222222',
+  ];
+  let capturedAt: string;
+
+  beforeAll(async () => {
+    tdb = await freshDb();
+    const region = (await rows<{ region: string }>(tdb, `select region from public.clusters limit 1`))[0]!.region;
+    const city_id = (await rows<{ city_id: string }>(
+      tdb,
+      `select city_id from public.upsert_city('rt_city','RT City','US','C','Europe/Amsterdam',$1)`,
+      [region],
+    ))[0]!.city_id;
+    // event with a TRUE Gamma listing time = now() → hoursSinceListing ≈ 0 (< 1, fresh), target_date today.
+    await tdb.query(
+      `insert into public.market_events (id, poly_event_id, slug, kind, city_id, target_date, unit,
+         accepting_orders, ladder_ok, gamma_created_at, first_seen, last_seen, volume24h)
+       values ($1,'rt_poly','rt-slug','highest',$2, current_date, 'C', true, true, now(), now(), now(), 1000)`,
+      [EVENT, city_id],
+    );
+    for (let i = 0; i < 3; i++) {
+      await tdb.query(
+        `insert into public.market_buckets (id, event_id, bucket_idx, label, low_native, high_native,
+           condition_id, token_yes, token_no)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+        [B[i], EVENT, i, `${20 + i}°C`, 20 + i, 20 + i, `c${i}`, `ty${i}`, `tn${i}`],
+      );
+    }
+    // force the depth path: the self-gating guard reads bot.depthCutoverMinRows (default 200); set 1 so a couple
+    // of accrued rows crosses it.
+    await tdb.exec(
+      `insert into public.config (key,value) values ('bot.depthCutoverMinRows','1')
+       on conflict (key) do update set value = excluded.value`,
+    );
+    // write handler-shaped depth rows for buckets 0 and 1 ONLY (b2 omitted → the complete-ladder LEFT JOIN test).
+    capturedAt = new Date().toISOString();
+    const pRows = [
+      { bucket_id: B[0], best_bid: 0.1, best_ask: 0.11, mid: 0.105, spread: 0.01, exec_ask: 0.115, exec_bid: 0.1, depth_usd: 340, sellback_depth_usd: 245, sellback_usd: 200 },
+      { bucket_id: B[1], best_bid: 0.28, best_ask: 0.3, mid: 0.29, spread: 0.02, exec_ask: 0.31, exec_bid: 0.29, depth_usd: 500, sellback_depth_usd: 400, sellback_usd: 300 },
+    ];
+    await tdb.query(`select public.record_market_depth($1::jsonb, $2::timestamptz)`, [JSON.stringify(pRows), capturedAt]);
+  });
+  afterAll(async () => {
+    await tdb.close();
+  });
+
+  it('a handler-shaped row lands in market_depth with exec prices intact (the write contract)', async () => {
+    const got = await rows<{ exec_ask: string; exec_bid: string; bucket_id: string }>(
+      tdb,
+      `select bucket_id, exec_ask, exec_bid from public.market_depth order by bucket_id`,
+    );
+    expect(got.length).toBe(2);
+    expect(Number(got[0]!.exec_ask)).toBeCloseTo(0.115, 6);
+    expect(Number(got[1]!.exec_bid)).toBeCloseTo(0.29, 6);
+  });
+
+  it('reads back through google_paper_inputs: complete ladder + true anchor + exec prices (findings A/F/I-2)', async () => {
+    const v = (await rows<{ v: Record<string, any> }>(
+      tdb,
+      `select public.google_paper_inputs(21, array['rt_city']::text[]) as v`,
+    ))[0]!.v;
+    expect(Array.isArray(v.captures)).toBe(true);
+    expect(v.captures.length).toBe(1); // one (event, tick)
+    const cap = v.captures[0];
+    // TRUE anchor (finding A): hoursSinceListing measured from gamma_created_at, < 1.
+    expect(cap.hoursSinceListing).toBeLessThan(1);
+    expect(cap.createdAtGamma).not.toBeNull();
+    // resolvesAt = target_date 12:00 UTC (the uniform venue rule, kept).
+    expect(String(cap.resolvesAt)).toContain('12:00:00');
+    // COMPLETE ladder (finding F): all 3 buckets present even though b2 had no depth row this tick.
+    expect(cap.buckets.length).toBe(3);
+    const byIdx: Record<number, any> = Object.fromEntries(cap.buckets.map((b: any) => [b.idx, b]));
+    expect(Number(byIdx[0].execAsk)).toBeCloseTo(0.115, 6); // the write→read contract holds
+    expect(Number(byIdx[1].execBid)).toBeCloseTo(0.29, 6);
+    expect(byIdx[2].execAsk).toBeNull(); // un-walked bucket → null exec (never silently dropped)
+  });
+
+  it('market_depth_targets returns the full ladder + each bucket’s last depth row + a pre-cap count', async () => {
+    // the handler's delta-dedupe (last_exec_*) + cap logging (total_candidates) ride on this RPC — assert the
+    // lateral last-row join + the count(*) over () against real SQL, not just the handler stub.
+    const t = await rows<{ bucket_id: string; last_exec_ask: string | null; total_candidates: string }>(
+      tdb,
+      `select bucket_id, last_exec_ask, total_candidates from public.market_depth_targets(2, 800) order by bucket_id`,
+    );
+    expect(t.length).toBe(3); // the complete ladder (all buckets of the near-dated live event)
+    expect(t.every((r) => Number(r.total_candidates) === 3)).toBe(true); // pre-cap count on every row
+    const byBucket = Object.fromEntries(t.map((r) => [r.bucket_id, r.last_exec_ask]));
+    expect(Number(byBucket[B[0]!])).toBeCloseTo(0.115, 6); // b0 carries its last depth row
+    expect(byBucket[B[2]!]).toBeNull(); // b2 has no depth row yet → null (a first-observation write next tick)
+  });
+
+  it('a key-name drift silently NULLs the column — which THIS round-trip catches (the guard’s point)', async () => {
+    // camelCase execAsk (the rest of the codebase's convention) does NOT match the recordset column exec_ask.
+    await tdb.query(
+      `select public.record_market_depth($1::jsonb, $2::timestamptz)`,
+      [JSON.stringify([{ bucket_id: B[2], best_ask: 0.5, execAsk: 0.5 }]), new Date(Date.now() + 1000).toISOString()],
+    );
+    const exec_ask = (await rows<{ exec_ask: string | null }>(
+      tdb,
+      `select exec_ask from public.market_depth where bucket_id = $1 order by captured_at desc limit 1`,
+      [B[2]],
+    ))[0]!.exec_ask;
+    expect(exec_ask).toBeNull(); // drift → NULL, exactly the silent failure the positive round-trip guards against
+  });
+
+  it('self-gating cutover guard (finding J): falls back to opening_captures until depth crosses the threshold', async () => {
+    // raise the threshold above the accrued rows → the guard must return the opening_captures path (empty here).
+    await tdb.exec(`update public.config set value = '999999' where key = 'bot.depthCutoverMinRows'`);
+    const v = (await rows<{ v: Record<string, any> }>(
+      tdb,
+      `select public.google_paper_inputs(21, array['rt_city']::text[]) as v`,
+    ))[0]!.v;
+    expect(v.captures).toEqual([]); // opening_captures has no rows → fallback returns empty, not the depth path
+    await tdb.exec(`update public.config set value = '1' where key = 'bot.depthCutoverMinRows'`);
   });
 });

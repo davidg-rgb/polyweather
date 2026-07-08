@@ -87,6 +87,23 @@ describe('discover-markets (§6.13)', () => {
     expect(bkCount[0]!.n).toBe(live * 11);
   });
 
+  it('threads the TRUE Gamma createdAt into market_events.gamma_created_at (0089 listing anchor)', async () => {
+    // discover-markets passes parsed.createdAt → upsert_event's p_gamma_created_at → the depth-capture repoint's
+    // listing anchor (hoursSinceListing = captured_at − gamma_created_at, NOT first_seen). The tag fixtures all
+    // carry createdAt, so every cleanly-parsed live event must land a non-null gamma_created_at.
+    const anchored = await rows<{ n: number }>(
+      db,
+      `select count(*)::int as n from market_events where gamma_created_at is not null`,
+    );
+    expect(anchored[0]!.n).toBeGreaterThan(0);
+    // and it is the LISTING time, not the ingestion time: first_seen (now()) is strictly after gamma_created_at.
+    const ordered = await rows<{ n: number }>(
+      db,
+      `select count(*)::int as n from market_events where gamma_created_at is not null and first_seen > gamma_created_at`,
+    );
+    expect(ordered[0]!.n).toBe(anchored[0]!.n);
+  });
+
   it('new cities arrive betting-disabled with a WARN alert each (~49-city universe)', async () => {
     const cities = await rows<{ n: number }>(db, `select count(*)::int as n from cities`);
     expect(cities[0]!.n).toBeGreaterThanOrEqual(45); // §14 P2 DoD: ~49 cities
