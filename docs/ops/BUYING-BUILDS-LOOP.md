@@ -23,20 +23,28 @@ _Claude keeps this block current every cycle. It is the whole status in 20 secon
 - **Branch / state:** `loop/2026-07-08-buying-builds` off `main @ 2491598` (6 depth-capture-v2 commits still
   local/unpushed) + 4 loop commits. **Suite 3006 green / typecheck clean** (C2 added the WS-A selector +12 tests).
 - **Staged, awaiting your yes/no (operator-gated — Claude will not apply):**
-  - _(none yet — will list one-command bundles here: migrations, edge-fn deploys, the WS-A forward panel)_
+  - **★ depth-capture v2 deploy** (WS-D's one real compute win — built + tested + committed, NOT deployed).
+    Sequence (full detail + verify + rollback in `DEPTH-CAPTURE-V2-HANDOFF.md` §6, re-verified current today +
+    cross-checked in `COMPUTE-AUDIT-2026-07-08.md`): **apply `0089` then `0088`** (MCP `apply_migration`) →
+    **redeploy `discover-markets` + `depth-capture` edge fns** → let `market_depth` accrue ≥1 day → verify +
+    parity-check → auto-cutover at ~200 rows. Self-gating; instant rollback = `update config set value='999999999'
+    where key='bot.depthCutoverMinRows'`. Moves the Google panel off `opening_captures` + drops the
+    `market_snapshots.depth` v1 column.
+  - _(WS-A faint cheap-band °F forward panel — only if you pick "forward-panel it" in decision #2; not built yet.)_
 - **Decisions I need from you:**
   1. **Deploy-autonomy flip** (offered in chat; default = staged — I do not apply migrations/deploy fns).
   2. **WS-A faint signal:** the blend-centered °F cheap-band (ask ≤12–20¢) showed +0.05–0.06/contract but n=6–23,
      CI-straddles-0 → INSUFFICIENT. Want a **forward paper panel** to accrue those cheap-band °F blend bets to a
      real §9R-E verdict (paper-only, staged for you), or **drop it** as efficient-like-everything-else? My read:
      low priority — the base rate says it regresses to efficient; the °F markets already price the blend.
-- **Compute readings (WS-D, C1, live):** pg_stat_statements window = **since 07-06** (so totals partly
-  predate the 07-07 cron cull — read as ranking, not current rate). Top exec-time hog = **`convergence_capture_inputs`
-  detoasting `opening_captures`** (848+559 calls, 9–18 s each) — the exact saturation source **depth-capture v2
-  is built to fix**. #3 `to_jsonb(oc.*)` scan (209×19 s) = the one-time 07-07 archive dump, not ongoing.
-  **Storage:** `market_snapshots` **346 MB** (biggest — carries the v1 depth-capture `depth` column that v2's
-  `0089` drops), `forecast_snapshots` 279 MB + `bucket_probabilities` 262 MB (forecasting core — keep),
-  dead-signal `market_rewards` **140 MB** (prune candidate, operator-gated), `opening_captures` down to 90 MB.
+- **Compute readings (WS-D, C4, live 2026-07-08 ~14Z — refreshed audit `COMPUTE-AUDIT-2026-07-08.md`):**
+  **The crisis is RESOLVED and holding.** Fleet = 21 jobs, **0 failures/24h**, DB-side cron time trivial
+  (~200s/day). `opening_captures` **bounded at 97 MB / 22.9k rows** by its daily prune (NOT re-growing toward the
+  1.2 GB TOAST trap — that trap was the now-unscheduled 45-city panels). Micro not saturated. **No reversible
+  cron pause is warranted** (no dead-signal cron still scheduled — 07-07 culled them). **One forward win: land
+  depth-capture v2** (staged above). Storage: `market_snapshots` 346 MB (v1 `depth` col, 0089 drops), dead
+  `market_rewards` 140 MB (optional drop, destructive → operator). Open Q for you: post-v2, `opening-capture` may
+  be retire-able (handoff keeps it for the dead panels' `houseProb`) — a further lever, your call.
 - **WS-A (Fahrenheit test) — COMPLETE (honest KILL/INSUFFICIENT), both halves measured:**
   - **C3a forecast-match:** on the full 396-event/11-city °F universe (ladder bucket-match, lead 1; 77-event
     apples-to-apples): **calibrated blend 84% within-1 / 38% exact vs raw Google 61%/26%**, weatherapi 62%, owm
@@ -273,3 +281,11 @@ readiness, so that *if* WS-A finds edge, the executor that would place those bid
   everywhere (+0.06@12¢ n=6 … −0.01@50¢), **every CI straddles 0** — win% ≈ avgAsk (efficient). Google cheap
   band 0%/15 CI [−0.071,−0.038] (a real loss). **WS-A COMPLETE: no tradable °F edge — accurate but priced.**
   Typecheck clean, committed. **Pivot → WS-D** (depth-capture v2 deploy bundle + refreshed compute audit).
+- **C4 (2026-07-08) — WS-D:** Measured the CURRENT compute picture (24h cron durations + failures, table sizes,
+  `opening_captures` growth). **Finding: the 07-07 cull already resolved the crisis and it has held** — fleet
+  healthy (0 fails/24h), DB-side load trivial, `opening_captures` bounded at 97 MB by its prune (not a runaway;
+  the TOAST trap was the now-off panels). No reversible cron pause is warranted. Wrote
+  **`COMPUTE-AUDIT-2026-07-08.md`** (honest refresh, not a redo) + **staged the depth-capture v2 deploy bundle**
+  (the one forward win) in the operator block. Surfaced 2 optional items (drop `market_rewards` 140 MB; remove 8
+  dead-signal edge fns) + 1 open Q (retire `opening-capture` post-v2). **No live change made** (correct — nothing
+  safe to shed). Next: WS-B (evaluate the live Google panel numbers) / WS-C (/trading bid-logic code eval).
