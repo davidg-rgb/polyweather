@@ -37,8 +37,12 @@ _Claude keeps this block current every cycle. It is the whole status in 20 secon
   the depth-path RPC drives `buildGoogleView` to a byte-identical panel decision vs the `opening_captures` path on a
   shared event (entry/TP-exit/P&L/gate/TP-grid all equal; guard proves both sources truly exercised). Correctly
   scoped away from the documented population difference (depth cohort smaller by discover cadence — a live-forward
-  property). **This raises operator confidence to apply the staged 0089/0088 bundle.** **▶ C15 = WS-C (`live.ts`
-  MakerExecutor + `planPlacements` code-eval)** — the last GREEN buying-build thread. **(2) GOOGLE CONVERGENCE
+  property). **This raises operator confidence to apply the staged 0089/0088 bundle.** **(1e) WS-C MakerExecutor
+  eval (C15):** the `live.ts` maker execution path (place/placeTaker/reprice/reconcile/cancel) is SOUND +
+  comprehensively tested (60 cases, 3-round-reviewed); added 3 money-path guard tests (placeTaker double-SELL
+  idempotency, taker reserve-race, cancel not-allCanceled abort). Rail stays DORMANT. **▶ ALL GREEN buying-build
+  threads are now swept — C16 = light periodic fleet/gate/accrual re-verify, else idle low cadence** (forward motion
+  is operator-deploy-gated or §9R-E-accrual-gated). **(2) GOOGLE CONVERGENCE
   PLAY (WS-B — FIRST read done C8):** `/convergence` is LIVE + accruing (89 snaps, */15 firing, cityErrors 0), but
   the §9R-E gate is **INSUFFICIENT_DATA (5/40 markets, 2/7 days)** and the early **+163% ROI is one lucky market**
   (mexico-city held-to-resolution = 83% of P&L; ex-it +$28 on 4) → **noise; no tuning justified until it accrues**
@@ -47,8 +51,8 @@ _Claude keeps this block current every cycle. It is the whole status in 20 secon
 - **On fire?** No. Prod healthy; probes light (stat views + small counts, no TOAST scans). Loop wound down for a
   manual fresh-context restart (2026-07-08); 21 commits on the branch, tree clean, nothing pushed/deployed.
 - **Branch / state:** `loop/2026-07-08-buying-builds` off `main @ 2491598` (6 depth-capture-v2 commits still
-  local/unpushed) + 12 loop commits (latest `d0898b0`). **Suite 3014 green / typecheck clean** (C14 added the
-  cross-path parity test +7).
+  local/unpushed) + 14 loop commits (latest `a56d864`). **Suite 3017 green / typecheck clean** (C14 +7 parity, C15
+  +3 MakerExecutor guards).
 - **Staged, awaiting your yes/no (operator-gated — Claude will not apply):**
   - **★ depth-capture v2 deploy** (WS-D's one real compute win — built + tested + committed, NOT deployed).
     **NOW PARITY-PROVEN OFFLINE (C14):** `google-repoint-parity.test.ts` proves the cutover is behavior-preserving
@@ -440,3 +444,18 @@ readiness, so that *if* WS-A finds edge, the executor that would place those bid
   green (+7), typecheck clean, committed (d0898b0)**. No DB touch (pure PGlite). **▶ C15 = WS-C (`live.ts`
   MakerExecutor + `planPlacements` code-eval) — the last GREEN buying-build thread; WS-A exhausted, WS-B tuning
   blocked on accrual, WS-D lean (07-07 cull holding), depth-v2 now parity-proven + staged for the operator.**
+- **C15 (2026-07-08) — WS-C: MakerExecutor place/reprice/reconcile/cancel code-eval — SOUND + 3 money-path guard
+  tests added:** read the whole `MakerExecutor` (`live.ts:455–1041`). The crash-safety + raced-fill + idempotency +
+  redaction story is **coherent and comprehensively tested (60 cases)** — every reprice raced-full/partial/below-min/
+  still-live/size-mismatch branch, reconcile adopt/ambiguous/freed/taker-hit/maker-falsifier/evidence-fail, cancel
+  raced-partial/full/poll-throw/ledger-raise, place HIGH-A(a,b,c)/CRITICAL-1/T3-final/shapeless. No bug found (this
+  was already a 3-round-reviewed T1 lane). Closed **three genuine coverage gaps** on the live money path, each a
+  DISTINCT return statement that could silently drift: (1) `placeTaker` open-intent idempotency — a resting
+  stop-loss/time-stop is NEVER re-fired on crash-restart/retry (the **double-SELL guard**; was tested for `place()`,
+  not `placeTaker`); (2) `placeTaker` concurrent-reserve race → duplicate, no post; (3) `cancel()`'s standalone
+  not-allCanceled early-out — returns UNPOLLED, no ledger transition, key stays held (was only exercised inside
+  `reprice()`). Tests-only, no behavior change. **suite 3017 green (+3), typecheck clean, committed (a56d864)**.
+  **▶ C16 = the loop has now swept every GREEN buying-build thread** (WS-A exhausted; WS-B parity-proven + accrual-
+  blocked; WS-C order-intent[C13] + MakerExecutor[C15] both SOUND; WS-D lean + holding). Remaining forward motion is
+  operator-gated (deploy the staged depth-v2 bundle) or accrual-gated (the §9R-E gates need forward days). Next best
+  = a light periodic re-verify of the live fleet/gate health + `/convergence` accrual, else idle at low cadence.
