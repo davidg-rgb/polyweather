@@ -1,5 +1,15 @@
 # Supabase compute audit — 2026-07-08 (refresh of `COMPUTE-AUDIT-2026-07-07.md`)
 
+> **⚠ SUPERSEDED IN PART by loop C16 (2026-07-08 ~20Z) — the "0 failures / fleet healthy" headline below was a
+> 14Z (OFF-PEAK) read that MISSED a persistent all-hours failure.** A 20Z health probe found **~53 job failures/24h,
+> steady ~3–4/hr across ALL hours**: `health-monitor`'s `data_freshness` RPC (~80% of its */30 ticks) + `poll-markets`'
+> `upsert_market_snapshots` (~5% of its */5 ticks), both `canceling statement due to statement timeout`. Root cause:
+> `data_freshness` (0020) runs `max(captured_at)` over `market_snapshots` (346 MB) + `forecast_snapshots`, neither
+> captured_at-indexed → a full seq scan every tick (+ contention with poll-markets' upserts on the same table). Fixed
+> in code by migration **`0090_freshness_indexes.sql`** (two `captured_at desc` indexes), **STAGED for a money-path-safe
+> CONCURRENTLY deploy** — see `BUYING-BUILDS-LOOP.md` operator block + cycle-log C16 (the canonical record). The
+> STORAGE + fleet-inventory sections below remain accurate; only the failure-count / "no firefight" claim is stale.
+
 Executed inside the buying-builds day-loop (WS-D). The 07-07 audit unscheduled 10 dead-signal/closed-gate
 crons + reclaimed `opening_captures` 1.37 GB → 75 MB after the 12th signal was recorded KILL. This refresh
 re-measures the drifted fleet and asks: is the compute problem still solved, and what's left to do?
