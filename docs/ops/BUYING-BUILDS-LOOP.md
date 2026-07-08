@@ -511,3 +511,16 @@ readiness, so that *if* WS-A finds edge, the executor that would place those bid
   exhausted, WS-B parity-proven + accrual-blocked, WS-C sound (C13+C15), WS-D lean + the timeout incident CLOSED
   (0090 live). Remaining motion is operator-gated (depth-v2 deploy — non-urgent) or §9R-E-accrual-gated (~24 days).
   → LOW-CADENCE idle watch: periodic light fleet/gate/`/convergence` re-verify; no build work pending.**
+- **C19 (2026-07-09) — OPERATOR-DIRECTED analysis (via `betting-market-analytics` skill): winning-bucket price
+  trajectories over ALL saved data → market CALIBRATED, "buy-the-dip" is survivorship (no edge).** Scanned the full
+  **238.3M-obs** enriched price archive (offline parquet — ZERO DB load) → 6,146 winning buckets / 45 cities. Logged
+  per winner: low point, time-from-start of the low, fluctuation count, drawdown (`winning-bucket-lows.csv`).
+  **Descriptive patterns:** winners bottom at a **12.5¢ median low, ~15% into life** (~10h; bimodal — open-is-the-low
+  vs a late-dip tail), swing **~8×** (≥5¢) before converging to $1; 90% dip <30¢; °C/°F alike; only 33% of winners were
+  our predicted bucket (the ones we missed were the cheapest). **Decisive cross-check (the honest part):** point-in-time
+  calibration (`price-calibration.csv`) shows the series is calibrated with a **consistently NEGATIVE gap** in the
+  5–55¢ band (a bucket at 13.5¢ wins 10.8%, at 22.5¢ wins 20.0% — you win 2–5¢ LESS than you pay, frictionless). The
+  Pass-B "88% win if lifetime-min ∈ 5–30¢" is pure look-ahead; at the dip the future winner is indistinguishable from
+  the future loser. Re-confirms efficiency (§12 cheap-longshot + dead convergence) from a new angle. FINDINGS.md row
+  added; verdict `scripts/research/out/winning-bucket-analysis.md`. No code change (analysis + docs). **▶ C20 = resume
+  low-cadence idle watch — nothing actionable pending (operator-deploy / accrual gated).**
