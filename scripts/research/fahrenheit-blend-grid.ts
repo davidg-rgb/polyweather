@@ -1,5 +1,5 @@
 /**
- * fahrenheit-blend-grid.ts — WS-A operator "full analysis" (2026-07-08): best ENTRY × EXIT for the °F flip.
+ * fahrenheit-blend-grid.ts — WS-A operator "full analysis" (2026-07-08): best ENTRY × EXIT for the °F/°C flip.
  *
  * The play is a PURE FLIP — buy cheap, sell slightly more expensive, NEVER hold to resolution:
  *   • ENTRY: buy the first tick the house-blend-predicted bucket's ask lands in a band centred on E (so each row
@@ -9,7 +9,9 @@
  *     (taker) — no $1/$0 resolution payout is ever collected.
  * Grid: entry E ∈ {5,10,15,20,25¢} × exit X ∈ {15,20,25,30,40,50¢}, cells with X > entry-band-high only.
  * house_gaussian earliest-forecast bucket · $10/position · real book (market_snapshots) · no look-ahead.
- * READ-ONLY (DATABASE_URL):  pnpm tsx scripts/research/fahrenheit-blend-grid.ts
+ * Also prints the HOLD-TO-RESOLUTION frontier per entry band — the reference the pure flip must beat (C7 showed
+ * the flip is strictly worse than holding, because not-holding forfeits the $1 on the true winners).
+ * READ-ONLY (DATABASE_URL):  pnpm tsx scripts/research/fahrenheit-blend-grid.ts [--unit F|C]   (default F)
  */
 import { loadEnv } from '../lib/load-env.ts';
 import { makeScriptDb } from '../lib/script-db.ts';
@@ -26,6 +28,13 @@ const ENTRY_BANDS = [
   { e: 25, lo: 0.23, hi: 0.27 },
 ];
 const EXITS = [0.15, 0.2, 0.25, 0.3, 0.4, 0.5];
+// which resolved market universe to grid — °F (default, preserves the C7 run) or °C (the 1045-event contrast).
+const UNIT: 'F' | 'C' = (() => {
+  const i = process.argv.indexOf('--unit');
+  const u = (i >= 0 ? (process.argv[i + 1] ?? '') : 'F').toUpperCase();
+  if (u !== 'F' && u !== 'C') { console.error(`--unit must be F or C (got '${u}')`); process.exit(1); }
+  return u as 'F' | 'C';
+})();
 
 interface Row {
   event_id: string; icao: string; winning_bucket_idx: number; pred_idx: number;
@@ -38,7 +47,7 @@ const SQL = `
 with f as (
   select me.id, me.icao_at_creation icao, me.winning_bucket_idx
   from market_events me
-  where me.kind='highest' and me.unit='F' and me.winning_bucket_idx is not null
+  where me.kind='highest' and me.unit=$1 and me.winning_bucket_idx is not null
 ),
 pred as (
   select distinct on (bp.event_id) bp.event_id,
@@ -85,13 +94,31 @@ function flip(snaps: Row[], lo: number, hi: number, X: number): { net: number; e
   return { net: payoff - STAKE - entryFee - exitFee, entryAsk, flipped };
 }
 
+/**
+ * The HOLD-TO-RESOLUTION reference for one market entered in [lo,hi]: buy the first ask in band, then HOLD —
+ * collect $1 if the predicted bucket is the resolved winner, $0 otherwise. Same entry tick as flip(), so the two
+ * are compared on the identical entered set. null if the band was never entered.
+ */
+function holdToResolution(snaps: Row[], lo: number, hi: number): number | null {
+  let entryAsk = NaN;
+  for (const s of snaps) {
+    const ask = n(s.best_ask);
+    if (ask != null && ask >= lo && ask <= hi) { entryAsk = ask; break; }
+  }
+  if (!Number.isFinite(entryAsk)) return null;
+  const shares = STAKE / entryAsk;
+  const entryFee = shares * takerFeePerShare(entryAsk, FEE_RATE);
+  const won = snaps[0]!.pred_idx === snaps[0]!.winning_bucket_idx; // per-event, constant across its snaps
+  return shares * (won ? 1 : 0) - STAKE - entryFee; // no exit fee — resolution settles free
+}
+
 const money = (x: number) => (x >= 0 ? '+' : '-') + '$' + Math.abs(x).toFixed(0);
 
 async function main(): Promise<void> {
   loadEnv();
   const db = makeScriptDb();
   try {
-    const rows = await db.query<Row>(SQL, []);
+    const rows = await db.query<Row>(SQL, [UNIT]);
     const byEvent = new Map<string, Row[]>();
     for (const r of rows) (byEvent.get(r.event_id) ?? byEvent.set(r.event_id, []).get(r.event_id)!).push(r);
     const events = [...byEvent.values()];
@@ -115,8 +142,23 @@ async function main(): Promise<void> {
       }
     }
 
-    console.log(`\n°F HOUSE-BLEND FLIP — full ENTRY×EXIT grid (buy cheap, sell higher, NEVER hold to resolution)`);
-    console.log(`Source market_snapshots · $${STAKE}/position · ${events.length} °F markets · maker sell @ exit, taker dump if it never fills\n`);
+    console.log(`\n°${UNIT} HOUSE-BLEND FLIP — full ENTRY×EXIT grid (buy cheap, sell higher, NEVER hold to resolution)`);
+    console.log(`Source market_snapshots · $${STAKE}/position · ${events.length} °${UNIT} markets · maker sell @ exit, taker dump if it never fills\n`);
+
+    // ── HOLD-TO-RESOLUTION frontier (the reference the flip must beat) ──
+    console.log(`  HOLD-TO-RESOLUTION frontier (buy in band, HOLD for $1/$0 — the reference the flip must beat):`);
+    console.log(`    buy    n    win%    net$      ROI`);
+    for (const b of ENTRY_BANDS) {
+      let hn = 0, hw = 0, hnet = 0;
+      for (const snaps of events) {
+        const h = holdToResolution(snaps, b.lo, b.hi);
+        if (h == null) continue;
+        hn++; hnet += h; if (h > 0) hw++;
+      }
+      if (hn > 0)
+        console.log(`    ${(b.e + '¢').padEnd(5)}  ${String(hn).padStart(3)}   ${((hw / hn) * 100).toFixed(0).padStart(3)}%   ${money(hnet).padStart(6)}   ${((hnet / (hn * STAKE)) * 100).toFixed(1).padStart(6)}%`);
+    }
+    console.log('');
 
     // ── matrix: net$ (rows entry, cols exit) ──
     console.log(`  NET $ (rows = buy ~E¢, cols = sell @ X¢):`);

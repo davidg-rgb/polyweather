@@ -152,3 +152,40 @@ sell 20c -> 60% win, -$261, -22.7%. **Every one of the 24 cells loses.**
 of buckets that genuinely win, and those big wins are what kept the hold-to-resolution loss small. **Conclusion:
 no profitable entry/exit exists for the flip — buying cheap and selling slightly higher on the °F markets loses
 in every combination, because the market prices these buckets efficiently.**
+
+---
+
+## °C CONTRAST (C9, 2026-07-08) — the same grid on the bigger °C universe + the hold-to-resolution frontier
+
+Operator follow-up: run the identical `fahrenheit-blend-grid.ts` shape on the **°C markets** (1045 resolved / 34
+cities vs °F 396 / 11) "for contrast, maybe less efficient", and grid the **hold-to-resolution frontier**. The
+engine is now unit-parameterized (`--unit F|C`, default F); the °F run above reproduces byte-for-byte (best
+25c/30c -16.6%), so the refactor is faithful. Both added in one commit.
+
+**1 · The pure FLIP is dead on °C too — all 24 cells lose** (best by ROI buy 25c/sell 30c -> 70% win, **-$934,
+-16.8% ROI**; best by net$ buy 20c/sell 30c -> -$795, -17.8%). Essentially identical to °F (-16.6% / -22.7%). Same
+mechanism: the flip caps the winner gain at (X-E) while non-completers dump near $0; the market delivers ~70%
+completion where break-even needs ~83%. **Flipping is efficient in both units.**
+
+**2 · The HOLD-TO-RESOLUTION frontier is where °C differs — and it is marginally NON-negative at 20c:**
+
+| buy band | n | win% | net$ | ROI |
+|---|---|---|---|---|
+| 5c | 275 | 5% | -$298 | -10.8% |
+| 10c | 318 | 9% | -$446 | -14.0% |
+| 15c | 381 | 14% | -$362 | -9.5% |
+| **20c** | **447** | **21%** | **+$50** | **+1.1%** |
+| 25c | 556 | 26% | -$42 | -0.8% |
+
+The **20c hold band is +1.1% (+$50 / 447 markets)** and 25c is near-breakeven (-0.8%) — the **first non-negative
+hold result across °F/°C** (°F's best hold was **-1.1%** at 10-20c, C6). So °C is *slightly less efficient than °F*
+at the ~20c hold: the house-blend's predicted bucket, bought at ~20c and held for $1/$0, wins 21% — just enough to
+cover a 20c ask.
+
+**⚠ NOT AN EDGE YET — this is a raw, ungated point estimate.** +1.1% on 447 markets is +$50 on $4,470 deployed: a
+razor-thin margin that has **not** been clustered or null-tested. Per the frozen-gate discipline (rule 3; the whole
+12-signal graveyard is "a point estimate that didn't survive the gate"), before this is anything more than
+"interesting" it must clear: (a) a **city-clustered** 95% CI on mean net-return with `ciLow > 0` (34 cities, not
+447 i.i.d. bets — same-day weather correlates), and (b) the **zero-skill sign-flip MC < 5%**. The strong prior is
+the clustered CI straddles zero at +1.1%. **C10 = run the °C 20c-hold band through `openingVerdict` / the §9R-E
+gate; only a clustered ciLow>0 promotes it.** Until then: interesting contrast, not a signal.
