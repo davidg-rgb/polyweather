@@ -379,7 +379,28 @@ describe('migrations 0001–0010', () => {
       // depth-capture-deadman */10 + market-depth-prune (daily) SQL crons (count 31 → 33). Money-path (poll-markets)
       // untouched. DEPTH-CAPTURE-V2-HANDOFF.md.
       '0089_depth_capture_v2.sql',
+      // 0090 = the FRESHNESS-INDEX fix (loop C16): two captured_at-leading indexes (market_snapshots +
+      // forecast_snapshots) so data_freshness's max(captured_at) stops full-seq-scanning (health-monitor was
+      // ~80% timing out, poll-markets ~5% by contention). Additive (2 indexes; no table/fn/cron change). PROD
+      // builds them CONCURRENTLY out-of-band first (money-path lock safety); the if-not-exists no-ops on apply.
+      '0090_freshness_indexes.sql',
     ]);
+  });
+});
+
+describe('0090 freshness indexes — data_freshness max(captured_at) is index-answerable, not a seq scan', () => {
+  it('market_snapshots + forecast_snapshots each carry a captured_at-LEADING btree', async () => {
+    // the fix's contract (loop C16): both max(captured_at) sources must have a captured_at-leading index, else
+    // Postgres full-seq-scans them (no loose index scan over the bucket_id-/icao-leading composites) and
+    // health-monitor's */30 data_freshness tick times out. Pin both index names against the applied schema.
+    const idx = await rows<{ indexname: string }>(
+      db,
+      `select indexname from pg_indexes where schemaname = 'public'
+         and indexname in ('market_snapshots_captured_idx', 'forecast_snapshots_captured_idx')`,
+    );
+    const names = new Set(idx.map((r) => r.indexname));
+    expect(names, 'market_snapshots needs a captured_at index for data_freshness').toContain('market_snapshots_captured_idx');
+    expect(names, 'forecast_snapshots needs a captured_at index for data_freshness').toContain('forecast_snapshots_captured_idx');
   });
 });
 
