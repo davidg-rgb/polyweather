@@ -1,4 +1,9 @@
-# Depth-capture + Google-panel repoint — operator handoff
+> **⚠ SUPERSEDED 2026-07-08 — v1 FAILED live (write times out → 0 rows) and a 5-agent review found 12 confirmed
+> issues. The full redesign is `DEPTH-CAPTURE-V2-HANDOFF.md` (execute that, not this). The `depth-capture` cron is
+> PAUSED; `0087` is applied (to be superseded); `0088` is unapplied; the panel runs on the revived `opening_captures`.
+> This doc is kept for the v1 context only.**
+
+# Depth-capture + Google-panel repoint — operator handoff (v1, superseded)
 
 **Built 2026-07-08.** Moves the /convergence **Google panel** off the flaky `opening_captures` table and onto
 the durable `market_snapshots` continuous store — *without* the +5.85¢ top-of-book optimism, by capturing true
