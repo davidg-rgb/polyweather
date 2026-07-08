@@ -32,14 +32,17 @@ _Claude keeps this block current every cycle. It is the whole status in 20 secon
   **Storage:** `market_snapshots` **346 MB** (biggest — carries the v1 depth-capture `depth` column that v2's
   `0089` drops), `forecast_snapshots` 279 MB + `bucket_probabilities` 262 MB (forecasting core — keep),
   dead-signal `market_rewards` **140 MB** (prune candidate, operator-gated), `opening_captures` down to 90 MB.
-- **WS-A (Fahrenheit test) progress:** selector **BUILT + tested** (C2). °F universe **sized** (C3 start):
-  **396 resolved °F markets / 11 cities**, all 3 commercial sources cover all 11 cities across ~13 distinct
-  forecast-days — **structurally clears §9R-E** (≥40/≥6/≥7), far bigger than the prior 22-event Google-only
-  window. Per-city coverage is thin (~13 events/city) → expect most cities to honestly fall back to the blend;
-  the selector's frozen TRAIN→OOS gate handles that. **Next (C3): multi-source per-event feed + backtest** —
-  does source-selection beat raw-Google on °F bucket-hit + P&L, OOS?
-- **Latest headline:** WS-D confirms **landing depth-capture v2** is the biggest compute win; WS-A selector is
-  built + green and the °F universe is big enough to give the backtest a real §9R-E verdict (C3 next).
+- **WS-A (Fahrenheit test) — C3a forecast-match verdict is IN (decisive):** on the full 396-event / 11-city °F
+  universe, scored on the °F **ladder** bucket-match at lead 1 — apples-to-apples (77 events, all 4 sources):
+  **calibrated blend 84% within-1 / 38% exact, vs raw Google 61%/26%, weatherapi 62%, openweathermap 52%.**
+  The frozen per-city selector gives **0/11 cities a commercial-source override** (none beats the blend OOS) →
+  OOS TEST (165 ev): **Google 61% → blend 88% within-1.** **So "Google + best-matching source" = BID THE
+  CALIBRATED BLEND on °F, not raw Google** — which is exactly why raw-Google °F was excluded. Per-city
+  commercial-source picking is noise; the lever is a **blend-centered °F cohort.** **Next (C3b):** does 88%/38%
+  accuracy convert to taker P&L at real °F market prices? (needs the book → offline archive.)
+- **Latest headline:** WS-A found the real °F lever — **bid the house blend, not Google** (88% vs 61% within-1
+  OOS). If P&L (C3b) holds, the deliverable is a blend-centered °F cohort of the Google play (staged for you,
+  paper-first). WS-D: **landing depth-capture v2** remains the biggest compute win.
 
 ---
 
@@ -244,3 +247,13 @@ readiness, so that *if* WS-A finds edge, the executor that would place those bid
   22 was the 21-day Google-only window). Next: build the multi-source per-event feed (harness pulling
   `source_forecasts` all sources + the calibrated blend, aligned to resolved °F events) → run the selector + the
   `replayGoogleBracket` backtest → honest verdict: does source-selection beat raw-Google °F, OOS?
+- **C3a (2026-07-08):** Built `scripts/research/fahrenheit-source-test.ts` — pulls the FULL resolved °F universe
+  from persistent tables (`market_events`/`market_buckets`/`source_forecasts`/`bucket_probabilities`, NOT the
+  pruned capture stream), scores each source's forecast center on the °F **ladder** bucket-match at lead 1, runs
+  the frozen selector. **Result (decisive):** blend **84% within-1 / 38% exact** vs google 61%/26%, weatherapi
+  62%, owm 52% (77-event apples-to-apples); **0/11 cities beat the blend OOS**; OOS TEST 165 ev → google 61% →
+  **blend 88% within-1.** Found the bug (SourceSelEvent carries no target_date → empty split) + fixed. Typecheck
+  clean, committed. **Verdict: the °F lever is a BLEND-centered cohort, not Google, not per-city commercial
+  picking** — re-confirms source-accuracy-findings on the real °F bidding metric. Next (C3b): the P&L half —
+  replay the blend-bucket bid at real °F market prices (cheap-band entry + hold-to-resolution) off the offline
+  archive; does 88%/38% accuracy beat the market's own price? If yes → stage a blend-centered °F cohort panel.
