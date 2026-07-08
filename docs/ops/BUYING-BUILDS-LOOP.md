@@ -524,3 +524,16 @@ readiness, so that *if* WS-A finds edge, the executor that would place those bid
   the future loser. Re-confirms efficiency (§12 cheap-longshot + dead convergence) from a new angle. FINDINGS.md row
   added; verdict `scripts/research/out/winning-bucket-analysis.md`. No code change (analysis + docs). **▶ C20 = resume
   low-cadence idle watch — nothing actionable pending (operator-deploy / accrual gated).**
+- **C20 (2026-07-09) — OPERATOR-DIRECTED analysis expansion: winner ±2 neighborhood + forecast-anchored
+  realizability test → KILL (the +EV is hindsight, realizable = −1.4%/fee).** Two offline passes on the 238M archive
+  (zero DB load). **Neighborhood spread:** winner buys ~12.5¢ / passes ~88.5¢ before an endgame starting at ~83% of
+  life; colder neighbor (rp−1) strongest competitor (high p90 0.84). WITHIN the true winner-centered ±2 the gap turns
+  **+1–3%** (buy 5–40¢) — but that is hindsight. **The operator's theory** (our ±1° 88% accuracy ≈ knowing the winner)
+  **tested decisively:** re-anchored the ±2 neighborhood on `pred_bucket_l1`; forecast-±2 contains the winner **90.6%**
+  (±1 74%, exact 33%) yet the buy-band [5–40¢] hold EV **collapses from +2.14%/+1.09%-fee (hindsight) to −0.37%/−1.42%-fee
+  (realizable)** — inside the neighborhood price≈win-prob because the market already priced our forecast in. Confirms
+  why the forecast-centered convergence/maker-exit died, with a number. Docs `neighborhood-analysis.md` +
+  `forecast-anchored-*.csv`; FINDINGS.md rows added. No code change. **Open non-price lever the operator flagged:** a
+  winner FINGERPRINT from momentum/hold-time/order-flow (not price) — the one angle the efficiency prior doesn't already
+  settle. Future: weather-regime error-attribution (front/cloud/precip vs model miss) — needs an added regime source
+  (METAR present-weather + reanalysis), parked. **▶ C21 = low-cadence idle watch; nothing actionable pending.**
