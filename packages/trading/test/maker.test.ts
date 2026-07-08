@@ -496,6 +496,38 @@ describe('MakerExecutor.placeTaker — FAK exit leg', () => {
     expect(client.createOrder).not.toHaveBeenCalled();
     expect(client.postOrder).not.toHaveBeenCalled();
   });
+
+  it('idempotency: an OPEN taker intent (a resting stop-loss/time-stop) is NEVER re-fired — the double-SELL guard (mirror of place())', async () => {
+    // The exit leg's idempotency is as money-critical as the entry's: a stop-loss FAK that fired once must never
+    // fire again on a crash-restart or a same-tick retry, or the position over-sells. Was covered for place(),
+    // NOT for placeTaker — this pins the mirrored findByIntentKey→duplicate short-circuit on the taker path.
+    const client = mockClient();
+    const { ledger } = mockLedger([
+      row({ intentKey: '0xcond|SELL|stop_loss|2026-07-05', clientOrderId: 'cid-taker-old', orderId: '0xTAKEROLD', side: 'SELL', purpose: 'stop_loss' }),
+    ]);
+    const exec = new MakerExecutor(deps('live', client, ledger));
+
+    const r = await exec.placeTaker({ marketId: '0xcond', tokenId: 'tok-yes', side: 'SELL', purpose: 'stop_loss', tradeDate: '2026-07-05', worstPrice: 0.3, size: 74 });
+
+    expect(r).toMatchObject({ status: 'duplicate', clientOrderId: 'cid-taker-old', orderId: '0xTAKEROLD', orderType: 'FAK' });
+    expect(client.createOrder).not.toHaveBeenCalled();
+    expect(client.postOrder).not.toHaveBeenCalled();
+  });
+
+  it('idempotency race: reserveIntent returns exists on the taker leg → duplicate, postOrder NOT called', async () => {
+    // the concurrent-placer race, on the taker path (a distinct return statement from place()'s — pins it against
+    // copy-paste drift): findByIntentKey saw nothing, but reserveIntent lost the partial-unique race → no post.
+    const client = mockClient();
+    const { ledger } = mockLedger();
+    (ledger.findByIntentKey as Mock).mockResolvedValueOnce(null);
+    (ledger.reserveIntent as Mock).mockResolvedValueOnce('exists');
+    const exec = new MakerExecutor(deps('live', client, ledger));
+
+    const r = await exec.placeTaker({ marketId: '0xcond', tokenId: 'tok-yes', side: 'SELL', purpose: 'time_stop', tradeDate: '2026-07-05', worstPrice: 0.3, size: 74 });
+
+    expect(r.status).toBe('duplicate');
+    expect(client.postOrder).not.toHaveBeenCalled();
+  });
 });
 
 describe('MakerExecutor lifecycle — cancel / cancel-all / list / poll', () => {
@@ -553,6 +585,23 @@ describe('MakerExecutor lifecycle — cancel / cancel-all / list / poll', () => 
     await expect(exec.cancel('0xOLD', 'cid-old')).rejects.toThrow();
     expect(calls.some((c) => c.fn === 'recordCanceled' || c.fn === 'recordFill')).toBe(false);
     expect(rows.get('cid-old')!.status).toBe('placed');
+  });
+
+  it('cancel NOT allCanceled (e.g. a rate-limited cancel): returns the raw result UNPOLLED — no fill-poll, no ledger transition, the key stays held', async () => {
+    // the standalone cancel()'s early-out (`!res.allCanceled → return res`): the venue refused the cancel, so the
+    // order may still rest → the raced-fill poll is DELIBERATELY skipped and NOTHING is freed (freeing beside a
+    // live resting order is the double-place hazard). The caller aborts on allCanceled=false. Was only exercised
+    // inside reprice(); this pins the standalone method's abort-safety.
+    const client = mockClient({ cancelOrder: vi.fn(async () => ({ canceled: [], not_canceled: { '0xOLD': 'rate limited' } })) });
+    const { ledger, calls, rows } = mockLedger([row()]);
+    const exec = new MakerExecutor(deps('live', client, ledger));
+
+    const res = await exec.cancel('0xOLD', 'cid-old');
+
+    expect(res.allCanceled).toBe(false);
+    expect(client.getOrder).not.toHaveBeenCalled(); // no adjudication poll — the order may still be live
+    expect(calls.some((c) => c.fn === 'recordCanceled' || c.fn === 'recordFill')).toBe(false);
+    expect(rows.get('cid-old')!.status).toBe('placed'); // key stays held; caller aborts, nothing freed
   });
 
   it('T3-final: record_canceled RAISING during cancel() → needs-reconcile alert + ERR_LEDGER_WRITE (never swallowed)', async () => {
