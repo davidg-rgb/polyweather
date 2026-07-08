@@ -19,14 +19,21 @@
 
 _Claude keeps this block current every cycle. It is the whole status in 20 seconds._
 
-- **On fire?** No. (If yes, it says so here with the one action needed.)
-- **Branch / state:** `loop/2026-07-08-buying-builds` off `main @ 2491598` (6 depth-capture-v2 commits still
-  local/unpushed). Suite/typecheck: _green at last cycle_.
+- **On fire?** No. Prod healthy; probes were light (stat views only, no TOAST scans).
+- **Branch / state:** `loop/2026-07-08-buying-builds` @ `b44f4e9` off `main @ 2491598` (6 depth-capture-v2
+  commits still local/unpushed). Suite/typecheck: not yet re-run this loop (no product code touched in C0–C1).
 - **Staged, awaiting your yes/no (operator-gated — Claude will not apply):**
   - _(none yet — will list one-command bundles here: migrations, edge-fn deploys, the WS-A forward panel)_
-- **Decisions I need from you:** _(none yet)_
-- **Gate / compute readings (live):** _(filled each cycle — WS-A °F cohort n, §9R-E status; Micro DB health)_
-- **Latest verdict / headline:** _(the most recent real finding)_
+- **Decisions I need from you:** _(none yet — a deploy-autonomy flip is offered in chat; default = staged.)_
+- **Compute readings (WS-D, C1, live):** pg_stat_statements window = **since 07-06** (so totals partly
+  predate the 07-07 cron cull — read as ranking, not current rate). Top exec-time hog = **`convergence_capture_inputs`
+  detoasting `opening_captures`** (848+559 calls, 9–18 s each) — the exact saturation source **depth-capture v2
+  is built to fix**. #3 `to_jsonb(oc.*)` scan (209×19 s) = the one-time 07-07 archive dump, not ongoing.
+  **Storage:** `market_snapshots` **346 MB** (biggest — carries the v1 depth-capture `depth` column that v2's
+  `0089` drops), `forecast_snapshots` 279 MB + `bucket_probabilities` 262 MB (forecasting core — keep),
+  dead-signal `market_rewards` **140 MB** (prune candidate, operator-gated), `opening_captures` down to 90 MB.
+- **Latest headline:** WS-D confirms the compute case for **landing depth-capture v2** (biggest single win);
+  WS-A grounding (prior Google-°F work) in flight before the source-selector build.
 
 ---
 
@@ -211,3 +218,12 @@ readiness, so that *if* WS-A finds edge, the executor that would place those bid
   the Google play excludes °F on purpose (cold-bias), so WS-A's "best-matching source" *is* the fix; the
   per-city source pick carries a known overfitting trap → frozen-gate/OOS mandatory. Next: create the loop
   branch, WS-D compute probe (cheap, protects DB), then WS-A step 1 (source selector, read prior work first).
+- **C1 (2026-07-08):** Loop branch created (`b44f4e9`). **WS-D compute probe (light stat views):** top
+  exec-time hog = `convergence_capture_inputs`/`opening_captures` TOAST reads (stats since 07-06, so partly
+  pre-cull) → confirms depth-capture v2 is the biggest compute win; storage leaders `market_snapshots` 346 MB
+  (v1 `depth` column, dropped by 0089) + dead-signal `market_rewards` 140 MB. Recorded in the operator block.
+  **WS-A grounding launched:** an agent is digesting `GOOGLE-FAHRENHEIT-INVESTIGATION.md` +
+  `google-fahrenheit-diagnostic.ts`/`google-f-biascorrect.ts` + `source-accuracy-findings.ts` +
+  `check-source-accuracy.ts`/`source_accuracy` + the `buildGoogleView` injection point, to return the reusable
+  pieces + the precise gap before I write the selector. Next (C2): consume that brief → build the per-city
+  best-matching-source selector (frozen TRAIN→TEST, must beat raw-Google AND the blend OOS) + tests.
