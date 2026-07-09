@@ -384,6 +384,10 @@ describe('migrations 0001–0010', () => {
       // ~80% timing out, poll-markets ~5% by contention). Additive (2 indexes; no table/fn/cron change). PROD
       // builds them CONCURRENTLY out-of-band first (money-path lock safety); the if-not-exists no-ops on apply.
       '0090_freshness_indexes.sql',
+      // 0091 = the efficiency-monitor tracking layer (loop C23/C24): efficiency_monitor_snapshots table +
+      // record_efficiency_monitor (service-role write + retention) + dash_efficiency_monitor (operator read).
+      // Additive; forward-paper CONFIRMATION of the C23/C24 KILLs (§9R-E gate over time). Operator-deploy-gated.
+      '0091_efficiency_monitor.sql',
     ]);
   });
 });
@@ -875,6 +879,7 @@ describe('0034: internal-RPC lockdown — anon/authenticated revoked except the 
     'trade_config_set',  // 0082: operator-guarded trade_config write (self-guards via operator_guard, like every operator_* RPC)
     'trade_gate_override_set',  // 0082 F1: operator-guarded EXPIRING interlock override write (self-guards)
     'trade_gate_override_clear',  // 0082 F1: operator-guarded override clear (expires active rows in place; self-guards)
+    'dash_efficiency_monitor',  // 0091: /monitor forward-paper efficiency-monitor (C23/C24 §9R-E gate over time) operator read
     'dash_city_live',  // 0085: /trading CITY-LIVE winners board + arms + maker-twin operator read
     'city_live_arms_get',  // 0085: /trading per-city Live toggle table operator read (operator_guard)
     'city_live_arm_set',  // 0085: operator-guarded per-city Live toggle write (self-guards via operator_guard)
