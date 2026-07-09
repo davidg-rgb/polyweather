@@ -196,7 +196,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   loadEnv();
   const minute = new Date().getUTCMinutes();
   if (minute >= 32 && minute <= 42) throw new Error(`${SCRIPT}: inside the reserved :32-:42 UTC window (now :${minute}); retry after :43`);
-  const { values } = parseArgs({ options: { from: { type: 'string' }, switch: { type: 'string' }, to: { type: 'string' }, 'live-slot': { type: 'string' }, leads: { type: 'string' }, json: { type: 'boolean' } } });
+  const { values } = parseArgs({ options: { from: { type: 'string' }, switch: { type: 'string' }, to: { type: 'string' }, 'live-slot': { type: 'string' }, leads: { type: 'string' }, json: { type: 'boolean' }, record: { type: 'boolean' } } });
   const args: WalkArgs = {
     from: values.from ?? '2026-04-21', switchDate: values.switch ?? '2026-06-15', to: values.to ?? '2026-07-08',
     liveSlot: values['live-slot'] ?? '10Z', leads: (splitList(values.leads) ?? ['1', '2']).map(Number),
@@ -216,5 +216,25 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     console.log(`    ${pctv(r.s2Geometry.verdict)}`);
     console.log(`    troughs ${r.s2Geometry.nTroughs} · per-bet edge ${pp(r.s2Geometry.edge.edge)} [${pp(r.s2Geometry.edge.edgeCiLo)}, ${pp(r.s2Geometry.edge.edgeCiHi)}] · hit ${(r.s2Geometry.edge.hitRate * 100).toFixed(1)}% @ ${r.s2Geometry.edge.avgAsk.toFixed(3)}`);
     if (values.json) console.log('\nJSON ' + JSON.stringify(r));
+
+    if (values.record) {
+      // the persisted snapshot view (shape read by dash_efficiency_monitor / migration 0091)
+      const asOf = events.reduce((m, e) => (e.targetDate > m ? e.targetDate : m), args.from);
+      const view = {
+        window: { from: args.from, switchDate: args.switchDate, to: args.to, liveSlot: args.liveSlot, leads: args.leads },
+        nEvents: r.nEvents,
+        s1: {
+          verdict: r.s1Regime.verdict, edge: r.s1Regime.edge, byQuartile: r.s1Regime.byQuartile,
+          q4DayClustered: r.s1Regime.q4DayClustered, q4DistinctWeatherDays: r.s1Regime.q4DistinctWeatherDays,
+          nPurchases: r.s1Regime.nPurchases,
+        },
+        s2: { verdict: r.s2Geometry.verdict, edge: r.s2Geometry.edge, nTroughs: r.s2Geometry.nTroughs, nPurchases: r.s2Geometry.nPurchases },
+      };
+      const recRows = await db.query<{ record_efficiency_monitor: number }>(
+        `select public.record_efficiency_monitor($1::date, $2::jsonb)`, [asOf, JSON.stringify(view)],
+      );
+      const id = recRows[0]?.record_efficiency_monitor;
+      console.log(`\n${SCRIPT}: recorded snapshot id=${id} (as_of ${asOf}) — needs migration 0091 applied to prod`);
+    }
   } finally { await db.end(); }
 }

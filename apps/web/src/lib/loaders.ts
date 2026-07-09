@@ -1960,6 +1960,26 @@ export interface MakerExitFeed {
  * assumptions — maker-fill rate / realized rebate / days — the FICTIVE money tracker, and the §9R-E gate).
  * Degrades to null (not a thrown 500) if the RPC errors so the page can deploy ahead of the 0073 RPC.
  */
+// ── efficiency-monitor (forward paper confirmation of C23/C24; migration 0091) ──────────────────────
+export interface EfficiencyMonitorFeed {
+  generatedAt: string | null;
+  asOf: string | null;
+  view: Record<string, unknown> | null;
+  history: Record<string, unknown>[];
+}
+
+/** dash_efficiency_monitor — the latest forward efficiency-monitor snapshot + a compact trend. Returns a
+ *  null-view feed (never throws) when the 0091 RPC isn't deployed yet, so the page renders its own banner. */
+export async function getEfficiencyMonitor(db: WebDb): Promise<EfficiencyMonitorFeed> {
+  try {
+    const v = await one<EfficiencyMonitorFeed>(db, 'dash_efficiency_monitor', {});
+    if (!v) return { generatedAt: null, asOf: null, view: null, history: [] };
+    return { generatedAt: v.generatedAt ?? null, asOf: v.asOf ?? null, view: v.view ?? null, history: v.history ?? [] };
+  } catch {
+    return { generatedAt: null, asOf: null, view: null, history: [] };
+  }
+}
+
 export async function getMakerExit(db: WebDb): Promise<MakerExitFeed | null> {
   let v: MakerExitFeed | null;
   try {
