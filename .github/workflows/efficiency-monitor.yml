@@ -1,0 +1,49 @@
+# Forward EFFICIENCY-MONITOR paper loop — daily snapshot recorder (operator-requested 2026-07-09).
+#
+# Runs scripts/research/efficiency-monitor-run.ts --record once a day: re-derives both strategies
+# (S1 regime + forecast cheap-subset / S2 ladder-geometry troughs) from the resolved DB tables, scores
+# them through the frozen §9R-E gate, and appends one snapshot to efficiency_monitor_panel (migration
+# 0091). Read-only analytics that WRITES only the panel via record_efficiency_monitor. No capital, no
+# trading, no external API — the rail stays DORMANT (FINDINGS.md / EFFICIENCY-MONITOR.md).
+#
+# ACTIVATION (operator): add a repository secret `DATABASE_URL` (the Supavisor session-pooler string,
+# service-role) under Settings → Secrets and variables → Actions. Scheduled workflows run from the
+# DEFAULT branch (main), so this file being on main is what arms the daily run.
+#
+# SECURITY NOTE: this repo is PUBLIC. GitHub encrypts Actions secrets and does NOT expose them to
+# pull-request workflows from forks, and this job only runs on schedule / manual dispatch on the trusted
+# main branch — but DATABASE_URL is a broad service-role credential. If you prefer to keep it out of the
+# cloud entirely, run the same one-liner from Windows Task Scheduler on your machine (where .env.local
+# already carries DATABASE_URL) instead of enabling this workflow.
+#
+#   pnpm tsx scripts/research/efficiency-monitor-run.ts --record
+#
+# 06:00 UTC keeps the run clear of the reserved :32–:42 cron window (the driver also guards it).
+
+name: efficiency-monitor
+
+on:
+  schedule:
+    - cron: '0 6 * * *' # daily 06:00 UTC
+  workflow_dispatch: {} # manual trigger from the Actions tab
+
+concurrency:
+  group: efficiency-monitor
+  cancel-in-progress: false
+
+jobs:
+  record:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # action-setup reads the exact pnpm from package.json's packageManager field (do not pass version:).
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Record efficiency-monitor snapshot (paper analytics; writes only the panel)
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: pnpm tsx scripts/research/efficiency-monitor-run.ts --record
