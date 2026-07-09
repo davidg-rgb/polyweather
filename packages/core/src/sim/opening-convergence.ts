@@ -209,10 +209,23 @@ export interface OpeningMarketResult {
   executed: boolean;
 }
 
-export type OpeningLabel = 'PASS' | 'KILL' | 'INSUFFICIENT_DATA';
+export type OpeningLabel = 'PASS' | 'PASS_PENDING_REAL_BOOK' | 'KILL' | 'INSUFFICIENT_DATA';
+
+/**
+ * What the panel's entry/exit prices actually are. 'real-book' = observed venue quotes (top-of-book
+ * bid/ask or depth-walked executable prices, live or archived — e.g. opening_captures, market_snapshots
+ * best_bid/best_ask, market_depth). 'mid' = anything else: mid-prices, synthetic/modeled books, or an
+ * undeclared basis. The distinction is load-bearing: three separate panels cleared every statistical bar
+ * on a mid/synthetic basis and flipped decisively negative on the real book (maker-exit +6.7% → −12.6%
+ * live; the C22 fade cohort +3.39% → −9.75%; the C23 trough +2.95pp → −8.72pp), so a mid-basis panel can
+ * never be allowed to certify a full PASS (traps #1/#8, MAKER-EXIT-SIM.md root-cause banner).
+ */
+export type PriceBasis = 'real-book' | 'mid';
 
 export interface OpeningVerdict {
   label: OpeningLabel;
+  /** the effective price basis the panel was scored on (defaults to 'mid' — fail-closed — when undeclared). */
+  priceBasis: PriceBasis;
   nMarkets: number;
   nCities: number;
   nDistinctDays: number;
@@ -252,6 +265,18 @@ export interface VerdictOpts {
    * passable (the CORE-1 trap does not recur).
    */
   dayBlockNull?: boolean;
+  /**
+   * MID-BASIS PASS CAP (2026-07-09, structural enforcement of traps #1/#8): declare what the panel's
+   * prices are. Every statistical criterion is computed identically regardless — this flag changes ONLY
+   * the label a passing panel is allowed to carry. When the basis is 'real-book' a clearing panel earns
+   * the full 'PASS'. When it is 'mid' (or undeclared — the fail-closed default), a clearing panel is
+   * capped at 'PASS_PENDING_REAL_BOOK': promising, but NOT certifiable until re-scored on observed venue
+   * bid/ask (three mid/synthetic panels passed every bar and flipped negative on the real book — see
+   * PriceBasis). KILL / INSUFFICIENT_DATA are unaffected. Live panels and any research script pricing
+   * off observed quotes must declare 'real-book' explicitly; the default exists so a future mid-archive
+   * scan that forgets the flag structurally cannot print PASS.
+   */
+  priceBasis?: PriceBasis;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
@@ -581,6 +606,8 @@ export function openingVerdict(panel: OpeningMarketResult[], opts: VerdictOpts =
   const minCities = opts.minCities ?? GATE_MIN_CITIES;
   const minDistinctDays = opts.minDistinctDays ?? GATE_MIN_DISTINCT_DAYS;
   const minWinFrac = opts.minWinFrac ?? GATE_MIN_WIN_FRAC;
+  // fail-closed: an undeclared basis is treated as 'mid' — see VerdictOpts.priceBasis.
+  const priceBasis: PriceBasis = opts.priceBasis === 'real-book' ? 'real-book' : 'mid';
 
   // EXECUTED markets only — an executed-but-void market is not a skill outcome (excluded upstream too). Note
   // "scored" (not "closed"): a caller MAY include a still-in-flight position conservatively marked to its last
@@ -597,7 +624,7 @@ export function openingVerdict(panel: OpeningMarketResult[], opts: VerdictOpts =
 
   if (nMarkets < minMarkets || nCities < minCities || nDistinctDays < minDistinctDays) {
     return {
-      label: 'INSUFFICIENT_DATA', nMarkets, nCities, nDistinctDays,
+      label: 'INSUFFICIENT_DATA', priceBasis, nMarkets, nCities, nDistinctDays,
       winFrac: NaN, meanNetReturn: NaN, ciLow: NaN, ciHigh: NaN, zeroSkillPassRate: NaN,
       reason:
         `INSUFFICIENT_DATA — ${nMarkets} scored paper markets across ${nCities} cities / ${nDistinctDays} dates ` +
@@ -629,8 +656,25 @@ export function openingVerdict(panel: OpeningMarketResult[], opts: VerdictOpts =
         `${nDistinctDays} day clusters, day-flip MC pass-rate ${pct(zspDay)} (same bar)`);
 
   if (winFrac >= minWinFrac && ciLow > 0 && zsp < ZERO_SKILL_MAX_PASS && dayBlockClears) {
+    if (priceBasis !== 'real-book') {
+      // MID-BASIS PASS CAP — the statistical bars all clear, but the prices are mids / synthetic /
+      // undeclared, and three such panels have already passed everything then flipped negative on the
+      // real book (maker-exit, C22 fade, C23 trough). Promising ≠ certified. See VerdictOpts.priceBasis.
+      return {
+        label: 'PASS_PENDING_REAL_BOOK', priceBasis, nMarkets, nCities, nDistinctDays, winFrac,
+        meanNetReturn: mean, ciLow, ciHigh, zeroSkillPassRate: zsp,
+        ...dayBlock,
+        reason:
+          `PASS_PENDING_REAL_BOOK — ${nMarkets} scored paper markets: ${stat}. Every statistical bar clears, ` +
+          `but the panel is priced on a MID/SYNTHETIC basis (priceBasis '${priceBasis}'), and mid-basis passes ` +
+          `have flipped decisively negative on the real book three times (maker-exit +6.7%→−12.6%, C22 fade ` +
+          `+3.39%→−9.75%, C23 trough +2.95pp→−8.72pp — traps #1/#8). NOT certifiable: re-score the same panel ` +
+          `on observed venue bid/ask at executable depth (declare priceBasis 'real-book') before treating this ` +
+          `as an edge. No capital implication at this basis.`,
+      };
+    }
     return {
-      label: 'PASS', nMarkets, nCities, nDistinctDays, winFrac, meanNetReturn: mean, ciLow, ciHigh, zeroSkillPassRate: zsp,
+      label: 'PASS', priceBasis, nMarkets, nCities, nDistinctDays, winFrac, meanNetReturn: mean, ciLow, ciHigh, zeroSkillPassRate: zsp,
       ...dayBlock,
       reason:
         `PASS — ${nMarkets} scored paper markets: ${stat}. A standing, executable opening-convergence edge net ` +
@@ -640,7 +684,7 @@ export function openingVerdict(panel: OpeningMarketResult[], opts: VerdictOpts =
   }
   const dayBlockBinds = !dayBlockClears && winFrac >= minWinFrac && ciLow > 0 && zsp < ZERO_SKILL_MAX_PASS;
   return {
-    label: 'KILL', nMarkets, nCities, nDistinctDays, winFrac, meanNetReturn: mean, ciLow, ciHigh, zeroSkillPassRate: zsp,
+    label: 'KILL', priceBasis, nMarkets, nCities, nDistinctDays, winFrac, meanNetReturn: mean, ciLow, ciHigh, zeroSkillPassRate: zsp,
     ...dayBlock,
     reason:
       `KILL — ${nMarkets} scored paper markets: ${stat}. ` +

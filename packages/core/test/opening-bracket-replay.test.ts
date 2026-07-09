@@ -253,11 +253,18 @@ describe('replayPanel — the §9R-E verdict labels', () => {
     );
 
   it('PASS — 6 cities × 7 days, all win: clears the floors, the bars, and the zero-skill MC', () => {
-    const panel = replayPanel(grid(6, 7, () => true), panelCfg, [0.25]);
+    const panel = replayPanel(grid(6, 7, () => true), panelCfg, [0.25], { priceBasis: 'real-book' });
     const h = panel.perTp.find((r) => r.tpDeltaPp === 0.25)!;
     expect(h.nMarkets).toBe(42);
     expect(h.executedFrac).toBeCloseTo(1, 9);
     expect(h.label).toBe('PASS');
+  });
+
+  it('MID-BASIS CAP — the same clearing panel with an undeclared basis is capped at PASS_PENDING_REAL_BOOK', () => {
+    const panel = replayPanel(grid(6, 7, () => true), panelCfg, [0.25]); // no verdictOpts → fail-closed 'mid'
+    const h = panel.perTp.find((r) => r.tpDeltaPp === 0.25)!;
+    expect(h.nMarkets).toBe(42); // identical statistics…
+    expect(h.label).toBe('PASS_PENDING_REAL_BOOK'); // …but no full PASS off an undeclared price basis
   });
 
   it('KILL — 8 cities × 7 days, half win / half lose: winFrac ≈ 0.5 but the city-clustered CI straddles 0', () => {

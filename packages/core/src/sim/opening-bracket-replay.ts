@@ -39,6 +39,7 @@ import {
   type OpeningCapture,
   type OpeningMarketResult,
   type OpeningLabel,
+  type VerdictOpts,
   type EntryCandidate,
   type OpenPosition,
   type PaperFill,
@@ -412,7 +413,12 @@ export function replayEvent(input: EventReplayInput, cfg: OpeningCfg, tpDeltaPp:
 // 2 · replayPanel — sweep the take-profit, run the frozen §9R-E verdict at each, headline the pre-reg TP
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 
-export function replayPanel(events: EventReplayInput[], cfg: OpeningCfg, tpValues: number[]): BracketPanel {
+export function replayPanel(
+  events: EventReplayInput[],
+  cfg: OpeningCfg,
+  tpValues: number[],
+  verdictOpts: VerdictOpts = {},
+): BracketPanel {
   const evs = (Array.isArray(events) ? events : []).filter((e): e is EventReplayInput => !!e && Array.isArray(e.ticks));
   // the headline TP (cfg.tpDeltaPp) is ALWAYS in the sweep — that row is the pre-registered gate even if a caller
   // passes a --tps set without it. de-dup + sort for a stable table.
@@ -449,7 +455,7 @@ export function replayPanel(events: EventReplayInput[], cfg: OpeningCfg, tpValue
         }
       }
     }
-    const v = openingVerdict(panel);
+    const v = openingVerdict(panel, verdictOpts);
     return {
       tpDeltaPp: tp,
       nEvents: considered.length,
