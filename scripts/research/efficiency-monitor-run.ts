@@ -198,7 +198,10 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   if (minute >= 32 && minute <= 42) throw new Error(`${SCRIPT}: inside the reserved :32-:42 UTC window (now :${minute}); retry after :43`);
   const { values } = parseArgs({ options: { from: { type: 'string' }, switch: { type: 'string' }, to: { type: 'string' }, 'live-slot': { type: 'string' }, leads: { type: 'string' }, json: { type: 'boolean' }, record: { type: 'boolean' } } });
   const args: WalkArgs = {
-    from: values.from ?? '2026-04-21', switchDate: values.switch ?? '2026-06-15', to: values.to ?? '2026-07-08',
+    // default --to = today (UTC); the walk only scores RESOLVED markets, so unresolved recent days are
+    // naturally excluded — a daily `--record` run needs no date args as the window rolls forward.
+    from: values.from ?? '2026-04-21', switchDate: values.switch ?? '2026-06-15',
+    to: values.to ?? new Date().toISOString().slice(0, 10),
     liveSlot: values['live-slot'] ?? '10Z', leads: (splitList(values.leads) ?? ['1', '2']).map(Number),
   };
   const db = makeScriptDb();
