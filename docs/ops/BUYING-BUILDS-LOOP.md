@@ -555,3 +555,22 @@ readiness, so that *if* WS-A finds edge, the executor that would place those bid
   −6.2%). Verdict `scripts/research/out/WINNER-ROUNDTRIP-ANALYSIS.md`; FINDINGS.md row + memory added. Re-confirms
   efficiency from the path-structure angle; no new edge; all 12 signals stay dead. **▶ C22 = low-cadence idle watch;
   nothing actionable pending (the non-price winner-fingerprint lever from C20 remains the only open direction).**
+- **C22 (2026-07-09) — OPERATOR-DIRECTED: the NON-PRICE winner-fingerprint hunt → NO edge; closes the last open
+  direction from C20/C21.** Operator: "find a net positive edge in buying/selling — evaluate all options
+  systematically." Framed as the **sufficient-statistic test** (a non-price feature has an edge iff
+  `E[won|price,feature] ≠ E[won|price]` beyond cost). Built the instant feature panel
+  (`nonprice-fingerprint-panel.ts`, 652,257 instants / 6,273 events / 45 cities / 523 days, 10 features) + the
+  conditional test (`nonprice_conditional.py`) + the real-book decider (`realbook-fade.ts`) — all tested, +
+  a **parallel agent** on the order BOOK. **THREE convergent findings:** **(1)** price is a sufficient statistic —
+  every path feature's price-controlled lift is a trivial ±0.3–1.9pp and **every group's frictionless EV (won−p)
+  is NEGATIVE** (momentum micro-structure is real but priced in; best BUY cohort gates −34%). **(2)** the only
+  cohort that gated positive on the mid — fading the most-overpriced "unmoved cheap" buckets (bottom run-up
+  decile, = the known §12/C19 overpricing) — passed EVERYTHING on the mid (spread ×2, OOS +1.81%, city+day
+  clustered, zsMC) then **FLIPPED +3.39%→−9.75%** priced off the REAL bid/ask on the same 3,073 opening_captures
+  events (median executable bid-side depth **$2**, p10 $0 = stale one-sided mid) — flagship trap #1+#8, exactly
+  the maker-exit story. **(3)** the agent's independent order-BOOK test (imbalance/spread/depth): none carries
+  residual info beyond mid (all straddle 0); baseline cheap-buy KILLs −80.3%; only `house_gap`=the dead forecast
+  signal survives residual-info and its trade loses. Docs `NONPRICE-FINGERPRINT-THESIS.md` + `ORDERFLOW-FINGERPRINT.md`;
+  FINDINGS.md row + memory added; new engines + tests committed (suite green, typecheck clean). Market efficient
+  on price, path-shape, AND order flow; no non-price fingerprint exists. **▶ C23 = low-cadence idle watch; the
+  price-side edge space is now exhaustively closed — no open lever remains.**
