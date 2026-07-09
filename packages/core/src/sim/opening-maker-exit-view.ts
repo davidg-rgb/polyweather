@@ -222,7 +222,9 @@ export function buildMakerExitView(
   // grading_mismatch markets (ambiguous payout) are EXCLUDED from scoring — replayMakerExitPanel filters them
   // out, so the entries / per-day / money / gate counts derive from the SAME excluded population (one source).
   const considered = events.filter((e) => !e.resolution.gradingMismatch);
-  const panel = replayMakerExitPanel(events, cfg, resolvesByEvent);
+  // priceBasis 'real-book': the forward loop replays the REAL captured book (the whole point vs the
+  // synthetic-book backtest that false-passed — MAKER-EXIT-SIM.md root-cause banner).
+  const panel = replayMakerExitPanel(events, cfg, resolvesByEvent, { priceBasis: 'real-book' });
 
   // ── per-event entries from the replayed ledger (executed trades) ─────────────────────────────────────
   const entries: MakerExitEntry[] = panel.ledger

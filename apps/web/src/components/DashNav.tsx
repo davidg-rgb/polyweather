@@ -34,7 +34,7 @@ export const DASH_NAV: ReadonlyArray<readonly [string, string]> = [
   ['/maker-exit', 'maker-exit'], // the maker-exit variant — first +EV config (dash_maker_exit)
   ['/trading', 'trading'], // LIVE-RAIL activation + risk console (dash_trading, 0082 staged dark)
   ['/amsterdam', 'amsterdam'], // the one-accurate-city paper-trade head-to-head
-  ['/paper-trade', 'paper-trade'], // the multi-city generalization — Singapore + Karachi (dash_city_sim)
+  ['/paper-trade', 'buy-table'], // per-city "$10 on our high, bought cheap" archive backtest (city-buy-table-results)
   ['/data', 'accuracy'], // forecast accuracy by market — best/worst stations + the Brier gap (dash_data)
   ['/sharps', 'sharps'], // SPORTS-sharps roster + fingerprints (9th signal DORMANT)
   ['/rewards', 'rewards'], // funded-weather liquidity-reward pool tracker (dash_market_rewards)

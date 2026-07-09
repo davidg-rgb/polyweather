@@ -444,7 +444,7 @@ describe('openingVerdict — the frozen §9R-E net-profit gate', () => {
   // floored the pass-rate ~0.4, making the gate un-passable). A clearly-positive panel must therefore clear
   // BOTH the descriptive bars AND the zero-skill floor → PASS.
   it('PASS — a clearly-positive panel clears the bars AND the zero-skill MC (independent per-city signs)', () => {
-    const v = openingVerdict(mkPanel(CITIES(12), DAYS(7), () => 0.02));
+    const v = openingVerdict(mkPanel(CITIES(12), DAYS(7), () => 0.02), { priceBasis: 'real-book' });
     expect(v.zeroSkillPassRate).toBeLessThan(ZERO_SKILL_MAX_PASS); // a real positive edge beats noise ≪5%
     expect(v.label).toBe('PASS');
   });
@@ -463,7 +463,7 @@ describe('openingVerdict — the frozen §9R-E net-profit gate', () => {
   });
 
   it('CORE-1 — the same clearly-positive edge across the 6-city minimum DOES clear the zero-skill floor → PASS', () => {
-    const v = openingVerdict(mkPanel(CITIES(6), DAYS(7), () => 0.02)); // 42 mkts, 6 cities = the gate minimum
+    const v = openingVerdict(mkPanel(CITIES(6), DAYS(7), () => 0.02), { priceBasis: 'real-book' }); // 42 mkts, 6 cities = the gate minimum
     expect(v.nCities).toBe(6);
     expect(v.zeroSkillPassRate).toBeLessThan(ZERO_SKILL_MAX_PASS); // 2^−6 ≈ 0.0156 < 0.05 — passable at the floor
     expect(v.label).toBe('PASS');
@@ -487,7 +487,7 @@ describe('openingVerdict — the frozen §9R-E net-profit gate', () => {
 
 describe('openingVerdict — the OPT-IN day-block tightening (frozen-gate-safe)', () => {
   it('UNSET ⇒ byte-identical to the frozen gate: no day-block fields, no day-block prose', () => {
-    const v = openingVerdict(mkPanel(CITIES(12), DAYS(7), () => 0.02));
+    const v = openingVerdict(mkPanel(CITIES(12), DAYS(7), () => 0.02), { priceBasis: 'real-book' });
     expect(v.label).toBe('PASS');
     expect('zeroSkillPassRateDayBlock' in v).toBe(false);
     expect('dayBlockCiLow' in v).toBe(false);
@@ -497,7 +497,7 @@ describe('openingVerdict — the OPT-IN day-block tightening (frozen-gate-safe)'
   it('a genuinely day-diverse positive panel STAYS PASS under the tightening (structurally passable)', () => {
     // constant positive return: day means all +0.02 → day-clustered ciLow > 0; only the no-flip vector
     // clears the day bar → zspDay ≈ 2^−7 ≈ 0.0078 < 0.05 (the ≥7-date sufficiency bar floors it passable).
-    const v = openingVerdict(mkPanel(CITIES(12), DAYS(7), () => 0.02), { dayBlockNull: true });
+    const v = openingVerdict(mkPanel(CITIES(12), DAYS(7), () => 0.02), { dayBlockNull: true, priceBasis: 'real-book' });
     expect(v.label).toBe('PASS');
     expect(v.zeroSkillPassRateDayBlock).toBeDefined();
     expect(v.zeroSkillPassRateDayBlock!).toBeLessThan(0.05);
@@ -510,9 +510,9 @@ describe('openingVerdict — the OPT-IN day-block tightening (frozen-gate-safe)'
     // (city-clustered variance 0 ⇒ city ciLow = mean > 0, city zsp ≈ 2^−12) → the frozen gate PASSES.
     // But with DAYS as the independent unit the evidence is one lucky day: day-clustered CI straddles 0.
     const rr = (_ci: number, di: number): number => (di === 0 ? 0.2 : 0.005);
-    const frozen = openingVerdict(mkPanel(CITIES(12), DAYS(7), rr));
+    const frozen = openingVerdict(mkPanel(CITIES(12), DAYS(7), rr), { priceBasis: 'real-book' });
     expect(frozen.label).toBe('PASS'); // the exact false-comfort the tightening exists to remove
-    const tightened = openingVerdict(mkPanel(CITIES(12), DAYS(7), rr), { dayBlockNull: true });
+    const tightened = openingVerdict(mkPanel(CITIES(12), DAYS(7), rr), { dayBlockNull: true, priceBasis: 'real-book' });
     expect(tightened.label).toBe('KILL');
     expect(tightened.dayBlockCiLow!).toBeLessThan(0);
     expect(tightened.reason).toContain('DAY-BLOCK tightening is the binding failure');
@@ -523,9 +523,9 @@ describe('openingVerdict — the OPT-IN day-block tightening (frozen-gate-safe)'
     // identical → the city-clustered CI is a point mass at +2.57% and the frozen gate PASSES; the day-clustered
     // CI over [0.06×4, −0.02×3] straddles 0 → the tightening KILLs.
     const rr = (_ci: number, di: number): number => (di < 4 ? 0.06 : -0.02);
-    const frozen = openingVerdict(mkPanel(CITIES(12), DAYS(7), rr));
+    const frozen = openingVerdict(mkPanel(CITIES(12), DAYS(7), rr), { priceBasis: 'real-book' });
     expect(frozen.label).toBe('PASS');
-    const tightened = openingVerdict(mkPanel(CITIES(12), DAYS(7), rr), { dayBlockNull: true });
+    const tightened = openingVerdict(mkPanel(CITIES(12), DAYS(7), rr), { dayBlockNull: true, priceBasis: 'real-book' });
     expect(tightened.label).toBe('KILL');
     expect(tightened.dayBlockCiLow!).toBeLessThan(0);
   });
@@ -534,6 +534,54 @@ describe('openingVerdict — the OPT-IN day-block tightening (frozen-gate-safe)'
     const rr = (ci: number): number => (ci % 2 === 0 ? 0.05 : -0.05); // the noisy zero-mean panel
     expect(openingVerdict(mkPanel(CITIES(8), DAYS(7), rr)).label).toBe('KILL');
     expect(openingVerdict(mkPanel(CITIES(8), DAYS(7), rr), { dayBlockNull: true }).label).toBe('KILL');
+  });
+});
+
+// ── 5c · the MID-BASIS PASS cap (VerdictOpts.priceBasis — traps #1/#8 made structural) ──────────────────
+
+describe('openingVerdict — the MID-BASIS PASS cap (priceBasis)', () => {
+  const clearing = (): OpeningMarketResult[] => mkPanel(CITIES(12), DAYS(7), () => 0.02); // clears every bar
+
+  it('an UNDECLARED basis fails closed: the clearing panel is capped at PASS_PENDING_REAL_BOOK', () => {
+    const v = openingVerdict(clearing());
+    expect(v.label).toBe('PASS_PENDING_REAL_BOOK');
+    expect(v.priceBasis).toBe('mid');
+    expect(v.reason).toContain('MID/SYNTHETIC');
+    expect(v.reason).toContain('real book');
+  });
+
+  it("an explicit 'mid' basis is capped identically", () => {
+    expect(openingVerdict(clearing(), { priceBasis: 'mid' }).label).toBe('PASS_PENDING_REAL_BOOK');
+  });
+
+  it("'real-book' earns the full PASS on the same panel", () => {
+    const v = openingVerdict(clearing(), { priceBasis: 'real-book' });
+    expect(v.label).toBe('PASS');
+    expect(v.priceBasis).toBe('real-book');
+  });
+
+  it('the cap changes ONLY the label — every statistical field is byte-identical across bases', () => {
+    const mid = openingVerdict(clearing(), { priceBasis: 'mid' });
+    const real = openingVerdict(clearing(), { priceBasis: 'real-book' });
+    expect(mid.winFrac).toBe(real.winFrac);
+    expect(mid.meanNetReturn).toBe(real.meanNetReturn);
+    expect(mid.ciLow).toBe(real.ciLow);
+    expect(mid.ciHigh).toBe(real.ciHigh);
+    expect(mid.zeroSkillPassRate).toBe(real.zeroSkillPassRate);
+  });
+
+  it('KILL and INSUFFICIENT_DATA are unaffected by the basis (the cap only touches would-be PASSes)', () => {
+    const noisy = (ci: number): number => (ci % 2 === 0 ? 0.05 : -0.05);
+    expect(openingVerdict(mkPanel(CITIES(8), DAYS(7), noisy), { priceBasis: 'mid' }).label).toBe('KILL');
+    expect(openingVerdict(mkPanel(CITIES(8), DAYS(7), noisy), { priceBasis: 'real-book' }).label).toBe('KILL');
+    expect(openingVerdict(mkPanel(CITIES(2), DAYS(7), () => 0.02), { priceBasis: 'mid' }).label).toBe('INSUFFICIENT_DATA');
+    expect(openingVerdict(mkPanel(CITIES(2), DAYS(7), () => 0.02), { priceBasis: 'real-book' }).label).toBe('INSUFFICIENT_DATA');
+  });
+
+  it('composes with the day-block tightening: real-book + dayBlock still catches day concentration', () => {
+    const rr = (_ci: number, di: number): number => (di === 0 ? 0.2 : 0.005);
+    const v = openingVerdict(mkPanel(CITIES(12), DAYS(7), rr), { dayBlockNull: true, priceBasis: 'real-book' });
+    expect(v.label).toBe('KILL'); // the tightening binds regardless of basis
   });
 });
 

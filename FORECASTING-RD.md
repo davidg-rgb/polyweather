@@ -363,3 +363,40 @@ cross-check (`tmax_metar_tenths_c` null), both 2024 (outside the market window, 
 they pollute per-station tails). Proposed guard (staged for operator, not auto-applied — prod data):
 `update observations set tmax_wu_native=null, divergence_flags = array_append(divergence_flags,'impossible_tmax')`
 for those two ids, plus an ingest sanity check rejecting derived °C outside [−60, 55].
+
+---
+
+# MODEL-TRIM — per-city NWP model-set selection (the 5th point-skill lever). VERDICT: REJECTED (KILL). 2026-07-09.
+
+> Full record: **`MODEL-TRIM.md`**. Script `scripts/research/model-trim.ts` (+ `.test.ts`, 17 cases). Read-only.
+> The one point-skill lever the four rejections above never tested: not the per-model *correction* (Probe #1)
+> or the *weighting scheme* (Probe #2 / WO-3) **over all models**, but hard per-city model **membership** —
+> dropping the models that hurt a city. The operator asked for a full per-city model trim, iterated to plateau.
+
+Same `mos-pointskill` walk-forward, extended to a **stitched forward test**: TRAIN = `backfill` (04-09→06-12),
+TEST = live 22Z/10Z (06-13→now, real forward data the selection never saw). Baseline = the live all-8
+inverse-MSE blend; arms change **only membership**. Per-city subset by bidirectional greedy stepwise on TRAIN.
+
+**The honest OOS number (TRAIN-select → apply forward, no test-set reuse), pooled ΔMAE °C, 45 cities, city-clustered CI:**
+
+| lead | Global trim ΔMAE | **Naive per-city ΔMAE [95% CI]** |
+|---|---|---|
+| 0 | −0.004 | **−0.016 [−0.044, +0.010]** |
+| 1 | −0.002 | **−0.023 [−0.049, +0.002]** |
+| 2 | +0.002 | **−0.024 [−0.050, +0.002]** |
+| 3 |  0.000 | **−0.045 [−0.082, −0.012]** |
+
+Per-city trimming is **negative at every lead** (lead-3 CI excludes 0 negative); global trim ≈ 0; stepwise
+from-empty **re-adds all 8 models** (every bias-corrected member carries decorrelated signal). Robust across
+inv-MSE/equal weighting × 22Z/10Z slots. Zero-skill null: naive selection (≈−0.02) beats *random* trimming
+(≈−0.08) but not "keep everyone" (0).
+
+**The trap it exposes (the value of the entry):** an adopt-or-shrink gate that *peeks at TEST* shows a
+**+0.018 °C "PASS" with a CI excluding 0** — pure post-selection bias. The same selection, scored honestly,
+is **−0.027 °C**. This is the project's prime lesson in miniature, and it reproduces + defuses the exact
+`source-accuracy-findings.ts` multiple-comparisons false positive.
+
+**VERDICT: keep the uniform full 8-model inverse-MSE blend for every city.** The blend is at its point-skill
+ceiling; the accuracy lever is NOT model *selection* but **more/longer data + spread-conditional weighting +
+ADDING decorrelated models + local predictors for the coastal/monsoon busts** (MODEL-TRIM.md §8). This makes
+it **5 rejected point-skill levers** (Probe #1, Probe #2, WO-L3-b, WO-3, MODEL-TRIM).

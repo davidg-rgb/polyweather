@@ -76,4 +76,10 @@ the day-clustered CI clearing 0 — would be **genuinely new measured informatio
 reconsider the standing KILL (`FINDINGS.md`). Anything short of that confirms the findings. No capital before
 a frozen forward PASS **and** an explicit operator decision. Rail stays DORMANT.
 
+**REPLICATION RULE (pre-registered 2026-07-09, mirrored in `FINDINGS.md`):** a first forward PASS is a
+*candidate*, not a result — it must **persist through a second, non-overlapping accrual window** meeting the
+same sufficiency bars before it reaches the operator as a capital question. Dozens of 5%-level gates have run
+across this project; a false PASS is an arithmetic eventuality, and one replication window cuts the false-GO
+odds roughly twenty-fold for the price of waiting.
+
 _Analytics & forecasting record. Nothing here is trading advice; the live rail is DORMANT._

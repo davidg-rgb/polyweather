@@ -1,15 +1,25 @@
 /**
- * /paper-trade — the GENERALIZED multi-city paper-trade head-to-head (the Amsterdam sim, N cities).
+ * /paper-trade — the PER-CITY "$10 on our predicted high, bought CHEAP, held to close" table.
  *
- * Operator ask (2026-06-29): run the daily $10/arm paper-trade on the most forecast-accurate °C cities with
- * a liquid Polymarket market — Singapore (WSSS) + Karachi (OPKC) — to MEASURE whether a systematic everyday
- * bet on our predicted bucket nets a profit vs the real market. Per city it races config arm hours (11–14
- * local, bracketing the tropical ~12:30 peak), records the in-lock-hour odds, grades to the resolved high,
- * and tracks cumulative P&L. Read-only over dash_city_sim (migration 0070). NOT trading — analytics only;
- * efficiency prior says the curves hug $0 net of fees (a sustained climb is the signal worth chasing).
+ * Operator ask (2026-07-09): replace the multi-city arms-race with a table of ALL cities. For each city, place
+ * a fictive $10 bet on OUR predicted daily-high bucket, but only enter while it is still cheap (ask ≤ 15¢ =
+ * "high return potential"), at the confidence sweet-spot (the entry lead that maximizes the day-clustered lower
+ * bound), held to resolution; log per city: bets, days active, win%, avg entry price, net P&L, ROI.
+ *
+ * HONESTY: this IS signal #12 (opening-convergence), already falsified (FINDINGS.md / MARKET-PNL.md). The
+ * cheap-entry filter buys the predicted bucket only while it is still a not-yet-converged LONGSHOT. Scored on
+ * the CANONICAL calibrated book (CALIBRATED_BOOK exec ask + taker fee; a bet exists only where walked depth
+ * covers the stake) the fillable population nearly vanishes — the legacy mid+1¢ read (−28% on 347 bets) was
+ * mostly bets that could never fill at $10 — and what remains is an UNDERPOWERED WASH leaning negative: no
+ * lead's day-clustered lower bound comes near zero. This page renders that truth per city from the committed
+ * archive-backtest asset (core/sim/city-buy-table-results.ts) — a FROZEN record (see the as-of chip), NOT a
+ * live feed — plus the LIVE forward ledger (dash_city_sim), which is still accruing and remains the
+ * backtest-vs-realized cross-check instrument (loop rule 4). The 45-City Scan below is the pre-registered
+ * TRAIN/TEST cut of the same question.
  */
 import type { ReactElement } from 'react';
 import {
+  CITY_BUY_TABLE,
   CITY_SCAN_ASK_SPLIT,
   CITY_SCAN_CAVEATS,
   CITY_SCAN_CONFIDENCE_TERCILES,
@@ -18,430 +28,452 @@ import {
   CITY_SCAN_META,
   CITY_SCAN_POOLED_CURVE,
   CITY_SCAN_TOP5_TRAIN_CELLS,
+  type CityBuyLeadPoint,
+  type CityBuyRow,
   type CityScanCandidate,
-  cityFloorConfidenceAt,
-  getCityClimatology,
-  localHourInstant,
 } from '@weather-edge/core';
-import { EquityChart, type EquitySeries } from '../../../components/EquityChart.tsx';
-import { fmtDate, fmtDelta, fmtPct, fmtStockholm, fmtUsd, num } from '../../../lib/format.ts';
-import {
-  type CityForecast,
-  type CitySimCity,
-  type CitySimView,
-  getCityForecast,
-  getCitySim,
-} from '../../../lib/loaders.ts';
+import { fmtDate, fmtDelta, fmtPct, fmtUsd, num } from '../../../lib/format.ts';
+import { type CitySimView, getCitySim } from '../../../lib/loaders.ts';
 import { serverDb } from '../../../lib/supabase.ts';
 
+// The (dash) layout is operator-gated (reads cookies → dynamic); this page's data is a committed static asset,
+// so it renders instantly, but we keep the route dynamic to match the gated layout (no static-prerender conflict).
 export const dynamic = 'force-dynamic';
 
 const GREEN = 'var(--ams-tertiary)';
 const RED = 'var(--ams-red)';
-// Arms are coloured by POSITION (not absolute hour, since cities race different hours) on the categorical ramp.
-// Six slots so a widened race (e.g. 10–15 local) keeps distinct colours without wrapping.
-const ARM_PALETTE = [
-  'var(--ams-arm-13)', 'var(--ams-arm-14)', 'var(--ams-arm-15)', 'var(--ams-arm-16)',
-  'var(--ams-tertiary)', 'var(--ams-secondary-dim)',
-];
-const ARM_DASH = [undefined, '5 3', '2 3', '7 3 2 3', '1 2', '9 3'];
+const AMBER = 'var(--ams-amber)';
 
 const signedUsd = (v: number | null, dp = 2): string =>
   v == null ? '—' : `${v >= 0 ? '+' : '−'}${fmtUsd(Math.abs(v), dp)}`;
 const pnlClass = (v: number | null): string => (v == null ? '' : v >= 0 ? 'pos' : 'neg');
-/** percentage-point delta, signed: pp(3.6) = '+3.6pp', pp(-11.4) = '-11.4pp'. */
+/** percentage-point value, signed: pp(3.6) = '+3.6pp', pp(-11.4) = '-11.4pp'. */
 const pp = (v: number | null): string => (v == null ? '—' : `${fmtDelta(v, 1)}pp`);
+/** cents from a fraction: cents(0.062) = '6.2¢'. */
+const cents = (v: number | null): string => (v == null ? '—' : `${(v * 100).toFixed(1)}¢`);
 
-/**
- * The Europe/Stockholm wall-clock equivalent of a city-LOCAL arm hour on a given target date, e.g.
- * '11:00 CEST'. DST-correct on both ends: the instant comes from the city's IANA zone
- * (core `localHourInstant`), the rendering from the Stockholm IANA zone via Intl — never a fixed
- * offset. Appends '+1d'/'−1d' when the Stockholm calendar date differs from the target date.
- */
-function stockholmHm(tz: string, dateISO: string, hour: number): string {
-  try {
-    const instant = localHourInstant(tz, dateISO, hour);
-    const p: Record<string, string> = {};
-    for (const part of new Intl.DateTimeFormat('sv-SE', {
-      timeZone: 'Europe/Stockholm',
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      hour12: false,
-      timeZoneName: 'short',
-    }).formatToParts(instant)) {
-      p[part.type] = part.value;
-    }
-    const sthlmDate = `${p.year}-${p.month}-${p.day}`;
-    const shift = sthlmDate === dateISO ? '' : sthlmDate > dateISO ? ' +1d' : ' −1d';
-    return `${p.hour}:${p.minute} ${p.timeZoneName}${shift}`;
-  } catch {
-    return '—';
-  }
-}
+const B = CITY_BUY_TABLE;
 
-/** The entry-time watcher's confidence → a tile colour + a short badge label. */
-const WATCH_UI: Record<string, { color: string; badge: string }> = {
-  sufficient: { color: GREEN, badge: 'confident' },
-  provisional: { color: 'var(--ams-secondary)', badge: 'provisional' },
-  insufficient: { color: 'var(--ams-secondary-dim)', badge: 'gathering' },
-};
-
-/** One city's section: standings tiles, the arm leaderboard, the equity chart, today's call, the bet log. */
-function CityPanel({ city }: { city: CitySimCity }): ReactElement {
-  const totalPnl = num(city.totals?.pnl);
-  const nGraded = num(city.totals?.nGraded) ?? 0;
-  const nWon = num(city.totals?.nWon) ?? 0;
-  const nDays = num(city.coverage?.nDays) ?? 0;
-  const nGradedDays = num(city.coverage?.nGradedDays) ?? 0;
-  const nPending = num(city.coverage?.nPending) ?? 0;
-  const armColor = (h: number): string => ARM_PALETTE[Math.max(0, city.armHours.indexOf(h)) % ARM_PALETTE.length]!;
-  const watch = city.entryWatch;
-  const watchUi = WATCH_UI[watch.confidence] ?? WATCH_UI.insufficient!;
-
-  // ERA5 ~20-yr climatology (display-only; core/sim/city-climatology). Peak hour + P(daily max already
-  // reached) per arm — surfaced NEXT TO the entry-watch recommendation. Touches no sim/bet/entry-watch math.
-  const clim = getCityClimatology(city.slug);
-  const climFloorAtRec = watch.recommendedHour != null ? cityFloorConfidenceAt(city.slug, watch.recommendedHour) : null;
-  const climFloorPct = (h: number): string => {
-    const f = cityFloorConfidenceAt(city.slug, h);
-    return f == null ? '—' : fmtPct(f, 0);
-  };
-
-  const series: EquitySeries[] = city.armHours
-    .filter((h) => city.chart.byHour[h])
-    .map((h, i) => ({
-      label: `${h}:00`,
-      color: armColor(h),
-      dash: ARM_DASH[i % ARM_DASH.length],
-      values: city.chart.byHour[h]!,
-    }));
-
-  const latestDate = city.latest?.date ?? null;
+/* ── the lead-curve "peak-time" hero: ROI at each entry lead — no lead demonstrates an edge ─────────────── */
+function LeadCurveChart({ width = 560, height = 220 }: { width?: number; height?: number }): ReactElement {
+  const padL = 44;
+  const padR = 14;
+  const padT = 14;
+  const padB = 30;
+  const plotW = width - padL - padR;
+  const plotH = height - padT - padB;
+  // dynamic y-range from the ROI points (a tiny-n fluke row can be strongly positive); the CI whiskers are
+  // CLAMPED to the plot rather than allowed to squash it (the 3-bet 6h row's CI reaches +600pp).
+  const rois = B.leadCurve.map((p) => p.roiPct);
+  const yMax = Math.max(15, Math.ceil(Math.max(...rois) / 25) * 25 + 10);
+  const yMin = Math.min(-105, Math.floor(Math.min(...rois) / 25) * 25 - 10);
+  const yAt = (v: number): number => padT + ((yMax - v) / (yMax - yMin)) * plotH;
+  const yCl = (v: number): number => Math.max(padT, Math.min(padT + plotH, yAt(v)));
+  const zeroY = yAt(0);
+  // far → near (48h..6h) left → right, so the eye reads "as we approach market close".
+  const pts = B.leadCurve;
+  const n = pts.length;
+  const slot = plotW / n;
+  const barW = Math.min(slot * 0.44, 46);
+  const xC = (i: number): number => padL + slot * (i + 0.5);
+  const grid = [-100, -75, -50, -25, 0, 25, 50, 75, 100, 125, 150].filter((g) => g >= yMin && g <= yMax);
+  const ariaLabel =
+    `Pooled ROI of the cheap-entry (≤${cents(B.params.cheapMax)}) predicted-bucket bet, by entry lead: ` +
+    pts.map((p) => `${p.leadH}h ${pp(p.roiPct)} (n=${p.bets})`).join(', ') +
+    `. No lead demonstrates an edge — every day-clustered CI lower bound sits far below zero; tiny-n rows are ` +
+    `longshot noise. Whiskers are day-clustered CIs, clamped to the plot.`;
 
   return (
-    <section className="panel" style={{ marginTop: '1.5rem' }}>
-      <div className="tile-head" style={{ alignItems: 'baseline', gap: '0.6rem' }}>
-        <h2 style={{ margin: 0 }}>{city.displayName}</h2>
-        <span className="cap" style={{ color: 'var(--ams-secondary)' }}>{city.icao}</span>
-        <span className="cap muted">°{city.unit} · {city.tz} · arms {city.armHours.join('/')} · ${num(city.stakeUsd) ?? 10}/day</span>
+    <svg
+      className="equity"
+      width={width}
+      height={height}
+      viewBox={`0 0 ${width} ${height}`}
+      preserveAspectRatio="xMidYMid meet"
+      role="img"
+      aria-label={ariaLabel}
+    >
+      {grid.map((g) => (
+        <g key={g}>
+          <line
+            x1={padL}
+            x2={width - padR}
+            y1={yAt(g)}
+            y2={yAt(g)}
+            stroke={g === 0 ? 'var(--ams-muted)' : 'var(--ams-grid)'}
+            strokeWidth={1}
+            strokeDasharray={g === 0 ? '0' : '3 3'}
+          />
+          <text x={padL - 6} y={yAt(g) + 3} textAnchor="end" fontSize={10} fill="var(--ams-muted)" className="mono">
+            {g === 0 ? '0' : `${g}`}
+          </text>
+        </g>
+      ))}
+      {pts.map((r, i) => {
+        const isSweet = r.leadH === B.params.sweetLeadH;
+        const neg = r.roiPct < 0;
+        const barTop = Math.min(zeroY, yAt(r.roiPct));
+        const barH = Math.max(Math.abs(zeroY - yAt(r.roiPct)), 1.5);
+        // a positive bar here is always a tiny-n fluke (the invariant tests pin every bets≥10 lead negative)
+        // — render it muted, not green, so noise never reads as signal.
+        const fill = isSweet ? AMBER : neg ? RED : 'var(--ams-secondary-dim)';
+        return (
+          <g key={r.leadH}>
+            <line x1={xC(i)} x2={xC(i)} y1={yCl(r.ciPct[1])} y2={yCl(r.ciPct[0])} stroke="var(--ams-secondary-dim)" strokeWidth={1.4} />
+            <line x1={xC(i) - 4} x2={xC(i) + 4} y1={yCl(r.ciPct[1])} y2={yCl(r.ciPct[1])} stroke="var(--ams-secondary-dim)" strokeWidth={1.4} />
+            <line x1={xC(i) - 4} x2={xC(i) + 4} y1={yCl(r.ciPct[0])} y2={yCl(r.ciPct[0])} stroke="var(--ams-secondary-dim)" strokeWidth={1.4} />
+            <rect x={xC(i) - barW / 2} y={barTop} width={barW} height={barH} rx={3} fill={fill} opacity={isSweet ? 0.9 : 0.55}>
+              <title>{`${r.leadH}h before close — ROI ${pp(r.roiPct)} · n=${r.bets} · win ${r.winPct}% · mean all-in ask ${cents(r.avgAsk)} · CI [${pp(r.ciPct[0])}, ${pp(r.ciPct[1])}]`}</title>
+            </rect>
+            <text x={xC(i)} y={neg ? yAt(r.roiPct) + 12 : yAt(r.roiPct) - 5} textAnchor="middle" fontSize={9} fontWeight={isSweet ? 700 : 400} fill={isSweet ? AMBER : neg ? RED : 'var(--ams-muted)'} className="mono">
+              {pp(r.roiPct)}
+            </text>
+            <text x={xC(i)} y={height - 8} textAnchor="middle" fontSize={10} fill="var(--ams-muted)" className="mono">
+              {r.leadH}h{isSweet ? ' ★' : ''} <tspan fontSize={8}>n={r.bets}</tspan>
+            </text>
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
+/* ── per-city lead sparkline: net P&L by entry lead (48/24/12/6h), zero-centered, green up / red down ──── */
+function LeadSparkline({ leadNet }: { leadNet: Record<string, number> }): ReactElement {
+  const order = B.params.leadsH.map(String);
+  const vals = order.map((k) => (k in leadNet ? leadNet[k]! : null));
+  const w = 66;
+  const h = 22;
+  const cap = 300; // clamp so a single fat longshot doesn't flatten every other bar
+  const bw = w / order.length;
+  const mid = h / 2;
+  const yFor = (v: number): number => (Math.max(-cap, Math.min(cap, v)) / cap) * (mid - 1.5);
+  const title = order.map((k, i) => `${k}h ${vals[i] == null ? '—' : signedUsd(vals[i], 0)}`).join(' · ');
+  return (
+    <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} role="img" aria-label={`net by lead — ${title}`}>
+      <title>{`net P&L by entry lead — ${title}`}</title>
+      <line x1={0} x2={w} y1={mid} y2={mid} stroke="var(--ams-grid)" strokeWidth={1} />
+      {vals.map((v, i) => {
+        if (v == null) return null;
+        const dy = yFor(v);
+        const y = v >= 0 ? mid - dy : mid;
+        return (
+          <rect
+            key={order[i]}
+            x={i * bw + 1.5}
+            y={y}
+            width={bw - 3}
+            height={Math.max(Math.abs(dy), 1)}
+            rx={1}
+            fill={v >= 0 ? GREEN : RED}
+            opacity={0.85}
+          />
+        );
+      })}
+    </svg>
+  );
+}
+
+/* ── one per-city row ──────────────────────────────────────────────────────────────────────────────────── */
+function CityRow({ r }: { r: CityBuyRow }): ReactElement {
+  return (
+    <tr>
+      <td style={{ fontWeight: 600, whiteSpace: 'nowrap' }}>
+        {r.display}
+        <span className="cap muted" style={{ marginLeft: '0.4rem' }}>{r.icao}</span>
+      </td>
+      <td>{r.daysActive}</td>
+      <td>{r.bets}</td>
+      <td style={{ whiteSpace: 'nowrap' }}>
+        {r.winPct.toFixed(1)}%
+        <span className="cap muted"> ({r.won}/{r.bets})</span>
+      </td>
+      <td className="mono">{cents(r.avgAsk)}</td>
+      <td>{fmtUsd(r.staked, 0)}</td>
+      <td className={pnlClass(r.netUsd)} style={{ fontWeight: 700 }}>{signedUsd(r.netUsd)}</td>
+      <td className={pnlClass(r.roiPct)}>{pp(r.roiPct)}</td>
+      <td style={{ lineHeight: 0 }}><LeadSparkline leadNet={r.leadNet} /></td>
+    </tr>
+  );
+}
+
+/* ── the per-city buy table (the deliverable) ──────────────────────────────────────────────────────────── */
+function BuyTableSection(): ReactElement {
+  const pooled = B.pooled;
+  const roiNeg = pooled.roiPct < 0;
+  const breakeven = pooled.avgAsk * 100; // win rate needed just to break even at the mid entry price
+  const sweetLead = B.leadCurve.find((l) => l.leadH === B.params.sweetLeadH);
+
+  return (
+    <>
+      <h1>Per-city buy table — $10 on our predicted high, bought cheap</h1>
+      <p className="cap muted" style={{ marginTop: '0.2rem' }}>
+        <span className="chip soft">frozen archive record · as of {fmtDate(B.recordedAt)}</span>{' '}
+        not a live feed — regenerate via the reproduce block below. The <strong>live forward ledger</strong> further
+        down is the accruing real-data instrument.
+      </p>
+
+      {/* the honest verdict, leading with the number */}
+      <div className="info-banner" style={{ borderLeftColor: RED }}>
+        <strong style={{ color: RED }}>Verdict: no demonstrable edge — an underpowered wash leaning negative.</strong>{' '}
+        Pooled ROI {pp(pooled.roiPct)} ({signedUsd(pooled.netUsd, 0)} on {pooled.bets} fillable bets ·{' '}
+        {B.universe.nDays} days · {B.universe.nCities} cities, day-clustered CI [{pp(pooled.dayCiPct[0])},{' '}
+        {pp(pooled.dayCiPct[1])}]). This is the strategy you described — $10 on our predicted whole-° bucket, entered
+        only while it is still <strong>cheap (all-in ask ≤ {cents(B.params.cheapMax)})</strong>, at the confidence
+        sweet-spot ({B.params.sweetLeadH}h before close), held to resolution — scored on the <strong>canonical
+        calibrated book</strong> (real opening_captures spread-by-price + taker fee), where a bet exists only if the
+        walked depth can fill the $10. That cost model nearly erases the strategy: the legacy mid+1¢ scoring read
+        −28.2% on 347 bets, but most of those “bets” were never fillable — the cheap zone carries $4–$24 of depth.
+        What survives shows no edge: every well-populated lead is negative, no day-clustered lower bound comes near
+        zero, and pooled win rate {pooled.winPct}% sits at the ~{breakeven.toFixed(0)}% you need just to break even.
+        It is <strong>signal #12 (opening-convergence), already falsified</strong> (FINDINGS.md / MARKET-PNL.md /
+        BUY-TABLE.md). The {pooled.nCitiesPositive} net-positive cities are small-sample longshot noise, not a
+        per-city edge. <strong>Nothing here reopens the trading rail.</strong>
       </div>
 
-      {/* standings strip */}
-      <div className="strip" style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', marginTop: '0.6rem' }}>
+      {/* summary strip */}
+      <div className="strip" style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', marginTop: '0.8rem' }}>
         <div className="tile">
-          <div className="cap">Net P&amp;L (all arms)</div>
-          <div className={`big ${totalPnl != null && totalPnl >= 0 ? 'pos' : 'neg'}`}>{signedUsd(totalPnl)}</div>
-          <div className="sub">{nGraded} graded · {nWon} won</div>
+          <div className="cap">Net P&amp;L (pooled)</div>
+          <div className={`big ${roiNeg ? 'neg' : 'pos'}`}>{signedUsd(pooled.netUsd, 0)}</div>
+          <div className="sub">on {fmtUsd(pooled.bets * B.params.stake, 0)} staked · {pooled.bets} bets</div>
         </div>
         <div className="tile">
-          <div className="cap">Leading arm</div>
-          <div className="big sky">{city.leaderHour != null ? `${city.leaderHour}:00` : '—'}</div>
-          <div className="sub">best P&amp;L of {city.armHours.length} arms</div>
+          <div className="cap">ROI · day-clustered CI</div>
+          <div className={`big ${roiNeg ? 'neg' : 'pos'}`}>{pp(pooled.roiPct)}</div>
+          <div className="sub">[{pp(pooled.dayCiPct[0])}, {pp(pooled.dayCiPct[1])}]</div>
         </div>
-        <div className="tile" title={watch.rationale}>
-          <div className="cap">Best entry-time ⓘ</div>
-          <div className="big" style={{ color: watchUi.color }}>{watch.recommendedHour != null ? `${watch.recommendedHour}:00` : '—'}</div>
-          <div className="sub">watcher · {watchUi.badge}</div>
-        </div>
-        <div
-          className="tile"
-          title={
-            clim
-              ? `ERA5 ${clim.fromYear}–${clim.toYear} hourly climatology (${clim.icao}, ${clim.nDays} days): when the daily max is typically reached, and P(it's already in) at the recommended entry hour.`
-              : 'No ERA5 climatology for this city.'
-          }
-        >
-          <div className="cap">Climatology ⓘ</div>
-          <div className="big sky">
-            {clim ? `${clim.medianPeakHour}:00` : '—'}
-            <span className="muted" style={{ fontSize: '0.9rem' }}> peak</span>
+        <div className="tile">
+          <div className="cap">Win rate vs breakeven</div>
+          <div className="big" style={{ fontSize: '1.4rem' }}>
+            {pooled.winPct}% <span className="muted" style={{ fontSize: '0.9rem' }}>/ {breakeven.toFixed(0)}%</span>
           </div>
-          <div className="sub">
-            {clim
-              ? climFloorAtRec != null
-                ? `floor ${fmtPct(climFloorAtRec, 0)} @ ${watch.recommendedHour}:00`
-                : `ERA5 ${clim.fromYear}–${clim.toYear}`
-              : 'no ERA5 data'}
-          </div>
+          <div className="sub">avg entry {cents(pooled.avgAsk)} · {pooled.won} won</div>
         </div>
         <div className="tile">
-          <div className="cap">Coverage</div>
-          <div className="big">{nDays}<span className="muted" style={{ fontSize: '0.9rem' }}> days</span></div>
-          <div className="sub">{nGradedDays} graded · {nPending} pending</div>
+          <div className="cap">Cities net-positive</div>
+          <div className="big sky">{pooled.nCitiesPositive}<span className="muted" style={{ fontSize: '0.9rem' }}> / {B.universe.nCities}</span></div>
+          <div className="sub">small-sample longshot noise</div>
+        </div>
+        <div className="tile">
+          <div className="cap">Sweet-spot entry</div>
+          <div className="big" style={{ color: AMBER }}>{B.params.sweetLeadH}h</div>
+          <div className="sub">max day-clustered lower bound{sweetLead ? ` · ${pp(sweetLead.roiPct)}` : ''}</div>
         </div>
         <div className="tile">
           <div className="cap">Window</div>
-          <div className="big" style={{ fontSize: '1.2rem' }}>{fmtDate(city.coverage?.firstDate)} →</div>
-          <div className="sub">{fmtDate(city.coverage?.lastDate)}</div>
+          <div className="big" style={{ fontSize: '1.2rem' }}>{fmtDate(B.universe.dateRange[0])} →</div>
+          <div className="sub">{fmtDate(B.universe.dateRange[1])} · {B.universe.nDays} weather-days</div>
         </div>
       </div>
 
-      {/* entry-time watcher verdict — the continuously-updated optimal-entry recommendation */}
-      <div className="info-banner" style={{ marginTop: '0.9rem', borderLeftColor: watchUi.color }}>
-        <strong style={{ color: watchUi.color }}>Entry-time watcher:</strong> {watch.rationale}
-        <span className="cap muted"> (ranks arms by the 95% lower bound of edge = won−ask, so a thin lucky arm
-        can't out-rank a deep one; recommends, never prunes — keep racing all arms.)</span>
-      </div>
-
-      {/* arm leaderboard */}
-      <div style={{ overflowX: 'auto', marginTop: '0.9rem' }}>
-        <table>
-          <thead>
-            <tr>
-              <th>arm</th>
-              <th title="ERA5 ~20-yr climatology: P(the daily max is already reached by this local hour) — the floor confidence at each arm">clim floor</th>
-              <th>bets</th><th>graded</th><th>hit rate</th><th>avg ask</th>
-              <th>net P&amp;L</th><th>ROI</th><th>edge (won−ask)</th>
-            </tr>
-          </thead>
-          <tbody>
-            {city.arms.map((a) => {
-              const pnl = num(a.pnl);
-              const hit = num(a.hitRate);
-              const ng = num(a.nGraded) ?? 0;
-              const edgeShown = ng > 0 && Number.isFinite(a.edge);
-              return (
-                <tr key={a.hour} className={a.recommended ? 'rec-row' : undefined}>
-                  <td style={{ color: armColor(a.hour), fontWeight: 700 }}>
-                    {a.hour}:00{a.isLeader ? ' 🥇' : ''}{a.recommended ? ' ⭐' : ''}
+      {/* the "peak time for ROI confidence" axis */}
+      <section className="panel" style={{ marginTop: '1.4rem' }}>
+        <div className="tile-head" style={{ alignItems: 'baseline', gap: '0.6rem', flexWrap: 'wrap' }}>
+          <h2 style={{ margin: 0, fontSize: '1.05rem' }}>The &ldquo;peak time&rdquo; axis — ROI by entry lead</h2>
+          <span className="cap muted">hours before market close · pooled, cheap-filtered · day-clustered CI whiskers</span>
+        </div>
+        <p className="muted small" style={{ marginTop: '0.5rem' }}>
+          The sweet-spot you asked for is the best of a bad set:{' '}
+          <strong style={{ color: AMBER }}>{B.params.sweetLeadH}h</strong> — <strong>no lead demonstrates an
+          edge</strong> (every well-populated lead&apos;s point estimate is negative and every day-clustered lower
+          bound sits deep below zero). On the calibrated book the efficiency signature shows up as a{' '}
+          <em>population collapse</em> near close: by 6h only {B.leadCurve.find((l) => l.leadH === 6)?.bets ?? 0} bets
+          in the whole window were both cheap AND fillable at $10 — the eventual winner has already converged above{' '}
+          {cents(B.params.cheapMax)}, and whatever is still cheap is too thin to fill. A strongly positive tiny-n row
+          is longshot noise (read its CI), not a late-entry edge.
+        </p>
+        <div style={{ marginTop: '0.4rem', overflowX: 'auto' }}>
+          <LeadCurveChart />
+        </div>
+        <div className="tbl-scroll" style={{ marginTop: '0.6rem' }}>
+          <table>
+            <thead>
+              <tr>
+                <th>entry lead</th><th>bets</th><th>days</th><th>win%</th><th>avg ask</th><th>ROI</th>
+                <th>net</th><th>day-clustered CI</th>
+              </tr>
+            </thead>
+            <tbody>
+              {B.leadCurve.map((l: CityBuyLeadPoint) => (
+                <tr key={l.leadH} className={l.leadH === B.params.sweetLeadH ? 'rec-row' : undefined}>
+                  <td style={{ fontWeight: l.leadH === B.params.sweetLeadH ? 700 : 400 }}>
+                    {l.leadH}h before close{l.leadH === B.params.sweetLeadH ? ' ★ sweet-spot' : ''}
                   </td>
-                  <td className="muted" title="ERA5 P(daily max already reached by this hour)">{climFloorPct(a.hour)}</td>
-                  <td>{num(a.nBets) ?? 0}</td>
-                  <td>{ng}</td>
-                  <td>{hit == null ? '—' : `${fmtPct(hit, 0)}${ng > 0 ? ` (${fmtPct(a.hitCiLo, 0)}–${fmtPct(a.hitCiHi, 0)})` : ''}`}</td>
-                  <td>{a.avgAsk == null ? '—' : fmtPct(a.avgAsk, 0)}</td>
-                  <td className={pnlClass(pnl)}>{signedUsd(pnl)}</td>
-                  <td className={pnlClass(num(a.roi))}>{a.roi == null ? '—' : fmtPct(a.roi, 1)}</td>
-                  <td className={edgeShown ? pnlClass(a.edge) : ''}>
-                    {edgeShown ? `${a.edge >= 0 ? '+' : '−'}${fmtPct(Math.abs(a.edge), 1)} (${fmtPct(a.edgeCiLo, 0)}–${fmtPct(a.edgeCiHi, 0)})` : '—'}
-                  </td>
+                  <td>{l.bets}</td>
+                  <td>{l.days}</td>
+                  <td>{l.winPct}%</td>
+                  <td className="mono">{cents(l.avgAsk)}</td>
+                  <td className={pnlClass(l.roiPct)}>{pp(l.roiPct)}</td>
+                  <td className={pnlClass(l.netUsd)}>{signedUsd(l.netUsd, 0)}</td>
+                  <td>[{pp(l.ciPct[0])}, {pp(l.ciPct[1])}]</td>
                 </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-
-      {/* cumulative P&L per arm */}
-      <div style={{ marginTop: '1rem' }}>
-        <div className="cap">Cumulative P&amp;L per arm ($)</div>
-        <EquityChart dates={city.chart.dates} series={series} />
-        <div className="chart-legend">
-          {city.armHours.map((h) => (
-            <span key={h}><i className="ln solid" style={{ borderColor: armColor(h) }} /> {h}:00</span>
-          ))}
+              ))}
+            </tbody>
+          </table>
         </div>
-      </div>
+      </section>
 
-      {/* latest standing call */}
-      {latestDate ? (
-        <div style={{ marginTop: '0.9rem' }}>
-          <div className="cap">Latest call · {fmtDate(latestDate)}</div>
-          <div style={{ overflowX: 'auto' }}>
-            <table>
-              <thead>
-                <tr><th>arm</th><th>predicted</th><th>run-max</th><th>ask</th><th>status</th><th>actual</th><th>P&amp;L</th></tr>
-              </thead>
-              <tbody>
-                {city.armHours.map((h) => {
-                  const r = city.latest.byHour[h];
-                  if (!r) return null;
-                  const pnl = num(r.pnl);
-                  return (
-                    <tr key={h}>
-                      <td style={{ color: armColor(h), fontWeight: 700 }}>{h}:00</td>
-                      <td>{r.predictedC == null ? '—' : `${r.predictedC}° ${r.label ?? ''}`}</td>
-                      <td>{r.runMaxC == null ? '—' : `${num(r.runMaxC)?.toFixed(1)}°`}</td>
-                      <td>{r.ask == null ? '—' : fmtPct(r.ask, 0)}</td>
-                      <td>{r.status}{r.won === true ? ' ✓' : r.won === false ? ' ✗' : ''}</td>
-                      <td>{r.actualC == null ? '—' : `${r.actualC}°`}</td>
-                      <td className={pnlClass(pnl)}>{r.status === 'pending' ? '—' : signedUsd(pnl)}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+      {/* THE TABLE */}
+      <section className="panel" style={{ marginTop: '1.4rem' }}>
+        <div className="tile-head" style={{ alignItems: 'baseline', gap: '0.6rem', flexWrap: 'wrap' }}>
+          <h2 style={{ margin: 0 }}>Per-city results @ {B.params.sweetLeadH}h sweet-spot</h2>
+          <span className="chip soft">backtest · calibrated book + fee · held to close</span>
+          <span className="cap muted">
+            {B.universe.nCities} of {B.universe.nCitiesTotal} cities had a qualifying cheap entry · sorted by net P&amp;L
+          </span>
         </div>
-      ) : null}
+        <p className="muted small" style={{ marginTop: '0.4rem' }}>
+          Each row: bet $10 on our predicted whole-° bucket every day the bucket&apos;s <strong>all-in cost</strong>{' '}
+          (calibrated-book executable ask + taker fee) was ≤ {cents(B.params.cheapMax)} at the {B.params.sweetLeadH}h
+          lead AND the walked depth could fill the stake, hold to resolution. The <strong>net-by-lead</strong>{' '}
+          sparkline shows the same city across all four entry leads (48/24/12/6h) — green up, red down. Per-city n is
+          tiny; read the <strong> pooled</strong> verdict above, not any single row.
+        </p>
+        <div className="tbl-scroll" style={{ marginTop: '0.6rem' }}>
+          <table>
+            <thead>
+              <tr>
+                <th>city</th><th title="distinct weather-days a bet was placed">days</th>
+                <th>bets</th><th>win%</th><th title="mean executable entry ask">avg ¢</th>
+                <th>staked</th><th>net P&amp;L</th><th>ROI</th>
+                <th title="net P&L across the four entry leads: 48 / 24 / 12 / 6h before close">net by lead</th>
+              </tr>
+            </thead>
+            <tbody>
+              {B.rows.map((r) => <CityRow key={r.city} r={r} />)}
+            </tbody>
+            <tfoot>
+              <tr style={{ borderTop: '2px solid var(--ams-grid)', fontWeight: 700 }}>
+                <td>POOLED ({B.universe.nCities})</td>
+                <td>{B.universe.nDays}</td>
+                <td>{pooled.bets}</td>
+                <td>{pooled.winPct}%</td>
+                <td className="mono">{cents(pooled.avgAsk)}</td>
+                <td>{fmtUsd(pooled.bets * B.params.stake, 0)}</td>
+                <td className={pnlClass(pooled.netUsd)}>{signedUsd(pooled.netUsd, 0)}</td>
+                <td className={pnlClass(pooled.roiPct)}>{pp(pooled.roiPct)}</td>
+                <td />
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      </section>
 
-      {/* bet log */}
-      {city.betLog.length > 0 ? (
-        <details className="detail" style={{ marginTop: '0.9rem' }}>
-          <summary>bet log · {city.betLog.length} most recent</summary>
-          <div style={{ overflowX: 'auto' }}>
-            <table>
-              <thead>
-                <tr><th>date</th><th>arm</th><th>predicted</th><th>ask</th><th>status</th><th>actual</th><th>P&amp;L</th></tr>
-              </thead>
-              <tbody>
-                {city.betLog.map((b, i) => {
-                  const pnl = num(b.pnl);
-                  return (
-                    <tr key={`${b.date}-${b.hour}-${i}`}>
-                      <td>{fmtDate(b.date)}</td>
-                      <td style={{ color: armColor(b.hour) }}>{b.hour}:00</td>
-                      <td>{b.predictedC == null ? '—' : `${b.predictedC}° ${b.label ?? ''}`}</td>
-                      <td>{b.ask == null ? '—' : fmtPct(b.ask, 0)}</td>
-                      <td>{b.status}{b.won === true ? ' ✓' : b.won === false ? ' ✗' : ''}</td>
-                      <td>{b.actualC == null ? '—' : `${b.actualC}°`}</td>
-                      <td className={pnlClass(pnl)}>{b.status === 'pending' ? '—' : signedUsd(pnl)}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </details>
-      ) : null}
-    </section>
+      {/* method / reproduce */}
+      <details className="detail" style={{ marginTop: '0.9rem' }}>
+        <summary>method, honesty rails &amp; reproduce</summary>
+        <div style={{ marginTop: '0.5rem' }}>
+          <p className="small muted">
+            <strong>Forecast:</strong> the CAUSAL walk-forward blend μ from <code>scripts/research/city-accuracy.ts</code>{' '}
+            (bias corrected on prior data only — no hindsight/look-ahead). <strong>Bucket match:</strong> by parsing
+            temperature from the label (bucket_idx is raw gamma order — trap #7). <strong>Cost basis ({B.params.book}):</strong>{' '}
+            the CANONICAL cost model (<code>scripts/research/cost_model.py</code>, a zero-drift parse of core&apos;s
+            CALIBRATED_BOOK — spread-by-price + walked depth fit from real opening_captures books) + the taker fee;
+            a bet exists only where depth covers the stake. <strong>Sweet-spot:</strong> the entry lead maximizing
+            the day-clustered lower bound (shrinkage, not the point estimate). <strong>CI:</strong> clustered on the
+            independent unit (city × weather-day). This is the sibling of the pooled MARKET-PNL record, with the
+            ≤{cents(B.params.cheapMax)} cheap-entry filter added; <code>--book flat</code> reproduces the legacy
+            mid+{cents(B.params.halfSpread)} scoring for comparison.
+          </p>
+          <p className="small muted" style={{ marginBottom: 0 }}>
+            <strong>Reproduce</strong> (read-only; reads the local parquet archive + causal-forecast CSV, writes only
+            out/, places no trade):<br />
+            <code>pnpm tsx scripts/research/city-accuracy.ts --leads 0,1,2 --slot 22Z --emit-forecast scripts/research/out/causal-forecast.csv</code><br />
+            <code>python scripts/research/city-buy-table.py --book {B.params.book} --emit scripts/research/out/city-buy-table.json --emit-ts packages/core/src/sim/city-buy-table-results.ts --asof {B.recordedAt}</code>
+          </p>
+        </div>
+      </details>
+    </>
   );
 }
 
-/** The placed-bet tile body (unchanged pre-N2 rendering): the temps carried on the city's `latest` bets. */
-function PlacedBetTile({ city, isCurrent, date }: { city: CitySimCity; isCurrent: boolean; date: string }): ReactElement {
-  const rows = city.armHours
-    .map((h) => ({ h, r: city.latest.byHour[h] }))
-    .filter((x): x is { h: number; r: NonNullable<CitySimCity['latest']['byHour'][number]> } =>
-      x.r != null && num(x.r.predictedC) != null);
-  const temps = [...new Set(rows.map((x) => num(x.r.predictedC)))];
-  const shared = temps.length === 1 ? temps[0] : null;
-  const firstArm = rows[0]?.h;
-  const lastArm = rows[rows.length - 1]?.h;
-  return (
-    <div className="tile">
-      <div className="tile-head">
-        <span className="cap">
-          {city.displayName} <span className="muted">{city.icao}</span>
-        </span>
-        <span className={`chip ${isCurrent ? 'green' : 'soft'}`}>{isCurrent ? 'bidding now' : 'latest bet'}</span>
-      </div>
-      <div className="sub">
-        bidding date <strong className="mono" style={{ color: 'var(--ams-text)' }}>{fmtDate(date)}</strong>
-        {isCurrent ? '' : ' — today’s bets not placed yet (daily 10:00Z tick)'}
-      </div>
-      {shared != null && firstArm != null && lastArm != null ? (
-        <>
-          <div className="big sky">{shared}°{city.unit}</div>
-          <div className="sub">
-            all arms · {firstArm}:00–{lastArm}:00 local · {stockholmHm(city.tz, date, firstArm)}
-            {firstArm !== lastArm ? `–${stockholmHm(city.tz, date, lastArm)}` : ''}
-          </div>
-        </>
-      ) : rows.length > 0 ? (
-        <div className="sub" style={{ display: 'flex', flexDirection: 'column', gap: '0.15rem' }}>
-          {rows.map(({ h, r }) => (
-            <span key={h} className="mono">
-              {h}:00 local · {stockholmHm(city.tz, date, h)} →{' '}
-              <strong style={{ color: 'var(--ams-secondary)' }}>{num(r.predictedC)}°{city.unit}</strong>
-            </span>
-          ))}
-        </div>
-      ) : (
-        <div className="sub muted">no prediction recorded for this date</div>
-      )}
-    </div>
-  );
-}
+/* ═══════════════════════════════════════════════════════════════════════════════════════════════════════
+ * 45-City Scan — the pre-registered TRAIN/TEST cut of the SAME question (SIGNAL-BACKLOG.md §12). Kept as the
+ * deeper, selection-disciplined companion to the table above. Renders entirely from the committed static asset.
+ * ═══════════════════════════════════════════════════════════════════════════════════════════════════════ */
 
-/**
- * The PRE-PLACEMENT tile (N2): before the daily 10:00Z tick, headline TODAY's intended whole-° call from the
- * live pre-placement forecast (dash_city_forecast, 0080 — the bias-corrected lead-1 forecast center the sim
- * will bet), not yesterday's placed bet. It's a forecast CENTER, not the bet: the running-max floor can still
- * lift the actual call at lock, so the tile says so and keeps yesterday's placed date as a footnote.
- */
-function IntendedBetTile({ city, fc, latestDate }: { city: CitySimCity; fc: CityForecast; latestDate: string | null }): ReactElement {
-  const pred = num(fc.predictedNative);
-  const ask = num(fc.ask);
-  const date = fc.targetDate ?? new Date().toISOString().slice(0, 10);
-  return (
-    <div className="tile">
-      <div className="tile-head">
-        <span className="cap">
-          {city.displayName} <span className="muted">{city.icao}</span>
-        </span>
-        <span className="chip amber">intended · pre-tick</span>
-      </div>
-      <div className="sub">
-        bidding date <strong className="mono" style={{ color: 'var(--ams-text)' }}>{fmtDate(date)}</strong>
-        {' — today’s bet not placed yet (daily 10:00Z tick)'}
-      </div>
-      <div className="big sky">
-        {pred}°{city.unit}
-        {fc.label ? <span className="cap muted" style={{ marginLeft: '0.4rem' }}>{fc.label}</span> : null}
-      </div>
-      <div className="sub">
-        forecast center {fc.biasCorrected ? '(bias corrected)' : '(raw)'}
-        {fc.capturedAt ? ` · as of ${fmtStockholm(fc.capturedAt)}` : ''}
-        {ask != null ? ` · ask ${fmtPct(ask, 0)}` : ''}
-      </div>
-      <div className="sub muted" style={{ fontSize: '0.85rem' }}>
-        the running-max floor may lift the actual call at lock
-        {latestDate ? ` · last placed bet ${fmtDate(latestDate)}` : ''}
-      </div>
-    </div>
-  );
-}
-
-/**
- * The current-bet box (operator request 2026-07-04; completed 2026-07-04 N2): per active city, the target
- * date currently being bet and the predicted native temperature. Once the daily 10:00Z tick has placed the
- * day's bets the box reads them from the loader's `latest` standing call (dash_city_sim carries
- * `predicted_native` per arm as `predictedC`). BEFORE the tick, when the pre-placement forecast RPC
- * (dash_city_forecast, 0080) is available, it headlines TODAY's intended whole-° call instead of lagging on
- * yesterday's bet. Arm hours stay city-LOCAL by design; the Stockholm equivalent is computed per-date via
- * the IANA zones (DST-correct), shown alongside.
- *
- * `forecasts` is a null-guarded add-on: when it is null/absent (the 0080 RPC hasn't shipped), the box renders
- * exactly its pre-N2 placed-bet behaviour — the page ships dark until the migration is applied.
- */
-function CurrentBetBox({
-  cities,
-  forecasts,
-}: {
-  cities: CitySimCity[];
-  forecasts?: Map<string, CityForecast> | null;
-}): ReactElement | null {
-  const todayUtc = new Date().toISOString().slice(0, 10);
-  // Show a city with a placed bet OR a pre-placement forecast to display. With no forecast map this reduces
-  // to the original `latest?.date != null` filter — the box is byte-identical when 0080 is absent.
-  const shown = cities.filter(
-    (c) => c.latest?.date != null || num(forecasts?.get(c.slug)?.predictedNative) != null,
-  );
-  if (shown.length === 0) return null;
+function ScanCurveChart({ width = 760, height = 300 }: { width?: number; height?: number }): ReactElement {
+  const padL = 48;
+  const padR = 12;
+  const padT = 16;
+  const padB = 34;
+  const plotW = width - padL - padR;
+  const plotH = height - padT - padB;
+  const yMax = 10;
+  const yMin = -110;
+  const yAt = (v: number): number => padT + ((yMax - v) / (yMax - yMin)) * plotH;
+  const zeroY = yAt(0);
+  const n = CITY_SCAN_POOLED_CURVE.length;
+  const slot = plotW / n;
+  const barW = Math.min(slot * 0.52, 42);
+  const xC = (i: number): number => padL + slot * (i + 0.5);
+  const grid = [0, -25, -50, -75, -100];
+  const best = CITY_SCAN_POOLED_CURVE.find((r) => r.label === 'best')!;
+  const worst = CITY_SCAN_POOLED_CURVE.find((r) => r.label === 'worst')!;
+  const ariaLabel =
+    `Pooled entry-hour ROI across all ${CITY_SCAN_META.nCities} cities: negative at every hour from 9:00 to 19:00 local; ` +
+    `best ${pp(best.roiPp)} at ${best.hour}:00, worst ${pp(worst.roiPp)} at ${worst.hour}:00. ` +
+    'Whiskers show the day-clustered confidence interval.';
 
   return (
-    <section className="panel" style={{ marginTop: '1rem' }}>
-      <div className="tile-head" style={{ alignItems: 'baseline', gap: '0.6rem', flexWrap: 'wrap' }}>
-        <h2 style={{ margin: 0, fontSize: '1.05rem' }}>Current bets</h2>
-        <span className="cap muted">
-          bidding date + predicted temperature per city · arm hours are city-local, Stockholm equivalent alongside
-        </span>
-      </div>
-      <div className="strip">
-        {shown.map((city) => {
-          const fc = forecasts?.get(city.slug) ?? null;
-          const latestDate = city.latest?.date ?? null;
-          const isCurrent = latestDate != null && latestDate >= todayUtc; // ≥ UTC-today counts as the live bet
-          // Pre-tick (today's bet not yet placed) + a forecast center exists → headline today's INTENDED call.
-          const showIntended = !isCurrent && fc != null && num(fc.predictedNative) != null;
-          return showIntended ? (
-            <IntendedBetTile key={city.slug} city={city} fc={fc} latestDate={latestDate} />
-          ) : (
-            // date is non-null here: !showIntended ⇒ either isCurrent (latestDate set) or the city entered
-            // `shown` via its latest bet (latestDate set).
-            <PlacedBetTile key={city.slug} city={city} isCurrent={isCurrent} date={latestDate!} />
-          );
-        })}
-      </div>
-    </section>
+    <svg
+      className="equity"
+      width={width}
+      height={height}
+      viewBox={`0 0 ${width} ${height}`}
+      preserveAspectRatio="xMidYMid meet"
+      role="img"
+      aria-label={ariaLabel}
+    >
+      {grid.map((g) => (
+        <g key={g}>
+          <line
+            x1={padL}
+            x2={width - padR}
+            y1={yAt(g)}
+            y2={yAt(g)}
+            stroke={g === 0 ? 'var(--ams-muted)' : 'var(--ams-grid)'}
+            strokeWidth={1}
+            strokeDasharray={g === 0 ? '0' : '3 3'}
+          />
+          <text x={padL - 6} y={yAt(g) + 3} textAnchor="end" fontSize={10} fill="var(--ams-muted)" className="mono">
+            {g === 0 ? '0' : `${g}pp`}
+          </text>
+        </g>
+      ))}
+      {CITY_SCAN_POOLED_CURVE.map((r, i) => {
+        const isBest = r.label === 'best';
+        const barH = Math.max(yAt(r.roiPp) - zeroY, 1.5);
+        return (
+          <g key={r.hour}>
+            <line x1={xC(i)} x2={xC(i)} y1={yAt(r.ciPp[1])} y2={yAt(r.ciPp[0])} stroke="var(--ams-secondary-dim)" strokeWidth={1.4} />
+            <line x1={xC(i) - 4} x2={xC(i) + 4} y1={yAt(r.ciPp[1])} y2={yAt(r.ciPp[1])} stroke="var(--ams-secondary-dim)" strokeWidth={1.4} />
+            <line x1={xC(i) - 4} x2={xC(i) + 4} y1={yAt(r.ciPp[0])} y2={yAt(r.ciPp[0])} stroke="var(--ams-secondary-dim)" strokeWidth={1.4} />
+            <rect x={xC(i) - barW / 2} y={zeroY} width={barW} height={barH} rx={3} fill={isBest ? AMBER : RED} opacity={isBest ? 0.9 : 0.55}>
+              <title>{`${r.hour}:00 — ROI ${pp(r.roiPp)} · n=${r.n} · win ${fmtPct(r.winRate, 1)} · mean ask ${r.meanAsk.toFixed(3)} · CI [${pp(r.ciPp[0])}, ${pp(r.ciPp[1])}]`}</title>
+            </rect>
+            <text
+              x={xC(i)}
+              y={yAt(r.roiPp) + 12}
+              textAnchor="middle"
+              fontSize={9}
+              fontWeight={isBest ? 700 : 400}
+              fill={isBest ? AMBER : RED}
+              className="mono"
+            >
+              {pp(r.roiPp)}
+            </text>
+            <text x={xC(i)} y={height - 8} textAnchor="middle" fontSize={10} fill="var(--ams-muted)" className="mono">
+              {r.hour}h
+            </text>
+          </g>
+        );
+      })}
+    </svg>
   );
 }
 
-/** One row of the top-5 TRAIN→TEST confirmation table. */
 function CandidateRow({ c }: { c: CityScanCandidate }): ReactElement {
   return (
     <tr className={c.isCandidate ? 'rec-row' : undefined}>
@@ -472,109 +504,6 @@ function CandidateRow({ c }: { c: CityScanCandidate }): ReactElement {
   );
 }
 
-/**
- * The hero chart: the pooled entry-hour ROI curve (all 11 hours, day-clustered CI whiskers) as downward
- * bars from a zero line — negative at every hour IS the story. Server component, inline SVG, no client JS
- * (the EquityChart/BarChart/PeakHourChart dependency-free idiom). The best (14h) bar is amber; every bar
- * is directly value-labelled so meaning never rides on colour alone; the table below is the a11y fallback.
- */
-function ScanCurveChart({ width = 760, height = 300 }: { width?: number; height?: number }): ReactElement {
-  const padL = 48;
-  const padR = 12;
-  const padT = 16;
-  const padB = 34;
-  const plotW = width - padL - padR;
-  const plotH = height - padT - padB;
-
-  // y domain in pp — spans every CI in the record with headroom (ciHi max +8.3, ciLo min −104.6).
-  const yMax = 10;
-  const yMin = -110;
-  const yAt = (v: number): number => padT + ((yMax - v) / (yMax - yMin)) * plotH;
-  const zeroY = yAt(0);
-
-  const n = CITY_SCAN_POOLED_CURVE.length;
-  const slot = plotW / n;
-  const barW = Math.min(slot * 0.52, 42);
-  const xC = (i: number): number => padL + slot * (i + 0.5);
-  const grid = [0, -25, -50, -75, -100];
-
-  const best = CITY_SCAN_POOLED_CURVE.find((r) => r.label === 'best')!;
-  const worst = CITY_SCAN_POOLED_CURVE.find((r) => r.label === 'worst')!;
-  const ariaLabel =
-    `Pooled entry-hour ROI across all ${CITY_SCAN_META.nCities} cities: negative at every hour from 9:00 to 19:00 local; ` +
-    `best ${pp(best.roiPp)} at ${best.hour}:00, worst ${pp(worst.roiPp)} at ${worst.hour}:00. ` +
-    'Whiskers show the day-clustered confidence interval.';
-
-  return (
-    <svg
-      className="equity"
-      width={width}
-      height={height}
-      viewBox={`0 0 ${width} ${height}`}
-      preserveAspectRatio="xMidYMid meet"
-      role="img"
-      aria-label={ariaLabel}
-    >
-      {/* gridlines + pp ticks */}
-      {grid.map((g) => (
-        <g key={g}>
-          <line
-            x1={padL}
-            x2={width - padR}
-            y1={yAt(g)}
-            y2={yAt(g)}
-            stroke={g === 0 ? 'var(--ams-muted)' : 'var(--ams-grid)'}
-            strokeWidth={1}
-            strokeDasharray={g === 0 ? '0' : '3 3'}
-          />
-          <text x={padL - 6} y={yAt(g) + 3} textAnchor="end" fontSize={10} fill="var(--ams-muted)" className="mono">
-            {g === 0 ? '0' : `${g}pp`}
-          </text>
-        </g>
-      ))}
-
-      {CITY_SCAN_POOLED_CURVE.map((r, i) => {
-        const isBest = r.label === 'best';
-        const barH = Math.max(yAt(r.roiPp) - zeroY, 1.5);
-        return (
-          <g key={r.hour}>
-            {/* day-clustered CI whisker */}
-            <line x1={xC(i)} x2={xC(i)} y1={yAt(r.ciPp[1])} y2={yAt(r.ciPp[0])} stroke="var(--ams-secondary-dim)" strokeWidth={1.4} />
-            <line x1={xC(i) - 4} x2={xC(i) + 4} y1={yAt(r.ciPp[1])} y2={yAt(r.ciPp[1])} stroke="var(--ams-secondary-dim)" strokeWidth={1.4} />
-            <line x1={xC(i) - 4} x2={xC(i) + 4} y1={yAt(r.ciPp[0])} y2={yAt(r.ciPp[0])} stroke="var(--ams-secondary-dim)" strokeWidth={1.4} />
-            {/* the ROI bar (all values negative — bars hang below the zero line) */}
-            <rect x={xC(i) - barW / 2} y={zeroY} width={barW} height={barH} rx={3} fill={isBest ? 'var(--ams-amber)' : 'var(--ams-red)'} opacity={isBest ? 0.9 : 0.55}>
-              <title>{`${r.hour}:00 — ROI ${pp(r.roiPp)} · n=${r.n} · win ${fmtPct(r.winRate, 1)} · mean ask ${r.meanAsk.toFixed(3)} · CI [${pp(r.ciPp[0])}, ${pp(r.ciPp[1])}]`}</title>
-            </rect>
-            {/* direct value label at the bar end */}
-            <text
-              x={xC(i)}
-              y={yAt(r.roiPp) + 12}
-              textAnchor="middle"
-              fontSize={9}
-              fontWeight={isBest ? 700 : 400}
-              fill={isBest ? 'var(--ams-amber)' : 'var(--ams-red)'}
-              className="mono"
-            >
-              {pp(r.roiPp)}
-            </text>
-            {/* hour label */}
-            <text x={xC(i)} y={height - 8} textAnchor="middle" fontSize={10} fill="var(--ams-muted)" className="mono">
-              {r.hour}h
-            </text>
-          </g>
-        );
-      })}
-    </svg>
-  );
-}
-
-/**
- * "45-City Scan" — the analytics section surfacing SIGNAL-BACKLOG.md §12: the one-time historical replay
- * that SELECTED ankara/14h + houston/14h (now enrolled above); the live paper loop CONFIRMS them going
- * forward, from CITY_SCAN_CONFIRMATION_CLOCK onward. Renders entirely from the committed static asset
- * (core/sim/city-scan-results.ts) — no DB round trip, no client fetch.
- */
 function CityScanSection(): ReactElement {
   const best = CITY_SCAN_POOLED_CURVE.find((r) => r.label === 'best')!;
   const worst = CITY_SCAN_POOLED_CURVE.find((r) => r.label === 'worst')!;
@@ -584,25 +513,22 @@ function CityScanSection(): ReactElement {
     <section className="panel" style={{ marginTop: '2rem' }}>
       <div className="tile-head" style={{ alignItems: 'baseline', gap: '0.6rem', flexWrap: 'wrap' }}>
         <h2 style={{ margin: 0 }}>45-City Scan</h2>
-        <span className="chip soft">analytics selection · not a capital gate</span>
+        <span className="chip soft">pre-registered TRAIN/TEST cut · not a capital gate</span>
         <span className="cap muted">
           {CITY_SCAN_META.nEvents} events · {CITY_SCAN_META.nCities} cities · {CITY_SCAN_META.nDays} days · run {fmtDate(CITY_SCAN_META.verdictRecordedAt)}
         </span>
       </div>
 
       <p className="muted small" style={{ marginTop: '0.5rem' }}>
-        A one-time historical replay of the $10/day predicted-bucket bet across every city × entry hour
-        (9h–19h local), pre-registered before measurement: TRAIN (≤ {CITY_SCAN_META.trainLastDate}) selects
-        candidates, TEST (≥ {CITY_SCAN_META.testFirstDate}) confirms them once. It shortlisted two
-        &ldquo;another Karachi&rdquo; candidates out of the top-5 ranked cells —{' '}
-        <strong>ankara/14:00</strong> and <strong>houston/14:00</strong> — which are{' '}
-        <strong>now enrolled</strong> in the live paper loop above. The live loop is the confirmation
-        instrument going forward: reads are restricted to markets from{' '}
-        <strong>{CITY_SCAN_CONFIRMATION_CLOCK}</strong> onward (the enrollment backfill overlaps the scan's
-        own window, so it is in-sample and doesn't count as confirmation).
+        The selection-disciplined companion to the table above: the same $10/day predicted-bucket bet across every
+        city × entry hour (9h–19h local), but pre-registered — TRAIN (≤ {CITY_SCAN_META.trainLastDate}) selects
+        candidates, TEST (≥ {CITY_SCAN_META.testFirstDate}) confirms them once. It shortlisted two &ldquo;another
+        Karachi&rdquo; candidates out of the top-5 ranked cells — <strong>ankara/14:00</strong> and{' '}
+        <strong>houston/14:00</strong>. Reads are restricted to markets from{' '}
+        <strong>{CITY_SCAN_CONFIRMATION_CLOCK}</strong> onward (the backfill overlaps the scan&apos;s own window, so
+        it is in-sample and doesn&apos;t count as confirmation).
       </p>
 
-      {/* hero: pooled ROI negative everywhere */}
       <div className="strip">
         <div className="tile">
           <div className="cap">Pooled ROI</div>
@@ -636,7 +562,6 @@ function CityScanSection(): ReactElement {
         </div>
       </div>
 
-      {/* HERO: the full pooled entry-hour ROI curve — negative at every hour */}
       <div style={{ marginTop: '1.1rem' }}>
         <div className="cap">Pooled entry-hour ROI, all {CITY_SCAN_META.nCities} cities (day-clustered CI whiskers)</div>
         <div style={{ marginTop: '0.5rem', overflowX: 'auto' }}>
@@ -644,9 +569,8 @@ function CityScanSection(): ReactElement {
         </div>
         <p className="muted small" style={{ marginTop: '0.5rem' }}>
           The flat 9h–14h shelf (−11 to −16pp) is the pooled-efficiency read; the monotone collapse from{' '}
-          {best.hour}:00 ({pp(best.roiPp)}) to {worst.hour}:00 ({pp(worst.roiPp)}) is largely the locked
-          fixed-bucket bet rule at late hours — see the caveats below. Figures from the §12 Data appendix
-          (two bit-identical independent runs).
+          {best.hour}:00 ({pp(best.roiPp)}) to {worst.hour}:00 ({pp(worst.roiPp)}) is largely the locked fixed-bucket
+          bet rule at late hours — see the caveats below.
         </p>
         <details className="detail">
           <summary>full curve table (n · net · ROI · win rate · mean ask · CI)</summary>
@@ -678,7 +602,6 @@ function CityScanSection(): ReactElement {
         </details>
       </div>
 
-      {/* confidence terciles — the monotone "higher confidence → less bad, never positive" read */}
       <div style={{ marginTop: '1.2rem' }}>
         <div className="cap">Forecast-confidence terciles (mode-bucket probability)</div>
         <div className="tbl-scroll" style={{ marginTop: '0.5rem' }}>
@@ -702,11 +625,10 @@ function CityScanSection(): ReactElement {
         </div>
         <p className="muted small" style={{ marginTop: '0.4rem' }}>
           Higher forecast confidence is monotonically less bad (−37.9pp → −26.8pp → −22.2pp) but never
-          pooled-positive — confidence sorts the losses, it doesn't produce an edge.
+          pooled-positive — confidence sorts the losses, it doesn&apos;t produce an edge.
         </p>
       </div>
 
-      {/* top-5 TRAIN -> TEST confirmation table */}
       <div style={{ marginTop: '1.2rem' }}>
         <div className="cap">Top-5 TRAIN cells (entry-watch shrinkage lower bound), confirmed on TEST only</div>
         <div className="tbl-scroll" style={{ marginTop: '0.5rem' }}>
@@ -729,7 +651,6 @@ function CityScanSection(): ReactElement {
         </p>
       </div>
 
-      {/* caveats — rendered visibly, not hidden in a tooltip */}
       <div className="info-banner" style={{ marginTop: '1.1rem' }}>
         <strong>Read this before trusting the two candidates:</strong>
         <ul style={{ margin: '0.5rem 0 0', paddingLeft: '1.2rem' }}>
@@ -739,27 +660,19 @@ function CityScanSection(): ReactElement {
         </ul>
       </div>
 
-      {/* methodology + run record + enrollment detail */}
       <details className="detail" style={{ marginTop: '0.9rem' }}>
         <summary>methodology, run record &amp; enrollment detail</summary>
         <div style={{ marginTop: '0.5rem' }}>
           <p className="small muted">
             <strong>Data:</strong> the local maker-exit cache ({CITY_SCAN_META.nEvents} events / {CITY_SCAN_META.nCities} cities
             / {CITY_SCAN_META.nDays} days of real tick series) joined against ONE {CITY_SCAN_META.nDbPullRows.toLocaleString('en-US')}-row
-            point-in-time <code>bucket_probabilities</code> pull (latest house-calibrated build strictly before each bet's entry
+            point-in-time <code>bucket_probabilities</code> pull (latest house-calibrated build strictly before each bet&apos;s entry
             tick — no look-ahead). {CITY_SCAN_META.nCells.toLocaleString('en-US')} city×hour cells ={' '}
             {CITY_SCAN_META.nBets.toLocaleString('en-US')} bets + {CITY_SCAN_META.nSkips.toLocaleString('en-US')} skips
             (ask&gt;0.95: {CITY_SCAN_META.skipBreakdown.askTooHigh} · already resolved: {CITY_SCAN_META.skipBreakdown.alreadyResolved} ·
             no tick: {CITY_SCAN_META.skipBreakdown.noTick}). {CITY_SCAN_META.pctDbRecoveredForecast}% of bets used a genuine
             pre-entry forecast build; {CITY_SCAN_META.pctFrozenSeedFallback}% ({CITY_SCAN_META.nFallbackBets} bets) fell back to
-            the cache's frozen seed — a look-ahead by construction, but measured 100% TRAIN-confined (the TEST holdout is clean)
-            and conservative (every touched top-5 cell improves without its fallback bet).
-          </p>
-          <p className="small muted">
-            <strong>Reproducibility:</strong> executed {CITY_SCAN_META.nIndependentRuns} times independently, bit-identical, plus{' '}
-            {CITY_SCAN_META.nReviewLenses} adversarial review lens on the script's load-bearing paths (look-ahead strictness,
-            split hygiene, entry-watch LB reuse, P&amp;L/bucket-index mapping). Source: <code>{CITY_SCAN_META.scriptPath}</code>,
-            adjudicated against {CITY_SCAN_META.sourceDocs.join(' + ')}.
+            the cache&apos;s frozen seed — a look-ahead by construction, but measured 100% TRAIN-confined (the TEST holdout is clean).
           </p>
           <p className="small muted" style={{ marginBottom: 0 }}>
             <strong>Enrollment (executed):</strong>{' '}
@@ -778,56 +691,85 @@ function CityScanSection(): ReactElement {
   );
 }
 
-export default async function PaperTradePage(): Promise<ReactElement> {
-  const db = await serverDb();
-  // The head-to-head (placed bets) + today's pre-placement forecast (N2) in one round of parallel reads.
-  const [view, fcView]: [CitySimView | null, Awaited<ReturnType<typeof getCityForecast>>] = await Promise.all([
-    getCitySim(db),
-    getCityForecast(db),
-  ]);
-  // null-guarded: when the 0080 RPC is absent, forecasts stays null and the box ships its pre-N2 behaviour.
-  const forecasts = fcView ? new Map(fcView.cities.map((c) => [c.slug, c])) : null;
-
-  if (!view) {
-    return (
-      <div className="ams-dash">
-        <h1>Multi-city paper-trade</h1>
-        <div className="info-banner">The paper-trade dashboard is not available yet (the dash_city_sim RPC is missing or errored).</div>
-        <CityScanSection />
+/* ═══════════════════════════════════════════════════════════════════════════════════════════════════════
+ * LIVE forward ledger — the realized multi-city paper-trade (dash_city_sim, migration 0070/0075). This is the
+ * project's backtest-vs-realized cross-check instrument (loop rule 4: a flat-accuracy backtest once gave WRONG
+ * entry-hour advice that only the realized forward ledger caught). The cron keeps writing city_paper_bets
+ * whether or not a page shows it — so this page MUST keep it visible while it accrues. Compact by design; the
+ * frozen buy-table above answers the strategy question, this answers "what is the live data actually doing".
+ * ═══════════════════════════════════════════════════════════════════════════════════════════════════════ */
+function ForwardLedgerSection({ view }: { view: CitySimView | null }): ReactElement {
+  return (
+    <section className="panel" style={{ marginTop: '1.6rem' }}>
+      <div className="tile-head" style={{ alignItems: 'baseline', gap: '0.6rem', flexWrap: 'wrap' }}>
+        <h2 style={{ margin: 0 }}>Live forward ledger — multi-city paper-trade</h2>
+        <span className="chip soft">real forward data · accruing daily · NOT a backtest</span>
       </div>
-    );
+      {view == null ? (
+        <p className="muted small" style={{ marginTop: '0.5rem', marginBottom: 0 }}>
+          The dash_city_sim RPC is unavailable in this environment — the ledger still accrues server-side (the
+          city-paper-trade cron writes city_paper_bets daily); it renders here on prod.
+        </p>
+      ) : (
+        <>
+          <p className="muted small" style={{ marginTop: '0.5rem' }}>
+            The daily $10/arm paper-trade on the enrolled cities — the <strong>realized</strong> counterpart to the
+            frozen archive backtest above, and the instrument that cross-checks it (a backtest once recommended the
+            wrong entry hour; only this ledger caught it). Overall:{' '}
+            <strong className={pnlClass(num(view.overall.pnl))}>{signedUsd(num(view.overall.pnl), 0)}</strong> on{' '}
+            {num(view.overall.nGraded) ?? 0} graded bets ({num(view.overall.nWon) ?? 0} won) · updated{' '}
+            {fmtDate(view.generatedAt)}.
+          </p>
+          <div className="tbl-scroll" style={{ marginTop: '0.4rem' }}>
+            <table>
+              <thead>
+                <tr>
+                  <th>city</th><th>window</th><th>graded</th><th>won</th><th>staked</th><th>net P&amp;L</th>
+                  <th title="max cumulative P&L arm">🥇 leader arm</th>
+                  <th title="the entry-time watcher's shrinkage pick (max edge CI lower bound) — NOT the P&L leader">⭐ watcher pick</th>
+                </tr>
+              </thead>
+              <tbody>
+                {view.cities.map((c) => {
+                  const rec = c.arms.find((a) => a.recommended);
+                  return (
+                    <tr key={c.slug}>
+                      <td style={{ fontWeight: 600, whiteSpace: 'nowrap' }}>
+                        {c.displayName}
+                        <span className="cap muted" style={{ marginLeft: '0.4rem' }}>{c.icao}</span>
+                      </td>
+                      <td className="mono small">{c.coverage.firstDate ? `${fmtDate(c.coverage.firstDate)} → ${c.coverage.lastDate ? fmtDate(c.coverage.lastDate) : '…'}` : '—'}</td>
+                      <td>{num(c.totals.nGraded) ?? 0}</td>
+                      <td>{num(c.totals.nWon) ?? 0}</td>
+                      <td>{fmtUsd(num(c.totals.staked) ?? 0, 0)}</td>
+                      <td className={pnlClass(num(c.totals.pnl))} style={{ fontWeight: 700 }}>{signedUsd(num(c.totals.pnl), 2)}</td>
+                      <td>{c.leaderHour != null ? `${c.leaderHour}:00` : '—'}</td>
+                      <td>{rec ? `${rec.hour}:00` : '—'}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
+
+export default async function PaperTradePage(): Promise<ReactElement> {
+  // The live forward ledger degrades to null (never a 500) when the DB/RPC is unreachable — the frozen
+  // buy-table + scan sections are committed static assets and must render regardless.
+  let live: CitySimView | null = null;
+  try {
+    live = await getCitySim(await serverDb());
+  } catch {
+    live = null;
   }
-
-  const overallPnl = num(view.overall?.pnl);
-  const overallGraded = num(view.overall?.nGraded) ?? 0;
-  const overallWon = num(view.overall?.nWon) ?? 0;
-
   return (
     <div className="ams-dash">
-      <h1>Multi-city paper-trade</h1>
-      <div className="info-banner">
-        <strong>Systematic $10/day-per-arm paper-trade</strong> on our predicted whole-° bucket for the most
-        forecast-accurate °C markets, scored against the real Polymarket book. Each city races its config arm
-        hours (local), records the in-lock-hour odds, and grades to the resolved daily high. <strong>NOT
-        trading</strong> — the analytics deliverable: it MEASURES whether a daily bet on our forecast nets a
-        profit. Efficiency prior (FINDINGS.md) says the curves hug $0 net of fees; a sustained climb on any arm
-        is the signal worth chasing.
-        <div className="sub" style={{ marginTop: '0.4rem' }}>
-          Combined net P&amp;L:{' '}
-          <strong style={{ color: overallPnl != null && overallPnl >= 0 ? GREEN : RED }}>{signedUsd(overallPnl)}</strong>{' '}
-          across {view.cities.length} cities · {overallGraded} graded bets · {overallWon} won ·{' '}
-          generated {fmtStockholm(view.generatedAt)}
-        </div>
-      </div>
-
-      <CurrentBetBox cities={view.cities} forecasts={forecasts} />
-
-      {view.cities.length === 0 ? (
-        <div className="info-banner">No active cities configured yet — add a city_sim_config row.</div>
-      ) : (
-        view.cities.map((c) => <CityPanel key={c.slug} city={c} />)
-      )}
-
+      <BuyTableSection />
+      <ForwardLedgerSection view={live} />
       <CityScanSection />
     </div>
   );

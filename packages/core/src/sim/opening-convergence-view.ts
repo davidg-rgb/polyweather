@@ -208,7 +208,8 @@ export function buildConvergenceView(
   const considered = events.filter((e) => !e.resolution.gradingMismatch);
 
   // ── tuning panel: the full TP sweep + the frozen §9R-E verdict per TP (replayPanel does its OWN gm filter) ──
-  const panel = replayPanel(events, cfg, tps);
+  // priceBasis 'real-book': the live view replays the observed opening_captures exec book, not mids.
+  const panel = replayPanel(events, cfg, tps, { priceBasis: 'real-book' });
   const tuning: ConvergenceTuningRow[] = panel.perTp.map((r) => ({
     tpDeltaPp: r.tpDeltaPp,
     executedFrac: r.executedFrac,

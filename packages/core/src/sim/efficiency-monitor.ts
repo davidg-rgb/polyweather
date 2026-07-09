@@ -127,7 +127,8 @@ export function scoreEfficiencyMonitor(events: MonitorEvent[], cfg: MonitorCfg =
   const q4Ci: Ci = clusterMeanTCi(q4DayVals, q4DayKeys);
   const s1Regime: RegimeReport = {
     nPurchases: s1Panel.length,
-    verdict: openingVerdict(s1Panel, { dayBlockNull: true, seedSalt: cfg.seed }),
+    // priceBasis 'real-book': the monitor buys at the observed day-before best_ask, not a mid.
+    verdict: openingVerdict(s1Panel, { dayBlockNull: true, seedSalt: cfg.seed, priceBasis: 'real-book' }),
     edge: armEdgeStats(s1Bets),
     byQuartile: { 1: armEdgeStats(byQ[1]), 2: armEdgeStats(byQ[2]), 3: armEdgeStats(byQ[3]), 4: armEdgeStats(byQ[4]) },
     q4DayClustered: { nClusters: new Set(q4DayKeys).size, mean: q4Ci.mean, lo: q4Ci.lo, hi: q4Ci.hi },
@@ -151,7 +152,7 @@ export function scoreEfficiencyMonitor(events: MonitorEvent[], cfg: MonitorCfg =
   const s2Geometry = {
     nPurchases: s2Panel.length,
     nTroughs,
-    verdict: openingVerdict(s2Panel, { dayBlockNull: true, seedSalt: cfg.seed }),
+    verdict: openingVerdict(s2Panel, { dayBlockNull: true, seedSalt: cfg.seed, priceBasis: 'real-book' }),
     edge: armEdgeStats(s2Bets),
   };
 

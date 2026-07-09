@@ -318,7 +318,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     );
     const events = await loadEvents(db, days, cfg.cities);
     process.stderr.write(`  ${events.length} fresh events (min hours_since_listing < 1) · ${events.reduce((a, e) => a + e.ticks.length, 0)} ticks\n`);
-    const panel = replayPanel(events, cfg, tps);
+    // priceBasis 'real-book': opening_captures carries the observed exec bid/ask, not mids.
+    const panel = replayPanel(events, cfg, tps, { priceBasis: 'real-book' });
     report(panel, feeRate, minDepthUsd, console.log);
   } finally {
     await db.end();

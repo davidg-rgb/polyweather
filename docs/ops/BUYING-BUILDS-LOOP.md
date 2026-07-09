@@ -19,6 +19,26 @@
 
 _Claude keeps this block current every cycle. It is the whole status in 20 seconds._
 
+- **▶▶ 2026-07-10 (C25, operator-directed "run all review fixes") — SIX hardenings/deliverables landed on this
+  branch; FOUR items need YOU:**
+  1. **main CI is RED** since 07-09 12:51Z (the last two pushes) — the fix (`af7a2c6` test-sync) lives on THIS
+     branch, not main. Fix = merge this branch's PR (or cherry-pick `af7a2c6` to main). Claude does not push (RED).
+  2. **This branch has 6 new local commits** (review fixes below) — `git push origin loop/2026-07-08-buying-builds`
+     updates the open PR when you're ready.
+  3. **Efficiency monitor is LIVE-ish already** (0091 applied 07-09 12:48Z, 2 snapshots recorded, /monitor renders):
+     the daily GitHub Action fires first at **06:00Z today** — it needs the `DATABASE_URL` repo secret (Settings →
+     Secrets → Actions), or use the Task-Scheduler alternative in the workflow header. Check the Actions tab after
+     06:00Z.
+  4. **Strategic fork (decision):** `BREAKEVEN-SKILL.md` closed the forecast-for-trading route by arithmetic
+     (buying our own bucket at all-in cost: −2.2%/$1, CI [−4.3,−0.2]; the ≥12mo forecast backfill is adjudicated
+     ANALYTICS-ONLY). Remaining trading paths: the forward monitor PASS (low prior, running) or genuinely
+     out-of-market information. Everything else is analytics product.
+  _What landed (C25): mid-basis PASS cap in the §9R-E gate (structural trap #1/#8 guard, TS + analytics.py) ·
+  canonical cost model (`cost_model.py` ↔ core CALIBRATED_BOOK, zero-drift) · buy-table re-scored on it (−28.2%
+  → an underpowered wash, −9.2% on 55 fillable bets; `BUY-TABLE.md` addendum) · /paper-trade regained the LIVE
+  forward ledger + frozen-record as-of chip · FINDINGS power-discipline legend + pre-registered REPLICATION RULE
+  · `BREAKEVEN-SKILL.md` (the skill-target arithmetic). Suite green + typecheck clean at every commit._
+
 - **▶ NEXT SESSION (post-/clear, operator-driven):** WS-A is CLOSED; the live threads are WS-B/WS-D infra + WS-C code-eval —
   **(1) °F/°C bidding play — FULLY EXHAUSTED (C10):** °F + °C, flip + hold-to-resolution, EVERY combination is
   efficient net of the real taker cost. The °C 20¢-hold's +1.1% raw ROI was gated (C10) and DIED — city-clustered
@@ -574,3 +594,27 @@ readiness, so that *if* WS-A finds edge, the executor that would place those bid
   FINDINGS.md row + memory added; new engines + tests committed (suite green, typecheck clean). Market efficient
   on price, path-shape, AND order flow; no non-price fingerprint exists. **▶ C23 = low-cadence idle watch; the
   price-side edge space is now exhaustively closed — no open lever remains.**
+- **C25 (2026-07-10) — OPERATOR-DIRECTED "run all your fixes and improvement suggestions" (the project-review
+  work program; C23/C24 + the efficiency monitor + MODEL-TRIM/MARKET-PNL/BUY-TABLE were logged in their own docs
+  rather than here):** Six commits on this branch. **(1) Gate hardening:** `VerdictOpts.priceBasis` — a
+  mid/synthetic-priced panel can never emit a full PASS (capped `PASS_PENDING_REAL_BOOK`; fail-closed default;
+  all live real-book surfaces declare themselves; `analytics.py` re-synced with `--price-basis`; +12 tests).
+  Traps #1/#8 are now an invariant, not a checklist item. **(2) Canonical cost model:** `cost_model.py` parses
+  core's committed `CALIBRATED_BOOK` literal at import (zero drift possible) + fees; every future Python
+  backtest imports it instead of inventing a haircut. **(3) Buy-table re-score on it (+explicit taker fee +
+  depth-fillability):** the 347-bet mid+1¢ population collapses to **55 fillable bets** — the −28.2% "loss" was
+  mostly bets that could never fill at $10; the honest read is an **underpowered wash leaning negative** (−9.2%,
+  day-CI [−62.9,+56.8]); `--book flat` reproduces the legacy record exactly; asset + page + 19 tests regenerated;
+  `BUY-TABLE.md` dual-basis verdict + addendum. **(4) /paper-trade regression fixed:** the page rewrite had
+  orphaned the LIVE forward ledger (dash_city_sim accruing invisibly — rule 4's cross-check instrument);
+  restored as a compact section + frozen-record as-of chip; render test covers null/populated/throwing ledger.
+  **(5) FINDINGS discipline:** power legend (well-powered null vs underpowered wash; CI half-width = MDE) +
+  the pre-registered **REPLICATION RULE** (a first forward PASS must persist through a second non-overlapping
+  window) + the missing MARKET-PNL/BUY-TABLE rows. **(6) BREAKEVEN-SKILL (the decision analysis):** taker
+  breakeven needs +3.7–5.1pp win-prob beyond price; our forecast's within-band info is real but buying our own
+  bucket at all-in cost nets **−2.2%/$1 [−4.3,−0.2]** (24h, well-powered); naive 48h positive = forecast-
+  availability look-ahead (honest read: wash). **⇒ the ≥12mo forecast backfill is adjudicated ANALYTICS-ONLY;**
+  `MODEL-TRIM.md` §8.1 cross-annotated. Also verified live: **0091 was already applied + 2 monitor snapshots
+  recorded** (the deploy-gated memory note was stale); the daily Action fires first 06:00Z today and needs the
+  `DATABASE_URL` secret (operator); **main CI is RED** since 07-09 (fix `af7a2c6` sits here, not on main) —
+  merge/cherry-pick is the operator's call. Suite green + typecheck clean at every commit; nothing pushed.

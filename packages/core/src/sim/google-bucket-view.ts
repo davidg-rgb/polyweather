@@ -417,7 +417,8 @@ export function buildGoogleView(
   };
 
   // ── gate progress: openingVerdict over the realized taker ledger; the bars come from the SAME verdict ──
-  const v = openingVerdict(panelRows);
+  // priceBasis 'real-book': this panel prices off the live capture stream's observed exec bid/ask.
+  const v = openingVerdict(panelRows, { priceBasis: 'real-book' });
   const gate: GoogleGate = {
     label: v.label,
     reason: v.reason,
