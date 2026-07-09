@@ -46,6 +46,7 @@ export * from './sim/opening-maker-exit-view.ts';
 export * from './sim/google-bucket-replay.ts';
 export * from './sim/google-bucket-view.ts';
 export * from './sim/city-scan-results.ts';
+export * from './sim/city-buy-table-results.ts';
 export * from './sim/signals-findings.ts';
 export * from './sim/source-accuracy-findings.ts';
 // sim/complete-set-arb is intentionally not re-exported from the barrel: it re-defines BookLevel
