@@ -177,6 +177,10 @@ The trim is the wrong lever; here is where real point-skill gains live, in desce
    selector overfits and the naive number is negative). **≥12 months** so the windows span seasons is the single
    highest-value investment; it would let every downstream lever below actually be fit. (Truth already goes back
    to 2024 — the gap is archived *forecasts*, backfillable from Open-Meteo's historical-forecast API.)
+   **⚠ ADJUDICATED 2026-07-09 (`BREAKEVEN-SKILL.md`): an ANALYTICS-product investment only, NOT a trading
+   investment** — the breakeven arithmetic shows taker-trading needs ~+2.2pp of conditional win-rate over the
+   market at unchanged prices (~10× any tested lever's yield), on public inputs the market also sees. Fund it
+   for forecast-product value if desired; do not fund it expecting a tradable edge.
 2. **Sub-degree, denser truth.** Truth is the **integer** WU native high, injecting ±0.5° quantization noise
    into every residual. `tmax_metar_tenths_c` is only ~11% covered and ERA5 is misaligned (MAE 5.3 °C). Filling
    METAR-tenths (and hourly obs, which `intraday_max` partly has) sharpens the error signal *and* unlocks
