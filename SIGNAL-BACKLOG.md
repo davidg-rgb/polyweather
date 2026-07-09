@@ -17,6 +17,16 @@
 > live APIs, so it did not interfere. Items marked Tier 1 are read-only analysis over already-captured
 > historical data and don't touch prod, cron, or capital; they're the safest to pick up next.
 
+> **↳ UPDATE 2026-07-09 (C23) — the PRICING-BUCKET DATA surface is now EXHAUSTIVELY closed, incl. the
+> one genuinely-orthogonal slice (cross-bucket ladder geometry).** Operator "leave no stone unturned"
+> sweep (`PRICING-BUCKET-EXHAUSTIVE.md`): every axis of the bucket-price data mapped to a kill —
+> single-bucket level/path/book (C19–C22) + **new**: high-band 55–95¢ calibration (calibrated, T1),
+> **cross-bucket unimodality-violation fade** (KILL frictionless +2.95pp CI[−1.54,+7.44]; **−8.72pp on
+> the real book**, T2/T3), whole-ladder sharpness/entropy over life (calibrated, T4). **Price is a
+> sufficient statistic on the ladder VECTOR, not just the single bucket** — any future price-only angle
+> is a re-skin. The still-open directions are NOT price slices: forecast-conditioned regime efficiency
+> (#3, unproven-dead, needs ≥10 Q4 wx-days), impossible order-placement data (#7), new instruments (#9).
+
 ## Why these and not others
 
 Every angle FINDINGS.md killed collapses into exactly two mechanisms: **(a)** forecast-conditioned
