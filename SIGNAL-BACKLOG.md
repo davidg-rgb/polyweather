@@ -246,6 +246,23 @@ the mispricing excludes 0, walk-forward (not the same window used to define "bus
 
 ## 3. Conditional efficiency by forecast-uncertainty regime
 
+> **✅ RE-OPENED ON THE LIVE PANEL + RESOLVED — KILL, well-powered null (2026-07-09, C24).** The re-open
+> criterion (**≥10 distinct Q4 weather-days in a TEST period**) is now **MET** — but the signal dies. The
+> 2026-07-03 blocker was that the pre-registered scan reads `forecast_snapshots snapshot_slot='backfill'`, a
+> one-time reconstruction **frozen at 2026-06-15**; re-running it reproduces the same 3 Q4 days. The live
+> `10Z`/`22Z` operational slots (06-13→present) are the SAME 8 models with mean signed bias **+0.047°C** on
+> their overlap (≈0 — clean transfer, trap #12 cleared). New script `conditional-efficiency-live.ts` warms
+> up + fits TRAIN quartile cutpoints on `backfill` (≤06-15) and scores the TEST **entirely on the live 10Z
+> panel** (06-16→07-08). Result: **21 distinct Q4 weather-days** (7× the original 3), Q4 per-bet edge
+> **+1.16pp [−0.41,+2.73]** (straddles 0 even i.i.d.), **day-clustered +1.05pp [−1.11,+3.20]** (includes 0 →
+> gate FAIL), station-clustered +2.73pp [−1.54,+6.99], permutation false-pass 2.6%. **22Z robustness:** 22
+> Q4 days, day-clustered +1.10pp [−0.83,+3.04] — same KILL. There is a faint monotone gradient (Q1 −0.67 →
+> Q4 +1.16pp: higher disagreement → very slightly larger edge) but it is ~1pp, CI-includes-0 at every
+> clustering level, and −EV after the taker fee + spread. The 2026-07-03 +7.47pp was noise from 3 correlated
+> days; with 7× the independent power it collapses to ≈+1pp non-significant. **Item #3 is now dead
+> (well-powered), not merely unproven.** Typecheck clean; both live slots agree. Re-open would now require a
+> DIFFERENT hypothesis, not more days. `scripts/research/conditional-efficiency-live.ts`, FINDINGS.md C24 row.
+>
 > **⚡ RUN + ADJUDICATED — gate-PASS, PROVISIONAL (2026-07-03 ~18:45, orchestrator).** Same run as item 2:
 > TEST-half quartiles Q1 −0.04pp [−4.17,+4.09] n=123 · Q2 +4.59pp [−0.80,+9.98] n=95 · Q3 +2.63pp
 > [−2.20,+7.46] n=122 · **Q4 +7.47pp [+1.06,+13.87] n=104** — the pre-registered pass cell is met
