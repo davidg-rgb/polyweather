@@ -537,3 +537,21 @@ readiness, so that *if* WS-A finds edge, the executor that would place those bid
   winner FINGERPRINT from momentum/hold-time/order-flow (not price) — the one angle the efficiency prior doesn't already
   settle. Future: weather-regime error-attribution (front/cloud/precip vs model miss) — needs an added regime source
   (METAR present-weather + reanalysis), parked. **▶ C21 = low-cadence idle watch; nothing actionable pending.**
+- **C21 (2026-07-09) — OPERATOR-DIRECTED analysis: the peak→dip→recover round-trip scalp → KILL (a martingale
+  scalp priced by the level).** The path-structure sibling of C19, and the **FIRST forward-executable form** of the
+  winner-dip family: buy any bucket that ALREADY traded ≥25¢ and has NOW dipped to 10–15¢ (both observable AT ENTRY —
+  not C19's lifetime-min hindsight), sell on recovery to ≥25¢, else hold to resolution. New engine
+  `scripts/research/winner-roundtrip-scalp.ts` (+ `.test.ts`, **14 green**; reuses `winner-band-prices.ts` loading +
+  the committed `synthBook`/`CALIBRATED_BOOK` cost model + `takerFeePerShare`) over the 46-city `market-history`
+  archive → **23,105 round-trips / 45 cities / 523 days** (zero DB load). **Part A — curvature by offset:** the
+  peak→dip→recover shape IS strongly offset-dependent — recovery rate winner **99.8%** → ±1 63% → ±2 44% → far(≥3)
+  34% — BUT the winner's ~100% is **TAUTOLOGICAL** (a winner that dips to 12¢ must cross 25¢ en route to $1) and
+  unusable: at the 12¢ entry moment a winner-dip is indistinguishable from a far-bucket-dip. **Part B — the trade:**
+  median entry 14¢, empirical hit-rate **54.5%** sits AT/below the **martingale null 56.0%** (=entry/sell) — the
+  recovery is not mean-reversion, it's the level being right. Asymmetric payoff (win small-capped 25¢ vs lose the
+  FULL stake on dip→0) ⇒ **winFrac 54.5% > 0.5 but EV NEGATIVE** — a naive win-rate test false-passes; the return-CI
+  kills it. §9R-E gate (city+day clustered): frictionless +0.89% CI **[−1.31%,+3.09%]** (wash, includes 0);
+  maker-exit ceiling −14.82%; **taker ×1 −21.48% CI [−23.16%,−19.80%]**; breakeven spread NEVER positive (fee-only
+  −6.2%). Verdict `scripts/research/out/WINNER-ROUNDTRIP-ANALYSIS.md`; FINDINGS.md row + memory added. Re-confirms
+  efficiency from the path-structure angle; no new edge; all 12 signals stay dead. **▶ C22 = low-cadence idle watch;
+  nothing actionable pending (the non-price winner-fingerprint lever from C20 remains the only open direction).**
