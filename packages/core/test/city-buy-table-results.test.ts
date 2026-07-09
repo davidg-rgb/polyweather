@@ -14,10 +14,11 @@ const B = CITY_BUY_TABLE;
 
 describe('city-buy-table-results record', () => {
   describe('params', () => {
-    it('golden strategy parameters (the operator spec)', () => {
+    it('golden strategy parameters (the operator spec + the canonical cost basis)', () => {
       expect(B.params.stake).toBe(10);
       expect(B.params.cheapMax).toBe(0.15);
-      expect(B.params.sweetLeadH).toBe(24);
+      expect(B.params.book).toBe('calibrated'); // the CANONICAL CALIBRATED_BOOK cost basis (cost_model.py)
+      expect(B.params.sweetLeadH).toBe(12);
       expect(B.params.forecastLead).toBe(1);
       expect(B.params.leadsH).toEqual([48, 24, 12, 6]);
       expect(B.params.leadsH).toContain(B.params.sweetLeadH);
@@ -29,16 +30,27 @@ describe('city-buy-table-results record', () => {
       expect(B.leadCurve.map((l) => l.leadH)).toEqual(B.params.leadsH);
     });
 
-    it('is negative at EVERY entry lead — the falsified-signal signature', () => {
+    it('NO lead demonstrates an edge: every day-clustered lower bound sits (deep) below zero', () => {
       for (const l of B.leadCurve) {
+        expect(l.ciPct[0], `day-CI lower bound @${l.leadH}h`).toBeLessThan(0);
+      }
+    });
+
+    it('every well-populated lead (bets ≥ 10) has a negative point estimate; tiny-n rows are noise, not signal', () => {
+      const populated = B.leadCurve.filter((l) => l.bets >= 10);
+      expect(populated.length).toBeGreaterThanOrEqual(3); // the record must carry real leads, not only flukes
+      for (const l of populated) {
         expect(l.roiPct, `roi @${l.leadH}h`).toBeLessThan(0);
         expect(l.netUsd, `net @${l.leadH}h`).toBeLessThan(0);
       }
     });
 
-    it('gets worse the closer to close you buy (6h is the worst)', () => {
-      const worst = B.leadCurve.reduce((a, b) => (b.roiPct < a.roiPct ? b : a));
-      expect(worst.leadH).toBe(6);
+    it('the fillable-and-cheap population COLLAPSES near close (the calibrated-book efficiency signature)', () => {
+      // by resolution the winner has converged above the cheap gate and what is left is too thin to fill:
+      // the nearest lead must carry a small fraction of the farthest lead's bets.
+      const near = B.leadCurve.find((l) => l.leadH === 6)!;
+      const far = B.leadCurve.find((l) => l.leadH === 48)!;
+      expect(near.bets).toBeLessThan(far.bets * 0.2);
     });
 
     it('the sweet-spot lead is the max day-clustered lower bound (shrinkage, not point estimate)', () => {
@@ -59,7 +71,10 @@ describe('city-buy-table-results record', () => {
     it('ROI equals net/(bets × stake) at display precision, every lead', () => {
       for (const l of B.leadCurve) {
         const implied = (l.netUsd / (l.bets * B.params.stake)) * 100;
-        expect(Math.abs(implied - l.roiPct), `roi consistency @${l.leadH}h`).toBeLessThanOrEqual(0.2);
+        // netUsd is rounded to whole dollars in the record, so the ROI tolerance scales with 1/bets
+        // (at n=3 a $0.50 rounding is ±1.7pp of ROI; at n≥50 it is negligible).
+        const tol = Math.max(0.2, (0.5 / (l.bets * B.params.stake)) * 100 + 0.15);
+        expect(Math.abs(implied - l.roiPct), `roi consistency @${l.leadH}h`).toBeLessThanOrEqual(tol);
       }
     });
   });
@@ -143,12 +158,15 @@ describe('city-buy-table-results record', () => {
       expect(B.pooled.winPct).toBeLessThan(breakevenPct + 1); // ~at/under breakeven → net loss after the spread
     });
 
-    it('golden headline figures (2026-07-09 record)', () => {
-      expect(B.pooled.roiPct).toBe(-28.2);
-      expect(B.pooled.netUsd).toBe(-977);
-      expect(B.pooled.bets).toBe(347);
-      expect(B.pooled.nCitiesPositive).toBe(16);
-      expect(B.universe.nCities).toBe(43);
+    it('golden headline figures (2026-07-09 record, calibrated book + taker fee)', () => {
+      // The legacy mid+1c record read −28.2%/−$977 on 347 bets — but the calibrated book shows most of that
+      // population was never fillable at $10 (cheap-zone walked depth $4–$24). The honest executable record
+      // is a small, underpowered, negative-leaning wash: signal #12 stays dead either way.
+      expect(B.pooled.roiPct).toBe(-9.2);
+      expect(B.pooled.netUsd).toBe(-51);
+      expect(B.pooled.bets).toBe(55);
+      expect(B.pooled.nCitiesPositive).toBe(6);
+      expect(B.universe.nCities).toBe(33);
       expect(B.universe.nCitiesTotal).toBeGreaterThanOrEqual(B.universe.nCities);
     });
   });

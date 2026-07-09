@@ -13,7 +13,9 @@ pnl-backtest.py (that script = the pooled MARKET-PNL record; this one = the per-
 <=15c filter added). Same honesty rails:
   * Forecast = the CAUSAL walk-forward blend mu from city-accuracy.ts (--emit-forecast). No hindsight/look-ahead.
   * Bucket match by PARSING TEMPERATURE FROM label (bucket_idx is raw gamma order, trap #7).
-  * Price = archive MID; we BUY at the executable ask = mid + half-spread (real top-of-book ~1c), floored.
+  * Price = archive MID; we BUY at the CANONICAL calibrated-book executable ask (cost_model.py = the committed
+    CALIBRATED_BOOK fit from real opening_captures books), and a bet only EXISTS where the walked depth can fill
+    the stake (depth_usd >= stake). `--book flat` reproduces the legacy mid+1c/3c-floor scoring for comparison.
   * Entry lead = fixed hours-before-close (causal: observed price at a fixed clock offset). Reported per lead so
     the accuracy/return "sweet-spot" is visible; the headline table uses one pooled-chosen lead.
   * Cluster on the independent unit (DAY + CITY) for the pooled CI. Per-city n is small -> shown, not trusted.
@@ -30,6 +32,8 @@ import csv
 import json
 import re
 import sys
+
+import cost_model  # the canonical calibrated-book cost model (parses core's CALIBRATED_BOOK — zero drift)
 
 ARCHIVE = "scripts/research/out/market-history-flat-enriched.parquet"
 CAUSAL_CSV = "scripts/research/out/causal-forecast.csv"
@@ -91,8 +95,27 @@ def choose(buckets, pred_int):
 
 
 def ask_of(mid, half_spread, floor):
-    """Executable buy price: mid + half-spread, floored (can't fill $10 on a sub-floor longshot), capped."""
+    """LEGACY flat executable buy price (--book flat): mid + half-spread, floored, capped."""
     return min(max(mid + half_spread, floor), 0.999)
+
+
+def price_bet(mid, book, half_spread, floor, stake):
+    """(ask, fillable) under the chosen cost basis.
+
+    calibrated: the canonical CALIBRATED_BOOK exec ask; fillable iff the walked depth covers the stake
+    (the cheap zone is genuinely thin — $4-$24 below mid ~0.12 — so a $10 order often cannot fill at all).
+    flat: the legacy mid+half-spread/floor, always considered fillable (the floor was its fillability proxy).
+    """
+    if book == "flat":
+        return ask_of(mid, half_spread, floor), True
+    q = cost_model.synth_quote(mid)
+    if q is None:
+        return None, False
+    # effective cost = calibrated exec ask + the taker fee per share (fees.ts convention: charged on the
+    # entry fill). The flat book's +1c was its TOTAL friction proxy; the calibrated askOver is spread only,
+    # so the fee must be explicit here or the round-trip cost is understated (skill non-negotiable #3).
+    eff = min(0.999, q["exec_ask"] + cost_model.taker_fee_per_share(q["exec_ask"], 0.05))
+    return eff, q["depth_usd"] >= stake
 
 
 def bet_net(ask, won, stake):
@@ -112,6 +135,14 @@ def selftest():
     assert abs(ask_of(0.001, 0.01, 0.03) - 0.03) < 1e-9   # floored
     assert abs(bet_net(0.10, True, 10) - 90.0) < 1e-9     # $10 at 0.10 wins -> +$90
     assert bet_net(0.10, False, 10) == -10.0
+    cost_model.selftest()
+    a, f = price_bet(0.12, "calibrated", 0.01, 0.03, 10)
+    # knot 0.12: exec ask 0.138, + taker fee 0.05*0.138*(1-0.138) -> the all-in per-share cost
+    assert abs(a - (0.138 + 0.05 * 0.138 * (1 - 0.138))) < 1e-9 and f is True
+    a, f = price_bet(0.05, "calibrated", 0.01, 0.03, 10)
+    assert f is False                                     # cheap zone: depth $4 < $10 -> cannot fill
+    a, f = price_bet(0.12, "flat", 0.01, 0.03, 10)
+    assert abs(a - 0.13) < 1e-9 and f is True             # legacy path unchanged (its +1c is total friction)
     print("selftest OK", file=sys.stderr)
 
 
@@ -170,20 +201,24 @@ def emit_ts(result, path, asof):
  *
  * VERDICT (recorded {asof}): this is SIGNAL #12, opening-convergence — ALREADY FALSIFIED (FINDINGS.md /
  * MARKET-PNL.md). The cheap-entry filter buys the predicted bucket only while it is still a not-yet-converged
- * LONGSHOT; at the executable ask, held to resolution, it LOSES at every entry lead. Pooled ROI
- * {pl['roi_pct']}% at the sweet-spot {p['sweet_lead_h']}h lead (win {pl['win_pct']}%, day-clustered CI
- * [{pl['day_ci_pct'][0]}%, {pl['day_ci_pct'][1]}%]) on {pl['bets']} bets / {u['n_days']} days / {u['n_cities']}
- * cities. The market prices our bucket <= {p['cheap_max']} EXACTLY when it is unlikely to win. The
- * {pl['n_cities_positive']} net-positive cities are small-sample longshot noise, not a per-city edge.
+ * LONGSHOT. On the {p['book']} book (exec ask + taker fee; a bet exists only where walked depth covers the
+ * stake) the fillable-and-cheap population nearly VANISHES — the sub-9c longshots that drove the legacy
+ * mid+1c −28% were never fillable at this stake — and what remains is an UNDERPOWERED WASH leaning negative:
+ * pooled ROI {pl['roi_pct']}% at the sweet-spot {p['sweet_lead_h']}h lead (win {pl['win_pct']}%, day-clustered
+ * CI [{pl['day_ci_pct'][0]}%, {pl['day_ci_pct'][1]}%]) on {pl['bets']} bets / {u['n_days']} days /
+ * {u['n_cities']} cities. NO lead demonstrates an edge (no day-clustered lower bound clears 0; every
+ * well-populated lead's point estimate is negative; tiny-n rows are longshot noise). The
+ * {pl['n_cities_positive']} net-positive cities are small-sample noise, not a per-city edge.
  *
  * SOURCE OF TRUTH: scripts/research/city-buy-table.py (reproduce below). Do NOT hand-edit a number — re-run:
  *   pnpm tsx scripts/research/city-accuracy.ts --leads 0,1,2 --slot 22Z --emit-forecast scripts/research/out/causal-forecast.csv
- *   python scripts/research/city-buy-table.py --emit scripts/research/out/city-buy-table.json \\
+ *   python scripts/research/city-buy-table.py --book {p['book']} --emit scripts/research/out/city-buy-table.json \\
  *     --emit-ts packages/core/src/sim/city-buy-table-results.ts --asof {asof}
  */
 
-/** One entry-lead row of the pooled "sweet-spot" curve (hours before market close). Negative at every lead
- *  — and MORE negative nearer close (the tell: a real forecast edge would strengthen near resolution). */
+/** One entry-lead row of the pooled "sweet-spot" curve (hours before market close). No lead demonstrates an
+ *  edge (no day-clustered lower bound clears 0); the fillable-and-cheap population COLLAPSES near close —
+ *  by resolution the winner has converged above the cheap gate and the rest is too thin to fill. */
 export interface CityBuyLeadPoint {{
   /** entry lead in hours before the market's close/resolution. */
   leadH: number;
@@ -235,10 +270,13 @@ export interface CityBuyTable {{
   params: {{
     stake: number;
     cheapMax: number;
+    /** cost basis: 'calibrated' = the canonical CALIBRATED_BOOK exec ask + depth-fillability; 'flat' = legacy mid+1c. */
+    book: string;
     halfSpread: number;
     floor: number;
     forecastLead: number;
     sweetLeadH: number;
+    /** entry leads with a scoreable (cheap + fillable) population, far -> near. */
     leadsH: number[];
   }};
   universe: {{ nCities: number; nDays: number; dateRange: [string, string]; nCitiesTotal: number }};
@@ -260,7 +298,7 @@ export interface CityBuyTable {{
 }}
 
 export const CITY_BUY_TABLE: CityBuyTable = {{
-  params: {{ stake: {p['stake']}, cheapMax: {p['cheap_max']}, halfSpread: {p['half_spread']}, floor: {p['floor']}, forecastLead: {p['forecast_lead']}, sweetLeadH: {p['sweet_lead_h']}, leadsH: {arr(p['leads_h'])} }},
+  params: {{ stake: {p['stake']}, cheapMax: {p['cheap_max']}, book: {p['book']!r}, halfSpread: {p['half_spread']}, floor: {p['floor']}, forecastLead: {p['forecast_lead']}, sweetLeadH: {p['sweet_lead_h']}, leadsH: {arr(p['leads_h'])} }},
   universe: {{ nCities: {u['n_cities']}, nDays: {u['n_days']}, dateRange: {arr(u['date_range'])}, nCitiesTotal: {len(result['per_city_leads'])} }},
   pooled: {{ bets: {pl['bets']}, won: {pl['won']}, winPct: {pl['win_pct']}, avgAsk: {pl['avg_ask']}, netUsd: {pl['net_usd']}, roiPct: {pl['roi_pct']}, dayCiPct: {arr(pl['day_ci_pct'])}, nCitiesPositive: {pl['n_cities_positive']} }},
   recordedAt: {asof!r},
@@ -281,8 +319,11 @@ def main():
     ap.add_argument("--stake", type=float, default=10.0)
     ap.add_argument("--lead", type=int, default=1, help="forecast lead-day (causal CSV) to bet")
     ap.add_argument("--cheap-max", type=float, default=0.15, help="only enter when the executable ask <= this")
-    ap.add_argument("--half-spread", type=float, default=0.01)
-    ap.add_argument("--floor", type=float, default=0.03)
+    ap.add_argument("--book", choices=["calibrated", "flat"], default="calibrated",
+                    help="cost basis: 'calibrated' = the canonical CALIBRATED_BOOK exec ask + depth-fillability "
+                         "(cost_model.py); 'flat' = the legacy mid+half-spread/floor (for comparison)")
+    ap.add_argument("--half-spread", type=float, default=0.01, help="flat-book only")
+    ap.add_argument("--floor", type=float, default=0.03, help="flat-book only")
     ap.add_argument("--archive", default=ARCHIVE)
     ap.add_argument("--causal", default=CAUSAL_CSV)
     ap.add_argument("--emit", default=None, help="write the dashboard JSON artifact to this path")
@@ -353,10 +394,14 @@ def main():
 
             for L in LEADS_H:
                 mid = mid_at(end_ts - L * 3600)
-                ask = ask_of(mid, a.half_spread, a.floor)
+                ask, fillable = price_bet(mid, a.book, a.half_spread, a.floor, STAKE)
+                if ask is None:
+                    continue  # degenerate mid — no real quote exists
                 rows.append({
                     "city": city, "icao": icao, "date": date, "lead_h": L,
-                    "ask": ask, "won": won, "cheap": ask <= CHEAP,
+                    # a "cheap" bet must ALSO be fillable at the stake — an order the walked depth cannot
+                    # absorb is not a bet, it's a fantasy (the calibrated cheap zone is $4-$24 thin).
+                    "ask": ask, "won": won, "cheap": (ask <= CHEAP) and fillable,
                 })
 
     b = pd.DataFrame(rows)
@@ -457,8 +502,11 @@ def main():
     result = {
         "script": "city-buy-table",
         "recorded_at": a.asof or None,
-        "params": {"stake": STAKE, "cheap_max": CHEAP, "half_spread": a.half_spread, "floor": a.floor,
-                   "forecast_lead": a.lead, "sweet_lead_h": sweet, "leads_h": LEADS_H},
+        # leads_h = the leads with a scoreable (cheap+fillable) population — under the calibrated book a lead
+        # can be empty (nothing both cheap AND depth-fillable), so the curve carries what actually exists.
+        "params": {"stake": STAKE, "cheap_max": CHEAP, "book": a.book, "half_spread": a.half_spread,
+                   "floor": a.floor, "forecast_lead": a.lead, "sweet_lead_h": sweet,
+                   "leads_h": [s["lead_h"] for s in lead_summ]},
         "universe": {"n_cities": int(prim.city.nunique()), "n_days": int(prim.date.nunique()),
                      "date_range": [prim.date.min(), prim.date.max()]},
         "pooled": {"bets": int(len(prim)), "won": int(prim.won.sum()),

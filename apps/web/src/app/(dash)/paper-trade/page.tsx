@@ -7,12 +7,15 @@
  * bound), held to resolution; log per city: bets, days active, win%, avg entry price, net P&L, ROI.
  *
  * HONESTY: this IS signal #12 (opening-convergence), already falsified (FINDINGS.md / MARKET-PNL.md). The
- * cheap-entry filter buys the predicted bucket only while it is still a not-yet-converged LONGSHOT; at the
- * executable ask, held to resolution, it LOSES at every entry lead (pooled −28% at the 24h sweet-spot). The
- * market prices our bucket ≤15¢ EXACTLY when it is unlikely to win. This page renders that truth per city
- * from the committed archive-backtest asset (core/sim/city-buy-table-results.ts) — server-side, no DB round
- * trip, no client fetch — NOT to resurrect the signal. The 45-City Scan below is the pre-registered TRAIN/TEST
- * cut of the same question.
+ * cheap-entry filter buys the predicted bucket only while it is still a not-yet-converged LONGSHOT. Scored on
+ * the CANONICAL calibrated book (CALIBRATED_BOOK exec ask + taker fee; a bet exists only where walked depth
+ * covers the stake) the fillable population nearly vanishes — the legacy mid+1¢ read (−28% on 347 bets) was
+ * mostly bets that could never fill at $10 — and what remains is an UNDERPOWERED WASH leaning negative: no
+ * lead's day-clustered lower bound comes near zero. This page renders that truth per city from the committed
+ * archive-backtest asset (core/sim/city-buy-table-results.ts) — a FROZEN record (see the as-of chip), NOT a
+ * live feed — plus the LIVE forward ledger (dash_city_sim), which is still accruing and remains the
+ * backtest-vs-realized cross-check instrument (loop rule 4). The 45-City Scan below is the pre-registered
+ * TRAIN/TEST cut of the same question.
  */
 import type { ReactElement } from 'react';
 import {
@@ -30,6 +33,8 @@ import {
   type CityScanCandidate,
 } from '@weather-edge/core';
 import { fmtDate, fmtDelta, fmtPct, fmtUsd, num } from '../../../lib/format.ts';
+import { type CitySimView, getCitySim } from '../../../lib/loaders.ts';
+import { serverDb } from '../../../lib/supabase.ts';
 
 // The (dash) layout is operator-gated (reads cookies → dynamic); this page's data is a committed static asset,
 // so it renders instantly, but we keep the route dynamic to match the gated layout (no static-prerender conflict).
@@ -49,7 +54,7 @@ const cents = (v: number | null): string => (v == null ? '—' : `${(v * 100).to
 
 const B = CITY_BUY_TABLE;
 
-/* ── the lead-curve "peak-time" hero: ROI at each entry lead, negative at every one, worse near close ──── */
+/* ── the lead-curve "peak-time" hero: ROI at each entry lead — no lead demonstrates an edge ─────────────── */
 function LeadCurveChart({ width = 560, height = 220 }: { width?: number; height?: number }): ReactElement {
   const padL = 44;
   const padR = 14;
@@ -57,9 +62,13 @@ function LeadCurveChart({ width = 560, height = 220 }: { width?: number; height?
   const padB = 30;
   const plotW = width - padL - padR;
   const plotH = height - padT - padB;
-  const yMax = 15;
-  const yMin = -105;
+  // dynamic y-range from the ROI points (a tiny-n fluke row can be strongly positive); the CI whiskers are
+  // CLAMPED to the plot rather than allowed to squash it (the 3-bet 6h row's CI reaches +600pp).
+  const rois = B.leadCurve.map((p) => p.roiPct);
+  const yMax = Math.max(15, Math.ceil(Math.max(...rois) / 25) * 25 + 10);
+  const yMin = Math.min(-105, Math.floor(Math.min(...rois) / 25) * 25 - 10);
   const yAt = (v: number): number => padT + ((yMax - v) / (yMax - yMin)) * plotH;
+  const yCl = (v: number): number => Math.max(padT, Math.min(padT + plotH, yAt(v)));
   const zeroY = yAt(0);
   // far → near (48h..6h) left → right, so the eye reads "as we approach market close".
   const pts = B.leadCurve;
@@ -67,12 +76,12 @@ function LeadCurveChart({ width = 560, height = 220 }: { width?: number; height?
   const slot = plotW / n;
   const barW = Math.min(slot * 0.44, 46);
   const xC = (i: number): number => padL + slot * (i + 0.5);
-  const grid = [0, -25, -50, -75, -100];
-  const worst = pts.reduce((a, b) => (b.roiPct < a.roiPct ? b : a));
+  const grid = [-100, -75, -50, -25, 0, 25, 50, 75, 100, 125, 150].filter((g) => g >= yMin && g <= yMax);
   const ariaLabel =
     `Pooled ROI of the cheap-entry (≤${cents(B.params.cheapMax)}) predicted-bucket bet, by entry lead: ` +
-    pts.map((p) => `${p.leadH}h ${pp(p.roiPct)}`).join(', ') +
-    `. Negative at every lead and worst nearest close (${worst.leadH}h, ${pp(worst.roiPct)}). Whiskers are day-clustered CIs.`;
+    pts.map((p) => `${p.leadH}h ${pp(p.roiPct)} (n=${p.bets})`).join(', ') +
+    `. No lead demonstrates an edge — every day-clustered CI lower bound sits far below zero; tiny-n rows are ` +
+    `longshot noise. Whiskers are day-clustered CIs, clamped to the plot.`;
 
   return (
     <svg
@@ -102,20 +111,25 @@ function LeadCurveChart({ width = 560, height = 220 }: { width?: number; height?
       ))}
       {pts.map((r, i) => {
         const isSweet = r.leadH === B.params.sweetLeadH;
-        const barH = Math.max(zeroY - yAt(r.roiPct), 1.5); // all negative → bars hang below zero
+        const neg = r.roiPct < 0;
+        const barTop = Math.min(zeroY, yAt(r.roiPct));
+        const barH = Math.max(Math.abs(zeroY - yAt(r.roiPct)), 1.5);
+        // a positive bar here is always a tiny-n fluke (the invariant tests pin every bets≥10 lead negative)
+        // — render it muted, not green, so noise never reads as signal.
+        const fill = isSweet ? AMBER : neg ? RED : 'var(--ams-secondary-dim)';
         return (
           <g key={r.leadH}>
-            <line x1={xC(i)} x2={xC(i)} y1={yAt(r.ciPct[1])} y2={yAt(r.ciPct[0])} stroke="var(--ams-secondary-dim)" strokeWidth={1.4} />
-            <line x1={xC(i) - 4} x2={xC(i) + 4} y1={yAt(r.ciPct[1])} y2={yAt(r.ciPct[1])} stroke="var(--ams-secondary-dim)" strokeWidth={1.4} />
-            <line x1={xC(i) - 4} x2={xC(i) + 4} y1={yAt(r.ciPct[0])} y2={yAt(r.ciPct[0])} stroke="var(--ams-secondary-dim)" strokeWidth={1.4} />
-            <rect x={xC(i) - barW / 2} y={zeroY} width={barW} height={barH} rx={3} fill={isSweet ? AMBER : RED} opacity={isSweet ? 0.9 : 0.55}>
-              <title>{`${r.leadH}h before close — ROI ${pp(r.roiPct)} · n=${r.bets} · win ${r.winPct}% · mean ask ${cents(r.avgAsk)} · CI [${pp(r.ciPct[0])}, ${pp(r.ciPct[1])}]`}</title>
+            <line x1={xC(i)} x2={xC(i)} y1={yCl(r.ciPct[1])} y2={yCl(r.ciPct[0])} stroke="var(--ams-secondary-dim)" strokeWidth={1.4} />
+            <line x1={xC(i) - 4} x2={xC(i) + 4} y1={yCl(r.ciPct[1])} y2={yCl(r.ciPct[1])} stroke="var(--ams-secondary-dim)" strokeWidth={1.4} />
+            <line x1={xC(i) - 4} x2={xC(i) + 4} y1={yCl(r.ciPct[0])} y2={yCl(r.ciPct[0])} stroke="var(--ams-secondary-dim)" strokeWidth={1.4} />
+            <rect x={xC(i) - barW / 2} y={barTop} width={barW} height={barH} rx={3} fill={fill} opacity={isSweet ? 0.9 : 0.55}>
+              <title>{`${r.leadH}h before close — ROI ${pp(r.roiPct)} · n=${r.bets} · win ${r.winPct}% · mean all-in ask ${cents(r.avgAsk)} · CI [${pp(r.ciPct[0])}, ${pp(r.ciPct[1])}]`}</title>
             </rect>
-            <text x={xC(i)} y={yAt(r.roiPct) + 12} textAnchor="middle" fontSize={9} fontWeight={isSweet ? 700 : 400} fill={isSweet ? AMBER : RED} className="mono">
+            <text x={xC(i)} y={neg ? yAt(r.roiPct) + 12 : yAt(r.roiPct) - 5} textAnchor="middle" fontSize={9} fontWeight={isSweet ? 700 : 400} fill={isSweet ? AMBER : neg ? RED : 'var(--ams-muted)'} className="mono">
               {pp(r.roiPct)}
             </text>
             <text x={xC(i)} y={height - 8} textAnchor="middle" fontSize={10} fill="var(--ams-muted)" className="mono">
-              {r.leadH}h{isSweet ? ' ★' : ''}
+              {r.leadH}h{isSweet ? ' ★' : ''} <tspan fontSize={8}>n={r.bets}</tspan>
             </text>
           </g>
         );
@@ -193,21 +207,28 @@ function BuyTableSection(): ReactElement {
   return (
     <>
       <h1>Per-city buy table — $10 on our predicted high, bought cheap</h1>
+      <p className="cap muted" style={{ marginTop: '0.2rem' }}>
+        <span className="chip soft">frozen archive record · as of {fmtDate(B.recordedAt)}</span>{' '}
+        not a live feed — regenerate via the reproduce block below. The <strong>live forward ledger</strong> further
+        down is the accruing real-data instrument.
+      </p>
 
       {/* the honest verdict, leading with the number */}
       <div className="info-banner" style={{ borderLeftColor: RED }}>
-        <strong style={{ color: RED }}>Verdict: a net loss — pooled ROI {pp(pooled.roiPct)}</strong>{' '}
-        ({signedUsd(pooled.netUsd, 0)} on {pooled.bets} bets · {B.universe.nDays} days · {B.universe.nCities} cities,
-        day-clustered CI [{pp(pooled.dayCiPct[0])}, {pp(pooled.dayCiPct[1])}]). This is the strategy you described —
-        $10 on our predicted whole-° bucket, entered only while it is still <strong>cheap (ask ≤ {cents(B.params.cheapMax)})</strong>,
-        at the confidence sweet-spot ({B.params.sweetLeadH}h before close), held to resolution — scored across every
-        city on the real price archive at the <strong>executable ask</strong>. It is <strong>signal #12
-        (opening-convergence), already falsified</strong> (FINDINGS.md / MARKET-PNL.md): the cheap filter buys the
-        bucket only while it is still a <strong>not-yet-converged longshot</strong>, and the market prices it
-        ≤{cents(B.params.cheapMax)} <em>exactly when it is unlikely to win</em> — pooled win rate {pooled.winPct}% vs
-        the ~{breakeven.toFixed(0)}% you need just to break even. The {pooled.nCitiesPositive} net-positive cities are
-        small-sample longshot noise (Jeddah went 2-for-2 → +1209%), not a per-city edge. <strong>Nothing here reopens
-        the trading rail.</strong>
+        <strong style={{ color: RED }}>Verdict: no demonstrable edge — an underpowered wash leaning negative.</strong>{' '}
+        Pooled ROI {pp(pooled.roiPct)} ({signedUsd(pooled.netUsd, 0)} on {pooled.bets} fillable bets ·{' '}
+        {B.universe.nDays} days · {B.universe.nCities} cities, day-clustered CI [{pp(pooled.dayCiPct[0])},{' '}
+        {pp(pooled.dayCiPct[1])}]). This is the strategy you described — $10 on our predicted whole-° bucket, entered
+        only while it is still <strong>cheap (all-in ask ≤ {cents(B.params.cheapMax)})</strong>, at the confidence
+        sweet-spot ({B.params.sweetLeadH}h before close), held to resolution — scored on the <strong>canonical
+        calibrated book</strong> (real opening_captures spread-by-price + taker fee), where a bet exists only if the
+        walked depth can fill the $10. That cost model nearly erases the strategy: the legacy mid+1¢ scoring read
+        −28.2% on 347 bets, but most of those “bets” were never fillable — the cheap zone carries $4–$24 of depth.
+        What survives shows no edge: every well-populated lead is negative, no day-clustered lower bound comes near
+        zero, and pooled win rate {pooled.winPct}% sits at the ~{breakeven.toFixed(0)}% you need just to break even.
+        It is <strong>signal #12 (opening-convergence), already falsified</strong> (FINDINGS.md / MARKET-PNL.md /
+        BUY-TABLE.md). The {pooled.nCitiesPositive} net-positive cities are small-sample longshot noise, not a
+        per-city edge. <strong>Nothing here reopens the trading rail.</strong>
       </div>
 
       {/* summary strip */}
@@ -253,14 +274,14 @@ function BuyTableSection(): ReactElement {
           <span className="cap muted">hours before market close · pooled, cheap-filtered · day-clustered CI whiskers</span>
         </div>
         <p className="muted small" style={{ marginTop: '0.5rem' }}>
-          The sweet-spot you asked for is a real trade-off: enter earlier and the bucket is cheaper but our forecast
-          is less certain; enter later and it is more accurate but no longer cheap. The best of a bad set is{' '}
-          <strong style={{ color: AMBER }}>{B.params.sweetLeadH}h</strong> — but ROI is <strong>negative at every
-          lead</strong>, and it gets <em>worse</em> the closer to close you buy ({pp(B.leadCurve[B.leadCurve.length - 1]!.roiPct)}{' '}
-          at {B.leadCurve[B.leadCurve.length - 1]!.leadH}h). A genuine forecast edge would do the opposite —
-          strengthen near resolution, where our forecast is sharpest. That it collapses instead is the efficiency
-          signature: near close the winner has already converged above {cents(B.params.cheapMax)}, so the cheap
-          filter keeps only near-certain losers.
+          The sweet-spot you asked for is the best of a bad set:{' '}
+          <strong style={{ color: AMBER }}>{B.params.sweetLeadH}h</strong> — <strong>no lead demonstrates an
+          edge</strong> (every well-populated lead&apos;s point estimate is negative and every day-clustered lower
+          bound sits deep below zero). On the calibrated book the efficiency signature shows up as a{' '}
+          <em>population collapse</em> near close: by 6h only {B.leadCurve.find((l) => l.leadH === 6)?.bets ?? 0} bets
+          in the whole window were both cheap AND fillable at $10 — the eventual winner has already converged above{' '}
+          {cents(B.params.cheapMax)}, and whatever is still cheap is too thin to fill. A strongly positive tiny-n row
+          is longshot noise (read its CI), not a late-entry edge.
         </p>
         <div style={{ marginTop: '0.4rem', overflowX: 'auto' }}>
           <LeadCurveChart />
@@ -283,8 +304,8 @@ function BuyTableSection(): ReactElement {
                   <td>{l.days}</td>
                   <td>{l.winPct}%</td>
                   <td className="mono">{cents(l.avgAsk)}</td>
-                  <td className="neg">{pp(l.roiPct)}</td>
-                  <td className="neg">{signedUsd(l.netUsd, 0)}</td>
+                  <td className={pnlClass(l.roiPct)}>{pp(l.roiPct)}</td>
+                  <td className={pnlClass(l.netUsd)}>{signedUsd(l.netUsd, 0)}</td>
                   <td>[{pp(l.ciPct[0])}, {pp(l.ciPct[1])}]</td>
                 </tr>
               ))}
@@ -297,17 +318,17 @@ function BuyTableSection(): ReactElement {
       <section className="panel" style={{ marginTop: '1.4rem' }}>
         <div className="tile-head" style={{ alignItems: 'baseline', gap: '0.6rem', flexWrap: 'wrap' }}>
           <h2 style={{ margin: 0 }}>Per-city results @ {B.params.sweetLeadH}h sweet-spot</h2>
-          <span className="chip soft">backtest · executable ask · held to close</span>
+          <span className="chip soft">backtest · calibrated book + fee · held to close</span>
           <span className="cap muted">
             {B.universe.nCities} of {B.universe.nCitiesTotal} cities had a qualifying cheap entry · sorted by net P&amp;L
           </span>
         </div>
         <p className="muted small" style={{ marginTop: '0.4rem' }}>
-          Each row: bet $10 on our predicted whole-° bucket every day the bucket was priced ≤ {cents(B.params.cheapMax)}
-          at the {B.params.sweetLeadH}h lead, buy at the executable ask (mid + {cents(B.params.halfSpread)} spread,
-          floored at {cents(B.params.floor)}), hold to resolution. The <strong>net-by-lead</strong> sparkline shows the
-          same city across all four entry leads (48/24/12/6h) — green up, red down. Per-city n is tiny; read the
-          <strong> pooled</strong> verdict above, not any single row.
+          Each row: bet $10 on our predicted whole-° bucket every day the bucket&apos;s <strong>all-in cost</strong>{' '}
+          (calibrated-book executable ask + taker fee) was ≤ {cents(B.params.cheapMax)} at the {B.params.sweetLeadH}h
+          lead AND the walked depth could fill the stake, hold to resolution. The <strong>net-by-lead</strong>{' '}
+          sparkline shows the same city across all four entry leads (48/24/12/6h) — green up, red down. Per-city n is
+          tiny; read the <strong> pooled</strong> verdict above, not any single row.
         </p>
         <div className="tbl-scroll" style={{ marginTop: '0.6rem' }}>
           <table>
@@ -346,18 +367,20 @@ function BuyTableSection(): ReactElement {
           <p className="small muted">
             <strong>Forecast:</strong> the CAUSAL walk-forward blend μ from <code>scripts/research/city-accuracy.ts</code>{' '}
             (bias corrected on prior data only — no hindsight/look-ahead). <strong>Bucket match:</strong> by parsing
-            temperature from the label (bucket_idx is raw gamma order — trap #7). <strong>Price:</strong> the archive
-            mid; we buy at the executable ask = mid + {cents(B.params.halfSpread)}, floored at {cents(B.params.floor)}
-            (can&apos;t fill $10 on a sub-floor longshot). <strong>Sweet-spot:</strong> the entry lead maximizing the
-            day-clustered lower bound (shrinkage, not the point estimate). <strong>CI:</strong> clustered on the
+            temperature from the label (bucket_idx is raw gamma order — trap #7). <strong>Cost basis ({B.params.book}):</strong>{' '}
+            the CANONICAL cost model (<code>scripts/research/cost_model.py</code>, a zero-drift parse of core&apos;s
+            CALIBRATED_BOOK — spread-by-price + walked depth fit from real opening_captures books) + the taker fee;
+            a bet exists only where depth covers the stake. <strong>Sweet-spot:</strong> the entry lead maximizing
+            the day-clustered lower bound (shrinkage, not the point estimate). <strong>CI:</strong> clustered on the
             independent unit (city × weather-day). This is the sibling of the pooled MARKET-PNL record, with the
-            ≤{cents(B.params.cheapMax)} cheap-entry filter added.
+            ≤{cents(B.params.cheapMax)} cheap-entry filter added; <code>--book flat</code> reproduces the legacy
+            mid+{cents(B.params.halfSpread)} scoring for comparison.
           </p>
           <p className="small muted" style={{ marginBottom: 0 }}>
             <strong>Reproduce</strong> (read-only; reads the local parquet archive + causal-forecast CSV, writes only
             out/, places no trade):<br />
             <code>pnpm tsx scripts/research/city-accuracy.ts --leads 0,1,2 --slot 22Z --emit-forecast scripts/research/out/causal-forecast.csv</code><br />
-            <code>python scripts/research/city-buy-table.py --emit scripts/research/out/city-buy-table.json --emit-ts packages/core/src/sim/city-buy-table-results.ts --asof {B.recordedAt}</code>
+            <code>python scripts/research/city-buy-table.py --book {B.params.book} --emit scripts/research/out/city-buy-table.json --emit-ts packages/core/src/sim/city-buy-table-results.ts --asof {B.recordedAt}</code>
           </p>
         </div>
       </details>
@@ -668,10 +691,85 @@ function CityScanSection(): ReactElement {
   );
 }
 
-export default function PaperTradePage(): ReactElement {
+/* ═══════════════════════════════════════════════════════════════════════════════════════════════════════
+ * LIVE forward ledger — the realized multi-city paper-trade (dash_city_sim, migration 0070/0075). This is the
+ * project's backtest-vs-realized cross-check instrument (loop rule 4: a flat-accuracy backtest once gave WRONG
+ * entry-hour advice that only the realized forward ledger caught). The cron keeps writing city_paper_bets
+ * whether or not a page shows it — so this page MUST keep it visible while it accrues. Compact by design; the
+ * frozen buy-table above answers the strategy question, this answers "what is the live data actually doing".
+ * ═══════════════════════════════════════════════════════════════════════════════════════════════════════ */
+function ForwardLedgerSection({ view }: { view: CitySimView | null }): ReactElement {
+  return (
+    <section className="panel" style={{ marginTop: '1.6rem' }}>
+      <div className="tile-head" style={{ alignItems: 'baseline', gap: '0.6rem', flexWrap: 'wrap' }}>
+        <h2 style={{ margin: 0 }}>Live forward ledger — multi-city paper-trade</h2>
+        <span className="chip soft">real forward data · accruing daily · NOT a backtest</span>
+      </div>
+      {view == null ? (
+        <p className="muted small" style={{ marginTop: '0.5rem', marginBottom: 0 }}>
+          The dash_city_sim RPC is unavailable in this environment — the ledger still accrues server-side (the
+          city-paper-trade cron writes city_paper_bets daily); it renders here on prod.
+        </p>
+      ) : (
+        <>
+          <p className="muted small" style={{ marginTop: '0.5rem' }}>
+            The daily $10/arm paper-trade on the enrolled cities — the <strong>realized</strong> counterpart to the
+            frozen archive backtest above, and the instrument that cross-checks it (a backtest once recommended the
+            wrong entry hour; only this ledger caught it). Overall:{' '}
+            <strong className={pnlClass(num(view.overall.pnl))}>{signedUsd(num(view.overall.pnl), 0)}</strong> on{' '}
+            {num(view.overall.nGraded) ?? 0} graded bets ({num(view.overall.nWon) ?? 0} won) · updated{' '}
+            {fmtDate(view.generatedAt)}.
+          </p>
+          <div className="tbl-scroll" style={{ marginTop: '0.4rem' }}>
+            <table>
+              <thead>
+                <tr>
+                  <th>city</th><th>window</th><th>graded</th><th>won</th><th>staked</th><th>net P&amp;L</th>
+                  <th title="max cumulative P&L arm">🥇 leader arm</th>
+                  <th title="the entry-time watcher's shrinkage pick (max edge CI lower bound) — NOT the P&L leader">⭐ watcher pick</th>
+                </tr>
+              </thead>
+              <tbody>
+                {view.cities.map((c) => {
+                  const rec = c.arms.find((a) => a.recommended);
+                  return (
+                    <tr key={c.slug}>
+                      <td style={{ fontWeight: 600, whiteSpace: 'nowrap' }}>
+                        {c.displayName}
+                        <span className="cap muted" style={{ marginLeft: '0.4rem' }}>{c.icao}</span>
+                      </td>
+                      <td className="mono small">{c.coverage.firstDate ? `${fmtDate(c.coverage.firstDate)} → ${c.coverage.lastDate ? fmtDate(c.coverage.lastDate) : '…'}` : '—'}</td>
+                      <td>{num(c.totals.nGraded) ?? 0}</td>
+                      <td>{num(c.totals.nWon) ?? 0}</td>
+                      <td>{fmtUsd(num(c.totals.staked) ?? 0, 0)}</td>
+                      <td className={pnlClass(num(c.totals.pnl))} style={{ fontWeight: 700 }}>{signedUsd(num(c.totals.pnl), 2)}</td>
+                      <td>{c.leaderHour != null ? `${c.leaderHour}:00` : '—'}</td>
+                      <td>{rec ? `${rec.hour}:00` : '—'}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
+
+export default async function PaperTradePage(): Promise<ReactElement> {
+  // The live forward ledger degrades to null (never a 500) when the DB/RPC is unreachable — the frozen
+  // buy-table + scan sections are committed static assets and must render regardless.
+  let live: CitySimView | null = null;
+  try {
+    live = await getCitySim(await serverDb());
+  } catch {
+    live = null;
+  }
   return (
     <div className="ams-dash">
       <BuyTableSection />
+      <ForwardLedgerSection view={live} />
       <CityScanSection />
     </div>
   );

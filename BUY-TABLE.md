@@ -1,13 +1,20 @@
 # BUY-TABLE — per-city "$10 on our predicted high, bought cheap, held to close"
 
-> **Verdict (2026-07-09): KILL — a net loss at every entry lead.** Staking $10 on our predicted daily-high bucket
-> across all cities, entered ONLY while the bucket is still cheap (executable ask ≤ 15¢ = "high return potential"),
-> at the confidence sweet-spot (24h before close), held to resolution, nets **−28.2% ROI / −$977** over 347 bets on
-> 46 weather-days / 43 cities; the day-clustered 95% CI **[−57.7%, +4.3%]** leans hard negative (positive only via a
-> fat longshot right-tail). This is **signal #12 (opening-convergence), re-confirmed** with the cheap-entry filter
-> added: the filter buys the predicted bucket only while it is still a **not-yet-converged longshot**, and the market
-> prices our bucket ≤15¢ **exactly when it is unlikely to win** (pooled win rate 6.3% vs the ~6% you need just to
-> break even). **Nothing here reopens the trading rail.** The `/paper-trade` page now renders this table.
+> **Verdict (2026-07-09): KILL / no demonstrable edge — at both cost bases.** Staking $10 on our predicted
+> daily-high bucket, entered ONLY while still cheap (ask ≤ 15¢), held to resolution:
+>
+> - **Canonical calibrated book + taker fee (the record of record, §Addendum below):** the fillable population
+>   nearly VANISHES — 55 bets @ the 12h sweet-spot (the sub-9¢ longshots that drove the mid-based loss were never
+>   fillable at $10; the calibrated cheap zone carries $4–$24 of walked depth). What survives is an **underpowered
+>   wash leaning negative**: −9.2% ROI / −$51, day-CI [−62.9%, +56.8%]; every well-populated lead negative; no
+>   day-clustered lower bound anywhere near 0. The 6h row (+141%) is a 3-bet fluke, CI [−100%, +624%].
+> - **Legacy mid+1¢ scoring (the original headline, kept below as the fantasy-population record):** −28.2% ROI /
+>   −$977 over 347 bets / 46 weather-days / 43 cities, day-CI [−57.7%, +4.3%].
+>
+> This is **signal #12 (opening-convergence), re-confirmed** with the cheap-entry filter added: the filter buys
+> the predicted bucket only while it is still a **not-yet-converged longshot**, and the market prices our bucket
+> ≤15¢ **exactly when it is unlikely to win**. **Nothing here reopens the trading rail.** The `/paper-trade` page
+> renders the calibrated record (plus the LIVE forward ledger, which keeps accruing).
 
 - **Engines:** `scripts/research/city-accuracy.ts --emit-forecast` (the causal blend μ) → `scripts/research/city-buy-table.py`
   (adds the ≤15¢ cheap gate + per-city aggregation to the MARKET-PNL scoring). Sibling of `pnl-backtest.py`.
@@ -50,6 +57,44 @@ filter keeps only near-certain losers (0.2% win at 6h). The sweet-spot is the *l
 clustered bar. High-*accuracy* cities (Madrid, Munich) are 0-for-6 and 0-for-15 here: the market prices their
 predictability into the price, so our accuracy buys nothing when we can only enter cheap.
 
+**Why "win 6.3% vs ~6% breakeven" still nets −28.2%:** the breakeven comparison only holds bet-by-bet if ask and
+win-probability were independent — they are not (that correlation IS the efficiency finding). The few winners
+were disproportionately the *higher-priced* entries (smaller payout multiples), while the cheapest tickets lost
+almost surely — so the stake-weighted P&L lands far below what the pooled win-rate-vs-average-ask comparison
+suggests.
+
+## Addendum (2026-07-09, same day) — re-scored on the canonical calibrated book: the population, not the edge, was the story
+
+The original scoring above used a flat mid+1¢ ask floored at 3¢. The project's canonical cost model
+(`CALIBRATED_BOOK` in `core/sim/history-replay-ingest.ts`, fit from real `opening_captures` books; new zero-drift
+Python mirror `scripts/research/cost_model.py`) prices the cheap zone honestly: **askOver ~1.8–4pp and only
+$4–$24 of walked depth below mid ~0.12**. Re-scored with it (+ the explicit taker fee, `fees.ts` convention —
+the flat +1¢ was a *total-friction* proxy; the calibrated askOver is spread only):
+
+| Entry lead | bets | win% | avg all-in ask | ROI | net | day-clustered CI |
+|---|---|---|---|---|---|---|
+| 48h | 70 | 11.4% | 13.5¢ | −11.8% | −$83 | [−66.5%, +46.5%] |
+| 24h | 65 | 12.3% | 13.5¢ | −11.8% | −$77 | [−66.6%, +45.7%] |
+| **12h (sweet-spot)** | 55 | 12.7% | 13.5¢ | **−9.2%** | **−$51** | **[−62.9%, +56.8%]** |
+| 6h | 3 | 33.3% | 13.9¢ | +141.3% | +$42 | [−100.0%, +623.9%] |
+
+Three honest readings, in order of importance:
+
+1. **The strategy barely exists at executable depth.** 347 mid-fantasy bets collapse to 55–78 fillable ones:
+   a $10 order cannot fill below mid ~0.085, which excludes exactly the deep longshots that produced the −28%.
+   The efficiency signature restates as a **population collapse near close** (78 → 3 bets from 48h to 6h) — by
+   resolution the winner has converged above the gate and the rest is depth-starved.
+2. **What survives is an UNDERPOWERED WASH, not a discovered edge and not a proven deep loss.** Every populated
+   lead is negative (−9 to −12%) but the day-clustered CIs span ±50pp — this panel can neither demonstrate nor
+   exclude a modest edge (n is just too small once you only count real bets). The KILL stands on the falsified
+   signal #12 family, the negative point estimates, and the absence of any lower bound near 0.
+3. **The two scorings agree on the verdict and differ on the mechanism** — the mid+1¢ read said "you lose big
+   buying cheap longshots"; the calibrated read says "you mostly *can't* buy them, and the buyable remnant shows
+   nothing." Both close the strategy.
+
+Regenerated artifacts: `city-buy-table-results.ts` (the page's committed record, now `book: 'calibrated'`),
+`out/city-buy-table.json`. The legacy numbers reproduce with `--book flat`.
+
 ## Traps ruled out
 
 Executable ask (mid + 1¢, floored) ✔ · cheap gate ✔ · day + city clustering ✔ · lead/sweet-spot robustness (all
@@ -71,6 +116,8 @@ the real number worse (the convergence-tuning KILL used the real bid/ask book an
 pnpm tsx scripts/research/city-accuracy.ts --leads 0,1,2 --slot 22Z --emit-forecast scripts/research/out/causal-forecast.csv
 python scripts/research/city-buy-table.py --stake 10 --cheap-max 0.15 --asof 2026-07-09 \
   --emit scripts/research/out/city-buy-table.json --emit-ts packages/core/src/sim/city-buy-table-results.ts
+# legacy flat-book comparison (the original -28.2% headline):
+python scripts/research/city-buy-table.py --book flat --stake 10 --cheap-max 0.15
 ```
 
 Read-only: reads the local parquet archive + the causal-forecast CSV; writes only `out/` + the committed asset;
