@@ -37,9 +37,12 @@ _Claude keeps this block current every material cycle. Whole status in 20 second
      `city-paper-trade` tick, which only places arms whose local hour has already passed** — so they can
      structurally never place. (The full-arm 07-04/07-05 rows came from manual runs at 22:08Z/18:53Z, which
      is why this wasn't visible at the change.) Karachi-14 (09:00Z) + Singapore-15 (07:00Z) are fine.
-     **Fix is a one-line cron change (operator-gated):** add a second daily run of the same fn at ~21:30Z
-     (clear of the reserved :32–:42 window; the fn is idempotent per city/date/arm) — or re-hour the two
-     cities pre-10Z, which contradicts the C101 best-hour finding. Say the word and I stage the SQL.
+     ~~Fix is a one-line cron change (operator-gated): add a second daily run of the same fn at ~21:30Z~~
+     **↳ SUPERSEDED by C6 (07-10):** 21:30Z is WRONG for Ankara (00:30 next local day — the handler targets
+     local-today, so the missed arms would still never place). The corrected, staged fix — TWO extra ticks
+     (13:50Z ankara-window + 20:45Z houston-window) + restoring the §12 candidate 14h arms as a RACE vs the
+     C101 incumbents + runway to 09-30 + a frozen forward confirmation gate — is **SIGNAL-BACKLOG §12-R**
+     (staged SQL inside, rollback included). One apply, and the scan candidates get their true test.
   2. **Efficiency monitor — the 06:00Z SCHEDULED run did NOT fire on 07-10** (watched through 06:59Z; GitHub
      drops scheduled runs under load at congested slots like :00, and brand-new schedules are the most
      drop-prone). **I dispatched it manually at 06:59Z → success (run 29075331802, 1m32s) → snapshot landed
@@ -92,6 +95,17 @@ _Claude keeps this block current every material cycle. Whole status in 20 second
   (ask 0.997) placed 10:00:14/23Z, pending; KHOU/LTAC absent exactly per the C1 diagnosis (⚑ #1 stands).
   Tripwires: ⑤ dry-run ✓ · ①②no signal · ③④ deferred to an occasional sweep. Both daily checkpoints done;
   idling until tomorrow's 06:00Z Action watch.
+- **C6 (2026-07-10 ~22:00Z) — OPERATOR ASK: "put the city-scan candidates to true testing" → §12-R written
+  (restoration + frozen forward gate), SQL staged.** Found the confirmation stream broken TWICE: the 07-07
+  C101 narrowing removed arm 14 from houston/ankara (an in-sample-driven pick displacing the pre-registered
+  forward test — C101's read for those cities was mostly the in-sample backfill), and the 10:00Z-tick gap
+  (⚑ #1) has blocked ALL placement for both cities since 07-08 → only ~4 qualifying forward days exist
+  (07-04→07-07). Corrected C1's 21:30Z cron suggestion (wrong for Ankara: handler targets local-today).
+  Design: race arms {14,15}/{14,16}, ticks 13:50Z+20:45Z, runway 09-30, gate frozen BEFORE data (n≥30
+  forward days/cell, day-clustered CI LB>0=CONFIRMED / UB<0=KILL / else NOT-CONFIRMED, hard stop n=45,
+  joint zsMC<5%, power stated: decisive for ankara-sized, ~50% for houston-sized at n=30). Null honesty:
+  2-of-4 TRAIN survivors passing TEST is the EXPECTED count under pure noise — the forward gate is the only
+  read that counts. Operator: apply the §12-R SQL block (one decision, rollback included).
 - **C5 (2026-07-10 ~21:00Z) — Lane-3 gauntlet: "World Cup maker whales / safer maker bets during WC volume"
   (operator idea) → NOT A REOPEN.** Fresh keyless reads: WC knockout volume real (esp-bel 1X2 $30M/24h);
   **flagship match markets carry $16,322/day maker-reward pools** (vs $25–500 typical) — the genuinely new datum,
