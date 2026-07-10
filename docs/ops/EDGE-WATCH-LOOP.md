@@ -15,6 +15,16 @@
 
 _Claude keeps this block current every material cycle. Whole status in 20 seconds._
 
+- **▶▶ CHECK TOMORROW (2026-07-11, operator-requested at C8) — two §12-R day-1 verifications:**
+  1. **The 13:50Z and 20:45Z ticks must actually fire and place** (first scheduled runs of the new `-b`/`-c`
+     per-slot periodKeys). Verify: `job_runs` shows two extra `city-paper-trade` runs with `placedByCity`
+     covering ankara (13:50Z) + houston (20:45Z) for target 07-11; if either 409s, the periodKey body isn't
+     reaching runJob — inspect `net._http_response` for the cron's request.
+  2. **The Houston 6°F pick gap grades**: 07-10 KHOU-14 bought 92–93°F @0.11 vs KHOU-15 86–87°F @0.59 (3
+     buckets apart, same day). When 07-10 grades (~10:00Z tick), check which won and whether the 14h lock's
+     forecast snapshot was a real intraday swing or a °F-path anomaly (C25/C37 verified the path, but this
+     is the widest arm divergence seen).
+
 - **▶▶ C4 (2026-07-10, operator-directed) — SLACK REWORK: pushes are FULLY PAUSED now; the reworked routing
   is BUILT + tested and awaits your two deploy steps.**
   - **Applied live already:** `alerts_slack_allow_kinds = ''` → nothing pushes (the master pause was already
