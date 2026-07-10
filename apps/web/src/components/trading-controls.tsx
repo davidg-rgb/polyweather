@@ -73,17 +73,44 @@ const NUM_FIELDS: { key: keyof TradeConfig; param: string; label: string; step?:
  * The editable trade_config surface. Current value + input per field; a single Save posts ONLY the changed
  * fields to /api/admin/trading/config (null-param = leave unchanged in trade_config_set). Range enforcement is
  * the DB's — the $25 ceiling / positivity / ≤1 fraction / 60-day cap all RAISE and are shown verbatim.
+ *
+ * ALLOWLIST SAFEGUARD (0093, operator 2026-07-11): the allowlist is a CHECKBOX PICKER over `cityOptions`
+ * (the enrolled cities, passed by the page) ∪ the currently-stored entries — no free text, so a typo'd or
+ * wrong-case slug can no longer be entered here at all. The DB is the real guarantee (trade_config_set
+ * normalizes + RAISES on unknown slugs); this UI just makes the error unreachable. "All cities" is an
+ * explicit radio (posts clearCityAllowlist), never an empty selection — an empty restrict-set is unsaveable.
  */
-export function TradeConfigEditor({ config }: { config: TradeConfig }): ReactElement {
+export function TradeConfigEditor({
+  config,
+  cityOptions = [],
+}: {
+  config: TradeConfig;
+  /** Valid allowlist targets (enrolled cities): slug + display label. */
+  cityOptions?: { slug: string; label: string }[];
+}): ReactElement {
   const a = useAction();
   const c = config as unknown as Record<string, unknown>;
   const [mode, setMode] = useState<string>(config.mode);
   const [edits, setEdits] = useState<Record<string, string>>({});
 
-  const curAllow = config.city_allowlist ? config.city_allowlist.join(', ') : '';
+  const curAllowArr = (config.city_allowlist ?? []).map((s) => s.toLowerCase());
+  const [allowAll, setAllowAll] = useState<boolean>(config.city_allowlist == null);
+  const [allowSel, setAllowSel] = useState<string[]>(curAllowArr);
+  // Options = the page-supplied enrolled cities ∪ whatever is currently stored (a stored slug outside the
+  // enrolled set must stay visible/uncheckable, never silently dropped by the picker).
+  const allowOptions: { slug: string; label: string }[] = [
+    ...cityOptions,
+    ...curAllowArr
+      .filter((s) => !cityOptions.some((o) => o.slug === s))
+      .map((s) => ({ slug: s, label: s })),
+  ];
+
   const curActive = config.active_until ?? '';
   const inputOf = (key: string, fallback: string): string => edits[key] ?? fallback;
   const set = (key: string, v: string): void => setEdits((p) => ({ ...p, [key]: v }));
+
+  const sameSet = (x: string[], y: string[]): boolean =>
+    x.length === y.length && [...x].sort().every((v, i) => v === [...y].sort()[i]);
 
   // Build the diff body — only fields whose input differs from the current DB value.
   const buildBody = (): Record<string, unknown> => {
@@ -94,14 +121,10 @@ export function TradeConfigEditor({ config }: { config: TradeConfig }): ReactEle
       const val = edits[f.key as string];
       if (val !== undefined && val.trim() !== '' && val.trim() !== cur) body[f.param] = Number(val);
     }
-    const allowInput = edits['city_allowlist'];
-    if (allowInput !== undefined && allowInput.trim() !== curAllow.trim()) {
-      const parsed = allowInput.split(',').map((s) => s.trim()).filter(Boolean);
-      if (parsed.length === 0) {
-        if (config.city_allowlist != null) body['clearCityAllowlist'] = true;
-      } else {
-        body['cityAllowlist'] = parsed;
-      }
+    if (allowAll) {
+      if (config.city_allowlist != null) body['clearCityAllowlist'] = true;
+    } else if (allowSel.length > 0 && !sameSet(allowSel, curAllowArr)) {
+      body['cityAllowlist'] = [...allowSel].sort();
     }
     const activeInput = edits['active_until'];
     if (activeInput !== undefined && activeInput.trim() !== curActive) {
@@ -162,15 +185,51 @@ export function TradeConfigEditor({ config }: { config: TradeConfig }): ReactEle
             ))}
             <tr>
               <td>City allowlist</td>
-              <td className="mono">{config.city_allowlist == null ? 'all cities' : curAllow}</td>
+              <td className="mono">{config.city_allowlist == null ? 'all cities' : curAllowArr.join(', ')}</td>
               <td>
-                <input
-                  className="mono"
-                  placeholder="comma-separated slugs — empty = all cities"
-                  style={{ width: '100%', minWidth: 240 }}
-                  value={inputOf('city_allowlist', curAllow)}
-                  onChange={(e) => set('city_allowlist', evVal(e))}
-                />
+                <label style={{ display: 'block', marginBottom: 4 }}>
+                  <input
+                    type="radio"
+                    name="allowlist-scope"
+                    checked={allowAll}
+                    onChange={() => setAllowAll(true)}
+                  />{' '}
+                  all cities
+                </label>
+                <label style={{ display: 'block', marginBottom: 4 }}>
+                  <input
+                    type="radio"
+                    name="allowlist-scope"
+                    checked={!allowAll}
+                    onChange={() => setAllowAll(false)}
+                  />{' '}
+                  restrict to:
+                </label>
+                {!allowAll ? (
+                  <div style={{ paddingLeft: 18 }}>
+                    {allowOptions.length === 0 ? (
+                      <span className="muted small">no enrolled cities to pick from</span>
+                    ) : (
+                      allowOptions.map((o) => (
+                        <label key={o.slug} style={{ display: 'block' }}>
+                          <input
+                            type="checkbox"
+                            checked={allowSel.includes(o.slug)}
+                            onChange={(e) =>
+                              setAllowSel((p) =>
+                                evChecked(e) ? [...p, o.slug] : p.filter((s) => s !== o.slug),
+                              )
+                            }
+                          />{' '}
+                          {o.label} <span className="muted small mono">{o.slug}</span>
+                        </label>
+                      ))
+                    )}
+                    {allowSel.length === 0 ? (
+                      <span className="form-error small">select at least one city (empty would allow none)</span>
+                    ) : null}
+                  </div>
+                ) : null}
               </td>
             </tr>
             <tr>

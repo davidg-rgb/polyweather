@@ -103,6 +103,12 @@ async function seedRealized(
 beforeAll(async () => {
   db = await freshDb();
   port = pglitePort(db);
+  // 0093: trade_config_set now VALIDATES allowlist entries against cities.slug — seed the two slugs the
+  // loadTradeConfig mapping test writes (before 0093 the twin needed no cities at all).
+  const region = (await rows<{ region: string }>(db, `select region from public.clusters limit 1`))[0]!.region;
+  for (const slug of ['singapore', 'karachi']) {
+    await rows(db, `select public.upsert_city($1, $2, 'US', 'C', 'UTC', $3)`, [slug, slug, region]);
+  }
 });
 afterAll(async () => {
   await db.close();
@@ -1110,7 +1116,8 @@ describe('0082 packages/trading TS reader (via the PGlite twin port)', () => {
     expect(cfg.totalConcurrentCapUsd).toBe(90);
     expect(cfg.dailyLossKillUsd).toBe(15);
     expect(cfg.dailyLossKillFrac).toBe(0.2);
-    expect(cfg.cityAllowlist).toEqual(['singapore', 'karachi']);
+    // 0093: the stored allowlist is NORMALIZED (lower/trim/dedupe, sorted) — input order is not preserved.
+    expect(cfg.cityAllowlist).toEqual(['karachi', 'singapore']);
     expect(cfg.activeUntil).toBeTruthy();
   });
 

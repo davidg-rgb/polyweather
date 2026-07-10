@@ -104,6 +104,22 @@ _Claude keeps this block current every material cycle. Whole status in 20 second
   (ask 0.997) placed 10:00:14/23Z, pending; KHOU/LTAC absent exactly per the C1 diagnosis (⚑ #1 stands).
   Tripwires: ⑤ dry-run ✓ · ①②no signal · ③④ deferred to an occasional sweep. Both daily checkpoints done;
   idling until tomorrow's 06:00Z Action watch.
+- **C9 (2026-07-10 ~22:40Z) — OPERATOR: /trading mode-switch verification + allowlist SAFEGUARD (0093).**
+  (1) **The operator's browser mode-flip DID NOT land** — trade_config.updated_at still 07-07T16:21Z (the
+  updated_at trigger fires on every write); mode was never 'live' tonight. Likely the diff-aware save button
+  (0 changes) or save not clicked; the positive end-to-end click test is STILL OWED (off→save→dry-run→save
+  while watching updated_at). Layers verified tonight: component/route code-traced, 15 web tests green, and
+  the live negative test — trade_config_set from a non-operator session raises ERR_FORBIDDEN (guard
+  unbypassable). (2) **Allowlist footgun closed (operator-requested):** migration **0093 APPLIED to prod** —
+  trade_config_set now normalizes (lower/trim/dedupe) + RAISES on unknown slugs vs cities.slug and on an
+  empty-normalizing list ('all cities' = the clear flag, never '{}'); + the /trading editor's free-text
+  allowlist replaced by an all-cities/restrict radio + per-city checkbox picker (options = enrolled cities ∪
+  stored entries). 4 new PGlite tests (migrations 100/100), typecheck clean; prod verified (new body present,
+  guard intact at line 7, config row untouched — allowlist still [karachi,houston,ankara], NOTE singapore
+  absent: operator should confirm that restriction is intentional). Full suite caught ONE downstream break —
+  trade-config.test.ts's loadTradeConfig test wrote an allowlist without seeding cities (now correctly
+  rejected under 0093) → seeded + expectation updated to the normalized-sorted contract; suite 3,111 green.
+  **UI half deploys with the next merge to main; the DB guarantee is already live.**
 - **C8 (2026-07-10 ~22:05Z) — OPERATOR "ACTIVATE" → §12-R APPLIED LIVE (paper); ⚑ #1 RESOLVED; a real
   cron-design defect caught and fixed in the act.** Operator asked for surgical best-time-per-market buys
   on a couple of cities = exactly §12-R. Applied under C21-class in-session approval: config (ankara

@@ -678,7 +678,14 @@ export default async function TradingPage(): Promise<ReactElement> {
 
       <h2>Trade config control</h2>
       {config ? (
-        <TradeConfigEditor config={config} />
+        <TradeConfigEditor
+          config={config}
+          cityOptions={
+            cityLive.kind === 'ok'
+              ? cityLive.view.arms.map((arm) => ({ slug: arm.slug, label: arm.displayName }))
+              : []
+          }
+        />
       ) : (
         <p className="muted">No config row to edit.</p>
       )}

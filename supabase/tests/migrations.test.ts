@@ -392,6 +392,10 @@ describe('migrations 0001–0010', () => {
       // instruments (monitor/cityLedger/whales24h), deadmen dedupe to 1/kind/UTC-day (was 30-min buckets),
       // whale_pending_alerts is suppression-aware + 48h-floored, WHALE_TRADE leaves the allowlist (digest-only).
       '0092_slack_rework.sql',
+      // 0093 = trade_config_set city_allowlist validation (operator 2026-07-11): entries are normalized
+      // (lower/trim/dedupe) and must match cities.slug — unknown slugs RAISE (surfaced verbatim in /trading),
+      // an empty-normalizing allowlist RAISES (all-cities is the clear flag, never '{}'). Guard-tightening only.
+      '0093_allowlist_validation.sql',
     ]);
   });
 });
@@ -1514,5 +1518,57 @@ describe('0092 slack rework — day-bucket deadmen, digest v2 data, whale queue 
         tdb, `select decision from public.claim_alert($1,'INFO',$2,'t','b')`, [kind, `reroute:${kind}`]))[0]!.decision;
       expect(decision, kind).toBe(want);
     }
+  });
+});
+
+describe('0093 allowlist validation — trade_config_set normalizes + validates city_allowlist against cities.slug', () => {
+  // The /trading console's allowlist was free text; 0093 makes the DB the guarantee: lower/trim/dedupe,
+  // unknown slugs RAISE (shown verbatim in the UI), and an empty-normalizing list RAISES (all-cities is
+  // p_clear_city_allowlist, never '{}' — an empty allowlist would silently allow NOTHING).
+  let tdb: PGlite;
+  const OPERATOR = { email: 'david.geborek@gmail.com' };
+  const asOperator = <T,>(fn: () => Promise<T>) => asRole(tdb, 'service_role', OPERATOR, fn);
+  const setAllow = (allow: string[] | null, clear = false) =>
+    asOperator(() =>
+      rows<{ r: { config: { city_allowlist: string[] | null } } }>(
+        tdb,
+        `select public.trade_config_set(p_city_allowlist := $1::text[], p_clear_city_allowlist := $2) as r`,
+        [allow, clear],
+      ),
+    );
+
+  beforeAll(async () => {
+    tdb = await freshDb();
+    const region = (await rows<{ region: string }>(tdb, `select region from public.clusters limit 1`))[0]!.region;
+    for (const slug of ['karachi', 'houston', 'ankara']) {
+      await rows(tdb, `select public.upsert_city($1, $2, 'US', 'C', 'UTC', $3)`, [slug, slug, region]);
+    }
+  });
+  afterAll(async () => { await tdb.close(); });
+
+  it('normalizes case/whitespace and de-duplicates before storing', async () => {
+    const out = await setAllow(['  Karachi ', 'HOUSTON', 'houston', 'ankara']);
+    expect(out[0]!.r.config.city_allowlist).toEqual(['ankara', 'houston', 'karachi']);
+  });
+
+  it('RAISES on an unknown slug, naming the offender verbatim', async () => {
+    await expect(setAllow(['karachi', 'houstn'])).rejects.toThrow(/unknown city slug\(s\): houstn/);
+    // and the stored value is untouched by the failed write
+    const cur = await rows<{ a: string[] | null }>(tdb, `select city_allowlist as a from trade_config where id = 1`);
+    expect(cur[0]!.a).toEqual(['ankara', 'houston', 'karachi']);
+  });
+
+  it('RAISES on an allowlist that normalizes to empty (all-cities is the clear flag, never an empty array)', async () => {
+    await expect(setAllow(['  ', ''])).rejects.toThrow(/normalized to empty/);
+  });
+
+  it('p_clear_city_allowlist still nulls the list (all cities), and the guard still blocks non-operators', async () => {
+    const out = await setAllow(null, true);
+    expect(out[0]!.r.config.city_allowlist).toBeNull();
+    await expect(
+      asRole(tdb, 'authenticated', { email: 'intruder@example.com' }, () =>
+        rows(tdb, `select public.trade_config_set(p_city_allowlist := array['karachi'])`),
+      ),
+    ).rejects.toThrow(/ERR_FORBIDDEN/);
   });
 });
