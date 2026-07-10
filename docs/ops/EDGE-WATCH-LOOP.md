@@ -25,9 +25,14 @@ _Claude keeps this block current every material cycle. Whole status in 20 second
      **Fix is a one-line cron change (operator-gated):** add a second daily run of the same fn at ~21:30Z
      (clear of the reserved :32–:42 window; the fn is idempotent per city/date/arm) — or re-hour the two
      cities pre-10Z, which contradicts the C101 best-hour finding. Say the word and I stage the SQL.
-  2. **Efficiency monitor: the manual dispatch at 22:59Z succeeded** (run 29056098243, 57s — proves the
-     `DATABASE_URL` secret + driver end-to-end; snapshot landed, S1 KILL / S2 INSUFFICIENT as expected).
-     **First scheduled 06:00Z run is this morning** — I verify after it fires and log here.
+  2. **Efficiency monitor — the 06:00Z SCHEDULED run did NOT fire on 07-10** (watched through 06:59Z; GitHub
+     drops scheduled runs under load at congested slots like :00, and brand-new schedules are the most
+     drop-prone). **I dispatched it manually at 06:59Z → success (run 29075331802, 1m32s) → snapshot landed
+     07:00:58Z: S1 KILL n=3,615 / 22 days · S2 INSUFFICIENT 10.** No data lost — the driver re-derives, so a
+     late run still records the day. **Watch tomorrow's 06:00Z:** if it also skips, the standard mitigation is
+     moving the cron off :00 (e.g. `17 6 * * *`) — a one-line workflow edit that must go to main to take
+     effect (operator push), or use the Task-Scheduler alternative in the workflow header. I'll keep
+     dispatching manually as the stopgap while the loop runs.
   3. **`city_sim_config.active_until = 2026-07-31`** (21 days runway). I'll re-surface before ~07-29 so the
      silent-pause gotcha doesn't eat the ledger if you still want it accruing.
 - **Nothing needs you right now beyond #1** (and #1 only costs unaccrued Houston/Ankara data-days while it waits).
@@ -62,3 +67,9 @@ _Claude keeps this block current every material cycle. Whole status in 20 second
   the single 10:00Z tick since the 07-07 best-hour narrowing** (post-10Z local hours; manual runs had masked
   it) → operator item #1. Efficiency-monitor manual dispatch 22:59Z success verified via `gh run list`.
   Next checkpoints: 06:00Z Action run, then 10:00Z city tick. Board created (docs-only commit).
+- **C2 (2026-07-10 ~07:05Z) — 06:00Z scheduled Action MISSED → manual dispatch recovered the day.** Watched
+  06:07/06:33/06:59Z: no scheduled run (GitHub drops cron runs at congested :00 slots; new schedules most
+  affected). Dispatched via `gh workflow run` 06:59Z → success (29075331802, 1m32s) → snapshot 07:00:58Z:
+  **S1 KILL n=3,615/45c/22d · S2 INSUFFICIENT 10 troughs** (S1 n +85 vs last night; verdicts unchanged vs the
+  C24 baseline — the forward accrual is confirming the KILL). Operator option logged in ⚑ #2 (cron off :00 if
+  tomorrow also skips). Next checkpoint: 10:00Z city tick.
