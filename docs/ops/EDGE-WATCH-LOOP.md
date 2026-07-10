@@ -15,6 +15,21 @@
 
 _Claude keeps this block current every material cycle. Whole status in 20 seconds._
 
+- **▶▶ C4 (2026-07-10, operator-directed) — SLACK REWORK: pushes are FULLY PAUSED now; the reworked routing
+  is BUILT + tested and awaits your two deploy steps.**
+  - **Applied live already:** `alerts_slack_allow_kinds = ''` → nothing pushes (the master pause was already
+    on; the allowlist is the routing table). The measured spam: WHALE_TRADE ~42/day (100 on 07-10 alone;
+    the 06-24 insider scan found no actionable signature at $100k) + ~230 deadman messages for ONE incident
+    (30-min dedupe buckets). Meanwhile the ONE high-value message — the 07:00Z daily digest — had been
+    silently suppressed since 06-24 (its kind was never allowlisted). Exactly inverted value.
+  - **The rework (your AskUserQuestion picks):** whale pushes → DIGEST-ONLY (data keeps recording) · ONE
+    daily digest as the backbone, now covering the forward instruments (efficiency-monitor S1/S2, city paper
+    ledger, whales-24h summary) · deadmen page max 1/kind/UTC-day. Rail-guard kinds stay armed.
+  - **DEPLOY (2 steps):** ① apply migration `0092_slack_rework.sql` (digest data v2 + day-bucket deadmen +
+    suppression-aware whale queue + the allowlist reroute — Slack resumes AT APPLY with the new routing) ·
+    ② redeploy the `daily-digest` edge fn (the handler gained the three sections; without it the digest
+    still sends, just without the new sections). Rollback line is in the migration header.
+
 - **▶▶ C1 (2026-07-10 ~23:30Z 07-09): loop initialized; ONE real finding + two watch items:**
   1. **The /paper-trade forward ledger is silently accruing only 2 of 4 cities since 07-08.** The 07-07
      18:11Z config change (deliberate — C101 best-hours) narrowed each city to its single best arm, but
@@ -77,3 +92,13 @@ _Claude keeps this block current every material cycle. Whole status in 20 second
   (ask 0.997) placed 10:00:14/23Z, pending; KHOU/LTAC absent exactly per the C1 diagnosis (⚑ #1 stands).
   Tripwires: ⑤ dry-run ✓ · ①②no signal · ③④ deferred to an occasional sweep. Both daily checkpoints done;
   idling until tomorrow's 06:00Z Action watch.
+- **C4 (2026-07-10 ~13:00–15:30Z) — OPERATOR-DIRECTED Slack rework (spam → value).** Measured the spam
+  (alerts_log 14d: WHALE_TRADE 587 — 100 sent on 07-10 alone; deadmen 230/incident via 30-min dedupe
+  buckets; the daily digest suppressed since 06-24 — never allowlisted). Applied the full pause live
+  (allowlist=''). Operator picked: whale digest-only · daily digest backbone · deadmen 1/day. Built:
+  migration `0092` (digest_data + monitor/cityLedger/whales24h — handles the double-encoded panel view;
+  capture/bot deadmen re-stated with UTC-day dedupe buckets; whale_pending_alerts suppression-aware + 48h
+  recency floor so a permanent pause can't grow the queue nor a resume flood it; allowlist hard-set without
+  WHALE_TRADE) + `daily-digest` handler sections + staged `0089` bucket fixed in place. Tests: new 0092
+  describe (5 tests) + support-jobs digest assertions + whale-watch re-pinned to the 0092 routing
+  (fixture re-stamped past the recency floor). Deploy = ⚑ steps ① ②.

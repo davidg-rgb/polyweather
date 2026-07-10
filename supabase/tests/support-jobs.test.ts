@@ -280,6 +280,10 @@ describe('daily-digest (§6.19)', () => {
     expect(body).toContain('*Breakers ACTIVE*: halt:city:seoul');
     expect(body).toContain('*Jobs 24h*: 0 ok / 0 failed');
     expect(body).not.toContain('Monthly reminder');
+    // 0092: the post-pivot forward-instrument sections always render (empty DB → the graceful fallbacks).
+    expect(body).toContain('*Efficiency monitor*: no snapshot yet');
+    expect(body).toContain('*City paper ledger*: graded 24h 0');
+    expect(body).toContain('*Whales 24h*: none');
 
     await db.query(`delete from config where key = 'halt:city:seoul'`);
   });

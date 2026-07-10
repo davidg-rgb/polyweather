@@ -182,7 +182,7 @@ declare
   v_latest    timestamptz;
   v_stale_min numeric := coalesce((select value::numeric from config where key = 'bot.depthStaleMin'), 70);
   v_age_min   numeric;
-  v_bucket    int     := floor(extract(epoch from now()) / 1800)::int;  -- 30-min dedupe
+  v_bucket    text    := to_char(now() at time zone 'utc', 'YYYY-MM-DD');  -- one page per UTC day (0092 policy; was 30-min)
   v_alarmed   boolean := false;
 begin
   select max(captured_at) into v_latest from public.market_depth;  -- index-backed; no full-table count(*)

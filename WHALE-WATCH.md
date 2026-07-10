@@ -9,6 +9,16 @@ reusing the existing Polymarket data client and the Slack/`notifySlack` machiner
 the live-trading rail stays DORMANT (`FINDINGS.md`). It is pure market-microstructure analytics, a sibling of
 the `0049` sharp-wallet tracker.
 
+> **UPDATE 2026-07-10 (migration `0092`) — per-print Slack pushes RETIRED; whales are DIGEST-ONLY.**
+> The operator's spam review measured ~42 WHALE_TRADE pushes/day (587/14d) with no action value — the 06-24
+> insider scan (`WALLET-RECON`/whale-insider) had already found no signature at the $100k floor. `WHALE_TRADE`
+> left `alerts_slack_allow_kinds`; the **daily digest** now carries a whales-24h summary (count + top-3
+> prints). **Recording is unchanged** — `whale_trades` still accrues every ≥$100k print (the tripwire-② /
+> fee-regime observability lives in the data, not the pings). `whale_pending_alerts` is now suppression-aware
+> (reads empty while the kind is paused — no unbounded queue churn) with a 48h recency floor (re-allowlisting
+> can't flood the channel with stale prints). Sections below describe the 0055 design; the delivery-path
+> details marked with per-print Slack posts are historical while the kind stays off the allowlist.
+
 ---
 
 ## 1. How it works
