@@ -388,6 +388,14 @@ describe('migrations 0001–0010', () => {
       // record_efficiency_monitor (service-role write + retention) + dash_efficiency_monitor (operator read).
       // Additive; forward-paper CONFIRMATION of the C23/C24 KILLs (§9R-E gate over time). Operator-deploy-gated.
       '0091_efficiency_monitor.sql',
+      // 0092 = the Slack notification rework (operator 2026-07-10): digest_data gains the post-pivot forward
+      // instruments (monitor/cityLedger/whales24h), deadmen dedupe to 1/kind/UTC-day (was 30-min buckets),
+      // whale_pending_alerts is suppression-aware + 48h-floored, WHALE_TRADE leaves the allowlist (digest-only).
+      '0092_slack_rework.sql',
+      // 0093 = trade_config_set city_allowlist validation (operator 2026-07-11): entries are normalized
+      // (lower/trim/dedupe) and must match cities.slug — unknown slugs RAISE (surfaced verbatim in /trading),
+      // an empty-normalizing allowlist RAISES (all-cities is the clear flag, never '{}'). Guard-tightening only.
+      '0093_allowlist_validation.sql',
     ]);
   });
 });
@@ -1396,5 +1404,171 @@ describe('depth-capture alert kinds survive the global Slack pause (0089, R3-1)'
     const control = (await rows<{ decision: string }>(
       tdb, `select decision from public.claim_alert('NOT_ALLOWLISTED_KIND','WARN','ctrl','t','b')`))[0]!.decision;
     expect(control).toBe('skip');
+  });
+});
+
+describe('0092 slack rework — day-bucket deadmen, digest v2 data, whale queue suppression, allowlist reroute', () => {
+  // The 2026-07-10 operator rework: WHALE_TRADE per-print pushes retired (digest-only), the daily digest
+  // gains the post-pivot forward instruments, deadmen page at most once per kind per UTC day, and the
+  // pending-whale queue reads empty while the kind is suppressed (no unbounded churn under a permanent pause).
+  let tdb: PGlite;
+  const EVENT = '44444444-4444-4444-4444-444444444444';
+  const todayUtc = new Date().toISOString().slice(0, 10);
+
+  beforeAll(async () => {
+    tdb = await freshDb();
+  });
+  afterAll(async () => { await tdb.close(); });
+
+  const digest = async () =>
+    (await rows<{ d: Record<string, any> }>(tdb, `select public.digest_data('paper','house_gaussian') as d`))[0]!.d;
+
+  it('digest_data on an empty DB: monitor null, cityLedger zeroed, whales24h zero (shape-safe for the handler)', async () => {
+    const d = await digest();
+    expect(d.monitor).toBeNull();
+    expect(d.cityLedger.graded24h.n).toBe(0);
+    expect(d.cityLedger.placedToday).toEqual([]);
+    expect(d.whales24h.n).toBe(0);
+    expect(d.whales24h.top).toEqual([]);
+  });
+
+  it('digest_data surfaces the forward instruments — including the DOUBLE-ENCODED monitor view (prod parity)', async () => {
+    // The prod efficiency_monitor_panel.view is a jsonb STRING containing JSON (the 0091 driver passed it
+    // stringified) — digest_data must normalize it exactly like the /monitor loader does.
+    await tdb.query(
+      `insert into public.efficiency_monitor_panel (as_of_date, view) values (current_date, to_jsonb($1::text))`,
+      [JSON.stringify({
+        window: { to: todayUtc },
+        s1: { verdict: { label: 'KILL', nMarkets: 3615, nCities: 45, nDistinctDays: 22, meanNetReturn: -0.0017, ciLow: -0.0102, ciHigh: 0.0069 } },
+        s2: { verdict: { label: 'INSUFFICIENT_DATA', nMarkets: 10 } },
+      })],
+    );
+    const region = (await rows<{ region: string }>(tdb, `select region from public.clusters limit 1`))[0]!.region;
+    const cid = (await rows<{ city_id: string }>(
+      tdb, `select city_id from public.upsert_city('digest_city','DG','US','C','Europe/Amsterdam',$1)`, [region]))[0]!.city_id;
+    await tdb.query(
+      `insert into public.market_events (id, poly_event_id, slug, kind, city_id, target_date, unit, ladder_ok, first_seen, last_seen)
+       values ($1,'dg_poly','dg-slug','highest',$2, current_date, 'C', true, now(), now())`, [EVENT, cid]);
+    await tdb.query(
+      `insert into public.city_paper_bets
+         (city_id, icao, unit, target_date, arm_hour, event_id, predicted_native, bucket_idx, label, ask, stake_usd, shares,
+          status, won, pnl_usd, graded_at)
+       values ($1, 'OPKC', 'C', (now() at time zone 'utc')::date, 14, $2, 40, 3, '40°C', 0.95, 10, 10.5,
+               'won', true, 0.53, now())`, [cid, EVENT]);
+    await tdb.query(
+      `insert into public.whale_trades (trade_key, transaction_hash, proxy_wallet, side, size_shares, price, notional_usd, title, traded_at)
+       values ('wt-fresh','0xabc','0xwallet','BUY', 500000, 0.40, 200000, 'Some big market', now())`);
+
+    const d = await digest();
+    expect(d.monitor.s1.label).toBe('KILL');
+    expect(Number(d.monitor.s1.nMarkets)).toBe(3615);
+    expect(Number(d.monitor.s1.nDistinctDays)).toBe(22);
+    expect(d.monitor.s2.label).toBe('INSUFFICIENT_DATA');
+    expect(d.cityLedger.graded24h).toMatchObject({ n: 1, won: 1 });
+    expect(d.cityLedger.placedToday).toHaveLength(1);
+    expect(d.cityLedger.placedToday[0]).toMatchObject({ icao: 'OPKC', arm: 14 });
+    expect(Number(d.cityLedger.lifetime.n)).toBe(1);
+    expect(Number(d.whales24h.n)).toBe(1);
+    expect(d.whales24h.top[0]).toMatchObject({ title: 'Some big market' });
+  });
+
+  it('deadmen page at most ONCE per kind per UTC day (was: every 30-min bucket → ~48 pages/day measured)', async () => {
+    await tdb.query(
+      `insert into public.bot_tick_log (as_of, mode, ran) values (now() - interval '2 hours', 'paper', true)`);
+    await tdb.exec(`select public.bot_deadman_check()`);
+    await tdb.exec(`select public.bot_deadman_check()`);  // the second check the SAME day must dedupe
+    const got = await rows<{ n: string; k: string }>(
+      tdb, `select count(*) n, min(dedupe_key) k from alerts_log where kind = 'BOT_DEADMAN'`);
+    expect(Number(got[0]!.n)).toBe(1);
+    expect(got[0]!.k).toBe(`bot-deadman:tick:paper:${todayUtc}`);  // day-keyed, not an epoch bucket
+  });
+
+  it('whale_pending_alerts: 48h recency floor + reads EMPTY while WHALE_TRADE is suppressed', async () => {
+    // stale whale (3 days old) — excluded by the recency floor even when the kind is deliverable.
+    await tdb.query(
+      `insert into public.whale_trades (trade_key, transaction_hash, proxy_wallet, side, size_shares, price, notional_usd, title, traded_at)
+       values ('wt-stale','0xdef','0xwallet','SELL', 400000, 0.30, 120000, 'Old news', now() - interval '3 days')`);
+    const before = (await rows<{ p: { rows: unknown[] } }>(tdb, `select public.whale_pending_alerts(50) as p`))[0]!.p;
+    expect(before.rows).toHaveLength(1);  // only wt-fresh; wt-stale is past the floor
+
+    // engage the pause: post-0092 allowlist deliberately lacks WHALE_TRADE → the queue must read empty.
+    await tdb.exec(
+      `insert into public.config (key,value) values ('alerts_slack_paused','true')
+       on conflict (key) do update set value = 'true'`);
+    const paused = (await rows<{ p: { rows: unknown[] } }>(tdb, `select public.whale_pending_alerts(50) as p`))[0]!.p;
+    expect(paused.rows).toHaveLength(0);
+
+    // re-allowlisting the kind resumes delivery of RECENT pending prints only.
+    await tdb.exec(
+      `update public.config set value = value || ',WHALE_TRADE' where key = 'alerts_slack_allow_kinds'`);
+    const resumed = (await rows<{ p: { rows: unknown[] } }>(tdb, `select public.whale_pending_alerts(50) as p`))[0]!.p;
+    expect(resumed.rows).toHaveLength(1);
+    await tdb.exec(  // restore the 0092 routing for the next test
+      `update public.config set value = replace(value, ',WHALE_TRADE', '') where key = 'alerts_slack_allow_kinds'`);
+  });
+
+  it('the reroute: DAILY_DIGEST + deadmen survive the pause; WHALE_TRADE is dropped (paused stays true)', async () => {
+    const list = (await rows<{ value: string }>(
+      tdb, `select value from config where key = 'alerts_slack_allow_kinds'`))[0]!.value;
+    expect(list.split(',')).toContain('DAILY_DIGEST');
+    expect(list.split(',')).not.toContain('WHALE_TRADE');
+
+    for (const [kind, want] of [['DAILY_DIGEST', 'insert'], ['CAPTURE_DEADMAN', 'insert'], ['WHALE_TRADE', 'skip']] as const) {
+      const decision = (await rows<{ decision: string }>(
+        tdb, `select decision from public.claim_alert($1,'INFO',$2,'t','b')`, [kind, `reroute:${kind}`]))[0]!.decision;
+      expect(decision, kind).toBe(want);
+    }
+  });
+});
+
+describe('0093 allowlist validation — trade_config_set normalizes + validates city_allowlist against cities.slug', () => {
+  // The /trading console's allowlist was free text; 0093 makes the DB the guarantee: lower/trim/dedupe,
+  // unknown slugs RAISE (shown verbatim in the UI), and an empty-normalizing list RAISES (all-cities is
+  // p_clear_city_allowlist, never '{}' — an empty allowlist would silently allow NOTHING).
+  let tdb: PGlite;
+  const OPERATOR = { email: 'david.geborek@gmail.com' };
+  const asOperator = <T,>(fn: () => Promise<T>) => asRole(tdb, 'service_role', OPERATOR, fn);
+  const setAllow = (allow: string[] | null, clear = false) =>
+    asOperator(() =>
+      rows<{ r: { config: { city_allowlist: string[] | null } } }>(
+        tdb,
+        `select public.trade_config_set(p_city_allowlist := $1::text[], p_clear_city_allowlist := $2) as r`,
+        [allow, clear],
+      ),
+    );
+
+  beforeAll(async () => {
+    tdb = await freshDb();
+    const region = (await rows<{ region: string }>(tdb, `select region from public.clusters limit 1`))[0]!.region;
+    for (const slug of ['karachi', 'houston', 'ankara']) {
+      await rows(tdb, `select public.upsert_city($1, $2, 'US', 'C', 'UTC', $3)`, [slug, slug, region]);
+    }
+  });
+  afterAll(async () => { await tdb.close(); });
+
+  it('normalizes case/whitespace and de-duplicates before storing', async () => {
+    const out = await setAllow(['  Karachi ', 'HOUSTON', 'houston', 'ankara']);
+    expect(out[0]!.r.config.city_allowlist).toEqual(['ankara', 'houston', 'karachi']);
+  });
+
+  it('RAISES on an unknown slug, naming the offender verbatim', async () => {
+    await expect(setAllow(['karachi', 'houstn'])).rejects.toThrow(/unknown city slug\(s\): houstn/);
+    // and the stored value is untouched by the failed write
+    const cur = await rows<{ a: string[] | null }>(tdb, `select city_allowlist as a from trade_config where id = 1`);
+    expect(cur[0]!.a).toEqual(['ankara', 'houston', 'karachi']);
+  });
+
+  it('RAISES on an allowlist that normalizes to empty (all-cities is the clear flag, never an empty array)', async () => {
+    await expect(setAllow(['  ', ''])).rejects.toThrow(/normalized to empty/);
+  });
+
+  it('p_clear_city_allowlist still nulls the list (all cities), and the guard still blocks non-operators', async () => {
+    const out = await setAllow(null, true);
+    expect(out[0]!.r.config.city_allowlist).toBeNull();
+    await expect(
+      asRole(tdb, 'authenticated', { email: 'intruder@example.com' }, () =>
+        rows(tdb, `select public.trade_config_set(p_city_allowlist := array['karachi'])`),
+      ),
+    ).rejects.toThrow(/ERR_FORBIDDEN/);
   });
 });

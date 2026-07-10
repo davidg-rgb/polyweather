@@ -28,9 +28,15 @@ const tradesFixture = JSON.parse(
 /** Every fixture row was pulled with filterAmount=100000 → all clear the floor. */
 const WHALES = parseTrades(tradesFixture).filter((t) => t.notionalUsd >= 100_000);
 
-/** Polymarket stub: the global /trades feed returns the whale fixture; everything else empty. */
+/** 0092 gave whale_pending_alerts a 48h recency floor (against SQL now(), which tests can't mock) — re-stamp
+ *  the fixture to "just traded" so the e2e delivery path still exercises. Distinct per-row timestamps keep
+ *  trade_key (which includes the timestamp) collision-free; counts are timestamp-independent. */
+const FRESH_TS = Math.floor(Date.now() / 1000) - 600;
+const freshFixture = (tradesFixture as Record<string, unknown>[]).map((r, i) => ({ ...r, timestamp: FRESH_TS - i }));
+
+/** Polymarket stub: the global /trades feed returns the (re-stamped) whale fixture; everything else empty. */
 const stub = (url: string): Promise<unknown> =>
-  Promise.resolve(url.includes('/trades') ? tradesFixture : []);
+  Promise.resolve(url.includes('/trades') ? freshFixture : []);
 
 describe('whale-watch — records the global feed, alerts each new whale, is idempotent', () => {
   let db: PGlite;
@@ -160,35 +166,41 @@ describe('whale-watch — the Slack-alert pause gate (0055)', () => {
     expect((await claim('WHALE_TRADE', 'k-whale-1'))[0]!.decision).toBe('insert');
   });
 
-  it('paused: non-allowlisted kinds are skipped (not recorded); WHALE_TRADE still passes', async () => {
+  it('paused: non-allowlisted kinds are skipped (not recorded) — including WHALE_TRADE since the 0092 reroute', async () => {
     await db.query(`update config set value = 'true' where key = 'alerts_slack_paused'`);
 
     expect((await claim('JOB_FAIL', 'k-jobfail-2'))[0]!.decision).toBe('skip');
     expect((await claim('RESOLUTION', 'k-res-2'))[0]!.decision).toBe('skip');
-    expect((await claim('WHALE_TRADE', 'k-whale-2'))[0]!.decision).toBe('insert');
+    // 0092: per-print whale pushes retired (digest-only) — WHALE_TRADE left the allowlist.
+    expect((await claim('WHALE_TRADE', 'k-whale-2'))[0]!.decision).toBe('skip');
+    // the digest backbone + the incident kinds survive the pause (the 0092 routing).
+    expect((await claim('DAILY_DIGEST', 'k-digest-2'))[0]!.decision).toBe('insert');
+    expect((await claim('CAPTURE_DEADMAN', 'k-deadman-2'))[0]!.decision).toBe('insert');
 
     // the skipped kinds were NOT written to alerts_log (no resend later)
     const suppressed = await rows<{ n: string }>(
       db,
-      `select count(*) n from alerts_log where dedupe_key in ('k-jobfail-2','k-res-2')`,
+      `select count(*) n from alerts_log where dedupe_key in ('k-jobfail-2','k-res-2','k-whale-2')`,
     );
     expect(Number(suppressed[0]!.n)).toBe(0);
   });
 
   it('the resend sweep (list_unsent_alerts) skips suppressed kinds while paused', async () => {
-    // an unsent JOB_FAIL row that predates the pause must not leak out while paused…
+    // unsent JOB_FAIL + WHALE_TRADE rows that predate the pause must not leak out while paused…
     await db.query(
       `insert into alerts_log (kind, severity, dedupe_key, title, body, sent, created_at)
        values ('JOB_FAIL','CRITICAL','k-old-jobfail','t','b', false, now() - interval '1 hour')`,
     );
     let unsent = await rows<{ kind: string }>(db, `select kind from public.list_unsent_alerts(0)`);
     expect(unsent.some((r) => r.kind === 'JOB_FAIL')).toBe(false);
-    expect(unsent.some((r) => r.kind === 'WHALE_TRADE')).toBe(true); // allowlisted → still delivered
+    expect(unsent.some((r) => r.kind === 'WHALE_TRADE')).toBe(false); // 0092: suppressed like any other
+    expect(unsent.some((r) => r.kind === 'DAILY_DIGEST')).toBe(true); // the backbone still delivers
 
-    // …and resumes cleanly once unpaused
+    // …and resumes cleanly once unpaused (k-whale-1 was recorded unpaused in the first test)
     await db.query(`update config set value = 'false' where key = 'alerts_slack_paused'`);
     unsent = await rows<{ kind: string }>(db, `select kind from public.list_unsent_alerts(0)`);
     expect(unsent.some((r) => r.kind === 'JOB_FAIL')).toBe(true);
+    expect(unsent.some((r) => r.kind === 'WHALE_TRADE')).toBe(true);
     expect((await claim('JOB_FAIL', 'k-jobfail-3'))[0]!.decision).toBe('insert');
   });
 });

@@ -36,10 +36,36 @@ interface DigestData {
   edgeDeciles: { decile: number; n: number; hitRate: number; avgEdge: number; pnl: number | null }[];
   halts: string[];
   jobs24h: { ok: number; failed: number };
+  // 0092 additions — the post-pivot forward instruments (null/empty on a pre-0092 DB).
+  monitor: {
+    asOf: string;
+    capturedAt: string;
+    s1: {
+      label: string | null;
+      nMarkets: number | null;
+      nCities: number | null;
+      nDistinctDays: number | null;
+      meanNetReturn: number | null;
+      ciLow: number | null;
+      ciHigh: number | null;
+    };
+    s2: { label: string | null; nMarkets: number | null };
+  } | null;
+  cityLedger: {
+    graded24h: { n: number; won: number; pnl: number };
+    placedToday: { icao: string; arm: number; ask: number }[];
+    lifetime: { n: number; pnl: number };
+  } | null;
+  whales24h: { n: number; top: { title: string | null; notional: number; side: string | null; slug: string | null }[] } | null;
 }
 
 const usd = (x: number): string => `$${x.toFixed(2)}`;
 const pct = (x: number | null): string => (x === null ? '—' : `${(Number(x) * 100).toFixed(1)}%`);
+/** Compact USD for whale notionals: $1.25M / $255k. */
+const usdShort = (n: number): string =>
+  n >= 1_000_000 ? `$${(n / 1_000_000).toFixed(2)}M` : n >= 1_000 ? `$${Math.round(n / 1_000)}k` : `$${Math.round(n)}`;
+/** Signed percent with 2 decimals for monitor net-returns (fractions in, e.g. −0.0017 → "−0.17%"). */
+const spct = (x: number | null): string => (x === null ? '—' : `${(Number(x) * 100).toFixed(2)}%`);
 
 export async function dailyDigest(ctx: JobCtx, deps: DigestDeps): Promise<JobStats> {
   const { db, config: cfg, log } = ctx;
@@ -57,6 +83,32 @@ export async function dailyDigest(ctx: JobCtx, deps: DigestDeps): Promise<JobSta
   lines.push(
     `*Bankroll (${cfg.tradingMode})*: ${usd(Number(d.bankroll))} (${delta >= 0 ? '+' : '−'}${usd(Math.abs(delta))} 24h)`,
   );
+
+  // 0092: the post-pivot forward instruments lead the digest — they are the live analytics product; the
+  // trading-era sections below mostly render empty while the rail is DORMANT.
+  if (d.monitor) {
+    const s1 = d.monitor.s1;
+    const s1Line =
+      s1.label === null
+        ? 'S1 —'
+        : `S1 ${s1.label} — n=${s1.nMarkets}/${s1.nCities}c/${s1.nDistinctDays}d, mean ${spct(s1.meanNetReturn)} CI [${spct(s1.ciLow)}, ${spct(s1.ciHigh)}]`;
+    const s2Line = d.monitor.s2.label === null ? 'S2 —' : `S2 ${d.monitor.s2.label} (n=${d.monitor.s2.nMarkets})`;
+    lines.push(`*Efficiency monitor* (as-of ${d.monitor.asOf}): ${s1Line} · ${s2Line}`);
+  } else {
+    lines.push(`*Efficiency monitor*: no snapshot yet`);
+  }
+
+  if (d.cityLedger) {
+    const cl = d.cityLedger;
+    const placed =
+      cl.placedToday.length === 0
+        ? 'none'
+        : cl.placedToday.map((p) => `${p.icao}@${p.arm} (${Math.round(Number(p.ask) * 100)}¢)`).join(', ');
+    lines.push(
+      `*City paper ledger*: graded 24h ${cl.graded24h.n} (won ${cl.graded24h.won}, P&L ${usd(Number(cl.graded24h.pnl))}) · ` +
+        `placed today: ${placed} · lifetime ${usd(Number(cl.lifetime.pnl))} over ${cl.lifetime.n} bets`,
+    );
+  }
 
   if (d.resolutions.length > 0) {
     lines.push(`*Yesterday's resolutions* (${d.resolutions.length}):`);
@@ -96,6 +148,20 @@ export async function dailyDigest(ctx: JobCtx, deps: DigestDeps): Promise<JobSta
     }
   }
 
+  // 0092: whales are DIGEST-ONLY — WHALE_TRADE per-print pushes retired 2026-07-10 (no actionable
+  // signature at the $100k floor per the 06-24 insider scan; ~42 pushes/day of noise). Data still records.
+  if (d.whales24h) {
+    const w = d.whales24h;
+    if (w.n > 0) {
+      const top = w.top
+        .map((t) => `${usdShort(Number(t.notional))} ${t.side ?? ''} _${t.title ?? t.slug ?? 'a market'}_`)
+        .join(' · ');
+      lines.push(`*Whales 24h*: ${w.n} large prints — top: ${top}`);
+    } else {
+      lines.push(`*Whales 24h*: none`);
+    }
+  }
+
   lines.push(
     d.halts.length > 0 ? `*Breakers ACTIVE*: ${d.halts.join(', ')}` : `*Breakers*: none active`,
   );
@@ -126,6 +192,8 @@ export async function dailyDigest(ctx: JobCtx, deps: DigestDeps): Promise<JobSta
     deciles: d.edgeDeciles.length,
     halts: d.halts.length,
     monthlyReminder: monthly,
+    monitorS1: d.monitor?.s1.label ?? null,
+    whales24h: d.whales24h ? Number(d.whales24h.n) : 0,
   };
   log('digest sent', stats);
   return stats;

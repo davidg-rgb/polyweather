@@ -822,6 +822,109 @@ expected to survive.
 >   | buenos-aires/14h | 10 | +$13.25 | +2.7pp | 8 | −$6.77 | 62.5% | [−9.4, +37.9] |
 >   | helsinki/15h | 11 | +$88.00 | −0.1pp | 7 | +$44.23 | 57.1% | [−16.0, +59.6] |
 
+## 12-R. CITY-SCAN candidate CONFIRMATION — restoration + the pre-registered forward gate (2026-07-10, EDGE-WATCH C6)
+
+> **📌 PRE-REGISTERED (2026-07-10 ~21:45Z, orchestrator — locked BEFORE any qualifying forward data exists
+> beyond the 4 days noted below). Status of the two §12 candidates and the frozen bar their live paper
+> confirmation must clear. Read this before trusting the two candidates.**
+>
+> **Why the scan table is NOT evidence yet (the honesty prong):** every TEST CI straddles 0 at n=7–8; of the
+> four top-5 cells with TRAIN LB > 0, exactly 2 passed TEST net > 0 — **under a zero-edge null (P(TEST net>0)
+> ≲ 0.5 per cell) two survivors out of four is the EXPECTED count from pure noise**; the pooled curve is
+> negative at every hour (mechanism-A re-confirmed); and the three live/known references (karachi, singapore,
+> amsterdam) do not clear TRAIN LB > 0 in the same window — a stability red flag on the selector itself.
+> The scan SELECTED; only the live forward loop can CONFIRM. That was the §12 pre-registration's own clause.
+>
+> **The confirmation stream was broken twice (single-writer record):**
+> 1. **2026-07-07 18:11Z** — the C101 best-hour narrowing set each city to its single realized-ledger best arm
+>    (houston→15, ankara→16), **removing arm 14 from both candidate cities**. C101's per-city read for
+>    houston/ankara was computed substantially on the 06-12→07-03 BACKFILL — which is IN-SAMPLE vs the scan —
+>    so the narrowing replaced a pre-registered forward test with an in-sample-driven pick.
+> 2. **Since 07-08** — houston-15 (20:00Z) and ankara-16 (13:00Z) fall after the single 10:00Z tick, which
+>    targets each city's LOCAL TODAY and only places arms whose local hour has passed → these cities place
+>    NOTHING (EDGE-WATCH ⚑ #1). Net: the candidates hold only ~4 qualifying forward days (07-04→07-07, arm 14,
+>    cron/gap-fill-placed) and zero accrual since.
+>    **Correction to the C1 board note:** a single extra tick at 21:30Z does NOT work — 21:30Z is 00:30 NEXT
+>    local day in Istanbul (handler targets local-today), so Ankara's missed arms would still never place.
+>
+> **Restoration design (staged below, OPERATOR-GATED):**
+> - **Race, don't swap:** houston arms → {14,15}, ankara arms → {14,16} — the §12 candidate arm PLUS the C101
+>   incumbent, same city, same days → the paired same-day diff directly measures candidate-vs-incumbent on
+>   clean forward data instead of re-litigating which analysis was right. Stake stays $10/arm (paper).
+> - **Two extra daily ticks of the SAME idempotent fn** (place windows: an arm places only while its local
+>   hour has passed AND it is still that local day): **13:50Z** (ankara 16:50 local — arms 14/16 both passed,
+>   7h clear of Istanbul midnight at 21:00Z; no-op elsewhere) + **20:45Z** (houston 15:45 CDT — arms 14/15
+>   passed; belt-and-braces re-try for ankara at 23:45 local; no-op where placed). Both clear of the reserved
+>   :32–:42 window. DST note: valid while Houston is on CDT (through Nov 1); Istanbul has no DST.
+> - **Runway:** `active_until` → 2026-09-30 all four cities (the 07-31 cap cannot fit the n below).
+>
+> **The FROZEN confirmation gate (do not move these to fit results):**
+> - **Population:** live-cron/gap-fill forward-placed bets only, `target_date ≥ 2026-07-04` (the recorded §12
+>   clock rule, unchanged), arm = 14, per city. Backfill-script rows are in-sample and never count.
+> - **Unit:** the distinct forward target-day (1 bet/day/cell — days are the independent unit).
+> - **Bar, per candidate cell, adjudicated at n ≥ 30 distinct forward target-days:** day-clustered 95% CI on
+>   per-day net ROI — **LB > 0 → CONFIRMED · UB < 0 → KILL · else NOT-CONFIRMED**; hard stop at n = 45 (no
+>   extension without a new mechanism). Alongside (reported, non-gating): the entry-watch shrinkage LB with
+>   the §12-finding-(1) eligibility floor hardened in, and the candidate-vs-incumbent paired diff.
+> - **Multiplicity:** two cells adjudicated separately; any single CONFIRMED carries the family-wise caveat
+>   (P(≥1 false CONFIRMED | both null) ≈ 9.8%) and must also clear a zero-skill sign-flip MC < 5% run on the
+>   exact joint two-cell procedure (project idiom, seeded).
+> - **Power (state it, don't discover it later):** day-level ROI sd ≈ 50–66pp (backed out of the TEST CIs) →
+>   at n=30 the CI half-width is ~±18–24pp: decisive for ankara-sized effects (+56pp TEST point), ~50% power
+>   for houston-sized (+17pp); n=45 tightens to ~±15–19pp. A thin true edge (<+15pp) will land NOT-CONFIRMED
+>   by design — per the FINDINGS power legend that is an *underpowered wash*, not a null, and it still ends
+>   the lever (a paper edge too small to measure in 45 days is not actionable under any standing rule).
+> - **Outcome mapping:** CONFIRMED ≠ capital — it only promotes the cell to the standing law's track (frozen
+>   forward PASS ×2 non-overlapping windows + explicit operator go; §9R boundary unchanged). Expected outcome
+>   per the prior: NOT-CONFIRMED or KILL. Timeline: n=30 lands ~2026-08-12, n=45 ~2026-08-27 (+ listing-gap slack).
+>
+> **Staged SQL (OPERATOR DECISION — do not apply without deciding; rollback lines included):**
+> ```sql
+> -- 1) restore the candidate arms as a RACE vs the C101 incumbents + extend runway (all 4 cities)
+> update public.city_sim_config set arm_hours = array[14,15]::smallint[], active_until = date '2026-09-30' where slug = 'houston';
+> update public.city_sim_config set arm_hours = array[14,16]::smallint[], active_until = date '2026-09-30' where slug = 'ankara';
+> update public.city_sim_config set active_until = date '2026-09-30' where slug in ('karachi','singapore');
+> -- verify: select slug, icao, arm_hours, forecast_max_hour, active, active_until from public.city_sim_config order by slug;
+> -- 2) two extra daily ticks of the same fn (idempotent per city/date/arm; same vault-secret idiom as 0070 §10)
+> do $$
+> declare edge_command text;
+> begin
+>   edge_command := $cmd$select net.http_post(
+>   url := (select decrypted_secret from vault.decrypted_secrets where name = 'project_url') || '/functions/v1/city-paper-trade',
+>   headers := jsonb_build_object(
+>     'Content-Type', 'application/json',
+>     'x-cron-secret', (select decrypted_secret from vault.decrypted_secrets where name = 'cron_secret')
+>   ),
+>   timeout_milliseconds := 4500
+> )$cmd$;
+>   perform cron.schedule('city-paper-trade-b', '50 13 * * *', edge_command);  -- ankara window (16:50 local)
+>   perform cron.schedule('city-paper-trade-c', '45 20 * * *', edge_command);  -- houston window (15:45 CDT)
+> end;
+> $$;
+> -- rollback: select cron.unschedule('city-paper-trade-b'); select cron.unschedule('city-paper-trade-c');
+> --           update public.city_sim_config set arm_hours=array[15]::smallint[] where slug='houston';
+> --           update public.city_sim_config set arm_hours=array[16]::smallint[] where slug='ankara';
+> ```
+>
+> **↳ APPLIED 2026-07-10 ~22:05Z (operator "activate — surgical, a couple of cities, best-time-per-market"
+> in-session; C21-class approval, paper-only). Single-writer record, with ONE material amendment to the
+> staged SQL above:**
+> - **The staged crons as written would have 409'd forever.** `runJob` claims a per-UTC-DAY period key
+>   (`city-paper-trade:YYYY-MM-DD`) BEFORE the handler's per city/date/arm idempotency — the 10:00Z tick
+>   claims the day, and any later plain tick gets `ERR_ALREADY_RAN` (discovered live: the first gap-fill
+>   attempt 409'd). **Fix, zero code changes:** the -b/-c cron bodies carry the §8.1 caller-supplied
+>   `periodKey` (`…:YYYY-MM-DD:b` / `…:c`, stamped at fire time), so each slot claims its own period; the
+>   handler's idempotency then dedupes actual placements. Any future extra tick of a runJob-wrapped fn
+>   needs the same body key — the "idempotent fn" note alone is NOT sufficient.
+> - Applied + verified: ankara `[14,16]` · houston `[14,15]` · all four cities `active_until = 2026-09-30` ·
+>   crons `city-paper-trade` 10:00Z / `-b` 13:50Z / `-c` 20:45Z (with per-slot keys).
+> - Gap-fill `targetDate=2026-07-10` (periodKey `…:gapfill-12r`): run ok 22:04:40Z, **placed 4** — KHOU-14
+>   92–93°F @ 0.11 · KHOU-15 86–87°F @ 0.59 · LTAC-14 29°C @ 0.89 · LTAC-16 29°C @ 0.95 (+4 maker twins).
+>   Watch item: the two Houston arms picked buckets 3 apart (6°F) at the same day's two lock hours — an
+>   intraday forecast swing or a °F-path anomaly; glance at the 07-11 grading.
+> - The frozen gate above is UNCHANGED and now accruing. Live capital stays behind the standing law —
+>   this activation is the paper confirmation instrument, nothing else.
+
 ## 13. Maker-exit forward gate — CLOSED 2026-07-07, KILL (the 12th and final signal)
 
 The 12th signal's sole surviving form — the opening-convergence **maker-exit variant** (enter at the first
