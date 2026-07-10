@@ -73,3 +73,7 @@ _Claude keeps this block current every material cycle. Whole status in 20 second
   **S1 KILL n=3,615/45c/22d · S2 INSUFFICIENT 10 troughs** (S1 n +85 vs last night; verdicts unchanged vs the
   C24 baseline — the forward accrual is confirming the KILL). Operator option logged in ⚑ #2 (cron off :00 if
   tomorrow also skips). Next checkpoint: 10:00Z city tick.
+- **C3 (2026-07-10 ~10:04Z) — 10:00Z city tick HEALTHY; tripwires no-change.** OPKC-14 (ask 0.95) + WSSS-15
+  (ask 0.997) placed 10:00:14/23Z, pending; KHOU/LTAC absent exactly per the C1 diagnosis (⚑ #1 stands).
+  Tripwires: ⑤ dry-run ✓ · ①②no signal · ③④ deferred to an occasional sweep. Both daily checkpoints done;
+  idling until tomorrow's 06:00Z Action watch.
