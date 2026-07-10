@@ -315,3 +315,45 @@ Artifacts: `scripts/research/fishalive-forensics.ts` + `out/fishalive-forensics.
 realized-PnL via `scripts/wallet-forensics.ts`. Read-only, keyless, no orders. Re-open only if a *fresh, multi-event*
 fishalive track record (post-2026-06-15 activity across many independent fixtures) shows a credibly-graded, executable
 edge — none exists today; the wallet is dormant after this one game.
+
+## 11. World Cup MAKER regime check 2026-07-10 — Lane-3 gauntlet (EDGE-WATCH C5): the reward pools are real and big, but the lever is a sub-second market-making business we cannot rent, and the event expires before the gate could certify anything
+
+**Operator question:** analyze the successful maker-side football whales; with World Cup knockout volume peaking,
+is there a chance for *safer maker bets* during this window? **Answer: NO — not a reopen.** The idea reduces to
+prior kills (REC-10 two-sided maker inventory −41%/day · maker-spray −1.46pp CI excl 0 · maker-exit live fill rate
+6.5% · §3 volume-machines-not-copyable) with every term made *worse* by the in-play regime, plus one structural
+wall that is decisive on its own. Fresh keyless reads (data-api leaderboard WEEK · gamma events · live CLOB book):
+
+- **The volume is real.** `fifwc-esp-bel-2026-07-10`: $30.0M/24h on the 1X2 + $32.8M on spreads + $14.3M exact-score;
+  `world-cup-winner` futures $27.8M/24h on $23.9M resting liquidity.
+- **NEW observation (tripwire-② lineage): flagship match markets carry enormous maker-reward pools** —
+  **$16,322/day** on the esp-bel 1X2 (typical elsewhere: $25–500/day; the WC-winner outcomes carry only $143–500/day).
+  The maker prize on these books is the pool, not the 0.25¢ spread. *Expires with the event (final 2026-07-19).*
+- **The "successful maker football whale," identified live:** `ferrariChampions2026` — **$53.6M volume / $599k P&L
+  this WEEK (1.1% ROI)**; a 100-fill sample spans 7.9h at **$130 median clip** across in-play tennis + the
+  Spain–Belgium match (all prints BUY-side; the public feed under-represents maker-side flow). This is a
+  professional high-frequency cross-sport MM bot — the §3 archetype (per-$ edge ≈ 0; profit = pool/rebate × enormous
+  size × sub-second risk management), not a bettor whose positions can be mirrored.
+- **The queue is crowded:** Spain 1X2 in-play top-of-book 0.25¢ wide, ~$350k bids / ~$700k asks resting. A $10k
+  two-sided quote is ~1% of the qualifying queue ≈ **~$150/day gross pool share** — *before* adverse selection.
+
+**Why "safer" is inverted, term by term:**
+1. **In-play is the maximal adverse-selection seat, not a safe one.** A goal gaps the book 10–40¢ in seconds; the
+   fast specialists (this week's #1: DEEDDIT, **$8.28M P&L on $23.3M vol, 35% ROI**) are precisely the flow that
+   picks off stale resting quotes. REC-10 measured two-sided maker inventory at **−41%/day on weather books that
+   drift gently**; in-play football is strictly worse, and our measured reachable reaction latency is **300–1800×
+   too slow** (§9 C2) to pull quotes on match events. A resting quote you cannot pull is a free option for the sharps.
+2. **The pre-match / futures variant doesn't rescue it.** Pools there are small ($143–500/day), the resting
+   competition is $23.9M deep, and pre-match books still gap on lineup/team-news leaks — the exact mechanism §10
+   ranked most plausible for fishalive's $9M. Same seat, slower poison.
+3. **Structural, decisive regardless of 1–2:** the gate of record requires a frozen forward paper **PASS ×2
+   non-overlapping windows (each ≥7 days / ≥40 markets) + explicit operator go** before any capital. The final is
+   **07-19** — two qualifying windows cannot fit inside the remaining event by construction. An event-scoped regime
+   expires faster than the discipline can certify it; that discipline exists because eleven backtest-plausible ideas
+   died on forward data.
+4. Boundary unchanged: no sports execution rail exists; the weather rail is DORMANT; Claude never trades.
+
+**Carry-forward (the one genuinely new datum):** Polymarket funds flagship-event maker pools at ~30–600× the
+baseline rate. Logged as a tripwire-② data point (program-funding behavior at the root). The *reachable* version of
+this lever is not football — it is: **if flagship-scale pools ever become STANDING on a slow-moving market class we
+can actually quote (weather), REC-8 economics reopen for a fresh measure.** Watch the pool rates, not the matches.

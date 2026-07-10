@@ -92,6 +92,15 @@ _Claude keeps this block current every material cycle. Whole status in 20 second
   (ask 0.997) placed 10:00:14/23Z, pending; KHOU/LTAC absent exactly per the C1 diagnosis (⚑ #1 stands).
   Tripwires: ⑤ dry-run ✓ · ①②no signal · ③④ deferred to an occasional sweep. Both daily checkpoints done;
   idling until tomorrow's 06:00Z Action watch.
+- **C5 (2026-07-10 ~21:00Z) — Lane-3 gauntlet: "World Cup maker whales / safer maker bets during WC volume"
+  (operator idea) → NOT A REOPEN.** Fresh keyless reads: WC knockout volume real (esp-bel 1X2 $30M/24h);
+  **flagship match markets carry $16,322/day maker-reward pools** (vs $25–500 typical) — the genuinely new datum,
+  logged against tripwire ② (expires with the final 07-19); the active maker whale (`ferrariChampions2026`,
+  $53.6M/$599k this week, 1.1% ROI, $130 median clips across in-play sports) is a professional sub-second MM bot,
+  the SPORTS-TRADERS §3 archetype. Reduces to REC-10 (−41%/day two-sided inventory) + maker-spray/maker-exit
+  adverse-selection kills with the in-play sign made worse (goals gap 10–40¢; our latency 300–1800× short, §9 C2);
+  and structurally: PASS ×2 non-overlapping ≥7d windows cannot fit before 07-19. Full record: SPORTS-TRADERS §11.
+  Carry-forward: watch pool RATES — flagship-scale pools going STANDING on weather would reopen REC-8, not football.
 - **C4 (2026-07-10 ~13:00–15:30Z) — OPERATOR-DIRECTED Slack rework (spam → value).** Measured the spam
   (alerts_log 14d: WHALE_TRADE 587 — 100 sent on 07-10 alone; deadmen 230/incident via 30-min dedupe
   buckets; the daily digest suppressed since 06-24 — never allowlisted). Applied the full pause live
