@@ -95,6 +95,22 @@ _Claude keeps this block current every material cycle. Whole status in 20 second
   (ask 0.997) placed 10:00:14/23Z, pending; KHOU/LTAC absent exactly per the C1 diagnosis (⚑ #1 stands).
   Tripwires: ⑤ dry-run ✓ · ①②no signal · ③④ deferred to an occasional sweep. Both daily checkpoints done;
   idling until tomorrow's 06:00Z Action watch.
+- **C7 (2026-07-10 ~23:30Z) — OPERATOR ASK: review the actual-money order path + prove it runs.** Reviewed
+  the full money path (live.ts 1041 lines + order-intent pricing + gate/preflight/smoke). Ran: trading suite
+  **150/150 green** (incl. the §15 repo-walk invariant: the wallet key is read nowhere outside packages/
+  trading) + `trade-smoke.ts` SAFE DEFAULT → **all green against the LIVE venue**: L2 creds derived (apiKey
+  632d3ff9…, sigType 2, funder set), authenticated getOpenOrders OK (0 open — dormant as expected), real V2
+  order built+signed for a live market, NOT posted; TRADE_MODE resolved dry-run; step 4 refused correctly.
+  Review verdict: fail-directional discipline is sound (post-succeeded never frees the key; transport-throw
+  holds for startup reconcile; only clean venue rejection frees). Residual risks named in-chat: (a) maker-ness
+  is price-enforced only — a book move in the read→post window can cross as an unbooked-fee taker fill (C75
+  deliberate, post_only is the gated lever); (b) getOrder fill shapes are mock/shadow-verified until the first
+  real fill; (c) reconcile's adopt heuristic can adopt an identical operator-manual order; (d) cancelAllForMarket
+  bypasses ledger transitions until next poll; (e) preflight has no on-chain balance/allowance check — the
+  operator `--live-smoke` probe is what proves funding. Remaining unproven live steps = postOrder/cancelOrder
+  real responses → exactly the operator-run `--live-smoke` ($0 far-from-market place+cancel; needs
+  TRADE_MODE=live + preflight or the explicit escape). Rail posture unchanged: quadruple-locked, strategy
+  KILLed, nothing to trade — this was a plumbing verification, not a reopen.
 - **C6 (2026-07-10 ~22:00Z) — OPERATOR ASK: "put the city-scan candidates to true testing" → §12-R written
   (restoration + frozen forward gate), SQL staged.** Found the confirmation stream broken TWICE: the 07-07
   C101 narrowing removed arm 14 from houston/ankara (an in-sample-driven pick displacing the pre-registered
