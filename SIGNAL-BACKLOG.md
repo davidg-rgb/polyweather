@@ -905,6 +905,25 @@ expected to survive.
 > --           update public.city_sim_config set arm_hours=array[15]::smallint[] where slug='houston';
 > --           update public.city_sim_config set arm_hours=array[16]::smallint[] where slug='ankara';
 > ```
+>
+> **↳ APPLIED 2026-07-10 ~22:05Z (operator "activate — surgical, a couple of cities, best-time-per-market"
+> in-session; C21-class approval, paper-only). Single-writer record, with ONE material amendment to the
+> staged SQL above:**
+> - **The staged crons as written would have 409'd forever.** `runJob` claims a per-UTC-DAY period key
+>   (`city-paper-trade:YYYY-MM-DD`) BEFORE the handler's per city/date/arm idempotency — the 10:00Z tick
+>   claims the day, and any later plain tick gets `ERR_ALREADY_RAN` (discovered live: the first gap-fill
+>   attempt 409'd). **Fix, zero code changes:** the -b/-c cron bodies carry the §8.1 caller-supplied
+>   `periodKey` (`…:YYYY-MM-DD:b` / `…:c`, stamped at fire time), so each slot claims its own period; the
+>   handler's idempotency then dedupes actual placements. Any future extra tick of a runJob-wrapped fn
+>   needs the same body key — the "idempotent fn" note alone is NOT sufficient.
+> - Applied + verified: ankara `[14,16]` · houston `[14,15]` · all four cities `active_until = 2026-09-30` ·
+>   crons `city-paper-trade` 10:00Z / `-b` 13:50Z / `-c` 20:45Z (with per-slot keys).
+> - Gap-fill `targetDate=2026-07-10` (periodKey `…:gapfill-12r`): run ok 22:04:40Z, **placed 4** — KHOU-14
+>   92–93°F @ 0.11 · KHOU-15 86–87°F @ 0.59 · LTAC-14 29°C @ 0.89 · LTAC-16 29°C @ 0.95 (+4 maker twins).
+>   Watch item: the two Houston arms picked buckets 3 apart (6°F) at the same day's two lock hours — an
+>   intraday forecast swing or a °F-path anomaly; glance at the 07-11 grading.
+> - The frozen gate above is UNCHANGED and now accruing. Live capital stays behind the standing law —
+>   this activation is the paper confirmation instrument, nothing else.
 
 ## 13. Maker-exit forward gate — CLOSED 2026-07-07, KILL (the 12th and final signal)
 

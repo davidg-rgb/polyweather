@@ -38,11 +38,10 @@ _Claude keeps this block current every material cycle. Whole status in 20 second
      structurally never place. (The full-arm 07-04/07-05 rows came from manual runs at 22:08Z/18:53Z, which
      is why this wasn't visible at the change.) Karachi-14 (09:00Z) + Singapore-15 (07:00Z) are fine.
      ~~Fix is a one-line cron change (operator-gated): add a second daily run of the same fn at ~21:30Z~~
-     **↳ SUPERSEDED by C6 (07-10):** 21:30Z is WRONG for Ankara (00:30 next local day — the handler targets
-     local-today, so the missed arms would still never place). The corrected, staged fix — TWO extra ticks
-     (13:50Z ankara-window + 20:45Z houston-window) + restoring the §12 candidate 14h arms as a RACE vs the
-     C101 incumbents + runway to 09-30 + a frozen forward confirmation gate — is **SIGNAL-BACKLOG §12-R**
-     (staged SQL inside, rollback included). One apply, and the scan candidates get their true test.
+     **↳ RESOLVED at C8 (07-10 ~22:05Z, operator "activate" in-session): §12-R APPLIED LIVE** — arms
+     ankara `[14,16]` / houston `[14,15]`, runway 09-30 all four cities, crons 13:50Z + 20:45Z added
+     (WITH per-slot §8.1 periodKeys — the staged plain crons would have 409'd against runJob's daily
+     claim; caught live), 07-10 gap-filled (4 bets placed). The §12-R frozen confirmation gate is accruing.
   2. **Efficiency monitor — the 06:00Z SCHEDULED run did NOT fire on 07-10** (watched through 06:59Z; GitHub
      drops scheduled runs under load at congested slots like :00, and brand-new schedules are the most
      drop-prone). **I dispatched it manually at 06:59Z → success (run 29075331802, 1m32s) → snapshot landed
@@ -95,6 +94,17 @@ _Claude keeps this block current every material cycle. Whole status in 20 second
   (ask 0.997) placed 10:00:14/23Z, pending; KHOU/LTAC absent exactly per the C1 diagnosis (⚑ #1 stands).
   Tripwires: ⑤ dry-run ✓ · ①②no signal · ③④ deferred to an occasional sweep. Both daily checkpoints done;
   idling until tomorrow's 06:00Z Action watch.
+- **C8 (2026-07-10 ~22:05Z) — OPERATOR "ACTIVATE" → §12-R APPLIED LIVE (paper); ⚑ #1 RESOLVED; a real
+  cron-design defect caught and fixed in the act.** Operator asked for surgical best-time-per-market buys
+  on a couple of cities = exactly §12-R. Applied under C21-class in-session approval: config (ankara
+  `[14,16]`, houston `[14,15]`, ×4 runway 09-30) + crons -b 13:50Z / -c 20:45Z. **DEFECT: the staged crons
+  would have 409'd daily** — runJob claims a per-UTC-day periodKey before the handler's idempotency; the
+  10:00Z tick owns the day (first gap-fill attempt returned ERR_ALREADY_RAN and exposed it). Fixed with
+  §8.1 body periodKeys (`…:b`/`…:c` stamped at fire time), zero code changes. Gap-fill 07-10 then placed
+  **4/4**: KHOU-14 92–93°F @0.11 · KHOU-15 86–87°F @0.59 · LTAC-14 29°C @0.89 · LTAC-16 29°C @0.95
+  (+4 maker twins). Watch: the Houston arms' 6°F pick gap (intraday swing vs °F-path anomaly — check at
+  07-11 grading); tomorrow's 13:50Z/20:45Z ticks are the first scheduled fires of the -b/-c keys — verify.
+  Boundary intact: paper only; live capital stays behind the standing law + operator-physical toggles.
 - **C7 (2026-07-10 ~23:30Z) — OPERATOR ASK: review the actual-money order path + prove it runs.** Reviewed
   the full money path (live.ts 1041 lines + order-intent pricing + gate/preflight/smoke). Ran: trading suite
   **150/150 green** (incl. the §15 repo-walk invariant: the wallet key is read nowhere outside packages/
