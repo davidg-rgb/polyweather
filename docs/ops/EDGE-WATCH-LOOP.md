@@ -23,6 +23,11 @@ _Claude keeps this block current every material cycle. Whole status in 20 second
      **↳ C10 (07-11 ~13:15Z): PENDING — checked before the first -b fire.** The 10:00Z tick itself ran clean
      (period_key `city-paper-trade:2026-07-11`, OPKC-14 @0.992 + WSSS-15 @0.984 placed, pending). The -b/-c
      verification stands for the next check-in.
+     **↳ C10 (07-11 13:50Z): the -b HALF PASSES.** First scheduled fire landed on the second (13:50:02Z),
+     period_key `city-paper-trade:2026-07-11:b`, status ok, NO 409 — the §8.1 body periodKey works live.
+     placedByCity {ankara: 2}: LTAC-14 30°C @0.66 + LTAC-16 29°C @0.48 (+2 maker twins, both filled). Note the
+     arms picked DIFFERENT buckets — the race is producing divergent picks, which is what §12-R exists to
+     adjudicate. The 20:45Z -c (houston) half remains.
   2. **The Houston 6°F pick gap grades**: 07-10 KHOU-14 bought 92–93°F @0.11 vs KHOU-15 86–87°F @0.59 (3
      buckets apart, same day). When 07-10 grades (~10:00Z tick), check which won and whether the 14h lock's
      forecast snapshot was a real intraday swing or a °F-path anomaly (C25/C37 verified the path, but this
@@ -95,10 +100,22 @@ _Claude keeps this block current every material cycle. Whole status in 20 second
 | ② | Polymarket fee/rebate/rewards program | a program flip at the root (REC-8 lineage, like the 06-24 rewards funding) | no signal; whale-watch+Slack cover the big-print side | 07-10 C1 |
 | ③ | New-instrument volume (precip/wind/snow) | ~10× regime change vs the $802/24h read (floor $7k, signal #9) | not swept C1 (occasional) | — |
 | ④ | Cross-venue true both-book depth | growth vs the 1–10-contract KILL read (#10) | not swept C1 (occasional) | — |
-| ⑤ | trade_config.mode | anything ≠ off/dry-run → fold v16 Phase-C monitoring in as a lane | `dry-run` ✓ | 07-10 C1 |
+| ⑤ | trade_config.mode | anything ≠ off/dry-run → fold v16 Phase-C monitoring in as a lane | **`live` — OPERATOR-SET 07-11 12:56Z** (authorized live test, not a reopen). Still inert: active_until null + no gate PASS/override + daemon not running (ledger last wrote 07-07, 0 live rows). Phase-C monitoring folds in the moment the daemon actually runs live. | 07-11 C11 |
 
 ## Cycle log
 
+- **C11 (2026-07-11 ~14:10Z) — OPERATOR armed the live test in /trading; verified state + named the three
+  blocks.** Audit trail: 12:55:54Z mode dry-run→**live** (the C9-owed positive click test implicitly done —
+  updated_at moves on save now) · 13:57:05Z allowlist −ankara +mexico-city · 13:57:31Z +shanghai (the 0094
+  picker's first real use). Config now: mode live · stake $5/buy · allowlist [houston, karachi, mexico-city,
+  shanghai] · caps 25/40/100 · kill min($30, $25). **NOT ACTIVE — three independent blocks, each verified:**
+  (1) `active_until` NULL → preflight run-window check fails; (2) gate branch unsatisfied — latest
+  bot_gate_snapshot 07-05 INSUFFICIENT (the settled verdict is the 07-07 KILL), trade_gate_override 0 rows
+  ever; (3) the daemon is a LOCAL process and isn't running — live_orders last wrote 07-07 04:49Z (356 rows,
+  ALL dry-run, 0 live, 0 fills), and a real post additionally needs env TRADE_MODE=live. City-taker lane
+  (arms table) separately INERT: `city_live_arms` is empty on prod. Tripwire ⑤ updated (operator-authorized,
+  not a reopen). Watch item: **ankara was dropped from the allowlist at 13:57Z** — flagged to the operator as
+  possibly accidental (the paper §12-R race is unaffected; the allowlist only gates the live daemon).
 - **C10 (2026-07-11 ~13:20Z) — OPERATOR: allowlist picker REGRESSION (0093's UI was narrower than the DB) →
   fixed via 0094 (APPLIED); day-1 verifications part-done.** The operator could not add ANY new city to the
   /trading buying allowlist: the 0093 checkbox picker's options came from `dash_city_live().arms` — and prod's
