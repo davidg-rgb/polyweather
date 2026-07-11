@@ -2196,12 +2196,30 @@ export interface BuyTablePriceConfig {
   cityRanges: Record<string, { min: unknown; max: unknown }>;
 }
 
+/**
+ * dash_trading.buyTable.liveCycles (0098) — one row per (city, currently-live target-date cycle): the min/max
+ * the LANE'S GATE PRICE (the predicted bucket's executable ask, the exact selectBuyTableCandidates pick) has
+ * logged across the cycle's ENTIRE live period, plus the tick count + coverage window behind the numbers.
+ * Numerics are jsonb-string-safe (file convention) — the panel coerces with Number().
+ */
+export interface BuyTableLiveCycle {
+  city: string;
+  targetDate: string;
+  minAsk: unknown;
+  maxAsk: unknown;
+  nTicks: unknown;
+  firstAt: string | null;
+  lastAt: string | null;
+}
+
 /** dash_trading.buyTable (0096) — { rows, totals }; null on a pre-0096 payload (the section notes it).
- *  0097 adds priceConfig — null on a pre-0097 payload (the price-ranges panel notes it). */
+ *  0097 adds priceConfig — null on a pre-0097 payload (the price-ranges panel notes it).
+ *  0098 adds liveCycles — null on a pre-0098 payload (the panel hides its cycle columns + notes it). */
 export interface BuyTableSection {
   rows: BuyTablePositionRow[];
   totals: BuyTableTotals | null;
   priceConfig: BuyTablePriceConfig | null;
+  liveCycles: BuyTableLiveCycle[] | null;
 }
 
 export interface TradingView {
@@ -2278,10 +2296,15 @@ export async function getTrading(db: WebDb): Promise<TradingLoad> {
       today: v.today ?? null,
       dryRun: v.dryRun ?? null,
       // 0096: absent on a pre-0096 payload → null (the page renders its "0096 not applied" note); present →
-      // null-tolerant inner defaults so a lean envelope still renders. priceConfig (0097) degrades the same
-      // way: absent on a pre-0097 payload → null (the price-ranges panel renders its "0097 not applied" note).
+      // null-tolerant inner defaults so a lean envelope still renders. priceConfig (0097) and liveCycles
+      // (0098) degrade the same way: absent → null (the price-ranges panel notes the unapplied migration).
       buyTable: v.buyTable
-        ? { rows: v.buyTable.rows ?? [], totals: v.buyTable.totals ?? null, priceConfig: v.buyTable.priceConfig ?? null }
+        ? {
+            rows: v.buyTable.rows ?? [],
+            totals: v.buyTable.totals ?? null,
+            priceConfig: v.buyTable.priceConfig ?? null,
+            liveCycles: v.buyTable.liveCycles ?? null,
+          }
         : null,
       recentAudit: v.recentAudit ?? [],
       generatedAt: v.generatedAt ?? null,

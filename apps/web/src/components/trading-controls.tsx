@@ -14,7 +14,7 @@
 import { useRouter } from 'next/navigation';
 import { useState, type ReactElement } from 'react';
 import { errText, postJson } from './post.ts';
-import type { BuyTablePriceConfig, CityLiveArm, TradeConfig } from '../lib/loaders.ts';
+import type { BuyTableLiveCycle, BuyTablePriceConfig, CityLiveArm, TradeConfig } from '../lib/loaders.ts';
 
 // A local twin of controls.tsx's useAction/Status (kept file-local, like the original) — busy latch + verbatim
 // message + router.refresh() on success.
@@ -350,11 +350,22 @@ export function TradeConfigEditor({
  * contract as the config editor: the route TYPE-validates only; the slug/range VALUE constraints RAISE in the
  * DB and are shown VERBATIM. Data comes from dash_trading().buyTable.priceConfig — null (pre-0097) renders the
  * staged-dark note, never a false empty editor.
+ *
+ * 0098 (operator directive 2026-07-12): the table additionally carries one head-column per LIVE date cycle,
+ * each cell stacking the city's LOGGED lo/hi — the min/max the lane's gate price (the predicted bucket's
+ * executable ask) has recorded over that cycle's entire live period (dash_trading().buyTable.liveCycles) —
+ * so the operator sets [min, max] against observed reality. null (pre-0098) hides the columns + notes it.
  */
+const cents = (v: unknown): string => {
+  const n = Number(v);
+  return Number.isFinite(n) ? `${Math.round(n * 100)}¢` : '—';
+};
+
 export function BuyTablePriceRangesPanel({
   priceConfig,
   allowlist,
   cityOptions = [],
+  liveCycles,
 }: {
   /** dash_trading().buyTable.priceConfig — null while migration 0097 is unapplied. */
   priceConfig: BuyTablePriceConfig | null;
@@ -362,6 +373,8 @@ export function BuyTablePriceRangesPanel({
   allowlist: string[] | null;
   /** Valid override targets (the buy_table_price_range_set slug domain): slug + display label. */
   cityOptions?: { slug: string; label: string }[];
+  /** dash_trading().buyTable.liveCycles (0098) — null while migration 0098 is unapplied. */
+  liveCycles?: BuyTableLiveCycle[] | null;
 }): ReactElement {
   const a = useAction();
   const [edits, setEdits] = useState<Record<string, { min: string; max: string }>>({});
@@ -395,6 +408,12 @@ export function BuyTablePriceRangesPanel({
   ].sort();
   const addable = cityOptions.filter((o) => !rowSlugs.includes(o.slug));
 
+  // 0098: pivot liveCycles into per-date head-columns (dates unioned across cities, ascending); each city row
+  // stacks the cycle's logged lo / hi — the min/max of the lane's gate price over the cycle's live period.
+  const cycles = liveCycles ?? [];
+  const cycleDates = [...new Set(cycles.map((c) => c.targetDate))].sort();
+  const cycleBy = new Map(cycles.map((c) => [`${c.city}|${c.targetDate}`, c]));
+
   const minOf = (slug: string): string => edits[slug]?.min ?? curStr(ranges[slug]?.min);
   const maxOf = (slug: string): string => edits[slug]?.max ?? curStr(ranges[slug]?.max);
   const patch = (slug: string, key: 'min' | 'max', v: string): void =>
@@ -425,7 +444,9 @@ export function BuyTablePriceRangesPanel({
         <strong>[min, max]</strong> purchase range. No override = the global default{' '}
         <span className="mono">[0, {globalCur || '0.15'}]</span>. Range guardrails are the database&apos;s
         (slug must exist, 0 ≤ min &lt; max ≤ 0.99, cap in (0, 0.99]) and any rejection is shown{' '}
-        <strong>verbatim</strong>.
+        <strong>verbatim</strong>. Date columns show each <strong>live cycle&apos;s logged lo / hi</strong> — the
+        lowest and highest the lane&apos;s gate price (the predicted bucket&apos;s ask) has been over that
+        cycle&apos;s entire live period so far — so ranges are set against observed reality.
       </p>
       <div className="form-row" style={{ marginBottom: 8 }}>
         <span>Global max</span>
@@ -460,6 +481,18 @@ export function BuyTablePriceRangesPanel({
               <tr>
                 <th>city</th>
                 <th>current range</th>
+                {cycleDates.map((d) => (
+                  <th
+                    key={d}
+                    className="num"
+                    title={`live cycle ${d} — the logged lo / hi of the lane's gate price over the cycle's live period so far`}
+                  >
+                    {d.slice(5)}
+                    <div className="muted small" style={{ fontWeight: 'normal' }}>
+                      lo / hi
+                    </div>
+                  </th>
+                ))}
                 <th className="num">min</th>
                 <th className="num">max</th>
                 <th />
@@ -478,6 +511,23 @@ export function BuyTablePriceRangesPanel({
                     <td className="mono small" title={`no override = the global [0, ${globalCur || '0.15'}]`}>
                       {r ? `[${curStr(r.min)}, ${curStr(r.max)}]` : 'default'}
                     </td>
+                    {cycleDates.map((d) => {
+                      const cyc = cycleBy.get(`${slug}|${d}`);
+                      return (
+                        <td key={d} className="num mono small">
+                          {cyc ? (
+                            <div
+                              title={`${labelOf(slug)} ${d}: gate price logged over ${curStr(cyc.nTicks)} capture ticks (${curStr(cyc.firstAt).slice(0, 16)} → ${curStr(cyc.lastAt).slice(0, 16)} UTC)`}
+                            >
+                              <div>{cents(cyc.minAsk)}</div>
+                              <div>{cents(cyc.maxAsk)}</div>
+                            </div>
+                          ) : (
+                            <span className="muted">—</span>
+                          )}
+                        </td>
+                      );
+                    })}
                     <td className="num">
                       <input
                         className="mono"
@@ -533,6 +583,15 @@ export function BuyTablePriceRangesPanel({
           </table>
         </div>
       )}
+      {liveCycles == null ? (
+        <p className="muted small">
+          <strong style={{ color: 'var(--ams-amber)' }}>0098 not applied</strong> — the live-cycle{' '}
+          <span className="mono">lo / hi</span> date columns (per-cycle logged min/max of the lane&apos;s gate
+          price) unlock when migration <span className="mono">0098_buy_table_live_cycles.sql</span> is applied.
+        </p>
+      ) : cycleDates.length === 0 ? (
+        <p className="muted small">No live date cycles with logged gate prices right now.</p>
+      ) : null}
       {addable.length > 0 ? (
         <div className="form-row">
           <span className="muted small">add override for</span>

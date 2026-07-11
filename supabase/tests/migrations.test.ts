@@ -425,6 +425,14 @@ describe('migrations 0001–0010', () => {
       // the 0096 body with buyTable gaining priceConfig { globalMax, cityRanges } (everything else
       // byte-preserved). No table/cron change (count stays 35).
       '0097_buy_table_price_ranges.sql',
+      // 0098 = buy-table LIVE-CYCLE observed price ranges (operator directive 2026-07-12): dash_trading()
+      // re-stated from the 0097 body with buyTable gaining liveCycles — one row per (city, currently-live
+      // target-date cycle) carrying the min/max the lane's gate price (the predicted bucket's executable ask,
+      // the exact selectBuyTableCandidates pick: argmax houseProb among identity-complete buckets, execAsk
+      // falling back to bestAsk, 0 < ask ≤ 1) has logged over the cycle's ENTIRE live period, + nTicks +
+      // coverage window. Live = market_events unresolved AND still trading (resolves_at > now()). Everything
+      // else byte-preserved; read-only display — the tick handler untouched. No table/cron change (stays 35).
+      '0098_buy_table_live_cycles.sql',
     ]);
   });
 });

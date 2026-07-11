@@ -10,6 +10,10 @@
  * + migration 0097: the per-city PRICE RANGES — buy_table_price_range_set (0093 slug-validation idiom;
  * null+null clears; 0 ≤ min < max ≤ 0.99) / buy_table_price_cap_set (0 < max ≤ 0.99) and
  * dash_trading().buyTable.priceConfig { globalMax, cityRanges }.
+ *
+ * + migration 0098: dash_trading().buyTable.liveCycles — per (city, currently-live target-date cycle), the
+ * min/max the lane's gate price (the predicted bucket's executable ask — the exact selectBuyTableCandidates
+ * pick) has logged over the cycle's entire live period, from the opening_captures stream.
  */
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import type { PGlite } from '@electric-sql/pglite';
@@ -614,7 +618,7 @@ describe('0097 buy-table price ranges — the operator RPCs + dash_trading().buy
         `select array(select jsonb_object_keys(public.dash_trading()->'buyTable') order by 1) as keys`,
       ),
     );
-    expect(keys!.keys).toEqual(['priceConfig', 'rows', 'totals']);
+    expect(keys!.keys).toEqual(['liveCycles', 'priceConfig', 'rows', 'totals']); // + liveCycles since 0098
     const [before] = await asOperator(() =>
       rows<{ v: { globalMax: number | string; cityRanges: Record<string, unknown> } }>(
         db,
@@ -647,6 +651,162 @@ describe('0097 buy-table price ranges — the operator RPCs + dash_trading().buy
       'buyTable', 'config', 'dryRun', 'generatedAt', 'openExposureUsd',
       'openOrders', 'preflight', 'recentAudit', 'today',
     ]);
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════════════
+describe('0098 dash_trading().buyTable.liveCycles — per live cycle, the logged lo/hi of the gate price', () => {
+  /** A city + one market_events row (no buckets needed — liveCycles reads opening_captures). */
+  async function seedEvent(opts: {
+    slug: string;
+    targetDateSql: string; // a SQL expression, e.g. `current_date + 1`
+    winnerIdx?: number | null;
+  }): Promise<string> {
+    const region = (await rows<{ region: string }>(db, `select region from public.clusters limit 1`))[0]!.region;
+    const cityId = (
+      await rows<{ city_id: string }>(
+        db,
+        `select city_id from public.upsert_city($1, $2, 'US', 'C', 'UTC', $3)`,
+        [opts.slug, opts.slug, region],
+      )
+    )[0]!.city_id;
+    return (
+      await rows<{ id: string }>(
+        db,
+        `insert into public.market_events
+           (poly_event_id, slug, city_id, target_date, unit, ladder_ok, winning_bucket_idx)
+         values ('pe-' || $1, 'ev-' || $1, $2, ${opts.targetDateSql}, 'C', true, $3)
+         returning id`,
+        [opts.slug, cityId, opts.winnerIdx ?? null],
+      )
+    )[0]!.id;
+  }
+
+  /** One opening_captures tick for an event (resolves_at as a SQL expression; buckets as a JSON value). */
+  const seedTick = (evId: string, city: string, targetDateSql: string, resolvesAtSql: string, buckets: unknown, atSql = 'now()') =>
+    rows(
+      db,
+      `insert into public.opening_captures
+         (captured_at, event_id, city, target_date, tz_name, resolves_at, is_flat_open, house_seeded, buckets, neg_risk)
+       values (${atSql}, $1, $2, ${targetDateSql}, 'UTC', ${resolvesAtSql}, false, true, $3::jsonb, true)`,
+      [evId, city, JSON.stringify(buckets)],
+    );
+
+  const liveCycles = async (): Promise<
+    Array<{ city: string; targetDate: string; minAsk: unknown; maxAsk: unknown; nTicks: unknown; firstAt: string; lastAt: string }>
+  > => {
+    const [r] = await asOperator(() =>
+      rows<{ v: Array<{ city: string; targetDate: string; minAsk: unknown; maxAsk: unknown; nTicks: unknown; firstAt: string; lastAt: string }> }>(
+        db,
+        `select public.dash_trading()->'buyTable'->'liveCycles' as v`,
+      ),
+    );
+    return r!.v;
+  };
+
+  afterEach(async () => {
+    await db.exec(`delete from public.opening_captures`); // FK child first
+    await db.exec(`delete from public.market_events`);
+  });
+
+  it("empty stream → liveCycles is '[]' — an ARRAY value inside the buyTable OBJECT (0081 tripwire)", async () => {
+    const [shape] = await asOperator(() =>
+      rows<{ t: string }>(db, `select jsonb_typeof(public.dash_trading()->'buyTable'->'liveCycles') as t`),
+    );
+    expect(shape!.t).toBe('array');
+    expect(await liveCycles()).toEqual([]);
+  });
+
+  it('aggregates min/max of the PICK ask over the cycle, mirroring the handler pick exactly', async () => {
+    const ev = await seedEvent({ slug: 'lc-houston', targetDateSql: `current_date + 1` });
+    const T = `current_date + 1`;
+    const R = `now() + interval '20 hours'`;
+    // tick A: pick = argmax houseProb (0.5) → execAsk 0.11; the 0.9-ask bucket has LOWER prob and must not leak in.
+    await seedTick(ev, 'lc-houston', T, R, [
+      { idx: 3, label: '33°C', conditionId: 'c-3', tokenYes: 't-3', houseProb: 0.5, execAsk: 0.11, bestAsk: 0.12 },
+      { idx: 4, label: '34°C', conditionId: 'c-4', tokenYes: 't-4', houseProb: 0.2, execAsk: 0.9, bestAsk: 0.9 },
+    ], `now() - interval '3 hours'`);
+    // tick B: the pick has NO execAsk → bestAsk 0.34 fallback (the handler's exact coalesce).
+    await seedTick(ev, 'lc-houston', T, R, [
+      { idx: 3, label: '33°C', conditionId: 'c-3', tokenYes: 't-3', houseProb: 0.6, bestAsk: 0.34 },
+    ], `now() - interval '2 hours'`);
+    // tick C: the TOP-prob bucket lacks tokenYes → the pick falls to the next identity-COMPLETE bucket (0.20),
+    // exactly like the handler's pick loop (identity required to be pickable at all).
+    await seedTick(ev, 'lc-houston', T, R, [
+      { idx: 3, label: '33°C', conditionId: 'c-3', houseProb: 0.9, execAsk: 0.5 }, // no tokenYes — unpickable
+      { idx: 4, label: '34°C', conditionId: 'c-4', tokenYes: 't-4', houseProb: 0.3, execAsk: 0.2 },
+    ], `now() - interval '1 hour'`);
+    // tick D: unseeded (no houseProb anywhere) → contributes NOTHING (the lane could not have bought).
+    await seedTick(ev, 'lc-houston', T, R, [
+      { idx: 3, label: '33°C', conditionId: 'c-3', tokenYes: 't-3', execAsk: 0.01 },
+    ]);
+    // tick E: the pick (top prob, identity-complete) has NO usable ask → the tick drops entirely — it must
+    // NOT fall through to the lower-prob bucket's 0.02 (the handler's no_ask skip, not a re-pick).
+    await seedTick(ev, 'lc-houston', T, R, [
+      { idx: 3, label: '33°C', conditionId: 'c-3', tokenYes: 't-3', houseProb: 0.8 },
+      { idx: 4, label: '34°C', conditionId: 'c-4', tokenYes: 't-4', houseProb: 0.1, execAsk: 0.02 },
+    ]);
+    // tick F: hand-mangled buckets (not an array) → guarded out, never a raise.
+    await seedTick(ev, 'lc-houston', T, R, { oops: true });
+
+    const [expected] = await rows<{ d: string }>(db, `select (current_date + 1)::text as d`);
+    const mine = (await liveCycles()).filter((c) => c.city === 'lc-houston');
+    expect(mine).toHaveLength(1);
+    expect(mine[0]!.targetDate).toBe(expected!.d);
+    expect(Number(mine[0]!.minAsk)).toBeCloseTo(0.11, 9);
+    expect(Number(mine[0]!.maxAsk)).toBeCloseTo(0.34, 9);
+    expect(Number(mine[0]!.nTicks)).toBe(3); // A + B + C only — D/E/F contribute nothing
+    expect(mine[0]!.firstAt < mine[0]!.lastAt).toBe(true); // the coverage window spans the logged ticks
+  });
+
+  it('only CURRENTLY-LIVE cycles appear: resolved, closed, and out-of-window events are all excluded', async () => {
+    const bucket = [{ idx: 0, label: '30°C', conditionId: 'c-0', tokenYes: 't-0', houseProb: 0.5, execAsk: 0.15 }];
+    // resolved (winner set) — excluded even though its resolves_at is still in the future.
+    const evResolved = await seedEvent({ slug: 'lc-resolved', targetDateSql: `current_date`, winnerIdx: 0 });
+    await seedTick(evResolved, 'lc-resolved', `current_date`, `now() + interval '4 hours'`, bucket);
+    // closed (resolves_at past) but not yet graded — no longer live, excluded.
+    const evClosed = await seedEvent({ slug: 'lc-closed', targetDateSql: `current_date - 1` });
+    await seedTick(evClosed, 'lc-closed', `current_date - 1`, `now() - interval '2 hours'`, bucket);
+    // ancient unresolved stray — outside the target_date scan bound, excluded.
+    const evOld = await seedEvent({ slug: 'lc-old', targetDateSql: `current_date - 10` });
+    await seedTick(evOld, 'lc-old', `current_date - 10`, `now() + interval '1 hour'`, bucket);
+    // …and one genuinely live control that MUST appear.
+    const evLive = await seedEvent({ slug: 'lc-live', targetDateSql: `current_date + 2` });
+    await seedTick(evLive, 'lc-live', `current_date + 2`, `now() + interval '40 hours'`, bucket);
+
+    const cities = (await liveCycles()).map((c) => c.city);
+    expect(cities).toContain('lc-live');
+    expect(cities).not.toContain('lc-resolved');
+    expect(cities).not.toContain('lc-closed');
+    expect(cities).not.toContain('lc-old');
+  });
+
+  it('two live cycles for ONE city stay separate rows (the per-date head-columns contract)', async () => {
+    const bucket = (ask: number) => [
+      { idx: 0, label: '30°C', conditionId: 'c-0', tokenYes: 't-0', houseProb: 0.5, execAsk: ask },
+    ];
+    const evD1 = await seedEvent({ slug: 'lc-two-a', targetDateSql: `current_date + 1` });
+    // (one city = one cities row; reuse the same slug's city via a second event on another date)
+    const cityId = (await rows<{ city_id: string }>(db, `select id as city_id from public.cities where slug = 'lc-two-a'`))[0]!.city_id;
+    const evD2 = (
+      await rows<{ id: string }>(
+        db,
+        `insert into public.market_events (poly_event_id, slug, city_id, target_date, unit, ladder_ok)
+         values ('pe-lc-two-b', 'ev-lc-two-b', $1, current_date + 2, 'C', true) returning id`,
+        [cityId],
+      )
+    )[0]!.id;
+    await seedTick(evD1, 'lc-two-a', `current_date + 1`, `now() + interval '20 hours'`, bucket(0.11));
+    await seedTick(evD1, 'lc-two-a', `current_date + 1`, `now() + interval '20 hours'`, bucket(0.34));
+    await seedTick(evD2, 'lc-two-a', `current_date + 2`, `now() + interval '44 hours'`, bucket(0.16));
+    await seedTick(evD2, 'lc-two-a', `current_date + 2`, `now() + interval '44 hours'`, bucket(0.4));
+
+    const mine = (await liveCycles()).filter((c) => c.city === 'lc-two-a');
+    expect(mine).toHaveLength(2);
+    expect(mine.map((c) => [Number(c.minAsk), Number(c.maxAsk), Number(c.nTicks)])).toEqual([
+      [0.11, 0.34, 2],
+      [0.16, 0.4, 2],
+    ]); // ordered city, target_date — the operator's Houston example verbatim
   });
 });
 
