@@ -23,6 +23,11 @@ _Claude keeps this block current every material cycle. Whole status in 20 second
      **↳ C10 (07-11 ~13:15Z): PENDING — checked before the first -b fire.** The 10:00Z tick itself ran clean
      (period_key `city-paper-trade:2026-07-11`, OPKC-14 @0.992 + WSSS-15 @0.984 placed, pending). The -b/-c
      verification stands for the next check-in.
+     **↳ C10 (07-11 13:50Z): the -b HALF PASSES.** First scheduled fire landed on the second (13:50:02Z),
+     period_key `city-paper-trade:2026-07-11:b`, status ok, NO 409 — the §8.1 body periodKey works live.
+     placedByCity {ankara: 2}: LTAC-14 30°C @0.66 + LTAC-16 29°C @0.48 (+2 maker twins, both filled). Note the
+     arms picked DIFFERENT buckets — the race is producing divergent picks, which is what §12-R exists to
+     adjudicate. The 20:45Z -c (houston) half remains.
   2. **The Houston 6°F pick gap grades**: 07-10 KHOU-14 bought 92–93°F @0.11 vs KHOU-15 86–87°F @0.59 (3
      buckets apart, same day). When 07-10 grades (~10:00Z tick), check which won and whether the 14h lock's
      forecast snapshot was a real intraday swing or a °F-path anomaly (C25/C37 verified the path, but this
