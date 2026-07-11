@@ -102,6 +102,13 @@ const FIXTURE = {
     totals: { nRows: 2, nOpen: 1, nWon: 1, nLost: 0, costUsd: '19.900000', resolvedPnlUsd: '73.040000' },
     // 0097: the price-range config — karachi carries an override; singapore (allowlisted) falls to 'default'.
     priceConfig: { globalMax: 0.15, cityRanges: { karachi: { min: 0.05, max: 0.3 } } },
+    // 0098: live-cycle logged lo/hi — karachi spans two cycles (the operator's Houston example numbers),
+    // singapore only one (its 07-14 cell must render the em-dash placeholder).
+    liveCycles: [
+      { city: 'karachi', targetDate: '2026-07-13', minAsk: '0.11', maxAsk: '0.34', nTicks: 41, firstAt: '2026-07-11T20:00:00+00:00', lastAt: '2026-07-12T08:10:00+00:00' },
+      { city: 'karachi', targetDate: '2026-07-14', minAsk: '0.16', maxAsk: '0.40', nTicks: 12, firstAt: '2026-07-12T02:00:00+00:00', lastAt: '2026-07-12T08:10:00+00:00' },
+      { city: 'singapore', targetDate: '2026-07-13', minAsk: '0.09', maxAsk: '0.27', nTicks: 33, firstAt: '2026-07-11T21:00:00+00:00', lastAt: '2026-07-12T08:10:00+00:00' },
+    ],
   },
   recentAudit: [
     {
@@ -201,6 +208,15 @@ describe('/trading page renders', () => {
     expect(html).toContain('default'); // singapore — allowlisted, no override
     expect(html).toContain('clear'); // the per-row override clear button
     expect(html).not.toContain('0097 not applied'); // priceConfig present — no staged-dark note
+    // 0098: one head-column per live date cycle, each city cell stacking the logged lo/hi in cents.
+    expect(html).toContain('07-13'); // cycle head-column
+    expect(html).toContain('07-14'); // second cycle head-column
+    expect(html).toContain('lo / hi'); // the column sub-label
+    expect(html).toContain('11¢'); // karachi 07-13 logged low
+    expect(html).toContain('34¢'); // karachi 07-13 logged high
+    expect(html).toContain('16¢'); // karachi 07-14 logged low
+    expect(html).toContain('40¢'); // karachi 07-14 logged high
+    expect(html).not.toContain('0098 not applied'); // liveCycles present — no staged-dark note
 
     // (b) CITY-LIVE — the winners board (section b): status badges + edge/nBets/nDays/rec-hour + the twin columns
     expect(html).toContain('Winners board'); // h2
@@ -213,6 +229,23 @@ describe('/trading page renders', () => {
     expect(html).toContain('City Live arms'); // h2
     expect(html).toContain('of real capital when the daemon runs live'); // the arming warning copy
     expect(html).toContain('2 cities already enabled'); // Amsterdam's toggle is disabled — the lockout title
+  });
+
+  it('0098: priceConfig present but liveCycles absent (pre-0098 dash_trading) → the staged-dark note, no cycle columns', async () => {
+    vi.resetModules();
+    const { liveCycles: _omitted, ...bt } = FIXTURE.buyTable;
+    vi.doMock('../src/lib/loaders.ts', () => ({
+      getTrading: async () => ({ kind: 'ok', view: { ...FIXTURE, buyTable: bt } }),
+      getCityLive: async () => ({ kind: 'ok', view: CITY_LIVE }),
+    }));
+    const { default: TradingPage } = await import('../src/app/(dash)/trading/page.tsx');
+    const html = renderToStaticMarkup(await TradingPage());
+    expect(html).toContain('Buy-table price ranges'); // the 0097 editor still renders in full
+    expect(html).toContain('[0.05, 0.3]');
+    expect(html).toContain('0098 not applied'); // the explicit staged-dark note for the cycle columns
+    // …and no cycle head-columns pretend to exist (the note itself names "lo / hi", so pin the date headers)
+    expect(html).not.toContain('07-13');
+    expect(html).not.toContain('07-14');
   });
 
   it('renders the CLEAR verdict + KILL-TRIPPED meter branches', async () => {
@@ -280,6 +313,8 @@ describe('/trading page renders', () => {
     // 0097: no buyTable ⇒ no priceConfig either — the price-ranges panel renders its OWN staged-dark note.
     expect(html).toContain('Buy-table price ranges');
     expect(html).toContain('0097 not applied');
+    // 0098: the panel early-returns on the missing priceConfig — no second (liveCycles) staged-dark note.
+    expect(html).not.toContain('0098 not applied');
     // the config editor (0082) still renders; only the winners board + arms (0085) show the dark note.
     expect(html).toContain('Trade config control');
     expect(html).toContain('0085 NOT APPLIED');

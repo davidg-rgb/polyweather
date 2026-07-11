@@ -58,6 +58,11 @@ const PAYLOAD = {
     totals: { nRows: 1, nOpen: 0, nWon: 1, nLost: 0, costUsd: '8.400000', resolvedPnlUsd: '61.600000' },
     // 0097: the operator price-range config (global cap + per-city overrides).
     priceConfig: { globalMax: 0.15, cityRanges: { karachi: { min: 0.05, max: 0.3 } } },
+    // 0098: the live-cycle observed price ranges (per city × live target-date, the logged gate-price lo/hi).
+    liveCycles: [
+      { city: 'houston', targetDate: '2026-07-13', minAsk: '0.11', maxAsk: '0.34', nTicks: 41, firstAt: '2026-07-11T20:00:00+00:00', lastAt: '2026-07-12T08:10:00+00:00' },
+      { city: 'houston', targetDate: '2026-07-14', minAsk: '0.16', maxAsk: '0.40', nTicks: 12, firstAt: '2026-07-12T02:00:00+00:00', lastAt: '2026-07-12T08:10:00+00:00' },
+    ],
   },
   recentAudit: [{ id: 3, old_value: { mode: 'dry-run' }, new_value: { mode: 'live' }, changed_at: '2026-07-05T09:00:00Z', changed_by: 'service_role' }],
   generatedAt: '2026-07-05T09:05:00Z',
@@ -86,6 +91,19 @@ describe('getTrading — dash_trading passthrough + null-tolerant defaults', () 
     expect(v.buyTable!.totals).toEqual({ nRows: 1, nOpen: 0, nWon: 1, nLost: 0, costUsd: '8.400000', resolvedPnlUsd: '61.600000' });
     // 0097: priceConfig passes through — global cap + the per-city override map intact.
     expect(v.buyTable!.priceConfig).toEqual({ globalMax: 0.15, cityRanges: { karachi: { min: 0.05, max: 0.3 } } });
+    // 0098: liveCycles passes through — one row per (city, live target-date cycle), order preserved.
+    expect(v.buyTable!.liveCycles).toHaveLength(2);
+    expect(v.buyTable!.liveCycles![0]).toMatchObject({ city: 'houston', targetDate: '2026-07-13', minAsk: '0.11', maxAsk: '0.34' });
+  });
+
+  it('0098: a pre-0098 buyTable (no liveCycles key) → liveCycles null (staged-dark, never a throw)', async () => {
+    const { liveCycles: _omitted, ...pre0098BuyTable } = PAYLOAD.buyTable;
+    const load = await getTrading(stubDb({ ...PAYLOAD, buyTable: pre0098BuyTable }));
+    expect(load.kind).toBe('ok');
+    if (load.kind !== 'ok') throw new Error('expected ok');
+    expect(load.view.buyTable).not.toBeNull();
+    expect(load.view.buyTable!.priceConfig).not.toBeNull(); // the 0097 editor still renders
+    expect(load.view.buyTable!.liveCycles).toBeNull(); // the panel hides its cycle columns + notes 0098
   });
 
   it('0097: a pre-0097 buyTable (no priceConfig key) → priceConfig null (staged-dark, never a throw)', async () => {
@@ -106,11 +124,11 @@ describe('getTrading — dash_trading passthrough + null-tolerant defaults', () 
     expect(load.view.buyTable).toBeNull();
   });
 
-  it('0096: a lean buyTable envelope gets null-tolerant inner defaults (rows [] / totals null / priceConfig null)', async () => {
+  it('0096: a lean buyTable envelope gets null-tolerant inner defaults (rows [] / totals null / priceConfig null / liveCycles null)', async () => {
     const load = await getTrading(stubDb({ ...PAYLOAD, buyTable: {} }));
     expect(load.kind).toBe('ok');
     if (load.kind !== 'ok') throw new Error('expected ok');
-    expect(load.view.buyTable).toEqual({ rows: [], totals: null, priceConfig: null });
+    expect(load.view.buyTable).toEqual({ rows: [], totals: null, priceConfig: null, liveCycles: null });
   });
 
   it('defaults the collection fields when a lean payload omits them', async () => {
