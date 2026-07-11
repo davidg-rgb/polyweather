@@ -62,10 +62,10 @@ describe('trading boundary invariants (§15)', () => {
   });
 
   it('the clob client is imported nowhere outside packages/trading', () => {
-    // Two non-executing mentions are allowed: execute-bet/index.ts carries
+    // Non-executing mentions are allowed: execute-bet/index.ts + buy-table-tick/index.ts carry
     // LITERAL eszip npm-snapshot hints (the deploy bundler can't see live.ts's
     // non-literal specifiers — hosted incident 2026-06-11), and the ambient
-    // npm-specifiers.d.ts declares those literals for tsc. Neither constructs
+    // npm-specifiers.d.ts declares those literals for tsc. None constructs
     // a client; the runtime boundary stays inside packages/trading.
     expect(
       offenders(
@@ -73,6 +73,7 @@ describe('trading boundary invariants (§15)', () => {
         (p) =>
           p.startsWith('packages/trading/') ||
           p === 'supabase/functions/execute-bet/index.ts' ||
+          p === 'supabase/functions/buy-table-tick/index.ts' ||
           p === 'supabase/functions/_shared/npm-specifiers.d.ts',
       ),
     ).toEqual([]);
@@ -111,14 +112,16 @@ describe('trading boundary invariants (§15)', () => {
     }
   });
 
-  it('packages/trading is imported only by execute-bet, the web gate-readout, + the T2 live-rail daemon', () => {
+  it('packages/trading is imported only by execute-bet, buy-table-tick, the web gate-readout, + the T2 live-rail daemon', () => {
     // The T2 LIVE-RAIL lane adds a LOCAL daemon (scripts/trade-bot.ts) + a credential smoke
     // (scripts/trade-smoke.ts) that DRIVE the T1 MakerExecutor — so they legitimately import
-    // packages/trading (the executor, the tradeConfig/gate reads, the createClobClient seam). §15's real
-    // guarantee is UNCHANGED: the key + the clob client stay inside packages/trading/live.ts (the two
-    // grep invariants above still pass — these files never name POLY_PRIVATE_KEY nor import
-    // @polymarket/clob-client). trade-bot-decide.ts + city-live-decide.ts (the pure decision spines) +
-    // trading-db.ts (the ScriptDb→TradingDb adapter) import only TYPES + redaction/intent-key helpers.
+    // packages/trading (the executor, the tradeConfig/gate reads, the createClobClient seam). The 0095
+    // BUY-TABLE cloud lane (supabase/functions/buy-table-tick) drives the SAME executor from an Edge tick
+    // (the execute-bet precedent). §15's real guarantee is UNCHANGED: the key + the clob client stay
+    // inside packages/trading/live.ts (the two grep invariants above still pass — these files never name
+    // POLY_PRIVATE_KEY nor import @polymarket/clob-client). trade-bot-decide.ts + city-live-decide.ts
+    // (the pure decision spines) + trading-db.ts (the ScriptDb→TradingDb adapter) import only TYPES +
+    // redaction/intent-key helpers.
     const importsTrading = /from\s+['"][^'"]*(?:packages\/trading|@weather-edge\/trading)[^'"]*['"]/;
     expect(
       offenders(
@@ -126,6 +129,7 @@ describe('trading boundary invariants (§15)', () => {
         (p) =>
           p.startsWith('packages/trading/') ||
           p.startsWith('supabase/functions/execute-bet/') ||
+          p.startsWith('supabase/functions/buy-table-tick/') ||
           p.startsWith('apps/web/') ||
           p === 'scripts/trade-bot.ts' ||
           p === 'scripts/trade-smoke.ts' ||

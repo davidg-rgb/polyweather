@@ -400,6 +400,16 @@ describe('migrations 0001–0010', () => {
       // the enrolled arms only, strictly narrower than the cities.slug domain trade_config_set validates —
       // non-enrolled cities were un-addable. allCities = the full domain { slug, displayName, enrolled }.
       '0094_allowlist_city_options.sql',
+      // 0095 = the BUY-TABLE cloud live lane (operator directive 2026-07-11 — run the KILLed BUY-TABLE model
+      // live small, interlock intact): buy_table.* config defaults (price_cap 0.15 / lead 2–12h / tick_enabled)
+      // + buy_table_entries (ANY-status lane ledger read — the one-entry-per-market-EVER gate + the resolution
+      // sweep; OBJECT envelope) + trade_live_preflight(text) re-stated with a 'buy-table' branch (generic
+      // checks tagged strategy='buy-table'; city-taker + maker-exit byte-equivalent) + buy_table_deadman_check
+      // (day-bucketed: tick staleness + all-degraded window) + the push-kind allowlist append (BUY_TABLE_* +
+      // the executor's ORDER_FAIL/ORDER_NEEDS_RECONCILE — the cloud lane notifies through the claim_alert
+      // gate) + the buy-table-tick */10 cron (per-tick periodKey stamped in the BODY at fire time, §8.1) +
+      // the buy-table-deadman */15 SQL cron (count 33 → 35). BUY-TABLE-LIVE.md.
+      '0095_buy_table_live.sql',
     ]);
   });
 });
@@ -1038,8 +1048,13 @@ describe('pg_cron registrations (§7.22, W11)', () => {
       // excluded from W11 below).
       'depth-capture-deadman':    '*/10 * * * *',
       'market-depth-prune':       '40 3 * * *',
+      // 0095: the BUY-TABLE cloud live lane tick (http_post edge-fn job; W11-checked — its command
+      // additionally stamps a per-tick periodKey into the request BODY at fire time, the §8.1 idiom).
+      'buy-table-tick':           '*/10 * * * *',
+      // 0095: the lane deadman (pure-SQL cron like the 0066/0089 deadmen — excluded from W11 below).
+      'buy-table-deadman':        '*/15 * * * *',
     };
-    expect(jobs.length).toBe(33);
+    expect(jobs.length).toBe(35);
     for (const j of jobs) {
       expect(j.schedule, `schedule for ${j.jobname}`).toBe(expected[j.jobname]);
     }
@@ -1052,7 +1067,7 @@ describe('pg_cron registrations (§7.22, W11)', () => {
     const jobs = await rows<{ jobname: string; command: string }>(
       db,
       `select jobname, command from cron.job where jobname not in
-        ('snapshot-downsample','opening-capture-deadman','opening-bot-deadman','opening-captures-prune','bot-tick-log-prune','depth-capture-deadman','market-depth-prune')`,
+        ('snapshot-downsample','opening-capture-deadman','opening-bot-deadman','opening-captures-prune','bot-tick-log-prune','depth-capture-deadman','market-depth-prune','buy-table-deadman')`,
     );
     for (const j of jobs) {
       expect(j.command).toContain(`vault.decrypted_secrets where name = 'cron_secret'`);
