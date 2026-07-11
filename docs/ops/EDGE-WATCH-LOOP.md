@@ -219,3 +219,12 @@ _Claude keeps this block current every material cycle. Whole status in 20 second
   WHALE_TRADE) + `daily-digest` handler sections + staged `0089` bucket fixed in place. Tests: new 0092
   describe (5 tests) + support-jobs digest assertions + whale-watch re-pinned to the 0092 routing
   (fixture re-stamped past the recency floor). Deploy = ⚑ steps ① ②.
+
+- **C12 (2026-07-11 ~15:25Z) — BUY-TABLE-LIVE cloud lane DEPLOYED + LIVE (operator-directed).** Operator set
+  window (07-14), directed the model swap (buy-table: predicted bucket, taker ≤15¢, lead 2–12h, hold to close)
+  + cloud execution. Built via agent (0095 + buy-table-tick fn + 39 tests, suite 3,151 green), merged PR #14.
+  Operator set Edge secrets; override created to 07-15 (direct row, operator-instructed). Two launch defects
+  found live and fixed: cron timeout 4500ms < cold boot (→10000ms, live + mirrored to 0095) and gateway JWT
+  verification 401 (→ redeployed --no-verify-jwt, runbook updated). **First clean LIVE tick 15:20:03Z:**
+  mode live, 4 cities / 217 captures / 8 evaluated / 0 candidates / 0 placed — the ≤15¢ gate correctly found
+  nothing. Lane self-runs */10; deadman armed; expires with window+override unless operator renews.

@@ -412,7 +412,7 @@ begin
     'x-cron-secret', (select decrypted_secret from vault.decrypted_secrets where name = 'cron_secret')
   ),
   body := jsonb_build_object('periodKey', 'buy-table-tick:' || to_char(now() at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI')),
-  timeout_milliseconds := 4500
+  timeout_milliseconds := 10000
 )$cmd$;
 
   perform cron.schedule('buy-table-tick', '*/10 * * * *', edge_command);
