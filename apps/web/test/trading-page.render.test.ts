@@ -34,6 +34,13 @@ const CITY_LIVE = {
   twin: [
     { cityId: 'c-kar', slug: 'karachi', nPlacements: 42, twinFilledFrac: 0.71, takerPnlUsd: '40.41', makerTwinPnlUsd: '52.10' },
   ],
+  // 0094: the FULL cities domain — London has NO arm and must still be an allowlist picker option.
+  allCities: [
+    { slug: 'amsterdam', displayName: 'Amsterdam', enrolled: true },
+    { slug: 'karachi', displayName: 'Karachi', enrolled: true },
+    { slug: 'london', displayName: 'London', enrolled: false },
+    { slug: 'singapore', displayName: 'Singapore', enrolled: true },
+  ],
   generatedAt: '2026-07-06T09:05:00Z',
 };
 // A single-enabled variant — proves the lockout is NOT engaged below 2 enabled cities.
@@ -139,6 +146,10 @@ describe('/trading page renders', () => {
     expect(html).toContain('Trade config control');
     expect(html).toContain('trade_config_set'); // the operator RPC named in the editor blurb
     expect(html).toContain('save 0 changes'); // the Save button, no pending edits at first render
+    // 0094: the allowlist picker offers the FULL cities domain — London (never enrolled) is an option,
+    // and enrolled cities are flagged in their label.
+    expect(html).toContain('London');
+    expect(html).toContain('Karachi · enrolled');
 
     // (b) CITY-LIVE — the winners board (section b): status badges + edge/nBets/nDays/rec-hour + the twin columns
     expect(html).toContain('Winners board'); // h2

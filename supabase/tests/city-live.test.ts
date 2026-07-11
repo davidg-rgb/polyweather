@@ -193,6 +193,13 @@ describe('CITY-LIVE — maker twin place/fill/grade + promotion board + dash_cit
     expect(Array.isArray(out.arms)).toBe(true);
     expect((out.board as { rows: unknown[] } | null)?.rows).toBeTruthy();
 
+    // 0094: allCities = the FULL cities.slug domain (the trade_config_set validation surface), not just the
+    // enrolled arms — here singapore exists in cities but has NO city_live_arms row, and must still appear.
+    const all = out.allCities as { slug: string; displayName: string; enrolled: boolean }[];
+    expect(all.map((c) => c.slug)).toEqual(['singapore']);
+    expect(all[0]!.displayName).toBe('Singapore');
+    expect(all[0]!.enrolled).toBe(false);
+
     const twin = (out.twin as { slug: string; nPlacements: number; twinFilledFrac: number; takerPnlUsd: number; makerTwinPnlUsd: number }[]).find(
       (t) => t.slug === 'singapore',
     )!;
@@ -312,6 +319,21 @@ describe('CITY-LIVE — toggle table (arm_set/get, max-2 trigger, $5 CHECK, audi
     await expect(armSet(cityIds['london']!, true, 5, null)).rejects.toThrow(/at most 2 cities may be enabled/i);
     const [n] = await rows<{ c: string }>(db, `select count(*) c from city_live_arms where enabled`);
     expect(Number(n!.c)).toBe(2);
+  });
+
+  it('dash_city_live().allCities covers the whole cities domain with enrolled flags (0094)', async () => {
+    const out = await asOperator(async () => {
+      const r = await rows<{ dash_city_live: Record<string, unknown> }>(db, `select public.dash_city_live() as dash_city_live`);
+      return r[0]!.dash_city_live;
+    });
+    const all = out.allCities as { slug: string; displayName: string; enrolled: boolean }[];
+    // Every cities row, slug-ordered — london has NO city_live_arms row and must still be a picker option
+    // (the 0093 regression: the picker was the enrolled arms only, narrower than the DB validation domain).
+    expect(all.map((c) => [c.slug, c.enrolled])).toEqual([
+      ['karachi', true],
+      ['london', false],
+      ['singapore', true],
+    ]);
   });
 
   it("trade_live_preflight('city-taker') passes with mode live + a run window + ≤2 enabled arms ≤ $5", async () => {

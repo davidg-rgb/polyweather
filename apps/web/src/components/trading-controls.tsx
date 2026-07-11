@@ -74,8 +74,9 @@ const NUM_FIELDS: { key: keyof TradeConfig; param: string; label: string; step?:
  * fields to /api/admin/trading/config (null-param = leave unchanged in trade_config_set). Range enforcement is
  * the DB's — the $25 ceiling / positivity / ≤1 fraction / 60-day cap all RAISE and are shown verbatim.
  *
- * ALLOWLIST SAFEGUARD (0093, operator 2026-07-11): the allowlist is a CHECKBOX PICKER over `cityOptions`
- * (the enrolled cities, passed by the page) ∪ the currently-stored entries — no free text, so a typo'd or
+ * ALLOWLIST SAFEGUARD (0093 + 0094, operator 2026-07-11): the allowlist is a CHECKBOX PICKER over
+ * `cityOptions` (the FULL cities.slug domain via dash_city_live().allCities — 0094; the page degrades to the
+ * enrolled arms while 0094 is unapplied) ∪ the currently-stored entries — no free text, so a typo'd or
  * wrong-case slug can no longer be entered here at all. The DB is the real guarantee (trade_config_set
  * normalizes + RAISES on unknown slugs); this UI just makes the error unreachable. "All cities" is an
  * explicit radio (posts clearCityAllowlist), never an empty selection — an empty restrict-set is unsaveable.
@@ -85,7 +86,7 @@ export function TradeConfigEditor({
   cityOptions = [],
 }: {
   config: TradeConfig;
-  /** Valid allowlist targets (enrolled cities): slug + display label. */
+  /** Valid allowlist targets (the trade_config_set slug domain): slug + display label. */
   cityOptions?: { slug: string; label: string }[];
 }): ReactElement {
   const a = useAction();
@@ -206,7 +207,8 @@ export function TradeConfigEditor({
                   restrict to:
                 </label>
                 {!allowAll ? (
-                  <div style={{ paddingLeft: 18 }}>
+                  // Scrollable: the 0094 option set is the whole 45-city domain, not just the enrolled few.
+                  <div style={{ paddingLeft: 18, maxHeight: 220, overflowY: 'auto' }}>
                     {allowOptions.length === 0 ? (
                       <span className="muted small">no enrolled cities to pick from</span>
                     ) : (

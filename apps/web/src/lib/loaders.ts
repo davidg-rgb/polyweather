@@ -2267,8 +2267,17 @@ export interface CityLiveTwin {
   makerTwinPnlUsd: unknown;
 }
 
+/** One valid allowlist target (dash_city_live.allCities, 0094) — the FULL cities.slug domain trade_config_set
+ *  validates against, not just the enrolled arms. `enrolled` = has a city_live_arms row (display hint only). */
+export interface AllowlistCityOption {
+  slug: string;
+  displayName: string;
+  enrolled: boolean;
+}
+
 export interface CityLiveView {
   arms: CityLiveArm[];
+  allCities: AllowlistCityOption[];
   board: { asOf: string | null; rows: CityLiveBoardRow[] };
   twin: CityLiveTwin[];
   generatedAt: string | null;
@@ -2282,6 +2291,8 @@ export type CityLiveLoad =
 
 interface CityLivePayload {
   arms?: CityLiveArm[] | null;
+  /** Absent until migration 0094 is applied — the loader defaults it to [] (the page falls back to arms). */
+  allCities?: AllowlistCityOption[] | null;
   /** The board arrives as the whole CityPromotionBoard { asOf, rows } — tolerate a bare rows array too. */
   board?: { asOf?: string | null; rows?: CityLiveBoardRow[] | null } | CityLiveBoardRow[] | null;
   twin?: CityLiveTwin[] | null;
@@ -2311,6 +2322,7 @@ export async function getCityLive(db: WebDb): Promise<CityLiveLoad> {
     kind: 'ok',
     view: {
       arms: v.arms ?? [],
+      allCities: v.allCities ?? [],
       board,
       twin: v.twin ?? [],
       generatedAt: v.generatedAt ?? null,

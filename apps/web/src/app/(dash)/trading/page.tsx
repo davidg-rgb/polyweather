@@ -682,7 +682,15 @@ export default async function TradingPage(): Promise<ReactElement> {
           config={config}
           cityOptions={
             cityLive.kind === 'ok'
-              ? cityLive.view.arms.map((arm) => ({ slug: arm.slug, label: arm.displayName }))
+              ? cityLive.view.allCities.length > 0
+                ? // 0094: the FULL cities.slug domain trade_config_set validates against — enrolled (racing)
+                  // cities flagged in the label so the picker is never narrower than the DB again.
+                  cityLive.view.allCities.map((c) => ({
+                    slug: c.slug,
+                    label: c.enrolled ? `${c.displayName} · enrolled` : c.displayName,
+                  }))
+                : // pre-0094 payload has no allCities — degrade to the enrolled arms (the old, narrower set).
+                  cityLive.view.arms.map((arm) => ({ slug: arm.slug, label: arm.displayName }))
               : []
           }
         />
