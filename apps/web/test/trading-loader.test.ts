@@ -43,6 +43,20 @@ const PAYLOAD = {
   openExposureUsd: '20.00',
   today: { buyUsd: '20.00', sellUsd: '2.00', feeUsd: '0.00', netUsd: '-18.00', lossUsd: '18.00', lossWindowStart: '2026-07-05T00:00:00Z', nFills: 3 },
   dryRun: { openOrders: 4, total: 37 },
+  // 0096: the BUY-TABLE lane position ledger (ANY-status rows + outcome + totals).
+  buyTable: {
+    rows: [
+      {
+        id: 'bt-1', createdAt: '2026-07-05T08:00:00Z', status: 'filled', reason: null,
+        marketId: '0xCCC', tokenId: 'tok-c', tradeDate: '2026-07-05',
+        city: 'karachi', cityName: 'Karachi', eventSlug: 'ev-karachi', targetDate: '2026-07-05',
+        label: '34°C bucket', bucketIdx: 1, winnerIdx: 1,
+        price: '0.120', size: '70.0000', sizeMatched: '70.0000', avgPrice: '0.120',
+        costUsd: '8.400000', feeUsd: '0.00', outcome: 'won', resolvedPnlUsd: '61.600000',
+      },
+    ],
+    totals: { nRows: 1, nOpen: 0, nWon: 1, nLost: 0, costUsd: '8.400000', resolvedPnlUsd: '61.600000' },
+  },
   recentAudit: [{ id: 3, old_value: { mode: 'dry-run' }, new_value: { mode: 'live' }, changed_at: '2026-07-05T09:00:00Z', changed_by: 'service_role' }],
   generatedAt: '2026-07-05T09:05:00Z',
 };
@@ -62,6 +76,27 @@ describe('getTrading — dash_trading passthrough + null-tolerant defaults', () 
     expect(v.dryRun).toEqual({ openOrders: 4, total: 37 });
     expect(v.recentAudit).toHaveLength(1);
     expect(v.generatedAt).toBe('2026-07-05T09:05:00Z');
+    // 0096: the buyTable section passes through — rows + totals intact.
+    expect(v.buyTable).not.toBeNull();
+    expect(v.buyTable!.rows).toHaveLength(1);
+    expect(v.buyTable!.rows[0]!.outcome).toBe('won');
+    expect(v.buyTable!.rows[0]!.city).toBe('karachi');
+    expect(v.buyTable!.totals).toEqual({ nRows: 1, nOpen: 0, nWon: 1, nLost: 0, costUsd: '8.400000', resolvedPnlUsd: '61.600000' });
+  });
+
+  it('0096: a pre-0096 payload (no buyTable key) → buyTable null (the staged-dark degradation, never a throw)', async () => {
+    const { buyTable: _omitted, ...pre0096 } = PAYLOAD;
+    const load = await getTrading(stubDb(pre0096));
+    expect(load.kind).toBe('ok');
+    if (load.kind !== 'ok') throw new Error('expected ok');
+    expect(load.view.buyTable).toBeNull();
+  });
+
+  it('0096: a lean buyTable envelope gets null-tolerant inner defaults (rows [] / totals null)', async () => {
+    const load = await getTrading(stubDb({ ...PAYLOAD, buyTable: {} }));
+    expect(load.kind).toBe('ok');
+    if (load.kind !== 'ok') throw new Error('expected ok');
+    expect(load.view.buyTable).toEqual({ rows: [], totals: null });
   });
 
   it('defaults the collection fields when a lean payload omits them', async () => {
@@ -80,6 +115,7 @@ describe('getTrading — dash_trading passthrough + null-tolerant defaults', () 
     expect(v.openExposureUsd).toBe(0);
     expect(v.today).toBeNull();
     expect(v.dryRun).toBeNull();
+    expect(v.buyTable).toBeNull(); // 0096: absent key degrades to null
     expect(v.config!.mode).toBe('off');
   });
 });

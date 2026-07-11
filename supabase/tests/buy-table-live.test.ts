@@ -3,12 +3,19 @@
  * strategy-aware trade_live_preflight('buy-table') branch, the crons (the §8.1 body-periodKey stamp),
  * the day-bucketed deadman, and the Slack push-kind allowlist. Exercised in PGlite (the
  * trade-config/city-live test idiom). The handler itself is unit-tested in buy-table-tick-handler.test.ts.
+ *
+ * + migration 0096: dash_trading().buyTable — the lane position ledger (ANY-status rows joined to their
+ * market identity + graded won/lost/open/unfilled/failed against the market_events winner, with totals).
  */
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import type { PGlite } from '@electric-sql/pglite';
-import { freshDb, rows } from './harness.ts';
+import { asRole, freshDb, rows } from './harness.ts';
 
 let db: PGlite;
+
+/** Call the operator-guarded dash_trading() as the single allow-listed operator (the trade-config idiom). */
+const asOperator = <T>(fn: () => Promise<T>) =>
+  asRole(db, 'service_role', { email: 'david.geborek@gmail.com' }, fn);
 
 beforeAll(async () => {
   db = await freshDb();
@@ -191,7 +198,8 @@ describe('0095 crons — the */10 edge tick with the §8.1 body periodKey + the 
     expect(j!.command).toContain('/functions/v1/buy-table-tick');
     // §8.1 — the periodKey is stamped into the BODY at fire time (now() evaluates per fire).
     expect(j!.command).toContain(`body := jsonb_build_object('periodKey', 'buy-table-tick:' || to_char(now()`);
-    expect(j!.command).toContain('timeout_milliseconds := 4500');
+    // 4cb1e77: 10s (the generic 4500 was shorter than a cold Edge boot — the launch-day fix).
+    expect(j!.command).toContain('timeout_milliseconds := 10000');
   });
 
   it('buy-table-deadman is registered */15 invoking buy_table_deadman_check()', async () => {
@@ -264,6 +272,230 @@ describe('0095 buy_table_deadman_check — day-bucketed staleness + all-degraded
     }
     const [r] = await rows<{ v: { alarmed: boolean } }>(db, `select public.buy_table_deadman_check() as v`);
     expect(r!.v.alarmed).toBe(false);
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════════════
+describe('0096 dash_trading().buyTable — the BUY-TABLE lane position ledger (ANY status + outcome + totals)', () => {
+  interface BuyTableRow {
+    intentKey?: string;
+    marketId: string;
+    city: string | null;
+    label: string | null;
+    targetDate: string | null;
+    status: string;
+    outcome: string;
+    sizeMatched: string | number;
+    costUsd: string | number;
+    resolvedPnlUsd: string | number | null;
+  }
+  interface BuyTablePayload {
+    rows: BuyTableRow[];
+    totals: {
+      nRows: number; nOpen: number; nWon: number; nLost: number;
+      costUsd: string | number; resolvedPnlUsd: string | number;
+    };
+  }
+
+  const buyTable = async (): Promise<BuyTablePayload> => {
+    const [r] = await asOperator(() =>
+      rows<{ v: BuyTablePayload }>(db, `select public.dash_trading()->'buyTable' as v`),
+    );
+    return r!.v;
+  };
+
+  let seq = 0;
+  /** Insert a buy-table live_orders row (superuser) + an optional exact fill; returns the order id. */
+  async function seedEntry(opts: {
+    marketId: string;
+    tokenId: string;
+    status: string;
+    matched?: number;
+    avgPrice?: number;
+    feeUsd?: number;
+    mode?: string;
+    strategy?: string;
+    createdAt?: string;
+  }): Promise<string> {
+    seq += 1;
+    const matched = opts.matched ?? 0;
+    const avg = opts.avgPrice ?? null;
+    const r = await rows<{ id: string }>(
+      db,
+      `insert into public.live_orders
+         (intent_key, client_order_id, market_id, token_id, side, purpose, order_type,
+          price, size, size_matched, avg_price, trade_date, mode, status, strategy, created_at)
+       values ($1, $1 || ':cid', $2, $3, 'BUY', 'entry', 'FAK',
+               $4, 70, $5, $6, '2026-07-11', $7, $8, $9, coalesce($10::timestamptz, now()))
+       returning id`,
+      [
+        `bt-${seq}`, opts.marketId, opts.tokenId, opts.avgPrice ?? 0.15, matched, avg,
+        opts.mode ?? 'live', opts.status, opts.strategy ?? 'buy-table', opts.createdAt ?? null,
+      ],
+    );
+    const id = r[0]!.id;
+    if (matched > 0 && avg != null) {
+      await rows(
+        db,
+        `insert into public.live_fills (order_id, fill_price, fill_size, fill_notional, fee_usd)
+         values ($1, $2, $3, $4, $5)`,
+        [id, avg, matched, avg * matched, opts.feeUsd ?? 0],
+      );
+    }
+    return id;
+  }
+
+  /** A market_events + 2-bucket market for a city; returns the two bucket condition/token ids. */
+  async function seedMarket(opts: {
+    slugStem: string;
+    winnerIdx?: number | null;
+  }): Promise<Array<{ conditionId: string; tokenYes: string }>> {
+    const region = (await rows<{ region: string }>(db, `select region from public.clusters limit 1`))[0]!.region;
+    const cityId = (
+      await rows<{ city_id: string }>(
+        db,
+        `select city_id from public.upsert_city($1, $2, 'US', 'C', 'UTC', $3)`,
+        [opts.slugStem, opts.slugStem, region],
+      )
+    )[0]!.city_id;
+    const eventId = (
+      await rows<{ id: string }>(
+        db,
+        `insert into public.market_events
+           (poly_event_id, slug, city_id, target_date, unit, ladder_ok, winning_bucket_idx)
+         values ('pe-' || $1, 'ev-' || $1, $2, '2026-07-11', 'C', true, $3)
+         returning id`,
+        [opts.slugStem, cityId, opts.winnerIdx ?? null],
+      )
+    )[0]!.id;
+    const out: Array<{ conditionId: string; tokenYes: string }> = [];
+    for (const idx of [0, 1]) {
+      const conditionId = `cond-${opts.slugStem}-${idx}`;
+      const tokenYes = `tokyes-${opts.slugStem}-${idx}`;
+      await rows(
+        db,
+        `insert into public.market_buckets
+           (event_id, bucket_idx, label, condition_id, token_yes, token_no)
+         values ($1, $2, $3, $4, $5, $5 || '-no')`,
+        [eventId, idx, `${idx === 0 ? '33°C' : '34°C'} bucket`, conditionId, tokenYes],
+      );
+      out.push({ conditionId, tokenYes });
+    }
+    return out;
+  }
+
+  afterEach(async () => {
+    await db.exec(`delete from public.live_fills`);
+    await db.exec(`delete from public.live_orders`);
+    await db.exec(`delete from public.market_buckets`);
+    await db.exec(`delete from public.market_events`);
+  });
+
+  it('empty ledger → { rows: [], totals: zeros } — an OBJECT, never a bare array (0081 tripwire)', async () => {
+    const [shape] = await asOperator(() =>
+      rows<{ outer: string; rowsTyp: string; totalsTyp: string }>(
+        db,
+        `select jsonb_typeof(public.dash_trading()->'buyTable')           as outer,
+                jsonb_typeof(public.dash_trading()->'buyTable'->'rows')   as "rowsTyp",
+                jsonb_typeof(public.dash_trading()->'buyTable'->'totals') as "totalsTyp"`,
+      ),
+    );
+    expect(shape).toEqual({ outer: 'object', rowsTyp: 'array', totalsTyp: 'object' });
+    const v = await buyTable();
+    expect(v.rows).toEqual([]);
+    expect(Number(v.totals.nRows)).toBe(0);
+    expect(Number(v.totals.nOpen)).toBe(0);
+    expect(Number(v.totals.nWon)).toBe(0);
+    expect(Number(v.totals.nLost)).toBe(0);
+    expect(Number(v.totals.costUsd)).toBe(0);
+    expect(Number(v.totals.resolvedPnlUsd)).toBe(0);
+  });
+
+  it('grades a resolved market: filled-on-winner → won (+matched−cost−fee); filled-on-loser → lost (−cost)', async () => {
+    // one graded event (winner = bucket 0), our two entries on its two buckets.
+    const buckets = await seedMarket({ slugStem: 'btp-graded', winnerIdx: 0 });
+    // WON: 70 sh @ 0.12 ($8.40) + $0.10 fee → pnl = 70 − 8.40 − 0.10 = +61.50
+    await seedEntry({
+      marketId: buckets[0]!.conditionId, tokenId: buckets[0]!.tokenYes,
+      status: 'filled', matched: 70, avgPrice: 0.12, feeUsd: 0.1, createdAt: '2026-07-11T10:00:00Z',
+    });
+    // LOST: 70 sh @ 0.10 ($7) → pnl = −7
+    await seedEntry({
+      marketId: buckets[1]!.conditionId, tokenId: buckets[1]!.tokenYes,
+      status: 'filled', matched: 70, avgPrice: 0.1, createdAt: '2026-07-11T11:00:00Z',
+    });
+
+    const v = await buyTable();
+    expect(v.rows).toHaveLength(2);
+    // newest first: the LOST row (11:00) leads.
+    const [lost, won] = v.rows as [BuyTableRow, BuyTableRow];
+    expect(lost.outcome).toBe('lost');
+    expect(Number(lost.resolvedPnlUsd)).toBeCloseTo(-7, 6);
+    expect(won.outcome).toBe('won');
+    expect(Number(won.resolvedPnlUsd)).toBeCloseTo(61.5, 6);
+    // the best-effort market join carries city / label / target date.
+    expect(won.city).toBe('btp-graded');
+    expect(won.label).toBe('33°C bucket');
+    expect(won.targetDate).toBe('2026-07-11');
+    // totals over the enumerated rows.
+    expect(Number(v.totals.nRows)).toBe(2);
+    expect(Number(v.totals.nWon)).toBe(1);
+    expect(Number(v.totals.nLost)).toBe(1);
+    expect(Number(v.totals.nOpen)).toBe(0);
+    expect(Number(v.totals.costUsd)).toBeCloseTo(8.5 + 7, 6);
+    expect(Number(v.totals.resolvedPnlUsd)).toBeCloseTo(61.5 - 7, 6);
+  });
+
+  it("an unresolved market stays 'open'; a joinless market renders fail-soft with nulls (never hidden)", async () => {
+    const buckets = await seedMarket({ slugStem: 'btp-open', winnerIdx: null });
+    await seedEntry({
+      marketId: buckets[0]!.conditionId, tokenId: buckets[0]!.tokenYes,
+      status: 'filled', matched: 70, avgPrice: 0.14,
+    });
+    // no market_buckets row at all for this condition id — the join misses.
+    await seedEntry({ marketId: 'cond-unknown', tokenId: 'tok-unknown', status: 'filled', matched: 50, avgPrice: 0.1 });
+
+    const v = await buyTable();
+    expect(v.rows).toHaveLength(2);
+    const joinless = v.rows.find((r) => r.marketId === 'cond-unknown')!;
+    expect(joinless.city).toBeNull();
+    expect(joinless.label).toBeNull();
+    expect(joinless.outcome).toBe('open'); // fail-soft: never guess a verdict without the winner join
+    const open = v.rows.find((r) => r.marketId !== 'cond-unknown')!;
+    expect(open.outcome).toBe('open');
+    expect(open.resolvedPnlUsd).toBeNull();
+    expect(Number(v.totals.nOpen)).toBe(2);
+    expect(Number(v.totals.resolvedPnlUsd)).toBe(0);
+  });
+
+  it("terminal no-fill rows grade 'failed' / 'unfilled' — the ANY-status visibility the open-orders table lacks", async () => {
+    await seedEntry({ marketId: 'm-f', tokenId: 't-f', status: 'failed' });
+    await seedEntry({ marketId: 'm-c', tokenId: 't-c', status: 'canceled' }); // a FAK that missed
+    const v = await buyTable();
+    expect(v.rows.map((r) => r.outcome).sort()).toEqual(['failed', 'unfilled']);
+    expect(Number(v.totals.nRows)).toBe(2);
+    expect(Number(v.totals.costUsd)).toBe(0);
+  });
+
+  it('scopes to the LIVE buy-table lane: dry-run rows and other strategies never appear (the 0082 invariant)', async () => {
+    await seedEntry({ marketId: 'm-dry', tokenId: 't-dry', status: 'filled', matched: 70, avgPrice: 0.1, mode: 'dry-run' });
+    await seedEntry({ marketId: 'm-mx', tokenId: 't-mx', status: 'filled', matched: 70, avgPrice: 0.1, strategy: 'maker-exit' });
+    const v = await buyTable();
+    expect(v.rows).toEqual([]);
+    expect(Number(v.totals.nRows)).toBe(0);
+  });
+
+  it('every pre-0096 dash_trading key is byte-preserved alongside buyTable', async () => {
+    const [r] = await asOperator(() =>
+      rows<{ keys: string[] }>(
+        db,
+        `select array(select jsonb_object_keys(public.dash_trading()) order by 1) as keys`,
+      ),
+    );
+    expect(r!.keys).toEqual([
+      'buyTable', 'config', 'dryRun', 'generatedAt', 'openExposureUsd',
+      'openOrders', 'preflight', 'recentAudit', 'today',
+    ]);
   });
 });
 
