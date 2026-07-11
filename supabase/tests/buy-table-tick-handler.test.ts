@@ -200,14 +200,37 @@ const reservesOf = (db: { calls: Array<{ fn: string; args: Record<string, unknow
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 describe('parseBuyTableConfig', () => {
   it('falls back to the 0095 defaults and honors overrides', () => {
-    expect(parseBuyTableConfig([])).toEqual({ priceCap: 0.15, leadMaxH: 12, leadMinH: 2, tickEnabled: true });
+    expect(parseBuyTableConfig([])).toEqual({
+      priceCap: 0.15, leadMaxH: 12, leadMinH: 2, tickEnabled: true, cityRanges: {},
+    });
     expect(
       parseBuyTableConfig([
         { key: 'buy_table.price_cap', value: '0.10' },
         { key: 'buy_table.lead_max_h', value: '24' },
         { key: 'buy_table.tick_enabled', value: 'false' },
       ]),
-    ).toEqual({ priceCap: 0.1, leadMaxH: 24, leadMinH: 2, tickEnabled: false });
+    ).toEqual({ priceCap: 0.1, leadMaxH: 24, leadMinH: 2, tickEnabled: false, cityRanges: {} });
+  });
+
+  it('0097: parses buy_table.city_price_ranges into slug-keyed cityRanges (normalized lower/trim)', () => {
+    const cfg = parseBuyTableConfig([
+      { key: 'buy_table.city_price_ranges', value: '{" Karachi ": {"min": 0.05, "max": 0.3}, "singapore": {"min": 0, "max": 0.2}}' },
+    ]);
+    expect(cfg.cityRanges).toEqual({ karachi: { min: 0.05, max: 0.3 }, singapore: { min: 0, max: 0.2 } });
+  });
+
+  it('0097: drops malformed JSON, non-object payloads, and invalid entries FAIL-SAFE (back to the global cap)', () => {
+    expect(parseBuyTableConfig([{ key: 'buy_table.city_price_ranges', value: 'not json' }]).cityRanges).toEqual({});
+    expect(parseBuyTableConfig([{ key: 'buy_table.city_price_ranges', value: '[1,2]' }]).cityRanges).toEqual({});
+    expect(
+      parseBuyTableConfig([
+        {
+          key: 'buy_table.city_price_ranges',
+          // inverted min/max, a non-numeric bound, a bare string entry — all dropped; the sane one survives.
+          value: '{"bad": {"min": 0.5, "max": 0.2}, "worse": {"min": "x", "max": 0.2}, "junk": "x", "ok": {"min": 0.1, "max": 0.3}}',
+        },
+      ]).cityRanges,
+    ).toEqual({ ok: { min: 0.1, max: 0.3 } });
   });
 });
 
@@ -232,6 +255,48 @@ describe('buy-table-tick — the price gate (executable ask ≤ price_cap)', () 
     const reserves = reservesOf(h.db);
     expect(reserves.length).toBe(1);
     expect(reserves[0]!.args['p_market_id']).toBe('c-ev-cheap-1');
+    expect(h.logs.some((l) => l.msg === 'buy-table.skip' && /price_cap/.test(String(l.extra?.reason)))).toBe(true);
+  });
+});
+
+describe('buy-table-tick — per-city price RANGES (0097) override the global cap', () => {
+  it('honors an override: enters inside [min,max] even ABOVE the global cap; min excludes a too-cheap ask', async () => {
+    const h = harness(
+      {
+        mode: 'off',
+        configRows: [{ key: 'buy_table.city_price_ranges', value: '{"testville": {"min": 0.10, "max": 0.30}}' }],
+        captures: [
+          capture({ eventId: 'ev-mid', ask: 0.25, hoursToClose: 6 }), // > global 0.15 cap but inside the override
+          capture({ eventId: 'ev-cheap', ask: 0.05, hoursToClose: 6 }), // below the override MIN — excluded
+          capture({ eventId: 'ev-rich', ask: 0.35, hoursToClose: 6 }), // above the override MAX — excluded
+        ],
+      },
+      'dry-run',
+    );
+    const stats = await buyTableTick(h.ctx, h.deps);
+    expect(stats.candidates).toBe(1);
+    expect(stats.cityOverrides).toBe(1);
+    expect(reservesOf(h.db).map((r) => r.args['p_market_id'])).toEqual(['c-ev-mid-1']);
+    const rangeSkips = h.logs.filter((l) => l.msg === 'buy-table.skip' && /price_range/.test(String(l.extra?.reason)));
+    expect(rangeSkips.length).toBe(2);
+  });
+
+  it('falls back to the global [0, price_cap] for a city with NO override (the original gate, unchanged)', async () => {
+    const h = harness(
+      {
+        mode: 'off',
+        // an override for a DIFFERENT city must not touch testville's gate
+        configRows: [{ key: 'buy_table.city_price_ranges', value: '{"otherville": {"min": 0.10, "max": 0.30}}' }],
+        captures: [
+          capture({ eventId: 'ev-ok', ask: 0.15, hoursToClose: 6 }),
+          capture({ eventId: 'ev-no', ask: 0.16, hoursToClose: 6 }),
+        ],
+      },
+      'dry-run',
+    );
+    const stats = await buyTableTick(h.ctx, h.deps);
+    expect(stats.candidates).toBe(1);
+    expect(reservesOf(h.db).map((r) => r.args['p_market_id'])).toEqual(['c-ev-ok-1']);
     expect(h.logs.some((l) => l.msg === 'buy-table.skip' && /price_cap/.test(String(l.extra?.reason)))).toBe(true);
   });
 });
@@ -458,7 +523,7 @@ describe('buy-table-tick — hold-to-close resolution-loss booking', () => {
 // The pure helpers directly (edge shapes)
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 describe('selectBuyTableCandidates — pure edge shapes', () => {
-  const baseCfg = { priceCap: 0.15, leadMaxH: 12, leadMinH: 2, tickEnabled: true };
+  const baseCfg = { priceCap: 0.15, leadMaxH: 12, leadMinH: 2, tickEnabled: true, cityRanges: {} };
 
   it('skips unseeded captures (no houseProb → no forecast center to buy)', () => {
     const cap = capture({ eventId: 'ev-1', ask: 0.12, hoursToClose: 6 });

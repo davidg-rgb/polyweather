@@ -2185,10 +2185,23 @@ export interface BuyTableTotals {
   resolvedPnlUsd: unknown;
 }
 
-/** dash_trading.buyTable (0096) — { rows, totals }; null on a pre-0096 payload (the section notes it). */
+/**
+ * dash_trading.buyTable.priceConfig (0097) — the operator price-range config the buy-table tick trades by:
+ * the global cap (buy_table.price_cap) + the per-city [min, max] override map (buy_table.city_price_ranges,
+ * keyed by lower-cased cities.slug; an absent slug = the global [0, globalMax] default). Numerics are
+ * jsonb-string-safe (file convention) — the page coerces with num().
+ */
+export interface BuyTablePriceConfig {
+  globalMax: unknown;
+  cityRanges: Record<string, { min: unknown; max: unknown }>;
+}
+
+/** dash_trading.buyTable (0096) — { rows, totals }; null on a pre-0096 payload (the section notes it).
+ *  0097 adds priceConfig — null on a pre-0097 payload (the price-ranges panel notes it). */
 export interface BuyTableSection {
   rows: BuyTablePositionRow[];
   totals: BuyTableTotals | null;
+  priceConfig: BuyTablePriceConfig | null;
 }
 
 export interface TradingView {
@@ -2265,8 +2278,11 @@ export async function getTrading(db: WebDb): Promise<TradingLoad> {
       today: v.today ?? null,
       dryRun: v.dryRun ?? null,
       // 0096: absent on a pre-0096 payload → null (the page renders its "0096 not applied" note); present →
-      // null-tolerant inner defaults so a lean envelope still renders.
-      buyTable: v.buyTable ? { rows: v.buyTable.rows ?? [], totals: v.buyTable.totals ?? null } : null,
+      // null-tolerant inner defaults so a lean envelope still renders. priceConfig (0097) degrades the same
+      // way: absent on a pre-0097 payload → null (the price-ranges panel renders its "0097 not applied" note).
+      buyTable: v.buyTable
+        ? { rows: v.buyTable.rows ?? [], totals: v.buyTable.totals ?? null, priceConfig: v.buyTable.priceConfig ?? null }
+        : null,
       recentAudit: v.recentAudit ?? [],
       generatedAt: v.generatedAt ?? null,
     },

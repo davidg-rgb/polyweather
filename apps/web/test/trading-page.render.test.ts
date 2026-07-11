@@ -100,6 +100,8 @@ const FIXTURE = {
       },
     ],
     totals: { nRows: 2, nOpen: 1, nWon: 1, nLost: 0, costUsd: '19.900000', resolvedPnlUsd: '73.040000' },
+    // 0097: the price-range config — karachi carries an override; singapore (allowlisted) falls to 'default'.
+    priceConfig: { globalMax: 0.15, cityRanges: { karachi: { min: 0.05, max: 0.3 } } },
   },
   recentAudit: [
     {
@@ -184,6 +186,21 @@ describe('/trading page renders', () => {
     // and enrolled cities are flagged in their label.
     expect(html).toContain('London');
     expect(html).toContain('Karachi · enrolled');
+    // 2026-07-11 picker rework: filter input + bulk actions + the selected-count readout (2 of the 4 options
+    // are in the stored allowlist), rendered as the responsive grid instead of the single-column scroll box.
+    expect(html).toContain('filter cities'); // the search input placeholder
+    expect(html).toContain('select all');
+    expect(html).toContain('2 of 4 selected');
+    expect(html).toContain('repeat(auto-fill'); // the multi-column responsive grid
+
+    // (a2) 0097 — the buy-table price-ranges panel: global max + the per-city table over allowlist ∪ overridden
+    // (karachi shows its override, singapore shows 'default'), with save/clear wired to the §8.2 route.
+    expect(html).toContain('Buy-table price ranges');
+    expect(html).toContain('save global max');
+    expect(html).toContain('[0.05, 0.3]'); // karachi's stored override
+    expect(html).toContain('default'); // singapore — allowlisted, no override
+    expect(html).toContain('clear'); // the per-row override clear button
+    expect(html).not.toContain('0097 not applied'); // priceConfig present — no staged-dark note
 
     // (b) CITY-LIVE — the winners board (section b): status badges + edge/nBets/nDays/rec-hour + the twin columns
     expect(html).toContain('Winners board'); // h2
@@ -260,6 +277,9 @@ describe('/trading page renders', () => {
     // the section header still renders, never a false empty state.
     expect(html).toContain('Buy-table positions');
     expect(html).toContain('0096 not applied');
+    // 0097: no buyTable ⇒ no priceConfig either — the price-ranges panel renders its OWN staged-dark note.
+    expect(html).toContain('Buy-table price ranges');
+    expect(html).toContain('0097 not applied');
     // the config editor (0082) still renders; only the winners board + arms (0085) show the dark note.
     expect(html).toContain('Trade config control');
     expect(html).toContain('0085 NOT APPLIED');

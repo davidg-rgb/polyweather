@@ -14,7 +14,7 @@
 import { useRouter } from 'next/navigation';
 import { useState, type ReactElement } from 'react';
 import { errText, postJson } from './post.ts';
-import type { CityLiveArm, TradeConfig } from '../lib/loaders.ts';
+import type { BuyTablePriceConfig, CityLiveArm, TradeConfig } from '../lib/loaders.ts';
 
 // A local twin of controls.tsx's useAction/Status (kept file-local, like the original) — busy latch + verbatim
 // message + router.refresh() on success.
@@ -57,6 +57,97 @@ const curStr = (v: unknown): string => (v === null || v === undefined ? '' : Str
 // root pass only because no root-graph test imports it.)
 const evVal = (e: { target: unknown }): string => (e.target as { value: string }).value;
 const evChecked = (e: { target: unknown }): boolean => (e.target as { checked: boolean }).checked;
+
+// ─── (a0) the allowlist picker ────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The allowlist CHECKBOX PICKER (operator UX rework 2026-07-11): the old single-column 45-checkbox scroll box
+ * was unusable at the 0094 full-domain scale. Now: a filter input, a responsive multi-column grid, select-all /
+ * clear bulk actions, and a selected-count readout. Options CHECKED AT MOUNT sort first (frozen once, so rows
+ * never reshuffle mid-edit as the operator toggles). Pure presentation over the SAME controlled state
+ * (allowSel via setSel) — the parent's diff-aware save and POST body are untouched.
+ */
+function AllowlistPicker({
+  options,
+  sel,
+  setSel,
+}: {
+  options: { slug: string; label: string }[];
+  sel: string[];
+  setSel: (update: (prev: string[]) => string[]) => void;
+}): ReactElement {
+  const [filter, setFilter] = useState('');
+  // The checked-first ordering is frozen at mount (a lazy useState initializer) — toggling a box must not
+  // reshuffle the grid under the cursor.
+  const [checkedAtMount] = useState<ReadonlySet<string>>(() => new Set(sel));
+  const ordered = [...options].sort((a, b) => {
+    const ca = checkedAtMount.has(a.slug) ? 0 : 1;
+    const cb = checkedAtMount.has(b.slug) ? 0 : 1;
+    return ca - cb || a.slug.localeCompare(b.slug);
+  });
+  const f = filter.trim().toLowerCase();
+  const visible = f === '' ? ordered : ordered.filter((o) => o.slug.includes(f) || o.label.toLowerCase().includes(f));
+
+  return (
+    <div style={{ paddingLeft: 18 }}>
+      <div className="form-row" style={{ marginBottom: 6 }}>
+        <input
+          type="text"
+          placeholder="filter cities"
+          value={filter}
+          onChange={(e) => setFilter(evVal(e))}
+          style={{ width: 160 }}
+        />
+        <button
+          type="button"
+          title="select every city currently shown (respects the filter)"
+          onClick={() => setSel((p) => [...new Set([...p, ...visible.map((o) => o.slug)])])}
+        >
+          select all
+        </button>
+        <button type="button" title="clear the whole selection" onClick={() => setSel(() => [])}>
+          clear
+        </button>
+        <span className="muted small">
+          {sel.length} of {options.length} selected
+        </span>
+      </div>
+      {options.length === 0 ? (
+        <span className="muted small">no enrolled cities to pick from</span>
+      ) : (
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fill, minmax(170px, 1fr))',
+            gap: '2px 12px',
+            maxHeight: 260,
+            overflowY: 'auto',
+          }}
+        >
+          {visible.length === 0 ? (
+            <span className="muted small">no city matches the filter</span>
+          ) : (
+            visible.map((o) => (
+              <label key={o.slug} style={{ display: 'block', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                <input
+                  type="checkbox"
+                  checked={sel.includes(o.slug)}
+                  onChange={(e) =>
+                    setSel((p) => (evChecked(e) ? [...p, o.slug] : p.filter((s) => s !== o.slug)))
+                  }
+                />{' '}
+                {o.label} <span className="muted small mono">{o.slug}</span>
+              </label>
+            ))
+          )}
+        </div>
+      )}
+      {sel.length === 0 ? (
+        <span className="form-error small">select at least one city (empty would allow none)</span>
+      ) : null}
+    </div>
+  );
+}
 
 // ─── (a) trade_config input table ─────────────────────────────────────────────────────────────────────────
 
@@ -207,30 +298,7 @@ export function TradeConfigEditor({
                   restrict to:
                 </label>
                 {!allowAll ? (
-                  // Scrollable: the 0094 option set is the whole 45-city domain, not just the enrolled few.
-                  <div style={{ paddingLeft: 18, maxHeight: 220, overflowY: 'auto' }}>
-                    {allowOptions.length === 0 ? (
-                      <span className="muted small">no enrolled cities to pick from</span>
-                    ) : (
-                      allowOptions.map((o) => (
-                        <label key={o.slug} style={{ display: 'block' }}>
-                          <input
-                            type="checkbox"
-                            checked={allowSel.includes(o.slug)}
-                            onChange={(e) =>
-                              setAllowSel((p) =>
-                                evChecked(e) ? [...p, o.slug] : p.filter((s) => s !== o.slug),
-                              )
-                            }
-                          />{' '}
-                          {o.label} <span className="muted small mono">{o.slug}</span>
-                        </label>
-                      ))
-                    )}
-                    {allowSel.length === 0 ? (
-                      <span className="form-error small">select at least one city (empty would allow none)</span>
-                    ) : null}
-                  </div>
+                  <AllowlistPicker options={allowOptions} sel={allowSel} setSel={setAllowSel} />
                 ) : null}
               </td>
             </tr>
@@ -269,6 +337,228 @@ export function TradeConfigEditor({
         </button>
         <Status msg={a.msg} ok={a.ok} />
       </div>
+    </div>
+  );
+}
+
+// ─── (b) Buy-table price ranges panel (0097) ──────────────────────────────────────────────────────────────
+
+/**
+ * The BUY-TABLE lane's purchase-price-range editor (migration 0097): the GLOBAL max (buy_table.price_cap →
+ * buy_table_price_cap_set) plus a per-city [min, max] override table over the allowlist ∪ overridden cities
+ * (buy_table.city_price_ranges → buy_table_price_range_set; clear = back to the global default). Same §8.2
+ * contract as the config editor: the route TYPE-validates only; the slug/range VALUE constraints RAISE in the
+ * DB and are shown VERBATIM. Data comes from dash_trading().buyTable.priceConfig — null (pre-0097) renders the
+ * staged-dark note, never a false empty editor.
+ */
+export function BuyTablePriceRangesPanel({
+  priceConfig,
+  allowlist,
+  cityOptions = [],
+}: {
+  /** dash_trading().buyTable.priceConfig — null while migration 0097 is unapplied. */
+  priceConfig: BuyTablePriceConfig | null;
+  /** trade_config.city_allowlist (null = all cities) — the base row set of the per-city table. */
+  allowlist: string[] | null;
+  /** Valid override targets (the buy_table_price_range_set slug domain): slug + display label. */
+  cityOptions?: { slug: string; label: string }[];
+}): ReactElement {
+  const a = useAction();
+  const [edits, setEdits] = useState<Record<string, { min: string; max: string }>>({});
+  const [globalEdit, setGlobalEdit] = useState<string>('');
+  const [added, setAdded] = useState<string[]>([]);
+  const [addSel, setAddSel] = useState<string>('');
+
+  if (!priceConfig) {
+    return (
+      <div className="panel">
+        <div className="cap" style={{ marginBottom: '0.25rem' }}>Buy-table price ranges</div>
+        <p className="muted small" style={{ marginTop: 0 }}>
+          <strong style={{ color: 'var(--ams-amber)' }}>0097 not applied</strong> — the{' '}
+          <span className="mono">dash_trading()</span> payload carries no{' '}
+          <span className="mono">buyTable.priceConfig</span> yet. The per-city purchase-price ranges (global cap +{' '}
+          <span className="mono">buy_table.city_price_ranges</span> overrides) unlock the moment the operator
+          applies migration <span className="mono">0097_buy_table_price_ranges.sql</span>. Until then the lane
+          trades on the global <span className="mono">buy_table.price_cap</span> alone.
+        </p>
+      </div>
+    );
+  }
+
+  const ranges = priceConfig.cityRanges ?? {};
+  const globalCur = curStr(priceConfig.globalMax);
+  const labelOf = (slug: string): string => cityOptions.find((o) => o.slug === slug)?.label ?? slug;
+
+  // Rows = allowlist ∪ overridden ∪ locally-added (the add-row below), lower-cased + deduped + sorted.
+  const rowSlugs = [
+    ...new Set([...(allowlist ?? []).map((s) => s.toLowerCase()), ...Object.keys(ranges).map((s) => s.toLowerCase()), ...added]),
+  ].sort();
+  const addable = cityOptions.filter((o) => !rowSlugs.includes(o.slug));
+
+  const minOf = (slug: string): string => edits[slug]?.min ?? curStr(ranges[slug]?.min);
+  const maxOf = (slug: string): string => edits[slug]?.max ?? curStr(ranges[slug]?.max);
+  const patch = (slug: string, key: 'min' | 'max', v: string): void =>
+    setEdits((p) => ({
+      ...p,
+      [slug]: {
+        min: key === 'min' ? v : (p[slug]?.min ?? minOf(slug)),
+        max: key === 'max' ? v : (p[slug]?.max ?? maxOf(slug)),
+      },
+    }));
+
+  const post = (body: Record<string, unknown>, okMsg: string): Promise<void> =>
+    a.run(async () => {
+      const r = await postJson('/api/admin/trading/buy-table-price', body);
+      if (r.status === 200) {
+        setEdits({});
+        setGlobalEdit('');
+        return { ok: true, msg: okMsg };
+      }
+      return { ok: false, msg: errText(r) };
+    });
+
+  return (
+    <div className="panel">
+      <div className="cap" style={{ marginBottom: '0.25rem' }}>Buy-table price ranges</div>
+      <p className="muted small" style={{ marginTop: 0 }}>
+        The BUY-TABLE lane enters only while the predicted bucket&apos;s executable ask sits inside the city&apos;s{' '}
+        <strong>[min, max]</strong> purchase range. No override = the global default{' '}
+        <span className="mono">[0, {globalCur || '0.15'}]</span>. Range guardrails are the database&apos;s
+        (slug must exist, 0 ≤ min &lt; max ≤ 0.99, cap in (0, 0.99]) and any rejection is shown{' '}
+        <strong>verbatim</strong>.
+      </p>
+      <div className="form-row" style={{ marginBottom: 8 }}>
+        <span>Global max</span>
+        <span className="mono">{globalCur || '—'}</span>
+        <input
+          className="mono"
+          type="number"
+          min="0.01"
+          max="0.99"
+          step="0.01"
+          style={{ width: 90 }}
+          placeholder={globalCur}
+          value={globalEdit}
+          onChange={(e) => setGlobalEdit(evVal(e))}
+        />
+        <button
+          className="primary"
+          disabled={a.busy || globalEdit.trim() === '' || globalEdit.trim() === globalCur}
+          onClick={() => void post({ globalMax: Number(globalEdit) }, `global max set to ${globalEdit}`)}
+        >
+          save global max
+        </button>
+      </div>
+      {rowSlugs.length === 0 ? (
+        <p className="muted small">
+          No allowlist cities and no overrides yet — restrict the allowlist above or add a city override below.
+        </p>
+      ) : (
+        <div className="tbl-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>city</th>
+                <th>current range</th>
+                <th className="num">min</th>
+                <th className="num">max</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              {rowSlugs.map((slug) => {
+                const r = ranges[slug];
+                const minStr = minOf(slug);
+                const maxStr = maxOf(slug);
+                return (
+                  <tr key={slug}>
+                    <td>
+                      {labelOf(slug)} <span className="muted small mono">{slug}</span>
+                    </td>
+                    <td className="mono small" title={`no override = the global [0, ${globalCur || '0.15'}]`}>
+                      {r ? `[${curStr(r.min)}, ${curStr(r.max)}]` : 'default'}
+                    </td>
+                    <td className="num">
+                      <input
+                        className="mono"
+                        type="number"
+                        min="0"
+                        max="0.99"
+                        step="0.01"
+                        placeholder="0"
+                        style={{ width: 80 }}
+                        value={minStr}
+                        onChange={(e) => patch(slug, 'min', evVal(e))}
+                      />
+                    </td>
+                    <td className="num">
+                      <input
+                        className="mono"
+                        type="number"
+                        min="0"
+                        max="0.99"
+                        step="0.01"
+                        placeholder={globalCur}
+                        style={{ width: 80 }}
+                        value={maxStr}
+                        onChange={(e) => patch(slug, 'max', evVal(e))}
+                      />
+                    </td>
+                    <td>
+                      <button
+                        disabled={a.busy || minStr.trim() === '' || maxStr.trim() === ''}
+                        onClick={() =>
+                          void post(
+                            { city: slug, min: Number(minStr), max: Number(maxStr) },
+                            `${slug} range set to [${minStr}, ${maxStr}]`,
+                          )
+                        }
+                      >
+                        save
+                      </button>{' '}
+                      {r ? (
+                        <button
+                          disabled={a.busy}
+                          title="remove the override — back to the global [0, max] default"
+                          onClick={() => void post({ city: slug, clear: true }, `${slug} override cleared`)}
+                        >
+                          clear
+                        </button>
+                      ) : null}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {addable.length > 0 ? (
+        <div className="form-row">
+          <span className="muted small">add override for</span>
+          <select value={addSel} onChange={(e) => setAddSel(evVal(e))}>
+            <option value="">— pick a city —</option>
+            {addable.map((o) => (
+              <option key={o.slug} value={o.slug}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            disabled={addSel === ''}
+            onClick={() => {
+              if (addSel !== '') {
+                setAdded((p) => (p.includes(addSel) ? p : [...p, addSel]));
+                setAddSel('');
+              }
+            }}
+          >
+            add
+          </button>
+        </div>
+      ) : null}
+      <Status msg={a.msg} ok={a.ok} />
     </div>
   );
 }

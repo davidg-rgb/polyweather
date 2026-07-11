@@ -33,7 +33,7 @@ import type {
 import { getCityLive, getTrading } from '../../../lib/loaders.ts';
 import { fmtAgo, fmtDate, fmtDateTime, fmtPct, fmtProb, fmtStockholm, fmtUsd, num } from '../../../lib/format.ts';
 import { serverDb } from '../../../lib/supabase.ts';
-import { CityArmsTable, TradeConfigEditor } from '../../../components/trading-controls.tsx';
+import { BuyTablePriceRangesPanel, CityArmsTable, TradeConfigEditor } from '../../../components/trading-controls.tsx';
 
 export const dynamic = 'force-dynamic';
 
@@ -725,6 +725,19 @@ export default async function TradingPage(): Promise<ReactElement> {
   // promotion sections until 0085 lands.
   const cityLive = await getCityLive(db);
 
+  // The valid slug domain for the allowlist picker AND the buy-table price-range table (0094: the FULL
+  // cities.slug domain trade_config_set / buy_table_price_range_set validate against — enrolled (racing)
+  // cities flagged in the label; pre-0094 payloads degrade to the enrolled arms, the old narrower set).
+  const cityOptions: { slug: string; label: string }[] =
+    cityLive.kind === 'ok'
+      ? cityLive.view.allCities.length > 0
+        ? cityLive.view.allCities.map((c) => ({
+            slug: c.slug,
+            label: c.enrolled ? `${c.displayName} · enrolled` : c.displayName,
+          }))
+        : cityLive.view.arms.map((arm) => ({ slug: arm.slug, label: arm.displayName }))
+      : [];
+
   return (
     <div className="ams-dash">
       <h1>
@@ -818,25 +831,17 @@ export default async function TradingPage(): Promise<ReactElement> {
 
       <h2>Trade config control</h2>
       {config ? (
-        <TradeConfigEditor
-          config={config}
-          cityOptions={
-            cityLive.kind === 'ok'
-              ? cityLive.view.allCities.length > 0
-                ? // 0094: the FULL cities.slug domain trade_config_set validates against — enrolled (racing)
-                  // cities flagged in the label so the picker is never narrower than the DB again.
-                  cityLive.view.allCities.map((c) => ({
-                    slug: c.slug,
-                    label: c.enrolled ? `${c.displayName} · enrolled` : c.displayName,
-                  }))
-                : // pre-0094 payload has no allCities — degrade to the enrolled arms (the old, narrower set).
-                  cityLive.view.arms.map((arm) => ({ slug: arm.slug, label: arm.displayName }))
-              : []
-          }
-        />
+        <TradeConfigEditor config={config} cityOptions={cityOptions} />
       ) : (
         <p className="muted">No config row to edit.</p>
       )}
+      {/* 0097: the BUY-TABLE purchase-price ranges — the global cap + per-city [min,max] overrides the tick
+          trades by. Degrades to its own "0097 not applied" note while priceConfig is absent. */}
+      <BuyTablePriceRangesPanel
+        priceConfig={view.buyTable?.priceConfig ?? null}
+        allowlist={config?.city_allowlist ?? null}
+        cityOptions={cityOptions}
+      />
 
       <h2>Winners board — front the winners</h2>
       {cityLive.kind === 'ok' ? (

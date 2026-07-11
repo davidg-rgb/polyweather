@@ -56,6 +56,8 @@ const PAYLOAD = {
       },
     ],
     totals: { nRows: 1, nOpen: 0, nWon: 1, nLost: 0, costUsd: '8.400000', resolvedPnlUsd: '61.600000' },
+    // 0097: the operator price-range config (global cap + per-city overrides).
+    priceConfig: { globalMax: 0.15, cityRanges: { karachi: { min: 0.05, max: 0.3 } } },
   },
   recentAudit: [{ id: 3, old_value: { mode: 'dry-run' }, new_value: { mode: 'live' }, changed_at: '2026-07-05T09:00:00Z', changed_by: 'service_role' }],
   generatedAt: '2026-07-05T09:05:00Z',
@@ -82,6 +84,18 @@ describe('getTrading — dash_trading passthrough + null-tolerant defaults', () 
     expect(v.buyTable!.rows[0]!.outcome).toBe('won');
     expect(v.buyTable!.rows[0]!.city).toBe('karachi');
     expect(v.buyTable!.totals).toEqual({ nRows: 1, nOpen: 0, nWon: 1, nLost: 0, costUsd: '8.400000', resolvedPnlUsd: '61.600000' });
+    // 0097: priceConfig passes through — global cap + the per-city override map intact.
+    expect(v.buyTable!.priceConfig).toEqual({ globalMax: 0.15, cityRanges: { karachi: { min: 0.05, max: 0.3 } } });
+  });
+
+  it('0097: a pre-0097 buyTable (no priceConfig key) → priceConfig null (staged-dark, never a throw)', async () => {
+    const { priceConfig: _omitted, ...pre0097BuyTable } = PAYLOAD.buyTable;
+    const load = await getTrading(stubDb({ ...PAYLOAD, buyTable: pre0097BuyTable }));
+    expect(load.kind).toBe('ok');
+    if (load.kind !== 'ok') throw new Error('expected ok');
+    expect(load.view.buyTable).not.toBeNull();
+    expect(load.view.buyTable!.rows).toHaveLength(1); // the 0096 ledger still renders
+    expect(load.view.buyTable!.priceConfig).toBeNull(); // the panel shows its "0097 not applied" note
   });
 
   it('0096: a pre-0096 payload (no buyTable key) → buyTable null (the staged-dark degradation, never a throw)', async () => {
@@ -92,11 +106,11 @@ describe('getTrading — dash_trading passthrough + null-tolerant defaults', () 
     expect(load.view.buyTable).toBeNull();
   });
 
-  it('0096: a lean buyTable envelope gets null-tolerant inner defaults (rows [] / totals null)', async () => {
+  it('0096: a lean buyTable envelope gets null-tolerant inner defaults (rows [] / totals null / priceConfig null)', async () => {
     const load = await getTrading(stubDb({ ...PAYLOAD, buyTable: {} }));
     expect(load.kind).toBe('ok');
     if (load.kind !== 'ok') throw new Error('expected ok');
-    expect(load.view.buyTable).toEqual({ rows: [], totals: null });
+    expect(load.view.buyTable).toEqual({ rows: [], totals: null, priceConfig: null });
   });
 
   it('defaults the collection fields when a lean payload omits them', async () => {
