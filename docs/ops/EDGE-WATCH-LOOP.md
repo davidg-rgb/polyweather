@@ -28,6 +28,11 @@ _Claude keeps this block current every material cycle. Whole status in 20 second
      placedByCity {ankara: 2}: LTAC-14 30°C @0.66 + LTAC-16 29°C @0.48 (+2 maker twins, both filled). Note the
      arms picked DIFFERENT buckets — the race is producing divergent picks, which is what §12-R exists to
      adjudicate. The 20:45Z -c (houston) half remains.
+     **↳ C13 (07-11 20:45Z): the -c HALF PASSES — ⚑ #1 fully RESOLVED.** Fired 20:45:04Z, period_key
+     `city-paper-trade:2026-07-11:c`, ok, placedByCity {houston: 2}: KHOU-14 90–91°F @0.80 + KHOU-15
+     88–89°F @0.31 (pending). Both new §12-R crons verified live on their first scheduled fires; the race
+     accrues on its own now. (Buy-table lane concurrently healthy: every */10 tick since 15:20Z clean,
+     mode live, 0 candidates yet — nothing under the 15¢ cap in-window.)
   2. **The Houston 6°F pick gap grades**: 07-10 KHOU-14 bought 92–93°F @0.11 vs KHOU-15 86–87°F @0.59 (3
      buckets apart, same day). When 07-10 grades (~10:00Z tick), check which won and whether the 14h lock's
      forecast snapshot was a real intraday swing or a °F-path anomaly (C25/C37 verified the path, but this
