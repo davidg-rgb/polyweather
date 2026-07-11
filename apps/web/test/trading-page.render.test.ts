@@ -79,6 +79,28 @@ const FIXTURE = {
   openExposureUsd: '20.00',
   today: { buyUsd: '20.00', sellUsd: '2.00', feeUsd: '0.00', netUsd: '-18.00', lossUsd: '18.00', lossWindowStart: '2026-07-05T00:00:00Z', nFills: 3 },
   dryRun: { openOrders: 4, total: 37 },
+  // 0096: the BUY-TABLE lane positions — one filled-and-WON (resolved, out of openOrders) + one still OPEN.
+  buyTable: {
+    rows: [
+      {
+        id: 'bt-open', createdAt: '2026-07-05T08:40:00Z', status: 'filled', reason: null,
+        marketId: '0xbtOPEN', tokenId: 'tok-open', tradeDate: '2026-07-05',
+        city: 'singapore', cityName: 'Singapore', eventSlug: 'ev-sing', targetDate: '2026-07-05',
+        label: '33°C bucket', bucketIdx: 2, winnerIdx: null,
+        price: '0.140', size: '71.0000', sizeMatched: '71.0000', avgPrice: '0.140',
+        costUsd: '9.940000', feeUsd: '0.00', outcome: 'open', resolvedPnlUsd: null,
+      },
+      {
+        id: 'bt-won', createdAt: '2026-07-04T20:00:00Z', status: 'filled', reason: null,
+        marketId: '0xbtWON', tokenId: 'tok-won', tradeDate: '2026-07-04',
+        city: 'karachi', cityName: 'Karachi', eventSlug: 'ev-kar', targetDate: '2026-07-04',
+        label: '34°C bucket', bucketIdx: 1, winnerIdx: 1,
+        price: '0.120', size: '83.0000', sizeMatched: '83.0000', avgPrice: '0.120',
+        costUsd: '9.960000', feeUsd: '0.00', outcome: 'won', resolvedPnlUsd: '73.040000',
+      },
+    ],
+    totals: { nRows: 2, nOpen: 1, nWon: 1, nLost: 0, costUsd: '19.900000', resolvedPnlUsd: '73.040000' },
+  },
   recentAudit: [
     {
       id: 3,
@@ -136,6 +158,18 @@ describe('/trading page renders', () => {
     expect(html).toContain('Open LIVE order ledger');
     expect(html).toContain('venue-9'); // order id
     expect(html).toContain('partial'); // status
+
+    // 0096: the buy-table positions section — totals strip + the ANY-status table (a filled row that the
+    // open-order ledger above would drop) with outcome chips + resolved P&L
+    expect(html).toContain('Buy-table positions'); // h2
+    expect(html).toContain('Lane cost');
+    expect(html).toContain('$19.90'); // totals.costUsd
+    expect(html).toContain('+$73.04'); // totals.resolvedPnlUsd (signed, colored)
+    expect(html).toContain('34°C bucket'); // the joined bucket label
+    expect(html).toContain('karachi'); // the joined city slug (buy-table row)
+    expect(html).toContain('won'); // the resolved outcome chip
+    expect(html).toContain('0.140'); // the open row's entry price (fmtProb)
+    expect(html).not.toContain('0096 not applied'); // the payload HAS buyTable — no staged-dark note
 
     // dry-run counts + audit trail (ASCII substrings — avoid dot/arrow mismatch)
     expect(html).toContain('Dry-run shadow rail'); // h2
@@ -222,6 +256,10 @@ describe('/trading page renders', () => {
     expect(html).toContain('No open LIVE orders.');
     expect(html).toContain('No open LIVE positions.');
     expect(html).toContain('No config changes recorded.');
+    // 0096: a payload WITHOUT buyTable (pre-0096 dash_trading) degrades to the explicit staged-dark note —
+    // the section header still renders, never a false empty state.
+    expect(html).toContain('Buy-table positions');
+    expect(html).toContain('0096 not applied');
     // the config editor (0082) still renders; only the winners board + arms (0085) show the dark note.
     expect(html).toContain('Trade config control');
     expect(html).toContain('0085 NOT APPLIED');

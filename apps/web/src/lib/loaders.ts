@@ -2140,6 +2140,57 @@ export interface TradeAuditRow {
   changed_by: string;
 }
 
+/**
+ * One BUY-TABLE lane position (dash_trading.buyTable.rows, 0096) — a live strategy='buy-table' order row of
+ * ANY status (a filled taker FAK leaves openOrders instantly — this is the lane's full ledger), joined
+ * best-effort to its market identity (nulls when the join misses) and graded against the market_events winner.
+ */
+export interface BuyTablePositionRow {
+  id: string;
+  createdAt: string | null;
+  status: string;
+  reason: string | null;
+  marketId: string;
+  tokenId: string | null;
+  tradeDate: string | null;
+  /** cities.slug via the best-effort market join — null when the market can't be joined (fail-soft). */
+  city: string | null;
+  cityName: string | null;
+  eventSlug: string | null;
+  targetDate: string | null;
+  /** the bucket label ("33°C bucket") — null when the join misses. */
+  label: string | null;
+  bucketIdx: number | null;
+  winnerIdx: number | null;
+  /** jsonb-string-safe numerics (file convention) — the page coerces with num(). */
+  price: unknown;
+  size: unknown;
+  sizeMatched: unknown;
+  avgPrice: unknown;
+  /** all-in cost of the matched shares (exact fill cash + fees). */
+  costUsd: unknown;
+  feeUsd: unknown;
+  outcome: 'won' | 'lost' | 'open' | 'unfilled' | 'failed' | string;
+  /** won: matched × $1 − cost; lost: −cost; null while open/unfilled/failed. */
+  resolvedPnlUsd: unknown;
+}
+
+/** dash_trading.buyTable.totals (0096) — the lane's running aggregate over the enumerated rows. */
+export interface BuyTableTotals {
+  nRows: unknown;
+  nOpen: unknown;
+  nWon: unknown;
+  nLost: unknown;
+  costUsd: unknown;
+  resolvedPnlUsd: unknown;
+}
+
+/** dash_trading.buyTable (0096) — { rows, totals }; null on a pre-0096 payload (the section notes it). */
+export interface BuyTableSection {
+  rows: BuyTablePositionRow[];
+  totals: BuyTableTotals | null;
+}
+
 export interface TradingView {
   config: TradeConfig | null;
   preflight: TradePreflight | null;
@@ -2147,6 +2198,9 @@ export interface TradingView {
   openExposureUsd: unknown;
   today: TradeToday | null;
   dryRun: { openOrders: unknown; total: unknown } | null;
+  /** 0096: the BUY-TABLE lane position ledger — null while 0096 is unapplied (staged-dark degradation,
+   *  the 0085 CityLive precedent: the page renders a "0096 not applied" note, never a false empty state). */
+  buyTable: BuyTableSection | null;
   recentAudit: TradeAuditRow[];
   generatedAt: string | null;
 }
@@ -2210,6 +2264,9 @@ export async function getTrading(db: WebDb): Promise<TradingLoad> {
       openExposureUsd: v.openExposureUsd ?? 0,
       today: v.today ?? null,
       dryRun: v.dryRun ?? null,
+      // 0096: absent on a pre-0096 payload → null (the page renders its "0096 not applied" note); present →
+      // null-tolerant inner defaults so a lean envelope still renders.
+      buyTable: v.buyTable ? { rows: v.buyTable.rows ?? [], totals: v.buyTable.totals ?? null } : null,
       recentAudit: v.recentAudit ?? [],
       generatedAt: v.generatedAt ?? null,
     },

@@ -18,6 +18,8 @@
  */
 import type { ReactElement } from 'react';
 import type {
+  BuyTablePositionRow,
+  BuyTableSection,
   CityLiveTwin,
   CityLiveView,
   LiveOrder,
@@ -431,6 +433,119 @@ function OrdersTable({ orders }: { orders: LiveOrder[] }): ReactElement {
   );
 }
 
+// ─── BUY-TABLE positions (0096) — the lane's ANY-status ledger + per-position outcome ─────────────────────
+
+const BUY_TABLE_PRICE_CAP = 0.15; // the 0095 buy_table.price_cap default — display reference only
+
+const OUTCOME_COLOR: Record<string, string> = {
+  won: GREEN,
+  lost: RED,
+  open: SKY,
+  unfilled: MUTED,
+  failed: RED,
+};
+
+/** The lane totals strip (dash_trading.buyTable.totals) — cost deployed, resolved P&L, outcome counts. */
+function BuyTableTotalsStrip({ section }: { section: BuyTableSection }): ReactElement {
+  const t = section.totals;
+  const pnl = num(t?.resolvedPnlUsd) ?? 0;
+  return (
+    <div className="strip">
+      <div className="tile">
+        <div className="cap">Lane cost</div>
+        <div className="big" style={{ fontSize: '1.5rem' }}>{fmtUsd(t?.costUsd ?? 0)}</div>
+        <div className="sub">all-in cost of matched shares (fills + fees)</div>
+      </div>
+      <div className="tile">
+        <div className="cap">Resolved P&amp;L</div>
+        <div className="big" style={{ fontSize: '1.5rem', color: pnl >= 0 ? GREEN : RED }}>
+          {signedUsd(t?.resolvedPnlUsd ?? 0)}
+        </div>
+        <div className="sub">won + lost positions only — open positions not marked</div>
+      </div>
+      <div className="tile">
+        <div className="cap">Won / lost</div>
+        <div className="big" style={{ fontSize: '1.5rem' }}>
+          <span style={{ color: GREEN }}>{num(t?.nWon) ?? 0}</span>
+          <span className="muted"> / </span>
+          <span style={{ color: RED }}>{num(t?.nLost) ?? 0}</span>
+        </div>
+        <div className="sub">resolved against the market_events winner</div>
+      </div>
+      <div className="tile">
+        <div className="cap">Open</div>
+        <div className="big sky" style={{ fontSize: '1.5rem' }}>{num(t?.nOpen) ?? 0}</div>
+        <div className="sub">held to close — no exits by design</div>
+      </div>
+      <div className="tile">
+        <div className="cap">Rows</div>
+        <div className="big" style={{ fontSize: '1.5rem' }}>{num(t?.nRows) ?? 0}</div>
+        <div className="sub">every lane row, ANY status (newest 200)</div>
+      </div>
+    </div>
+  );
+}
+
+/** The lane position table (dash_trading.buyTable.rows) — ANY-status rows the open-order ledger drops. */
+function BuyTablePositionsTable({ rows }: { rows: BuyTablePositionRow[] }): ReactElement {
+  if (rows.length === 0) return <p className="muted">No buy-table positions yet.</p>;
+  return (
+    <div className="tbl-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th className="num">age</th>
+            <th>city</th>
+            <th>date</th>
+            <th>label / market</th>
+            <th className="num">entry px</th>
+            <th className="num">shares</th>
+            <th className="num">cost</th>
+            <th>status</th>
+            <th>outcome</th>
+            <th className="num">resolved P&amp;L</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => {
+            const px = num(r.avgPrice) ?? num(r.price);
+            const overCap = px != null && px > BUY_TABLE_PRICE_CAP + 1e-9;
+            const pnl = num(r.resolvedPnlUsd);
+            return (
+              <tr key={r.id}>
+                <td className="num small">{r.createdAt ? fmtAgo(r.createdAt) : '—'}</td>
+                <td className="small">{r.city ?? '—'}</td>
+                <td className="mono small">{r.targetDate ?? r.tradeDate ?? '—'}</td>
+                <td className="small">
+                  {r.label ?? <span className="mono">{short(r.marketId, 16)}</span>}
+                </td>
+                <td
+                  className="num"
+                  style={{ color: overCap ? AMBER : undefined }}
+                  title={`entry vs the ${BUY_TABLE_PRICE_CAP.toFixed(2)} price cap (buy_table.price_cap)`}
+                >
+                  {fmtProb(px)}
+                </td>
+                <td className="num">{num(r.sizeMatched) ?? 0}<span className="muted small"> / {num(r.size) ?? 0}</span></td>
+                <td className="num">{fmtUsd(r.costUsd)}</td>
+                <td className="small">
+                  <span className="chip small" style={{ color: ORDER_STATUS_COLOR[r.status] ?? undefined }}>{r.status}</span>
+                </td>
+                <td className="small">
+                  <span className="chip small" style={{ color: OUTCOME_COLOR[r.outcome] ?? undefined }}>{r.outcome}</span>
+                </td>
+                <td className="num" style={{ color: pnl == null ? undefined : pnl >= 0 ? GREEN : RED }}>
+                  {pnl == null ? '—' : signedUsd(pnl)}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 /** Dry-run shadow-rail counts (dash_trading.dryRun — count only; the shadow-diff harness reads the rows). */
 function DryRunTiles({ dryRun }: { dryRun: TradingView['dryRun'] }): ReactElement {
   return (
@@ -661,6 +776,31 @@ export default async function TradingPage(): Promise<ReactElement> {
           counts above.
         </p>
         <OrdersTable orders={view.openOrders} />
+      </div>
+
+      <h2>Buy-table positions</h2>
+      <div className="panel">
+        <p className="muted small" style={{ marginTop: 0 }}>
+          The <strong>BUY-TABLE live lane</strong> (migration 0095, <span className="mono">buy-table-tick</span>):
+          every <span className="mono">strategy=&apos;buy-table&apos;</span> LIVE row of <strong>ANY status</strong> — a
+          filled taker FAK leaves the open-order ledger above instantly, so this is where the lane&apos;s held
+          positions live. Outcome grades against the market winner
+          (<span className="mono">market_events</span>); positions are held to close (no exits by design).
+        </p>
+        {view.buyTable ? (
+          <>
+            <BuyTableTotalsStrip section={view.buyTable} />
+            <BuyTablePositionsTable rows={view.buyTable.rows} />
+          </>
+        ) : (
+          <p className="muted small">
+            <strong style={{ color: AMBER }}>0096 not applied</strong> — the{' '}
+            <span className="mono">dash_trading()</span> payload carries no{' '}
+            <span className="mono">buyTable</span> key yet. The lane position ledger lights up the moment the
+            operator applies migration <span className="mono">0096_buy_table_positions.sql</span> (read-only —
+            nothing else changes on apply).
+          </p>
+        )}
       </div>
 
       <h2>Dry-run shadow rail</h2>

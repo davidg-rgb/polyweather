@@ -410,6 +410,13 @@ describe('migrations 0001–0010', () => {
       // gate) + the buy-table-tick */10 cron (per-tick periodKey stamped in the BODY at fire time, §8.1) +
       // the buy-table-deadman */15 SQL cron (count 33 → 35). BUY-TABLE-LIVE.md.
       '0095_buy_table_live.sql',
+      // 0096 = dash_trading() gains `buyTable` (operator-directed 2026-07-11): the BUY-TABLE lane position
+      // ledger — every live strategy='buy-table' row ANY status (a filled taker FAK leaves openOrders
+      // instantly — the visibility gap), joined best-effort to market_buckets/market_events/cities, graded
+      // against coalesce(poly_resolved_winner_idx, winning_bucket_idx) into won/lost/open/unfilled/failed +
+      // resolvedPnlUsd, with lane totals. Every existing dash_trading key byte-preserved; LIVE-only (the
+      // 0082 dry-run money invariant); OBJECT envelope. No table/cron change (count stays 35).
+      '0096_buy_table_positions.sql',
     ]);
   });
 });
@@ -1069,11 +1076,16 @@ describe('pg_cron registrations (§7.22, W11)', () => {
       `select jobname, command from cron.job where jobname not in
         ('snapshot-downsample','opening-capture-deadman','opening-bot-deadman','opening-captures-prune','bot-tick-log-prune','depth-capture-deadman','market-depth-prune','buy-table-deadman')`,
     );
+    // 4cb1e77: buy-table-tick posts with a 10s timeout (a cold Edge boot exceeded the generic 4.5s and the
+    // launch tick 504'd); every other edge-fn cron keeps the standard 4500.
+    const timeoutMs: Record<string, string> = { 'buy-table-tick': '10000' };
     for (const j of jobs) {
       expect(j.command).toContain(`vault.decrypted_secrets where name = 'cron_secret'`);
       expect(j.command).toContain(`vault.decrypted_secrets where name = 'project_url'`);
       expect(j.command).toContain(`/functions/v1/${j.jobname}`);
-      expect(j.command).toContain('timeout_milliseconds := 4500');
+      expect(j.command, `timeout for ${j.jobname}`).toContain(
+        `timeout_milliseconds := ${timeoutMs[j.jobname] ?? '4500'}`,
+      );
       // No secret-shaped literal anywhere in the registered command.
       expect(j.command).not.toMatch(/x-cron-secret',\s*'[^(]/);
       expect(j.command).not.toMatch(/(sk|whsec|sbp)_[A-Za-z0-9]/);
