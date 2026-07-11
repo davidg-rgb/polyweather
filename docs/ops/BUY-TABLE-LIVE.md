@@ -74,7 +74,7 @@ default 5; the executor re-checks the live book's own floor at placement). Ledge
    the key** — the executor signs the would-be order to record it (the daemon behaved the same way); without
    it every dry-run placement logs `ERR_NO_KEY` and counts as failed.
 
-3. **Deploy the function:** `supabase functions deploy buy-table-tick`. The cron starts POSTing immediately;
+3. **Deploy the function:** `supabase functions deploy buy-table-tick --no-verify-jwt` (JWT verification OFF like every sibling cron fn — the gateway 401s cron posts otherwise; auth stays in-function via x-cron-secret). The cron starts POSTing immediately;
    until this deploy it 404s harmlessly and the deadman stays silent.
 
 4. **Arm the interlock** (the placement gate — do this last):
