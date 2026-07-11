@@ -533,6 +533,65 @@ export async function adminCityArm(req: Request, deps: ApiDeps): Promise<Respons
   }
 }
 
+// --- [POST] /api/admin/trading/buy-table-price — buy_table_price_cap_set / buy_table_price_range_set (0097) --
+// The BUY-TABLE lane's price-range writes behind /trading. §8.2 idiom: TYPE-validate only, pass through, and
+// every VALUE constraint (0 < globalMax ≤ 0.99 · slug must exist in cities.slug · 0 ≤ min < max ≤ 0.99) is a
+// DB RAISE surfaced VERBATIM. Body: { globalMax? } and/or { city, min, max } / { city, clear: true } — the
+// clear flag maps to the RPC's null+null "clear the override" contract.
+export async function adminBuyTablePrice(req: Request, deps: ApiDeps): Promise<Response> {
+  const denied = await requireOperator(deps);
+  if (denied) return denied;
+  const body = await readBody(req);
+
+  const details: string[] = [];
+  const globalMax = body['globalMax'];
+  const city = body['city'];
+  const min = body['min'];
+  const max = body['max'];
+  const clear = body['clear'] === true;
+
+  const hasGlobal = globalMax !== undefined && globalMax !== null;
+  const hasCity = city !== undefined && city !== null;
+  if (!hasGlobal && !hasCity) details.push('provide globalMax and/or city');
+  if (hasGlobal && (typeof globalMax !== 'number' || !Number.isFinite(globalMax))) {
+    details.push('globalMax must be a finite number');
+  }
+  if (hasCity && (typeof city !== 'string' || city.trim() === '')) details.push('city must be a non-empty string');
+  if (hasCity && !clear) {
+    // Type only — the 0 ≤ min < max ≤ 0.99 range envelope is the DB RAISE (surfaced verbatim below).
+    if (typeof min !== 'number' || !Number.isFinite(min)) details.push('min must be a finite number');
+    if (typeof max !== 'number' || !Number.isFinite(max)) details.push('max must be a finite number');
+  }
+  if (details.length > 0) return json(400, { error: 'ERR_VALIDATION', details });
+
+  try {
+    let priceCap: unknown = null;
+    let cityRanges: unknown = null;
+    if (hasGlobal) {
+      const [r] = await deps.db.rpc<{ buy_table_price_cap_set: { priceCap: unknown } }>('buy_table_price_cap_set', {
+        p_max: globalMax,
+      });
+      priceCap = r?.buy_table_price_cap_set?.priceCap ?? null;
+    }
+    if (hasCity) {
+      const [r] = await deps.db.rpc<{ buy_table_price_range_set: { cityPriceRanges: unknown } }>(
+        'buy_table_price_range_set',
+        {
+          p_city: city,
+          p_min: clear ? null : min,
+          p_max: clear ? null : max,
+        },
+      );
+      cityRanges = r?.buy_table_price_range_set?.cityPriceRanges ?? null;
+    }
+    return json(200, { ok: true, priceCap, cityRanges });
+  } catch (e) {
+    // A DB RAISE (unknown slug, an invalid range/cap, ERR_FORBIDDEN) — surfaced VERBATIM. `details` so
+    // errText() renders the exact guardrail text for the operator (post.ts).
+    return json(400, { error: 'ERR_DB_CHECK', details: [e instanceof Error ? e.message : String(e)] });
+  }
+}
+
 // --- [GET] /api/health — the out-of-band uptime probe (R-18); NO auth ---------------
 export async function healthCheck(_req: Request, deps: ApiDeps): Promise<Response> {
   try {

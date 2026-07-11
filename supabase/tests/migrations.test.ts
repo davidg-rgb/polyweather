@@ -417,6 +417,14 @@ describe('migrations 0001–0010', () => {
       // resolvedPnlUsd, with lane totals. Every existing dash_trading key byte-preserved; LIVE-only (the
       // 0082 dry-run money invariant); OBJECT envelope. No table/cron change (count stays 35).
       '0096_buy_table_positions.sql',
+      // 0097 = buy-table per-city PRICE RANGES (operator directive 2026-07-11): config-key semantics
+      // buy_table.city_price_ranges (jsonb text map slug → {min,max}; NOT seeded — absent = no overrides,
+      // global [0, buy_table.price_cap] stays the default) + operator RPCs buy_table_price_range_set
+      // (0093 slug-validation idiom, normalized lower/trim; null+null clears; 0 ≤ min < max ≤ 0.99 RAISES)
+      // and buy_table_price_cap_set (0 < max ≤ 0.99 → buy_table.price_cap) + dash_trading() re-stated from
+      // the 0096 body with buyTable gaining priceConfig { globalMax, cityRanges } (everything else
+      // byte-preserved). No table/cron change (count stays 35).
+      '0097_buy_table_price_ranges.sql',
     ]);
   });
 });
@@ -912,6 +920,8 @@ describe('0034: internal-RPC lockdown — anon/authenticated revoked except the 
     'dash_city_live',  // 0085: /trading CITY-LIVE winners board + arms + maker-twin operator read
     'city_live_arms_get',  // 0085: /trading per-city Live toggle table operator read (operator_guard)
     'city_live_arm_set',  // 0085: operator-guarded per-city Live toggle write (self-guards via operator_guard)
+    'buy_table_price_range_set',  // 0097: operator-guarded per-city buy-table [min,max] override write (self-guards)
+    'buy_table_price_cap_set',  // 0097: operator-guarded global buy_table.price_cap write (self-guards)
     'go_live_gate_inputs',
     'operator_halt', 'operator_resume', 'operator_update_config', 'operator_verify_station',
     'operator_set_champion', 'operator_skip_bet', 'operator_manual_bet',
