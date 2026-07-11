@@ -45,6 +45,12 @@ const PAYLOAD = {
   twin: [
     { cityId: 'c-kar', slug: 'karachi', nPlacements: 42, twinFilledFrac: 0.71, takerPnlUsd: '40.41', makerTwinPnlUsd: '52.10' },
   ],
+  // 0094: the FULL cities domain (incl. non-enrolled london) — the allowlist picker's option source.
+  allCities: [
+    { slug: 'karachi', displayName: 'Karachi', enrolled: true },
+    { slug: 'london', displayName: 'London', enrolled: false },
+    { slug: 'singapore', displayName: 'Singapore', enrolled: true },
+  ],
   generatedAt: '2026-07-06T09:05:00Z',
 };
 
@@ -62,6 +68,8 @@ describe('getCityLive — dash_city_live passthrough + null-tolerant defaults', 
     expect(v.board.rows[0]!.status).toBe('PROMOTED');
     expect(v.twin).toHaveLength(1);
     expect(v.twin[0]!.makerTwinPnlUsd).toBe('52.10');
+    expect(v.allCities).toHaveLength(3);
+    expect(v.allCities[1]).toEqual({ slug: 'london', displayName: 'London', enrolled: false });
     expect(v.generatedAt).toBe('2026-07-06T09:05:00Z');
   });
 
@@ -80,6 +88,7 @@ describe('getCityLive — dash_city_live passthrough + null-tolerant defaults', 
     if (load.kind !== 'ok') throw new Error('expected ok');
     const v = load.view;
     expect(v.arms).toEqual([]);
+    expect(v.allCities).toEqual([]); // pre-0094 payload has no allCities — the page degrades to arms
     expect(v.board).toEqual({ asOf: null, rows: [] });
     expect(v.twin).toEqual([]);
     expect(v.generatedAt).toBe('2026-07-06T00:00:00Z');

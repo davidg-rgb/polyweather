@@ -396,6 +396,10 @@ describe('migrations 0001–0010', () => {
       // (lower/trim/dedupe) and must match cities.slug — unknown slugs RAISE (surfaced verbatim in /trading),
       // an empty-normalizing allowlist RAISES (all-cities is the clear flag, never '{}'). Guard-tightening only.
       '0093_allowlist_validation.sql',
+      // 0094 = dash_city_live() gains allCities (operator-reported 2026-07-11): the 0093 picker's options were
+      // the enrolled arms only, strictly narrower than the cities.slug domain trade_config_set validates —
+      // non-enrolled cities were un-addable. allCities = the full domain { slug, displayName, enrolled }.
+      '0094_allowlist_city_options.sql',
     ]);
   });
 });

@@ -20,10 +20,23 @@ _Claude keeps this block current every material cycle. Whole status in 20 second
      per-slot periodKeys). Verify: `job_runs` shows two extra `city-paper-trade` runs with `placedByCity`
      covering ankara (13:50Z) + houston (20:45Z) for target 07-11; if either 409s, the periodKey body isn't
      reaching runJob — inspect `net._http_response` for the cron's request.
+     **↳ C10 (07-11 ~13:15Z): PENDING — checked before the first -b fire.** The 10:00Z tick itself ran clean
+     (period_key `city-paper-trade:2026-07-11`, OPKC-14 @0.992 + WSSS-15 @0.984 placed, pending). The -b/-c
+     verification stands for the next check-in.
   2. **The Houston 6°F pick gap grades**: 07-10 KHOU-14 bought 92–93°F @0.11 vs KHOU-15 86–87°F @0.59 (3
      buckets apart, same day). When 07-10 grades (~10:00Z tick), check which won and whether the 14h lock's
      forecast snapshot was a real intraday swing or a °F-path anomaly (C25/C37 verified the path, but this
      is the widest arm divergence seen).
+     **↳ C10 (07-11): GRADED — the CHEAP 14h arm WON.** Actual 92°F: KHOU-14 92–93°F @0.11 → **won +$80.46**;
+     KHOU-15 86–87°F @0.59 → lost −$10.21 (LTAC 29°C won both arms; 07-10 gap-fill day settled 5/6). The 15h
+     pick sat on the then-observed running-max floor (87.08 at stamp) while the forecast said 92.05 and the
+     high arrived late — a real late-day swing, not a °F-path bug. n=1 day; the frozen §12-R gate decides,
+     not this.
+  3. **Efficiency-monitor Action (the C2 watch item): the 07-11 SCHEDULED run FIRED** — drifted to 08:00:36Z
+     (GitHub cron congestion), success in 55s, snapshot 08:01:27Z as-of 07-10: **S1 KILL n=3,735/45c/23d,
+     mean −0.25%, city-CI [−0.99%, +0.49%], zsMC 1.5% · S2 INSUFFICIENT 10 troughs** — the well-powered null
+     keeps tightening. (A second scheduled attempt on 07-10 09:40Z had failed in 20s — transient; today clean.
+     No manual dispatch needed; the off-:00 cron mitigation stays optional.)
 
 - **▶▶ C4 (2026-07-10, operator-directed) — SLACK REWORK: pushes are FULLY PAUSED now; the reworked routing
   is BUILT + tested and awaits your two deploy steps.**
@@ -86,6 +99,18 @@ _Claude keeps this block current every material cycle. Whole status in 20 second
 
 ## Cycle log
 
+- **C10 (2026-07-11 ~13:20Z) — OPERATOR: allowlist picker REGRESSION (0093's UI was narrower than the DB) →
+  fixed via 0094 (APPLIED); day-1 verifications part-done.** The operator could not add ANY new city to the
+  /trading buying allowlist: the 0093 checkbox picker's options came from `dash_city_live().arms` — and prod's
+  `city_live_arms` is EMPTY (0085 seeded dark, no arm ever set) — so the picker offered zero enrolled options
+  and only the 3 stored slugs, while `trade_config_set` validates against the FULL 45-row `cities.slug` domain.
+  Fix: migration **0094 APPLIED to prod** — `dash_city_live()` gains `allCities` (the whole validation domain
+  as { slug, displayName, enrolled }); the page prefers it (falls back to arms pre-0094), enrolled cities are
+  label-flagged, the picker scrolls at 45 options. Guard re-verified live (non-operator call still
+  ERR_FORBIDDEN). Suite **3,112 green** (new PGlite allCities-domain test + loader/render assertions),
+  typecheck clean. Verifications: KHOU pick-gap graded (⚑ #2 ↳), 07-11 10:00Z tick clean, monitor Action
+  fired scheduled (⚑ #3 ↳); the -b/-c first fires were still ahead at write time (⚑ #1 ↳ PENDING).
+  **UI half needs the merge to main to deploy; the DB half is live.**
 - **C1 (2026-07-09 ~23:30Z / 07-10 01:30 local) — loop init + baseline.** Read the state files (BUYING-BUILDS
   ⚑ + C25 wrap, FINDINGS bottom-line + power legend + REPLICATION RULE, SIGNAL-BACKLOG §13 + What-NOT-to-do,
   EFFICIENCY-MONITOR frozen gates, BREAKEVEN-SKILL, BUY-TABLE addendum). Branch created. Baseline DB reads
