@@ -433,6 +433,21 @@ describe('migrations 0001–0010', () => {
       // coverage window. Live = market_events unresolved AND still trading (resolves_at > now()). Everything
       // else byte-preserved; read-only display — the tick handler untouched. No table/cron change (stays 35).
       '0098_buy_table_live_cycles.sql',
+      // 0099 = HOTFIX (operator-reported ~00:20Z 07-12, minutes after 0098): the inlined liveCycles scan
+      // blew the authenticated role's 8s statement_timeout (91 live events / 16.5k capture jsonbs on the
+      // saturated Micro) → the WHOLE /trading console rendered the RPC-error state. dash_trading() restored
+      // verbatim to the 0097 body; the scan moved to buy_table_live_cycles() — its own operator-guarded
+      // OBJECT-envelope RPC, called fail-soft by the loader (a slow/absent cycles read degrades ONLY the
+      // lo/hi columns), panel-city-restricted (allowlist ∪ override keys). Lesson: verify RPC latency under
+      // the CALLING role's timeout — the 0098 pre-apply check ran as postgres (no timeout) = a false pass.
+      '0099_buy_table_cycles_rpc.sql',
+      // 0100 = the permanent follow-through: even city-restricted, the 0099 on-read scan measured 2.3–7.0s
+      // (TOAST detoast/IO variance) — too close to the 8s budget at peak. buy_table_cycle_ranges table +
+      // a statement-level AFTER INSERT trigger on opening_captures fold each tick's gate price into running
+      // per-(city, target_date) min/max aggregates (trigger body exception-swallowed — a broken fold must
+      // never fail the capture writer, the live lane's data source) + a one-time backfill; the RPC re-stated
+      // to the O(1) table read (~120ms measured), envelope unchanged. No cron change (count stays 35).
+      '0100_buy_table_cycle_ranges.sql',
     ]);
   });
 });
@@ -930,6 +945,7 @@ describe('0034: internal-RPC lockdown — anon/authenticated revoked except the 
     'city_live_arm_set',  // 0085: operator-guarded per-city Live toggle write (self-guards via operator_guard)
     'buy_table_price_range_set',  // 0097: operator-guarded per-city buy-table [min,max] override write (self-guards)
     'buy_table_price_cap_set',  // 0097: operator-guarded global buy_table.price_cap write (self-guards)
+    'buy_table_live_cycles',  // 0099/0100: /trading live-cycle lo/hi columns operator read (fail-soft, self-guards)
     'go_live_gate_inputs',
     'operator_halt', 'operator_resume', 'operator_update_config', 'operator_verify_station',
     'operator_set_champion', 'operator_skip_bet', 'operator_manual_bet',

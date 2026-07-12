@@ -12,13 +12,31 @@ import { describe, expect, it } from 'vitest';
 import { getTrading, isUndefinedFunctionError } from '../src/lib/loaders.ts';
 import type { WebDb } from '../src/lib/api/deps.ts';
 
-const stubDb = (payload: unknown, opts: { throwsMessage?: string } = {}): WebDb => ({
+// 0099: getTrading now calls TWO RPCs — dash_trading (primary) + buy_table_live_cycles (fail-soft). The stub
+// routes per function: `cycles` is the cycles RPC's payload (default: throws not-applied, the pre-0099 state).
+const stubDb = (
+  payload: unknown,
+  opts: { throwsMessage?: string; cycles?: unknown; cyclesThrows?: string } = {},
+): WebDb => ({
   rpc: (async (fn: string) => {
+    if (fn === 'buy_table_live_cycles') {
+      if (opts.cycles === undefined || opts.cyclesThrows != null) {
+        throw new Error(opts.cyclesThrows ?? 'PGRST202: could not find the function public.buy_table_live_cycles');
+      }
+      return [{ [fn]: opts.cycles }];
+    }
     if (opts.throwsMessage != null) throw new Error(opts.throwsMessage);
     return [{ [fn]: payload }];
   }) as WebDb['rpc'],
   getConfigRows: async () => [],
 });
+
+const CYCLES = {
+  cycles: [
+    { city: 'houston', targetDate: '2026-07-13', minAsk: '0.11', maxAsk: '0.34', nTicks: 41, firstAt: '2026-07-11T20:00:00+00:00', lastAt: '2026-07-12T08:10:00+00:00' },
+    { city: 'houston', targetDate: '2026-07-14', minAsk: '0.16', maxAsk: '0.40', nTicks: 12, firstAt: '2026-07-12T02:00:00+00:00', lastAt: '2026-07-12T08:10:00+00:00' },
+  ],
+};
 
 const PAYLOAD = {
   config: {
@@ -58,11 +76,6 @@ const PAYLOAD = {
     totals: { nRows: 1, nOpen: 0, nWon: 1, nLost: 0, costUsd: '8.400000', resolvedPnlUsd: '61.600000' },
     // 0097: the operator price-range config (global cap + per-city overrides).
     priceConfig: { globalMax: 0.15, cityRanges: { karachi: { min: 0.05, max: 0.3 } } },
-    // 0098: the live-cycle observed price ranges (per city × live target-date, the logged gate-price lo/hi).
-    liveCycles: [
-      { city: 'houston', targetDate: '2026-07-13', minAsk: '0.11', maxAsk: '0.34', nTicks: 41, firstAt: '2026-07-11T20:00:00+00:00', lastAt: '2026-07-12T08:10:00+00:00' },
-      { city: 'houston', targetDate: '2026-07-14', minAsk: '0.16', maxAsk: '0.40', nTicks: 12, firstAt: '2026-07-12T02:00:00+00:00', lastAt: '2026-07-12T08:10:00+00:00' },
-    ],
   },
   recentAudit: [{ id: 3, old_value: { mode: 'dry-run' }, new_value: { mode: 'live' }, changed_at: '2026-07-05T09:00:00Z', changed_by: 'service_role' }],
   generatedAt: '2026-07-05T09:05:00Z',
@@ -70,7 +83,7 @@ const PAYLOAD = {
 
 describe('getTrading — dash_trading passthrough + null-tolerant defaults', () => {
   it('passes the full activation-console payload through as { kind: ok }', async () => {
-    const load = await getTrading(stubDb(PAYLOAD));
+    const load = await getTrading(stubDb(PAYLOAD, { cycles: CYCLES }));
     expect(load.kind).toBe('ok');
     if (load.kind !== 'ok') throw new Error('expected ok');
     const v = load.view;
@@ -91,19 +104,36 @@ describe('getTrading — dash_trading passthrough + null-tolerant defaults', () 
     expect(v.buyTable!.totals).toEqual({ nRows: 1, nOpen: 0, nWon: 1, nLost: 0, costUsd: '8.400000', resolvedPnlUsd: '61.600000' });
     // 0097: priceConfig passes through — global cap + the per-city override map intact.
     expect(v.buyTable!.priceConfig).toEqual({ globalMax: 0.15, cityRanges: { karachi: { min: 0.05, max: 0.3 } } });
-    // 0098: liveCycles passes through — one row per (city, live target-date cycle), order preserved.
+    // 0099: liveCycles is merged in from the SEPARATE buy_table_live_cycles() RPC, order preserved.
     expect(v.buyTable!.liveCycles).toHaveLength(2);
     expect(v.buyTable!.liveCycles![0]).toMatchObject({ city: 'houston', targetDate: '2026-07-13', minAsk: '0.11', maxAsk: '0.34' });
   });
 
-  it('0098: a pre-0098 buyTable (no liveCycles key) → liveCycles null (staged-dark, never a throw)', async () => {
-    const { liveCycles: _omitted, ...pre0098BuyTable } = PAYLOAD.buyTable;
-    const load = await getTrading(stubDb({ ...PAYLOAD, buyTable: pre0098BuyTable }));
+  it('0099: an absent buy_table_live_cycles (pre-0099 DB) → liveCycles null; the console is untouched', async () => {
+    const load = await getTrading(stubDb(PAYLOAD)); // cycles RPC throws PGRST202 by default
     expect(load.kind).toBe('ok');
     if (load.kind !== 'ok') throw new Error('expected ok');
     expect(load.view.buyTable).not.toBeNull();
     expect(load.view.buyTable!.priceConfig).not.toBeNull(); // the 0097 editor still renders
-    expect(load.view.buyTable!.liveCycles).toBeNull(); // the panel hides its cycle columns + notes 0098
+    expect(load.view.buyTable!.liveCycles).toBeNull(); // the panel hides its cycle columns + notes it
+  });
+
+  it('0099: a FAILING cycles read (timeout/transient) degrades to liveCycles null — NEVER the console error state', async () => {
+    // The 0098 incident contract: the cycles read blowing the 8s statement timeout must not take /trading down.
+    const load = await getTrading(
+      stubDb(PAYLOAD, { cyclesThrows: 'rpc buy_table_live_cycles failed: canceling statement due to statement timeout' }),
+    );
+    expect(load.kind).toBe('ok'); // the console renders in full
+    if (load.kind !== 'ok') throw new Error('expected ok');
+    expect(load.view.buyTable!.rows).toHaveLength(1);
+    expect(load.view.buyTable!.liveCycles).toBeNull();
+  });
+
+  it('0099: a shapeless cycles envelope (no cycles array) → liveCycles null, never a throw', async () => {
+    const load = await getTrading(stubDb(PAYLOAD, { cycles: { unexpected: true } }));
+    expect(load.kind).toBe('ok');
+    if (load.kind !== 'ok') throw new Error('expected ok');
+    expect(load.view.buyTable!.liveCycles).toBeNull();
   });
 
   it('0097: a pre-0097 buyTable (no priceConfig key) → priceConfig null (staged-dark, never a throw)', async () => {
@@ -129,6 +159,14 @@ describe('getTrading — dash_trading passthrough + null-tolerant defaults', () 
     expect(load.kind).toBe('ok');
     if (load.kind !== 'ok') throw new Error('expected ok');
     expect(load.view.buyTable).toEqual({ rows: [], totals: null, priceConfig: null, liveCycles: null });
+  });
+
+  it('0099: cycles succeeding while buyTable is ABSENT (pre-0096) still yields buyTable null', async () => {
+    const { buyTable: _omitted, ...pre0096 } = PAYLOAD;
+    const load = await getTrading(stubDb(pre0096, { cycles: CYCLES }));
+    expect(load.kind).toBe('ok');
+    if (load.kind !== 'ok') throw new Error('expected ok');
+    expect(load.view.buyTable).toBeNull(); // no ledger section to hang the columns on
   });
 
   it('defaults the collection fields when a lean payload omits them', async () => {

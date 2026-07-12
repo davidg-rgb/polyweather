@@ -11,9 +11,11 @@
  * null+null clears; 0 ≤ min < max ≤ 0.99) / buy_table_price_cap_set (0 < max ≤ 0.99) and
  * dash_trading().buyTable.priceConfig { globalMax, cityRanges }.
  *
- * + migration 0098: dash_trading().buyTable.liveCycles — per (city, currently-live target-date cycle), the
- * min/max the lane's gate price (the predicted bucket's executable ask — the exact selectBuyTableCandidates
- * pick) has logged over the cycle's entire live period, from the opening_captures stream.
+ * + migrations 0098→0099→0100: the live-cycle logged lo/hi. 0098 inlined the scan into dash_trading() and
+ * took the console down on the authenticated role's 8s statement timeout; 0099 split it into the fail-soft
+ * buy_table_live_cycles() RPC; 0100 made it O(1) — a statement-level trigger on opening_captures folds each
+ * new capture tick's gate price (the predicted bucket's executable ask — the exact selectBuyTableCandidates
+ * pick) into the buy_table_cycle_ranges running aggregates, and the RPC just reads that tiny table.
  */
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import type { PGlite } from '@electric-sql/pglite';
@@ -618,7 +620,8 @@ describe('0097 buy-table price ranges — the operator RPCs + dash_trading().buy
         `select array(select jsonb_object_keys(public.dash_trading()->'buyTable') order by 1) as keys`,
       ),
     );
-    expect(keys!.keys).toEqual(['liveCycles', 'priceConfig', 'rows', 'totals']); // + liveCycles since 0098
+    // 0099 REVERTED the 0098 liveCycles key — the cycles ride their own fail-soft RPC, never dash_trading.
+    expect(keys!.keys).toEqual(['priceConfig', 'rows', 'totals']);
     const [before] = await asOperator(() =>
       rows<{ v: { globalMax: number | string; cityRanges: Record<string, unknown> } }>(
         db,
@@ -655,7 +658,7 @@ describe('0097 buy-table price ranges — the operator RPCs + dash_trading().buy
 });
 
 // ══════════════════════════════════════════════════════════════════════════════════════════════════════════
-describe('0098 dash_trading().buyTable.liveCycles — per live cycle, the logged lo/hi of the gate price', () => {
+describe('0099/0100 buy_table_live_cycles() — per live cycle, the trigger-fed logged lo/hi of the gate price', () => {
   /** A city + one market_events row (no buckets needed — liveCycles reads opening_captures). */
   async function seedEvent(opts: {
     slug: string;
@@ -698,23 +701,54 @@ describe('0098 dash_trading().buyTable.liveCycles — per live cycle, the logged
     const [r] = await asOperator(() =>
       rows<{ v: Array<{ city: string; targetDate: string; minAsk: unknown; maxAsk: unknown; nTicks: unknown; firstAt: string; lastAt: string }> }>(
         db,
-        `select public.dash_trading()->'buyTable'->'liveCycles' as v`,
+        `select public.buy_table_live_cycles()->'cycles' as v`,
       ),
     );
     return r!.v;
   };
 
   afterEach(async () => {
+    await db.exec(`delete from public.buy_table_cycle_ranges`); // the trigger-fed aggregates
     await db.exec(`delete from public.opening_captures`); // FK child first
     await db.exec(`delete from public.market_events`);
   });
 
-  it("empty stream → liveCycles is '[]' — an ARRAY value inside the buyTable OBJECT (0081 tripwire)", async () => {
+  it("empty stream → { cycles: [] } — an OBJECT envelope with an ARRAY value (0081 tripwire)", async () => {
     const [shape] = await asOperator(() =>
-      rows<{ t: string }>(db, `select jsonb_typeof(public.dash_trading()->'buyTable'->'liveCycles') as t`),
+      rows<{ outer: string; inner: string }>(
+        db,
+        `select jsonb_typeof(public.buy_table_live_cycles())           as outer,
+                jsonb_typeof(public.buy_table_live_cycles()->'cycles') as inner`,
+      ),
     );
-    expect(shape!.t).toBe('array');
+    expect(shape).toEqual({ outer: 'object', inner: 'array' });
     expect(await liveCycles()).toEqual([]);
+  });
+
+  it('is operator-guarded (a non-operator authenticated caller is ERR_FORBIDDEN) with the dash grants', async () => {
+    await expect(
+      asRole(db, 'authenticated', { email: 'intruder@example.com' }, () =>
+        rows(db, `select public.buy_table_live_cycles()`),
+      ),
+    ).rejects.toThrow(/ERR_FORBIDDEN/);
+    const [g] = await rows<{ anon_can: boolean; authd_can: boolean; svc_can: boolean }>(
+      db,
+      `select has_function_privilege('anon', 'public.buy_table_live_cycles()', 'EXECUTE') as anon_can,
+              has_function_privilege('authenticated', 'public.buy_table_live_cycles()', 'EXECUTE') as authd_can,
+              has_function_privilege('service_role', 'public.buy_table_live_cycles()', 'EXECUTE') as svc_can`,
+    );
+    expect(g).toEqual({ anon_can: false, authd_can: true, svc_can: true });
+  });
+
+  it('the ingest trigger NEVER breaks the capture writer: a mangled-buckets insert succeeds and folds nothing', async () => {
+    const ev = await seedEvent({ slug: 'lc-mangled', targetDateSql: `current_date + 1` });
+    // buckets = a non-array jsonb — the fold filter skips it; the INSERT itself must succeed regardless
+    // (the trigger body is exception-swallowed: aggregates are display-only, the writer feeds the live lane).
+    await seedTick(ev, 'lc-mangled', `current_date + 1`, `now() + interval '20 hours'`, { oops: true });
+    const [n] = await rows<{ n: number }>(db, `select count(*)::int as n from public.opening_captures`);
+    expect(n!.n).toBe(1); // the write landed
+    const [agg] = await rows<{ n: number }>(db, `select count(*)::int as n from public.buy_table_cycle_ranges`);
+    expect(agg!.n).toBe(0); // nothing folded
   });
 
   it('aggregates min/max of the PICK ask over the cycle, mirroring the handler pick exactly', async () => {
