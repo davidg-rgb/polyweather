@@ -324,7 +324,7 @@ describe('health-monitor (§6.19)', () => {
     alerts = [];
     await db.exec(`
       insert into job_runs (job, period_key, status, started_at, finished_at) values
-        ('poll-markets',       'pm:1', 'ok',      now() - interval '32 minutes', now() - interval '30 minutes'),
+        ('poll-markets',       'pm:1', 'ok',      now() - interval '42 minutes', now() - interval '40 minutes'),
         ('discover-markets',   'dm:1', 'ok',      now() - interval '9 hours 5 minutes', now() - interval '9 hours'),
         ('metar-nowcast',      'mn:1', 'running', now() - interval '1 minute',  null),
         ('fetch-actuals',      'fa:1', 'running', now() - interval '10 minutes', null),
@@ -345,7 +345,7 @@ describe('health-monitor (§6.19)', () => {
           : Math.floor(Date.now() / 1000) - 3600,
     }));
 
-    // poll-markets (30 min > 15) + fetch-actuals (running past wall, no success) are stale;
+    // poll-markets (40 min > 35, the C15 */15-cadence threshold) + fetch-actuals (running past wall, no success) are stale;
     // discover-markets at 9h stays quiet (10h threshold, W7); metar-nowcast 'running' young is fresh.
     expect(stats).toMatchObject({ staleJobs: 2, reaped: 1, deadManHalts: 0, modelAnomalies: 1, tomorrowCoverage: 0 });
     const staleTitles = ofKind('JOB_STALE').map((a) => a.title);
