@@ -15,6 +15,17 @@
 
 _Claude keeps this block current every material cycle. Whole status in 20 seconds._
 
+- **▶▶ C17 (2026-07-12 ~15:10Z) — OPERATOR DECISION: the live lane's dates LAPSE NATURALLY (no renewal);
+  everything else runs and collects.** Per the pre-absence recommendation: the gate override expires
+  **07-15 00:00Z** and `active_until` **07-20** — neither will be renewed; the lane keeps hunting (unpaged,
+  Slack dark) until 07-15, then goes quietly inert by design (ticks keep running, candidates skip at
+  preflight; preflight-skip alerts are suppressed unrecorded under C16, so nothing accumulates). Nothing is
+  cleared early — the remaining ~2.5 live days stand as authorized. **All data collection continues
+  unattended:** opening-capture (5-min, 45 cities), buy-table-tick, §12-R city race (runway 09-30 ×4 cities),
+  google panel hourly, whale/metar/poll on the C15 lanes, efficiency-monitor Action 06:17Z. To revive the
+  live lane later: /trading → gate-override panel (≤14d) + bump active_until — both remote, both yours.
+  (Also resolved: the 07-11 ankara allowlist drop was confirmed INTENTIONAL — [houston, karachi,
+  mexico-city, shanghai] is the intended set.)
 - **▶▶ C16 (2026-07-12 ~14:45Z) — ALL SLACK POSTS HALTED (your order: "halt all slack posts … until I tell you
   otherwise").** `alerts_slack_paused` was already `true`; the 14-kind allowlist that pushed through it is now
   EMPTY (`alerts_slack_allow_kinds=''`) → every kind (digest, deadmen, buy-table/order CRITICALs) is skipped
@@ -30,7 +41,7 @@ _Claude keeps this block current every material cycle. Whole status in 20 second
   measurement fidelity kept (google replay is deterministic over stored captures; the buy-table lane + google
   panel read opening_captures, whose 5-min capture cadence is UNTOUCHED). Rollback lines in cycle log C15.
 - **▶▶ C14 (2026-07-12, operator-requested pre-absence verification) — the system is REMOTE-OPERABLE; two
-  renewal dates are YOURS while away:**
+  renewal dates are YOURS while away: ← SETTLED at C17 (operator: let both lapse; see ▶▶ C17 above)**
   1. **Gate override expires 07-15 00:00Z** — the live lane's gate branch fails then (run window alone is not
      enough). **You can now renew it FROM /trading**: the new "gate override" panel (under Interlock gate)
      sets/renews/clears via `trade_gate_override_set` (≤14d per renewal, confirmed + audited). `active_until`
