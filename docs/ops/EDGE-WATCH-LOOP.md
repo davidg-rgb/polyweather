@@ -15,6 +15,11 @@
 
 _Claude keeps this block current every material cycle. Whole status in 20 seconds._
 
+- **▶▶ C15 (2026-07-12) — the compute-shed you asked for is APPLIED: ~2.5h/day of edge-fn time freed** (google
+  panel 15-min→hourly, whale 10→30-min, metar 15→30-min, poll-markets 5→15-min on clean minute lanes). Nothing
+  you need to do; freshness alarms + the price dead-man were re-calibrated first so nothing false-alarms. All
+  measurement fidelity kept (google replay is deterministic over stored captures; the buy-table lane + google
+  panel read opening_captures, whose 5-min capture cadence is UNTOUCHED). Rollback lines in cycle log C15.
 - **▶▶ C14 (2026-07-12, operator-requested pre-absence verification) — the system is REMOTE-OPERABLE; two
   renewal dates are YOURS while away:**
   1. **Gate override expires 07-15 00:00Z** — the live lane's gate branch fails then (run window alone is not
@@ -134,6 +139,27 @@ _Claude keeps this block current every material cycle. Whole status in 20 second
 
 ## Cycle log
 
+- **C15 (2026-07-12 ~13:35–14:45Z) — COMPUTE-SHED APPLIED (the C14 handoff): four cron cuts live; ~2.5h/day of
+  edge-fn time freed for the priorities (trading rail + buy-table + google picks).** Applied via cron.alter_job:
+  **google-paper-panel `9,24,39,54` → `24 * * * *`** (hourly; deterministic replay over stored captures — zero
+  measurement fidelity lost, only dash refresh latency; periodKey embeds hh:mm so no idempotency conflict) ·
+  **whale-watch `2,12,…,52` → `2,32 * * * *`** (feed is most-recent-300 by trade_key, not time-windowed — a 30-min
+  gap loses nothing at ~42 whales/day) · **metar-nowcast `4,19,34,49` → `4,34 * * * *`** · **poll-markets `*/5` →
+  `12,27,42,57 * * * *`**. Prerequisites done FIRST: STALENESS_MATRIX poll-markets 15→35 + metar 45→75
+  (health-monitor redeployed; support-jobs test updated, 18 green, typecheck clean) + config
+  **stalePriceHaltMin 30→45** (at 15-min cadence one missed tick = 30-min price age = the old dead-man bar).
+  A full consumer sweep (subagent, every market_snapshots + `bucket_probabilities source='market_consensus'`
+  reader) found exactly TWO cadence-coupled consumers — both are those thresholds; everything else is latest-row
+  / windowed-asof / day-lead granularity: SAFE (dashboards show "~15 min ago"; paper sims lose minor
+  inter-tick fill fidelity — maker-twin fill detect was already a documented lower bound). **Lane choice
+  deviation from the C14 sketch: NOT `0,15,30,45`** — job_runs showed ALL 9 of today's poll-markets timeouts
+  sat exactly on quarter-hour slots (07:45→11:00, poll_known_events/upsert_market_snapshots statement timeouts)
+  even after the C14 stagger moved every other fn off them → something still loads the DB at quarters (no cron,
+  no Vercel cron, no Action — unidentified, possibly platform-side); `12,27,42,57` is collision-free across the
+  whole cron table AND takes poll off the contended quarters entirely (side benefit: its failure rate should
+  DROP vs */5). **Rollback lines:** google `9,24,39,54 * * * *` · whale `2,12,22,32,42,52 * * * *` · metar
+  `4,19,34,49 * * * *` · poll `*/5 * * * *` · config stalePriceHaltMin `30` · matrix 35/75 → 15/45 + redeploy.
+  Post-cut watch (first fires 13:57/14:02/14:04/14:24Z + health 14:07/14:37Z): see ↳ below.
 - **C14 (2026-07-12 ~11:20–12:10Z) — OPERATOR: pre-absence verification run ("verify every interactive function
   + trading connections primed"; away from the local machine for weeks).** Full sweep + four fixes, all live:
   (1) **Cron stagger** — the 07-11 lane launch saturated the Micro at quarter-hour slots (5–7 fns same second):

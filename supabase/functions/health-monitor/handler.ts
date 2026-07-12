@@ -37,10 +37,10 @@ export interface HealthDeps {
   now: Date;
 }
 
-/** §6.19 staleness matrix, minutes (W7: discovery 10h). */
+/** §6.19 staleness matrix, minutes (W7: discovery 10h; C15 compute-shed: poll every 15m + metar every 30m ⇒ cadence + 1 missed tick + margin). */
 const STALENESS_MATRIX: Record<string, number> = {
-  'poll-markets': 15,
-  'metar-nowcast': 45,
+  'poll-markets': 35,
+  'metar-nowcast': 75,
   'fetch-actuals': 120,
   'snapshot-forecasts': 14 * 60,
   'snapshot-ensembles': 14 * 60,
