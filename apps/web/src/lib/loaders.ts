@@ -2197,10 +2197,11 @@ export interface BuyTablePriceConfig {
 }
 
 /**
- * dash_trading.buyTable.liveCycles (0098) — one row per (city, currently-live target-date cycle): the min/max
- * the LANE'S GATE PRICE (the predicted bucket's executable ask, the exact selectBuyTableCandidates pick) has
- * logged across the cycle's ENTIRE live period, plus the tick count + coverage window behind the numbers.
- * Numerics are jsonb-string-safe (file convention) — the panel coerces with Number().
+ * buy_table_live_cycles().cycles (0099/0100) — one row per (city, currently-live target-date cycle): the
+ * min/max the LANE'S GATE PRICE (the predicted bucket's executable ask, the exact selectBuyTableCandidates
+ * pick) has logged across the cycle's ENTIRE live period, plus the tick count + coverage window behind the
+ * numbers. Since 0100 this reads the trigger-fed buy_table_cycle_ranges aggregates (O(1) — never a capture
+ * scan at page time). Numerics are jsonb-string-safe (file convention) — the panel coerces with Number().
  */
 export interface BuyTableLiveCycle {
   city: string;
@@ -2214,7 +2215,9 @@ export interface BuyTableLiveCycle {
 
 /** dash_trading.buyTable (0096) — { rows, totals }; null on a pre-0096 payload (the section notes it).
  *  0097 adds priceConfig — null on a pre-0097 payload (the price-ranges panel notes it).
- *  0098 adds liveCycles — null on a pre-0098 payload (the panel hides its cycle columns + notes it). */
+ *  liveCycles rides the SEPARATE buy_table_live_cycles() RPC (0099 — the 0098 inline read took the whole
+ *  console down on a statement timeout) and is merged in by getTrading; null when that RPC is absent OR
+ *  failed (the panel hides its cycle columns + renders one honest unavailable note for both). */
 export interface BuyTableSection {
   rows: BuyTablePositionRow[];
   totals: BuyTableTotals | null;
@@ -2276,16 +2279,25 @@ export function isUndefinedFunctionError(message: string, symbol = 'dash_trading
  * APPLIED" empty-state. Every OTHER failure is { kind: 'error' } (#22) — never a false "not applied" claim.
  */
 export async function getTrading(db: WebDb): Promise<TradingLoad> {
-  let v: TradingView | null;
-  try {
-    v = await one<TradingView>(db, 'dash_trading', {});
-  } catch (e) {
+  // 0099: the live-cycle columns ride a SEPARATE RPC, fetched in parallel and STRICTLY fail-soft — the 0098
+  // inline read took the WHOLE console down when the cycles scan hit the authenticated role's 8s statement
+  // timeout. Here ANY cycles failure (not-applied, timeout, transient) degrades to null: the panel drops the
+  // lo/hi columns and renders its unavailable note; the console itself never depends on this read.
+  const [vRes, cyclesRes] = await Promise.allSettled([
+    one<TradingView>(db, 'dash_trading', {}),
+    one<{ cycles?: BuyTableLiveCycle[] }>(db, 'buy_table_live_cycles', {}),
+  ]);
+  if (vRes.status === 'rejected') {
+    const e: unknown = vRes.reason;
     const message = e instanceof Error ? e.message : String(e);
     return isUndefinedFunctionError(message) ? { kind: 'not-applied' } : { kind: 'error', message };
   }
+  const v = vRes.value;
   // dash_trading always returns an object envelope; a null payload without a throw is an anomaly, not the
   // staged-dark state — surface it as an error rather than a false "not applied" diagnosis.
   if (!v) return { kind: 'error', message: 'dash_trading() returned an empty payload' };
+  const liveCycles =
+    cyclesRes.status === 'fulfilled' && Array.isArray(cyclesRes.value?.cycles) ? cyclesRes.value.cycles : null;
   return {
     kind: 'ok',
     view: {
@@ -2296,14 +2308,14 @@ export async function getTrading(db: WebDb): Promise<TradingLoad> {
       today: v.today ?? null,
       dryRun: v.dryRun ?? null,
       // 0096: absent on a pre-0096 payload → null (the page renders its "0096 not applied" note); present →
-      // null-tolerant inner defaults so a lean envelope still renders. priceConfig (0097) and liveCycles
-      // (0098) degrade the same way: absent → null (the price-ranges panel notes the unapplied migration).
+      // null-tolerant inner defaults so a lean envelope still renders. priceConfig (0097) degrades the same
+      // way; liveCycles is the separate fail-soft RPC merged in above (null = absent OR failed).
       buyTable: v.buyTable
         ? {
             rows: v.buyTable.rows ?? [],
             totals: v.buyTable.totals ?? null,
             priceConfig: v.buyTable.priceConfig ?? null,
-            liveCycles: v.buyTable.liveCycles ?? null,
+            liveCycles,
           }
         : null,
       recentAudit: v.recentAudit ?? [],

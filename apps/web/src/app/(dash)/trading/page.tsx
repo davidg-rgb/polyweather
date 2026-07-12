@@ -836,8 +836,9 @@ export default async function TradingPage(): Promise<ReactElement> {
         <p className="muted">No config row to edit.</p>
       )}
       {/* 0097: the BUY-TABLE purchase-price ranges — the global cap + per-city [min,max] overrides the tick
-          trades by. Degrades to its own "0097 not applied" note while priceConfig is absent. 0098 adds the
-          live-cycle lo/hi date columns (per-cycle logged min/max of the lane's gate price) — same degradation. */}
+          trades by. Degrades to its own "0097 not applied" note while priceConfig is absent. 0099/0100 add
+          the live-cycle lo/hi date columns via the separate fail-soft buy_table_live_cycles() RPC — a slow or
+          absent cycles read drops ONLY the columns (the 0098 inline read timed the whole console out). */}
       <BuyTablePriceRangesPanel
         priceConfig={view.buyTable?.priceConfig ?? null}
         allowlist={config?.city_allowlist ?? null}

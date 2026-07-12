@@ -216,7 +216,7 @@ describe('/trading page renders', () => {
     expect(html).toContain('34¢'); // karachi 07-13 logged high
     expect(html).toContain('16¢'); // karachi 07-14 logged low
     expect(html).toContain('40¢'); // karachi 07-14 logged high
-    expect(html).not.toContain('0098 not applied'); // liveCycles present — no staged-dark note
+    expect(html).not.toContain('live-cycle columns unavailable'); // liveCycles present — no unavailable note
 
     // (b) CITY-LIVE — the winners board (section b): status badges + edge/nBets/nDays/rec-hour + the twin columns
     expect(html).toContain('Winners board'); // h2
@@ -231,18 +231,18 @@ describe('/trading page renders', () => {
     expect(html).toContain('2 cities already enabled'); // Amsterdam's toggle is disabled — the lockout title
   });
 
-  it('0098: priceConfig present but liveCycles absent (pre-0098 dash_trading) → the staged-dark note, no cycle columns', async () => {
+  it('0099: liveCycles null (cycles RPC absent OR failed) → the unavailable note, no cycle columns, console intact', async () => {
     vi.resetModules();
     const { liveCycles: _omitted, ...bt } = FIXTURE.buyTable;
     vi.doMock('../src/lib/loaders.ts', () => ({
-      getTrading: async () => ({ kind: 'ok', view: { ...FIXTURE, buyTable: bt } }),
+      getTrading: async () => ({ kind: 'ok', view: { ...FIXTURE, buyTable: { ...bt, liveCycles: null } } }),
       getCityLive: async () => ({ kind: 'ok', view: CITY_LIVE }),
     }));
     const { default: TradingPage } = await import('../src/app/(dash)/trading/page.tsx');
     const html = renderToStaticMarkup(await TradingPage());
     expect(html).toContain('Buy-table price ranges'); // the 0097 editor still renders in full
     expect(html).toContain('[0.05, 0.3]');
-    expect(html).toContain('0098 not applied'); // the explicit staged-dark note for the cycle columns
+    expect(html).toContain('live-cycle columns unavailable'); // the honest note for absent OR failed reads
     // …and no cycle head-columns pretend to exist (the note itself names "lo / hi", so pin the date headers)
     expect(html).not.toContain('07-13');
     expect(html).not.toContain('07-14');
@@ -313,8 +313,8 @@ describe('/trading page renders', () => {
     // 0097: no buyTable ⇒ no priceConfig either — the price-ranges panel renders its OWN staged-dark note.
     expect(html).toContain('Buy-table price ranges');
     expect(html).toContain('0097 not applied');
-    // 0098: the panel early-returns on the missing priceConfig — no second (liveCycles) staged-dark note.
-    expect(html).not.toContain('0098 not applied');
+    // 0099: the panel early-returns on the missing priceConfig — no second (liveCycles) unavailable note.
+    expect(html).not.toContain('live-cycle columns unavailable');
     // the config editor (0082) still renders; only the winners board + arms (0085) show the dark note.
     expect(html).toContain('Trade config control');
     expect(html).toContain('0085 NOT APPLIED');

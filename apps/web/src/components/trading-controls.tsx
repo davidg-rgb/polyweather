@@ -351,10 +351,11 @@ export function TradeConfigEditor({
  * DB and are shown VERBATIM. Data comes from dash_trading().buyTable.priceConfig — null (pre-0097) renders the
  * staged-dark note, never a false empty editor.
  *
- * 0098 (operator directive 2026-07-12): the table additionally carries one head-column per LIVE date cycle,
- * each cell stacking the city's LOGGED lo/hi — the min/max the lane's gate price (the predicted bucket's
- * executable ask) has recorded over that cycle's entire live period (dash_trading().buyTable.liveCycles) —
- * so the operator sets [min, max] against observed reality. null (pre-0098) hides the columns + notes it.
+ * 0098→0099/0100 (operator directive 2026-07-12): the table additionally carries one head-column per LIVE
+ * date cycle, each cell stacking the city's LOGGED lo/hi — the min/max the lane's gate price (the predicted
+ * bucket's executable ask) has recorded over that cycle's entire live period — so the operator sets
+ * [min, max] against observed reality. Data rides the SEPARATE fail-soft buy_table_live_cycles() RPC (the
+ * 0098 inline read timed the whole console out); null (absent OR failed) hides the columns + notes it.
  */
 const cents = (v: unknown): string => {
   const n = Number(v);
@@ -585,9 +586,11 @@ export function BuyTablePriceRangesPanel({
       )}
       {liveCycles == null ? (
         <p className="muted small">
-          <strong style={{ color: 'var(--ams-amber)' }}>0098 not applied</strong> — the live-cycle{' '}
-          <span className="mono">lo / hi</span> date columns (per-cycle logged min/max of the lane&apos;s gate
-          price) unlock when migration <span className="mono">0098_buy_table_live_cycles.sql</span> is applied.
+          <strong style={{ color: 'var(--ams-amber)' }}>live-cycle columns unavailable</strong> — the{' '}
+          <span className="mono">buy_table_live_cycles()</span> read (migration{' '}
+          <span className="mono">0099</span>/<span className="mono">0100</span>) is not applied or failed this
+          load. The console renders without the <span className="mono">lo / hi</span> date columns by design —
+          they can never take this page down.
         </p>
       ) : cycleDates.length === 0 ? (
         <p className="muted small">No live date cycles with logged gate prices right now.</p>
