@@ -15,6 +15,15 @@
 
 _Claude keeps this block current every material cycle. Whole status in 20 seconds._
 
+- **▶▶ C16 (2026-07-12 ~14:45Z) — ALL SLACK POSTS HALTED (your order: "halt all slack posts … until I tell you
+  otherwise").** `alerts_slack_paused` was already `true`; the 14-kind allowlist that pushed through it is now
+  EMPTY (`alerts_slack_allow_kinds=''`) → every kind (digest, deadmen, buy-table/order CRITICALs) is skipped
+  WITHOUT recording, and 0 unsent rows existed, so the ADR-11 resend sweep has nothing to re-post and nothing
+  accumulates to flood you on re-enable. **Consequence while this holds: NOTHING pages — monitoring is
+  pull-only (/trading, /system, /monitor). The C14 "Slack is your heartbeat" line is suspended**, including
+  the live lane's post-failure CRITICALs. **To re-enable**: restore the routing table —
+  `update config set value='DAILY_DIGEST,BOT_DEADMAN,CAPTURE_DEADMAN,DEPTH_CAPTURE_DEADMAN,DEPTH_CAPTURE_PARTIAL_WRITE,EXIT_FAILED,CIRCUIT_BREAK,POL_LOW,DAILY_KILL,BUY_TABLE_DEADMAN,BUY_TABLE_DEGRADED,BUY_TABLE_POST_FAILED,ORDER_FAIL,ORDER_NEEDS_RECONCILE' where key='alerts_slack_allow_kinds';`
+  (or just tell Claude "re-enable slack").
 - **▶▶ C15 (2026-07-12) — the compute-shed you asked for is APPLIED: ~2.5h/day of edge-fn time freed** (google
   panel 15-min→hourly, whale 10→30-min, metar 15→30-min, poll-markets 5→15-min on clean minute lanes). Nothing
   you need to do; freshness alarms + the price dead-man were re-calibrated first so nothing false-alarms. All
@@ -27,7 +36,8 @@ _Claude keeps this block current every material cycle. Whole status in 20 second
      sets/renews/clears via `trade_gate_override_set` (≤14d per renewal, confirmed + audited). `active_until`
      (07-20) was already editable in the config editor. Letting either lapse = the lane goes quietly inert
      (ticks keep running, candidates skip at preflight) — that is a valid choice too, just make it on purpose.
-  2. **Slack is your heartbeat again**: 0092 applied + daily-digest redeployed — ONE digest/day at 07:00Z
+  2. ~~**Slack is your heartbeat again**~~ **← SUSPENDED by your C16 order (all posts halted; see ▶▶ C16
+     above for the one-line restore)**: 0092 applied + daily-digest redeployed — ONE digest/day at 07:00Z
      (monitor S1/S2, city ledger, whales-24h) + the five buy-table/order CRITICAL kinds + deadmen (1/kind/day).
      Root cause found during verify: **the digest had NEVER sent** — its 4–5k-char body exceeded Slack's
      3,000-char section limit and 400'd every day since 06-14; bodies now chunk across blocks.
@@ -139,6 +149,17 @@ _Claude keeps this block current every material cycle. Whole status in 20 second
 
 ## Cycle log
 
+- **C16 (2026-07-12 ~14:40Z) — OPERATOR: "halt all slack posts … until I tell you otherwise" → TOTAL Slack
+  silence applied.** Lever: `alerts_slack_allow_kinds` `'DAILY_DIGEST,…,ORDER_NEEDS_RECONCILE'` (the 0092+0095
+  14-kind routing table, verbatim restore string in the ⚑ block) → `''`, with `alerts_slack_paused` staying
+  `true` — under the 0055 mechanism every claim_alert now returns skip WITHOUT recording (no sent=false
+  accumulation → no ADR-11 flood at re-enable; verified 0 unsent rows at flip time). Named consequence: the
+  live buy-table lane's CRITICALs no longer page; monitoring is pull-only until the operator reverses.
+  **+ C15 post-cut watch CLOSED ALL GREEN:** every first fire on the new lanes ok — poll 13:57/14:12/14:27
+  (new-lane ticks clean, incl. :27 which replaces the contended :30 class), whale 14:02/14:32, metar
+  14:04/14:34, google's first hourly 14:24 (periodKey floors to `T14:15` — harmless at one run/hour), health
+  14:07 + 14:37 with ZERO alerts raised (no JOB_STALE / no dead-man) → the recalibrated matrix + halt
+  thresholds hold. 0 job failures anywhere in the window.
 - **C15 (2026-07-12 ~13:35–14:45Z) — COMPUTE-SHED APPLIED (the C14 handoff): four cron cuts live; ~2.5h/day of
   edge-fn time freed for the priorities (trading rail + buy-table + google picks).** Applied via cron.alter_job:
   **google-paper-panel `9,24,39,54` → `24 * * * *`** (hourly; deterministic replay over stored captures — zero
