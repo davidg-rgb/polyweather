@@ -448,6 +448,12 @@ describe('migrations 0001–0010', () => {
       // never fail the capture writer, the live lane's data source) + a one-time backfill; the RPC re-stated
       // to the O(1) table read (~120ms measured), envelope unchanged. No cron change (count stays 35).
       '0100_buy_table_cycle_ranges.sql',
+      // 0101 = /system 500 root-caused (2026-07-12 pre-absence verification): dash_system_health() needed
+      // ~16.5s against the callers' 8s statement_timeout — three exact count(*) storage gauges (12.7s on the
+      // grown tables) + forecast_gap_matrix's ~2,520 per-row NOT EXISTS probes (~3.8s). The gauges re-read as
+      // pg_class.reltuples estimates (instant); the gap matrix re-stated as ONE set-based anti-join over the
+      // p_days slice (also de-fragilizes the snapshot-forecasts tick that calls it). Payloads unchanged.
+      '0101_system_health_perf.sql',
     ]);
   });
 });

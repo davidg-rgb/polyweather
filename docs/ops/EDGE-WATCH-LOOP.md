@@ -15,6 +15,31 @@
 
 _Claude keeps this block current every material cycle. Whole status in 20 seconds._
 
+- **▶▶ C14 (2026-07-12, operator-requested pre-absence verification) — the system is REMOTE-OPERABLE; two
+  renewal dates are YOURS while away:**
+  1. **Gate override expires 07-15 00:00Z** — the live lane's gate branch fails then (run window alone is not
+     enough). **You can now renew it FROM /trading**: the new "gate override" panel (under Interlock gate)
+     sets/renews/clears via `trade_gate_override_set` (≤14d per renewal, confirmed + audited). `active_until`
+     (07-20) was already editable in the config editor. Letting either lapse = the lane goes quietly inert
+     (ticks keep running, candidates skip at preflight) — that is a valid choice too, just make it on purpose.
+  2. **Slack is your heartbeat again**: 0092 applied + daily-digest redeployed — ONE digest/day at 07:00Z
+     (monitor S1/S2, city ledger, whales-24h) + the five buy-table/order CRITICAL kinds + deadmen (1/kind/day).
+     Root cause found during verify: **the digest had NEVER sent** — its 4–5k-char body exceeded Slack's
+     3,000-char section limit and 400'd every day since 06-14; bodies now chunk across blocks.
+  3. **DB stability restored**: the 07-11 lane launch tipped the Micro over at :00/:15/:30/:45 (5–7 fns firing
+     the same second → statement-timeout cluster: poll-markets ~50/day, grade-bets + snapshot-forecasts +
+     city-paper-trade dailies). Crons are now minute-staggered per function (rollback = old schedules in C14
+     cycle notes); failed dailies were re-run same-day (attempt 2, ledger caught up). Watch: `job_runs` failures
+     should stay ≈0; if the timeout cluster returns at peak, the durable fix is the compute upgrade (Micro).
+  4. **/system fixed** (was 500 since the tables grew): dash_system_health needed 16.5s vs the 8s ceiling —
+     exact count(*) gauges → reltuples estimates + a set-based gap matrix (migration 0101, applied).
+  5. **The efficiency-monitor Action moved to 06:17Z** (0 6 → 17 6; GitHub drops :00 runs and nobody will be
+     around to hand-dispatch).
+  6. **Still PENDING a real candidate: the first-ever clean live post.** Nothing under the 25¢ cap in-window
+     yet since the secrets fix. If the first post FAILS, the Slack CRITICAL now carries the venue's status +
+     error body verbatim (PR #20) — remote playbook: set mode `dry-run` from /trading while it's diagnosed
+     (every failed post permanently burns that market's one-entry key).
+
 - **▶▶ CHECK TOMORROW (2026-07-11, operator-requested at C8) — two §12-R day-1 verifications:**
   1. **The 13:50Z and 20:45Z ticks must actually fire and place** (first scheduled runs of the new `-b`/`-c`
      per-slot periodKeys). Verify: `job_runs` shows two extra `city-paper-trade` runs with `placedByCity`
@@ -109,7 +134,34 @@ _Claude keeps this block current every material cycle. Whole status in 20 second
 
 ## Cycle log
 
-- **C11 (2026-07-11 ~14:10Z) — OPERATOR armed the live test in /trading; verified state + named the three
+- **C14 (2026-07-12 ~11:20–12:10Z) — OPERATOR: pre-absence verification run ("verify every interactive function
+  + trading connections primed"; away from the local machine for weeks).** Full sweep + four fixes, all live:
+  (1) **Cron stagger** — the 07-11 lane launch saturated the Micro at quarter-hour slots (5–7 fns same second):
+  poll-markets failing ~every :00/:15/:30/:45 (poll_known_events / upsert_market_snapshots timeouts, max_exec
+  7.9s vs the 8s ceiling), grade-bets KILLed 2 mornings (sweep_grading_targets), snapshot-forecasts 2× at 10:15Z
+  (forecast_gap_matrix), city-paper-trade 07-12 10:00Z. Applied per-function minute lanes via cron.alter_job
+  (bodies carry no fixed periodKeys; -b/-c untouched): metar 4,19,34,49 · google 9,24,39,54 · buy-table-deadman
+  14,29,44,59 · health 7,37 · whale 2,12,…,52 · buy-table-tick 3,13,…,53 · opening-capture +1 lane · grade-bets
+  06:28 · city-paper-trade 10:28 · run-calibration 11:28 · snapshot-forecasts 10:17/22:17 (rollback = these
+  reversed). Failed dailies re-run same-day (attempt 2 ok; ledger placed ankara+singapore, karachi had landed
+  pre-timeout; 07-11 graded). 45 post-stagger minutes: 0 failures. (2) **Slack digest NEVER-SENT root cause** —
+  every DAILY_DIGEST row ever (06-14→) was sent=false: the 4–5k-char body exceeds Slack's 3,000-char section
+  limit → webhook 400 → ADR-11 correctly never consumed the key. Fixed buildAlertBlocks (line-boundary chunking
+  ≤2,900/section, 50-block cap; 10 io tests). Applied the AMENDED 0092 (the staged hard-set predated 0095 —
+  unioned the five buy-table/order kinds in, else the live lane's CRITICALs would have gone silent), retired the
+  10 stale June digests (sent=true), redeployed daily-digest + health-monitor (both carry the chunking fix; the
+  resend sweep delivers today's digest). (3) **/system 500 root cause** — dash_system_health 16.5s vs 8s: three
+  exact count(*) gauges (2.4+3.5+6.8s) + the ~2,520-probe gap matrix (3.8s) → migration **0101 APPLIED**
+  (reltuples estimates + ONE set-based anti-join; 3.2s total, page renders 200; also de-fragilizes
+  snapshot-forecasts which calls the same fn). (4) **Gate-override remote renewal built** — the 0082 §3 RPCs
+  (trade_gate_override_set/_clear, operator_guard, ≤14d) had NO route/UI; the ONLY unlock after the gate KILL is
+  the override and it expires 07-15 with the operator away. New /api/admin/trading/gate-override + a
+  GateOverridePanel on /trading (§8.2 idiom: confirm-before-set, clear immediate, DB RAISE verbatim; 6 route
+  tests + render assertions); the stale "rail DORMANT" h1 chip now tracks trade_config.mode. + the
+  efficiency-monitor Action moved off :00 → `17 6 * * *`. Browser sweep: every dash page 200 (nav "google" →
+  /convergence is intentional; /city is a dynamic segment), /trading console renders live state matching the DB
+  exactly. Suite 3,201 green post-fixes; typecheck clean. Boundary intact: verification + software only — no
+  trade placed, no keys touched, no authorization extended (the override renewal is the operator's click).
   blocks.** Audit trail: 12:55:54Z mode dry-run→**live** (the C9-owed positive click test implicitly done —
   updated_at moves on save now) · 13:57:05Z allowlist −ankara +mexico-city · 13:57:31Z +shanghai (the 0094
   picker's first real use). Config now: mode live · stake $5/buy · allowlist [houston, karachi, mexico-city,

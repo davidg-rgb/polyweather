@@ -18,13 +18,17 @@
 #
 #   pnpm tsx scripts/research/efficiency-monitor-run.ts --record
 #
-# 06:00 UTC keeps the run clear of the reserved :32–:42 cron window (the driver also guards it).
+# ~06:00 UTC keeps the run clear of the reserved :32–:42 cron window (the driver also guards it).
+# 06:17, not 06:00 (2026-07-12): GitHub drops scheduled runs at congested round-minute slots — the 07-10
+# 06:00Z run silently skipped (loop board ⚑; new schedules are the most drop-prone) and needed a manual
+# dispatch. An off-:00 minute is the standard mitigation; nobody is around to hand-dispatch while the
+# operator is away.
 
 name: efficiency-monitor
 
 on:
   schedule:
-    - cron: '0 6 * * *' # daily 06:00 UTC
+    - cron: '17 6 * * *' # daily ~06:17 UTC (off the congested :00 slot)
   workflow_dispatch: {} # manual trigger from the Actions tab
 
 concurrency:

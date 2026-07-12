@@ -33,7 +33,7 @@ import type {
 import { getCityLive, getTrading } from '../../../lib/loaders.ts';
 import { fmtAgo, fmtDate, fmtDateTime, fmtPct, fmtProb, fmtStockholm, fmtUsd, num } from '../../../lib/format.ts';
 import { serverDb } from '../../../lib/supabase.ts';
-import { BuyTablePriceRangesPanel, CityArmsTable, TradeConfigEditor } from '../../../components/trading-controls.tsx';
+import { BuyTablePriceRangesPanel, CityArmsTable, GateOverridePanel, TradeConfigEditor } from '../../../components/trading-controls.tsx';
 
 export const dynamic = 'force-dynamic';
 
@@ -741,7 +741,12 @@ export default async function TradingPage(): Promise<ReactElement> {
   return (
     <div className="ams-dash">
       <h1>
-        Trading activation console <span className="chip soft">LIVE-RAIL · rail DORMANT</span>
+        {/* the badge tracks trade_config.mode — a static "rail DORMANT" chip misled remote check-ins once
+            the operator armed the 07-11 live lane */}
+        Trading activation console{' '}
+        <span className="chip soft">
+          LIVE-RAIL · {config?.mode === 'live' ? 'mode LIVE' : config?.mode === 'dry-run' ? 'mode dry-run' : 'rail DORMANT'}
+        </span>
       </h1>
       <p className="muted small">
         The read side of the <strong>0082 activation + risk console</strong> — the master mode, the risk caps, the
@@ -766,6 +771,14 @@ export default async function TradingPage(): Promise<ReactElement> {
 
       <h2>Interlock gate</h2>
       {preflight ? <GateTiles checks={preflight.checks} /> : <p className="muted">No preflight payload.</p>}
+      {/* The override set/renew/clear control (2026-07-12): the gate branch's operator escape hatch was
+          display-only — an expiring override could not be renewed remotely. Rendered even without a
+          preflight payload (state degrades to "none") so a failed dash read never hides the control. */}
+      <GateOverridePanel
+        active={preflight?.checks.override ?? false}
+        reason={preflight?.checks.overrideReason ?? null}
+        expiresAt={preflight?.checks.overrideExpiresAt ?? null}
+      />
 
       <h2>Daily-loss kill</h2>
       {preflight ? (

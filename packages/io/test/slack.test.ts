@@ -62,4 +62,49 @@ describe('buildAlertBlocks (§6.12)', () => {
     );
     expect(new Set(emojis).size).toBe(4);
   });
+
+  // Slack 400s a section over 3000 chars — the daily digest (4-5k chars) was NEVER delivered until
+  // long bodies were split across sections (found 2026-07-12: every DAILY_DIGEST row ever was sent=false).
+  it('splits a long body across multiple ≤3000-char section blocks on line boundaries', () => {
+    const line = 'x'.repeat(100);
+    const body = Array.from({ length: 60 }, () => line).join('\n'); // 6059 chars
+    const { blocks } = buildAlertBlocks({ kind: 'DAILY_DIGEST', severity: 'INFO', title: 'd', body });
+    const sections = blocks.filter((b) => b['type'] === 'section');
+    expect(sections.length).toBeGreaterThan(1);
+    for (const s of sections) {
+      const text = (s['text'] as { text: string }).text;
+      expect(text.length).toBeLessThanOrEqual(3000);
+      // line-boundary splits: every chunk is whole lines, never a torn line
+      for (const l of text.split('\n')) expect(l).toBe(line);
+    }
+    // nothing lost: the chunks reassemble to the original body
+    expect(sections.map((s) => (s['text'] as { text: string }).text).join('\n')).toBe(body);
+  });
+
+  it('hard-splits a single line longer than the section limit', () => {
+    const body = 'y'.repeat(7000);
+    const { blocks } = buildAlertBlocks({ kind: 'X', severity: 'INFO', title: 't', body });
+    const sections = blocks.filter((b) => b['type'] === 'section');
+    expect(sections.length).toBe(3);
+    expect(sections.map((s) => (s['text'] as { text: string }).text).join('')).toBe(body);
+  });
+
+  it('caps the block count under the Slack 50-block message limit', () => {
+    const body = Array.from({ length: 300 }, () => 'z'.repeat(2900)).join('\n');
+    const { blocks } = buildAlertBlocks({
+      kind: 'X',
+      severity: 'INFO',
+      title: 't',
+      body,
+      link: 'https://weather-edge.vercel.app',
+    });
+    expect(blocks.length).toBeLessThanOrEqual(50);
+    expect(JSON.stringify(blocks)).toContain('truncated');
+  });
+
+  it('keeps a short body as a single section (payload shape unchanged)', () => {
+    const { blocks } = buildAlertBlocks({ kind: 'X', severity: 'INFO', title: 't', body: 'short' });
+    expect(blocks.filter((b) => b['type'] === 'section').length).toBe(1);
+    expect(blocks.length).toBe(3);
+  });
 });

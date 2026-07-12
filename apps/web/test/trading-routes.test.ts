@@ -8,7 +8,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { ApiDeps, WebDb } from '../src/lib/api/deps.ts';
-import { adminBuyTablePrice, adminCityArm, adminTradingConfig } from '../src/lib/api/routes.ts';
+import { adminBuyTablePrice, adminCityArm, adminGateOverride, adminTradingConfig } from '../src/lib/api/routes.ts';
 
 const OPERATOR = 'david.geborek@gmail.com';
 const UUID = '00000000-0000-0000-0000-0000000000aa';
@@ -245,6 +245,82 @@ describe('/api/admin/trading/buy-table-price → buy_table_price_cap_set / buy_t
       },
     });
     const res = await adminBuyTablePrice(req({ city: 'atlantis', min: 0.05, max: 0.3 }), d);
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string; details: string[] };
+    expect(body.error).toBe('ERR_DB_CHECK');
+    expect(body.details[0]).toBe(raise); // verbatim, unmodified
+  });
+});
+
+describe('/api/admin/trading/gate-override → trade_gate_override_set / _clear (0082 §3)', () => {
+  it('401 without an operator session', async () => {
+    const res = await adminGateOverride(req({ reason: 'x', expiresAt: '2026-07-20' }), makeDeps({ session: null }));
+    expect(res.status).toBe(401);
+    expect(await res.json()).toEqual({ error: 'ERR_AUTH' });
+  });
+
+  it('set/renew: passes (reason, expiresAt, note) through trimmed; 200 + the new override row', async () => {
+    const calls: RpcCall[] = [];
+    const d = makeDeps({
+      calls,
+      rpc: () => ({ trade_gate_override_set: { override: { id: 2, expires_at: '2026-07-20T00:00:00+00:00' } } }),
+    });
+    const res = await adminGateOverride(
+      req({ reason: '  remote renewal — operator away  ', expiresAt: ' 2026-07-20 ', note: 'set from /trading' }),
+      d,
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ ok: true, override: { id: 2 } });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.fn).toBe('trade_gate_override_set');
+    expect(calls[0]!.args).toEqual({
+      p_reason: 'remote renewal — operator away',
+      p_expires_at: '2026-07-20',
+      p_note: 'set from /trading',
+    });
+  });
+
+  it('note omitted / blank → p_note null', async () => {
+    const calls: RpcCall[] = [];
+    const d = makeDeps({ calls, rpc: () => ({ trade_gate_override_set: { override: {} } }) });
+    await adminGateOverride(req({ reason: 'r', expiresAt: '2026-07-20', note: '  ' }), d);
+    expect(calls[0]!.args['p_note']).toBeNull();
+  });
+
+  it('clear: true → trade_gate_override_clear (no args); 200 + the cleared count', async () => {
+    const calls: RpcCall[] = [];
+    const d = makeDeps({ calls, rpc: () => ({ trade_gate_override_clear: { cleared: 1 } }) });
+    const res = await adminGateOverride(req({ clear: true }), d);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true, cleared: 1 });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.fn).toBe('trade_gate_override_clear');
+    expect(calls[0]!.args).toEqual({});
+  });
+
+  it('TYPE validation — missing reason + missing expiresAt rejected with per-field details, no RPC call', async () => {
+    const calls: RpcCall[] = [];
+    const d = makeDeps({ calls });
+    const res = await adminGateOverride(req({ reason: '   ', note: 42 }), d);
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string; details: string[] };
+    expect(body.error).toBe('ERR_VALIDATION');
+    expect(body.details.some((s) => s.includes('reason'))).toBe(true);
+    expect(body.details.some((s) => s.includes('expiresAt'))).toBe(true);
+    expect(body.details.some((s) => s.includes('note'))).toBe(true);
+    expect(calls).toHaveLength(0);
+  });
+
+  it('surfaces the ≤14-day-cap RAISE VERBATIM — the expiry envelope is the DB, not the route', async () => {
+    const raise =
+      'rpc trade_gate_override_set failed: trade_gate_override_set: expires_at more than 14 days out — an override is short-lived by construction';
+    const d = makeDeps({
+      rpc: () => {
+        throw new Error(raise);
+      },
+    });
+    // a far-future date passes TYPE validation (non-empty string) → reaches the RPC → the 14-day cap RAISES.
+    const res = await adminGateOverride(req({ reason: 'r', expiresAt: '2026-09-30' }), d);
     expect(res.status).toBe(400);
     const body = (await res.json()) as { error: string; details: string[] };
     expect(body.error).toBe('ERR_DB_CHECK');

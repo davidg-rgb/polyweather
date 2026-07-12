@@ -592,6 +592,59 @@ export async function adminBuyTablePrice(req: Request, deps: ApiDeps): Promise<R
   }
 }
 
+// --- [POST] /api/admin/trading/gate-override — trade_gate_override_set / _clear (0082 §3) ---------------
+// The interlock's operator escape hatch, now reachable from /trading (built 2026-07-12 so the operator can
+// RENEW the expiring override remotely — the RPCs existed since 0082 but had no route/UI, and the only prior
+// write was a direct row insert). §8.2 idiom: TYPE-validate only, pass through; the VALUE constraints
+// (non-empty reason, future expiry, the ≤14-day cap, operator_guard) RAISE in Postgres and are surfaced
+// VERBATIM. Body: { reason, expiresAt, note? } to set/renew (a renewal is simply a new row — the newest
+// unexpired row wins) or { clear: true } to expire every active override in place (audit trail kept).
+export async function adminGateOverride(req: Request, deps: ApiDeps): Promise<Response> {
+  const denied = await requireOperator(deps);
+  if (denied) return denied;
+  const body = await readBody(req);
+
+  if (body['clear'] === true) {
+    try {
+      const [r] = await deps.db.rpc<{ trade_gate_override_clear: { cleared: number } }>(
+        'trade_gate_override_clear',
+        {},
+      );
+      return json(200, { ok: true, cleared: r?.trade_gate_override_clear?.cleared ?? 0 });
+    } catch (e) {
+      return json(400, { error: 'ERR_DB_CHECK', details: [e instanceof Error ? e.message : String(e)] });
+    }
+  }
+
+  const details: string[] = [];
+  const reason = body['reason'];
+  const expiresAt = body['expiresAt'];
+  const note = body['note'];
+  if (typeof reason !== 'string' || reason.trim() === '') details.push('reason must be a non-empty string');
+  // Type only — a YYYY-MM-DD date (expires at that midnight UTC) or a full ISO timestamp; the future/≤14d
+  // envelope is the DB RAISE (surfaced verbatim below).
+  if (typeof expiresAt !== 'string' || expiresAt.trim() === '') {
+    details.push('expiresAt must be a date (YYYY-MM-DD) or ISO timestamp string');
+  }
+  if (note !== undefined && note !== null && typeof note !== 'string') details.push('note must be a string');
+  if (details.length > 0) return json(400, { error: 'ERR_VALIDATION', details });
+
+  try {
+    const [r] = await deps.db.rpc<{ trade_gate_override_set: { override: Record<string, unknown> } }>(
+      'trade_gate_override_set',
+      {
+        p_reason: (reason as string).trim(),
+        p_expires_at: (expiresAt as string).trim(),
+        p_note: typeof note === 'string' && note.trim() !== '' ? note.trim() : null,
+      },
+    );
+    return json(200, { ok: true, override: r?.trade_gate_override_set?.override ?? null });
+  } catch (e) {
+    // The DB RAISE (empty reason, non-future expiry, the ≤14-day cap, ERR_FORBIDDEN) — surfaced VERBATIM.
+    return json(400, { error: 'ERR_DB_CHECK', details: [e instanceof Error ? e.message : String(e)] });
+  }
+}
+
 // --- [GET] /api/health — the out-of-band uptime probe (R-18); NO auth ---------------
 export async function healthCheck(_req: Request, deps: ApiDeps): Promise<Response> {
   try {
