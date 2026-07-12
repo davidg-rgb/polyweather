@@ -440,6 +440,28 @@ describe('MakerExecutor.place — maker pricing + mode + idempotency', () => {
     expect(calls.some((c) => c.fn === 'recordFailed')).toBe(false);
     expect(rows.get('cid-fixed')!.status).toBe('intent');
     expect(alerts[0]).toMatchObject({ kind: 'ORDER_NEEDS_RECONCILE', severity: 'CRITICAL' });
+    // …and the alert names WHAT came back (the shapeless snapshot) — a 401-auth JSON, a CF/geo block page,
+    // and a venue glitch are otherwise indistinguishable (the 2026-07-12 shanghai stuck-intent gap).
+    expect(alerts[0]!.body).toContain('typeof=object');
+    expect(alerts[0]!.body).toContain('"success":true');
+  });
+
+  it('the shapeless snapshot is REDACTED and truncated before it reaches the alert body', async () => {
+    const client = mockClient({
+      postOrder: vi.fn(
+        async () =>
+          ({
+            blocked: `cf-challenge POLY_PASSPHRASE: hunter2secret42 ${'x'.repeat(600)}`,
+          }) as unknown as { orderID?: string },
+      ),
+    });
+    const { ledger } = mockLedger();
+    const alerts: TradeAlert[] = [];
+    const exec = new MakerExecutor(deps('live', client, ledger, { notify: async (a: TradeAlert) => (alerts.push(a), true) }));
+    await expect(exec.place(req)).rejects.toMatchObject({ code: 'ERR_CLOB_POST' });
+    expect(alerts[0]!.body).toContain('typeof=object'); // the snapshot is there…
+    expect(alerts[0]!.body).not.toContain('hunter2secret42'); // …with credential material scrubbed (MEDIUM-4)…
+    expect(alerts[0]!.body.length).toBeLessThan(800); // …and the 600-char tail truncated (300-char cap)
   });
 
   it('MEDIUM-4: authent-shaped material in a venue rejection is redacted from the ledger arg, the alert body, AND the thrown message', async () => {

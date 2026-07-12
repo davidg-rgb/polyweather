@@ -106,6 +106,23 @@ export interface LiveExecutorDeps {
 
 const round6 = (x: number): number => Math.round(x * 1e6) / 1e6;
 
+/**
+ * A compact, REDACTED snapshot of a shapeless postOrder response — what actually came back when there was
+ * no orderID and no clean {success:false} rejection. Without it, a 401 bad-credentials JSON, a
+ * Cloudflare/geo block page (HTML), and a venue glitch are indistinguishable in the alert (the 2026-07-12
+ * shanghai stuck-intent: the first-ever cloud live post failed exactly here with no way to tell which).
+ * Redacted (MEDIUM-4) and truncated — safe for alert bodies and the ledger error column.
+ */
+function shapelessSnapshot(posted: unknown): string {
+  let body: string;
+  try {
+    body = JSON.stringify(posted) ?? String(posted);
+  } catch {
+    body = String(posted);
+  }
+  return redactText(`typeof=${typeof posted} body=${body.slice(0, 300)}`);
+}
+
 /** Deno.env in Edge Functions, process.env elsewhere — local copy so this package depends on nothing above it. */
 function envVar(name: string): string | undefined {
   const g = globalThis as {
@@ -348,7 +365,7 @@ export class LiveExecutor implements TradeExecutor {
       const posted = await client.postOrder(order, 'GTC');
       orderId = posted?.orderID;
       if (!orderId) {
-        throw new ExecutionError('ERR_CLOB_POST', 'postOrder returned no orderID');
+        throw new ExecutionError('ERR_CLOB_POST', `postOrder returned no orderID (${shapelessSnapshot(posted)})`);
       }
 
       const status = await client.getOrder(orderId);
@@ -633,7 +650,12 @@ export class MakerExecutor {
           );
         }
         // A response arrived but carries no orderID and no explicit rejection — order state UNKNOWN.
-        throw new ExecutionError('ERR_CLOB_POST', 'postOrder returned no orderID (shapeless response — order state unknown)');
+        // The snapshot names WHAT came back (401-auth JSON vs a CF/geo block page vs a venue glitch) —
+        // the 2026-07-12 shanghai stuck-intent was undiagnosable without it.
+        throw new ExecutionError(
+          'ERR_CLOB_POST',
+          `postOrder returned no orderID (shapeless response — order state unknown): ${shapelessSnapshot(posted)}`,
+        );
       }
       await this.ledger.recordPlaced(clientOrderId, orderId);
 
