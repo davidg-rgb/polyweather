@@ -153,6 +153,11 @@ describe('/trading page renders', () => {
     expect(html).toContain('Operator override');
     expect(html).toContain('first-N live review window');
 
+    // the override set/renew/clear control (2026-07-12 — the remote-renewal panel) renders with the gate
+    expect(html).toContain('trade_gate_override_set');
+    expect(html).toContain('renew override'); // fixture has an ACTIVE override → the renew + clear affordances
+    expect(html).toContain('clear override');
+
     // daily-loss kill meter + today's cashflow (ASCII substrings — avoid apostrophe/minus/dot mismatch)
     expect(html).toContain('realized loss');
     expect(html).toContain('$18.00'); // today's realized loss

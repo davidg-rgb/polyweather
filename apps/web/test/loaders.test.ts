@@ -310,6 +310,9 @@ describe('dashboard loader RPCs (0022, §6.21)', () => {
       dataGaps: { icao: string; model: string }[];
       storage: { snapshotRows: number };
     }
+    // 0101: the storage gauges read pg_class.reltuples (planner estimates — the exact count(*) scans cost
+    // 12.7s/page-load on prod and 500'd /system). ANALYZE makes the estimate exact on the seeded table.
+    await db.exec('analyze market_snapshots');
     const v = await one<Sys>('dash_system_health', {});
     expect(v.jobRuns.some((j) => j.job === 'poll-markets' && j.status === 'ok')).toBe(true);
     expect(v.alertsRecent.some((a) => a.kind === 'BET_REC')).toBe(true);

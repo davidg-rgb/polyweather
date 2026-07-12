@@ -341,6 +341,138 @@ export function TradeConfigEditor({
   );
 }
 
+// ─── (a1) Gate-override control ───────────────────────────────────────────────────────────────────────────
+
+/**
+ * The trade_gate_override control (built 2026-07-12 — remote-renewal gap): the interlock's gate branch is
+ * satisfied by a forward-paper PASS or an ACTIVE ≤14-day override row; the RPCs (trade_gate_override_set /
+ * _clear, 0082 §3, operator_guard inside) existed but had NO route/UI, so an expiring override could only be
+ * renewed at a keyboard with DB access. Same §8.2 idiom as the config editor: TYPE validation in the route,
+ * every VALUE constraint (future expiry, ≤14-day cap) is a DB RAISE shown VERBATIM. Setting/renewing an
+ * override ARMS live entries (with mode=live + an open run window), so the set path fronts a confirmation;
+ * clearing blocks live entries and posts immediately (the safe direction).
+ */
+export function GateOverridePanel({
+  active,
+  reason,
+  expiresAt,
+}: {
+  /** preflight.checks.override — an ACTIVE (unexpired) override row exists. */
+  active: boolean;
+  /** preflight.checks.overrideReason (null when none). */
+  reason?: string | null;
+  /** preflight.checks.overrideExpiresAt (null when none). */
+  expiresAt?: string | null;
+}): ReactElement {
+  const a = useAction();
+  const [reasonEdit, setReasonEdit] = useState('');
+  const [expiryEdit, setExpiryEdit] = useState('');
+  const [noteEdit, setNoteEdit] = useState('');
+  const [confirming, setConfirming] = useState(false);
+
+  const ready = reasonEdit.trim() !== '' && expiryEdit.trim() !== '';
+
+  const post = (body: Record<string, unknown>, okMsg: string): Promise<void> =>
+    a.run(async () => {
+      const r = await postJson('/api/admin/trading/gate-override', body);
+      if (r.status === 200) {
+        setConfirming(false);
+        setReasonEdit('');
+        setExpiryEdit('');
+        setNoteEdit('');
+        return { ok: true, msg: okMsg };
+      }
+      return { ok: false, msg: errText(r) };
+    });
+
+  return (
+    <div className="panel">
+      <p className="muted small" style={{ marginTop: 0 }}>
+        The gate branch needs a forward-paper PASS <strong>or</strong> an ACTIVE operator override (RPC{' '}
+        <span className="mono">trade_gate_override_set</span>, ≤14 days by DB RAISE — renewing simply adds a new
+        expiring row; the audit trail keeps every row). Without either, live posting stops even inside an open
+        run window. Currently:{' '}
+        {active ? (
+          <>
+            <strong>ACTIVE</strong>
+            {reason ? <> — &ldquo;{reason}&rdquo;</> : null}
+            {expiresAt ? (
+              <>
+                {' '}
+                · expires <span className="mono">{expiresAt}</span>
+              </>
+            ) : null}
+          </>
+        ) : (
+          <strong>none</strong>
+        )}
+        .
+      </p>
+      {confirming ? (
+        <div className="info-banner" role="dialog" aria-modal="true" style={{ borderLeftColor: 'var(--ams-amber)' }}>
+          <strong style={{ color: 'var(--ams-amber)' }}>Set the gate override?</strong> With mode{' '}
+          <span className="mono">live</span> and an open run window this PERMITS real-money entries until{' '}
+          <span className="mono">{expiryEdit}</span> (midnight UTC). Reason: &ldquo;{reasonEdit.trim()}&rdquo;.
+          <div className="form-row">
+            <button
+              className="primary"
+              disabled={a.busy}
+              onClick={() =>
+                void post(
+                  { reason: reasonEdit.trim(), expiresAt: expiryEdit.trim(), note: noteEdit.trim() || undefined },
+                  `override set — expires ${expiryEdit.trim()}`,
+                )
+              }
+            >
+              Confirm override
+            </button>
+            <button disabled={a.busy} onClick={() => setConfirming(false)}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : null}
+      <div className="form-row">
+        <input
+          type="text"
+          placeholder="reason (required, audited)"
+          value={reasonEdit}
+          onChange={(e) => setReasonEdit(evVal(e))}
+          style={{ width: 280 }}
+        />
+        <input
+          className="mono"
+          type="date"
+          title="expires at this date's midnight UTC — the DB caps it at 14 days out"
+          value={expiryEdit}
+          onChange={(e) => setExpiryEdit(evVal(e))}
+          style={{ width: 160 }}
+        />
+        <input
+          type="text"
+          placeholder="note (optional)"
+          value={noteEdit}
+          onChange={(e) => setNoteEdit(evVal(e))}
+          style={{ width: 220 }}
+        />
+        <button className="primary" disabled={a.busy || !ready} onClick={() => setConfirming(true)}>
+          {active ? 'renew override' : 'set override'}
+        </button>
+        {active ? (
+          <button
+            disabled={a.busy}
+            title="expires every active override in place — live posting blocks on the next preflight"
+            onClick={() => void post({ clear: true }, 'override cleared — live posting blocked')}
+          >
+            clear override
+          </button>
+        ) : null}
+      </div>
+      <Status msg={a.msg} ok={a.ok} />
+    </div>
+  );
+}
+
 // ─── (b) Buy-table price ranges panel (0097) ──────────────────────────────────────────────────────────────
 
 /**

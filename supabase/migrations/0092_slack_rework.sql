@@ -351,6 +351,8 @@ grant  execute on function public.whale_pending_alerts(int) to service_role;
 -- armed; the 0089 depth kinds are included pre-emptively so this migration is order-independent with the
 -- staged 0089 (its append-if-missing no-ops when it applies after this). alerts_slack_paused stays wherever
 -- ops set it — on prod 'true', which with this allowlist IS the routing table.
+-- AMENDED 2026-07-12 (pre-apply): the five buy-table live-lane kinds (0095, launched 2026-07-11 — AFTER this
+-- migration was staged) are unioned in — without them this hard-set would silence the live lane's CRITICALs.
 insert into public.config (key, value) values
-  ('alerts_slack_allow_kinds', 'DAILY_DIGEST,BOT_DEADMAN,CAPTURE_DEADMAN,DEPTH_CAPTURE_DEADMAN,DEPTH_CAPTURE_PARTIAL_WRITE,EXIT_FAILED,CIRCUIT_BREAK,POL_LOW,DAILY_KILL')
+  ('alerts_slack_allow_kinds', 'DAILY_DIGEST,BOT_DEADMAN,CAPTURE_DEADMAN,DEPTH_CAPTURE_DEADMAN,DEPTH_CAPTURE_PARTIAL_WRITE,EXIT_FAILED,CIRCUIT_BREAK,POL_LOW,DAILY_KILL,BUY_TABLE_DEADMAN,BUY_TABLE_DEGRADED,BUY_TABLE_POST_FAILED,ORDER_FAIL,ORDER_NEEDS_RECONCILE')
 on conflict (key) do update set value = excluded.value;
