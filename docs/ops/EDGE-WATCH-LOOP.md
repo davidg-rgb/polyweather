@@ -220,6 +220,8 @@ _Claude keeps this block current every material cycle. Whole status in 20 second
   (arms table) separately INERT: `city_live_arms` is empty on prod. Tripwire ⑤ updated (operator-authorized,
   not a reopen). Watch item: **ankara was dropped from the allowlist at 13:57Z** — flagged to the operator as
   possibly accidental (the paper §12-R race is unaffected; the allowlist only gates the live daemon).
+  **↳ RESOLVED (07-12, operator): the ankara drop was ON PURPOSE — allowlist [houston, karachi, mexico-city,
+  shanghai] is the intended set; do not re-flag.**
 - **C10 (2026-07-11 ~13:20Z) — OPERATOR: allowlist picker REGRESSION (0093's UI was narrower than the DB) →
   fixed via 0094 (APPLIED); day-1 verifications part-done.** The operator could not add ANY new city to the
   /trading buying allowlist: the 0093 checkbox picker's options came from `dash_city_live().arms` — and prod's
