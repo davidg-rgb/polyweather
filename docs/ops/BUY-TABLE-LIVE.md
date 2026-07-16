@@ -20,7 +20,7 @@ seed the maker-exit daemon reads) as a **TAKER FAK**, only when:
 | Lead to close | **2–12 h** | `config buy_table.lead_min_h / lead_max_h` (the C25 calibrated sweet-spot is ≤12h; the final 2h is excluded — the record's worst regime: near close the cheap filter keeps only near-certain losers) |
 | Stake per buy | `trade_config.stake_per_buy_usd` (currently **$5**) | `/trading` console |
 | Cities | `trade_config.city_allowlist` | `/trading` console (0093-validated slugs) |
-| Entries per market | **ONE, EVER** | `buy_table_entries` (ANY-status ledger read — even a terminal `failed` row blocks re-entry; no chase) + the `(mode, intent_key)` partial-unique index underneath |
+| Entries per market | **`buy_table.max_entry_attempts` total attempts (default 1 = one-EVER)** | the 0102 entry gate (`deriveEntryGate` over the ANY-status `buy_table_entries` read) + the `(mode, intent_key)` partial-unique index underneath — see "Entry rules (0102)" below |
 
 Then **HOLD TO RESOLUTION** — no take-profit, no stop-loss, no time-stop. A market that resolves against a
 held position gets its full-stake loss **booked into the N1 daily-loss kill** every tick via the idempotent
@@ -107,6 +107,19 @@ default 5; the executor re-checks the live book's own floor at placement). Ledge
    -- the deadman is silent
    select public.buy_table_deadman_check();
    ```
+
+## Entry rules (0102) — operator verification semantics (2026-07-16 C18c)
+
+Two config-gated rules in the tick's entry gate (`deriveEntryGate`, `handler.ts`); **defaults reproduce the
+original one-attempt-EVER behavior exactly**, so flipping both back fully restores the old lane:
+
+| Config key | Default | Verification value (set 07-16) | Rule |
+|---|---|---|---|
+| `buy_table.max_entry_attempts` | `1` | `3` | **"trade fails → reset, get the next entry."** Total placement attempts per market. Only PROVABLY-dead attempts are retryable: a clean venue rejection (`failed` — the executor freed the key because the venue verifiably holds no order) or a zero-fill `canceled`. **Unknown-state rows always block their market** (stuck `intent` / unfilled `placed` — the ORDER_NEEDS_RECONCILE classes; a blind retry could double-place). A market with a REAL fill is never re-entered. |
+| `buy_table.stop_after_first_success` | `false` | `true` | **"trade successful → no further buying trials."** Once ANY entry in the mode carries a fill (`size_matched > 0`, partial counts — money deployed), the lane opens NO new entries, including later candidates in the same tick. Halts until the operator flips it back. `job_runs.stats.laneHalted` + the diag tool surface the halt as by-design. |
+
+The handler must be redeployed to pick up gate-logic changes (done 07-16); the config values are read fresh
+every tick, so flipping them needs **no** redeploy.
 
 ## ⚠ Candidate scarcity — "0 candidates" is the NORMAL state (C18, 2026-07-16)
 

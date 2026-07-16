@@ -51,6 +51,16 @@ _Claude keeps this block current every material cycle. Whole status in 20 second
     = 0.40 (admits 3/4 cities on current prices; karachi's 49¢ favorite excluded; worst case 4×$5=$20,
     inside the $25/$30 kills). **⚑ THE OPERATOR LOWERS IT BACK — if this note is stale and the cap still
     reads 0.40, surface it.** A live buy tonight still additionally needs the override renewal (his click).
+  - **↳ C18c (07-16 ~14:20Z, operator-instructed): the ENTRY RULES shipped (migration 0102 + handler +
+    REDEPLOYED to prod)** — "if trade fails → reset and get the next entry; if trade successful → no
+    further buying trials." Rule 1: `buy_table.max_entry_attempts` (LIVE `3`, default `1` = the old
+    one-EVER gate) — only PROVABLY-dead attempts retry (clean-rejection `failed` / zero-fill `canceled`);
+    unknown-state rows (stuck `intent`, unfilled `placed` — the needs-reconcile classes) still always
+    block, so the 07-12 double-place discipline holds. Rule 2: `buy_table.stop_after_first_success`
+    (LIVE `true`) — the first REAL fill halts all further entries, including same-tick; visible as
+    `stats.laneHalted` + a by-design blocker in the diag tool. Defaults reproduce the original lane
+    exactly (both flags are the operator's to flip back, no redeploy needed — config is read per tick).
+    Suite 3,220 green; deploy verified on the next scheduled tick.
 - **▶▶ C17 (2026-07-12 ~15:10Z) — OPERATOR DECISION: the live lane's dates LAPSE NATURALLY (no renewal);
   everything else runs and collects.** Per the pre-absence recommendation: the gate override expires
   **07-15 00:00Z** and `active_until` **07-20** — neither will be renewed; the lane keeps hunting (unpaged,
@@ -213,6 +223,11 @@ _Claude keeps this block current every material cycle. Whole status in 20 second
   lowers it himself later) — sized off measured tonight's-window predicted-bucket asks (min houston 0.32
   + headroom; karachi 0.49 excluded; see ⚑ C18b). Watch item: if the cap still reads 0.40 in a later
   cycle, surface it to the operator.
+  **↳ C18c (~14:20Z): the operator's entry rules BUILT + DEPLOYED** (0102 + deriveEntryGate + redeploy;
+  see ⚑ C18c): retry-after-provably-dead-failure (max 3 attempts/market, unknown-state rows still hard-block)
+  + halt-all-buying-after-first-fill (live `true`). Live config: cap 0.40 · attempts 3 · stop-on-success on.
+  Suite 3,220 green, typecheck clean. Boundary intact: config + code only, operator-instructed; the override
+  renewal (the actual arming click) remains his.
 - **C16 (2026-07-12 ~14:40Z) — OPERATOR: "halt all slack posts … until I tell you otherwise" → TOTAL Slack
   silence applied.** Lever: `alerts_slack_allow_kinds` `'DAILY_DIGEST,…,ORDER_NEEDS_RECONCILE'` (the 0092+0095
   14-kind routing table, verbatim restore string in the ⚑ block) → `''`, with `alerts_slack_paused` staying
