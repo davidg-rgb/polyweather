@@ -228,6 +228,20 @@ _Claude keeps this block current every material cycle. Whole status in 20 second
   + halt-all-buying-after-first-fill (live `true`). Live config: cap 0.40 · attempts 3 · stop-on-success on.
   Suite 3,220 green, typecheck clean. Boundary intact: config + code only, operator-instructed; the override
   renewal (the actual arming click) remains his.
+  **↳ C18d (~14:40Z, operator-requested code review of the C18 build) — 2 real defects found in C18c,
+  FIXED + REDEPLOYED same cycle:** **F1 (HIGH)**: a zero-fill FAK (the most likely live failure — ask
+  drifts above worstPrice between the 5-min capture and the post; FAK dies at post) landed as `placed`/0
+  = unknown-state = PERMANENT market block — rule 1 would never have fired on it. Fix: in-tick
+  adjudication to `canceled` (poll-verified dead by the FAK contract) → retryable; `stats.zeroFillAdjudicated`.
+  **F2 (MEDIUM)**: an ambiguous post failure (ERR_CLOB/ERR_CLOB_POST — possible hidden fill) let the same
+  tick keep buying seconds later; with stop-on-success on it now halts the tick's remainder
+  (`stats.haltedOnAmbiguous`); clean rejections/pre-venue throws still continue (rule 1). **F3 (LOW)**:
+  stats now echo `stopOnFirstSuccess`. Known gap ISOLATED not fixed (F4): the cloud lane has no reconcile
+  sweep for stuck intent/placed rows (the daemon's startup sweep never ported) — rare, diag-visible,
+  deliberate no-rush pre-window; candidate for a calm-day port. +3 tests (36 handler total), suite
+  **3,223 green**, redeployed ~14:37Z, tick-verified. Everything else in the C18 build verified clean
+  (gate defaults = legacy byte-exact, strategy scoping, no attempt burn on preflight-block, migration
+  idempotency, diag shares the gate).
 - **C16 (2026-07-12 ~14:40Z) — OPERATOR: "halt all slack posts … until I tell you otherwise" → TOTAL Slack
   silence applied.** Lever: `alerts_slack_allow_kinds` `'DAILY_DIGEST,…,ORDER_NEEDS_RECONCILE'` (the 0092+0095
   14-kind routing table, verbatim restore string in the ⚑ block) → `''`, with `alerts_slack_paused` staying

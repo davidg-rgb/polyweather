@@ -41,6 +41,7 @@
  */
 import type { JobCtx, JobStats } from '../_shared/runJob.ts';
 import {
+  ExecutionError,
   parseBotConfig,
   type RawBucket,
   type RawCaptureRow,
@@ -601,6 +602,8 @@ export async function buyTableTick(ctx: JobCtx, deps: BuyTableTickDeps): Promise
   let duplicate = 0;
   let failed = 0;
   let haltedAfterFill = false;
+  let haltedOnAmbiguous = false;
+  let zeroFillAdjudicated = 0;
   const blocked = mode === 'live' && preflightOk !== true;
   if (candidates.length > 0 && !blocked) {
     const executor = new MakerExecutor({
@@ -638,6 +641,24 @@ export async function buyTableTick(ctx: JobCtx, deps: BuyTableTickDeps): Promise
           hoursToClose: Math.round(c.hoursToClose * 10) / 10,
           reason: result.reason,
         });
+        // 0102 F1: a poll-verified ZERO-FILL FAK is provably DEAD at the venue (Fill-And-Kill cannot
+        // rest — it matches at post or dies), but the ledger row stays 'placed'/0, which the entry gate
+        // reads as unknown-state → a permanent market block. Adjudicate it to 'canceled' NOW so the
+        // gate's zero-fill retry class (rule 1) applies. A failed adjudication write leaves the row
+        // 'placed' — the market stays blocked, which is the safe direction.
+        if (result.status === 'placed' && (result.sizeMatched ?? 0) === 0 && result.clientOrderId) {
+          try {
+            await db.rpc('bot_order_record_canceled', { p_client_order_id: result.clientOrderId });
+            zeroFillAdjudicated++;
+            log('buy-table.fak_zero_fill_adjudicated', {
+              marketRef: c.marketId,
+              city: c.city,
+              note: 'FAK matched nothing — row adjudicated canceled; retryable under max_entry_attempts',
+            });
+          } catch (e2) {
+            log('buy-table.fak_zero_fill_adjudicate_failed', { marketRef: c.marketId, error: redactText(errMsg(e2)) });
+          }
+        }
         // 0102 rule 2, in-tick: the first REAL fill halts the rest of this tick's candidates too —
         // one successful buy, then quiet (later ticks halt via deriveEntryGate reading the fill row).
         if (cfg.stopAfterFirstSuccess && (result.sizeMatched ?? 0) > 0) {
@@ -664,6 +685,25 @@ export async function buyTableTick(ctx: JobCtx, deps: BuyTableTickDeps): Promise
             body: message,
             dedupeKey: `buy-table-post-fail:${c.marketId}`,
           });
+          // 0102 F2 (fail-toward-quiet): an AMBIGUOUS post failure — the post reached the venue without
+          // a clean rejection (ERR_CLOB / ERR_CLOB_POST / ledger-write classes) — may HIDE a real fill
+          // the poll never recorded. With stop_after_first_success on, do not keep buying seconds after
+          // a possible hidden fill: halt this tick's remaining candidates. Provably-fill-less throws
+          // (clean rejection ERR_CLOB_REJECTED, pre-venue ERR_MIN_SIZE/ERR_NO_KEY) continue to the next
+          // candidate — that is rule 1. Non-ExecutionError throws are pre-venue by construction
+          // (postAndRecord wraps every post-attempted error as ExecutionError) → continue.
+          const code = e instanceof ExecutionError ? e.code : null;
+          const ambiguous = code != null && !['ERR_CLOB_REJECTED', 'ERR_MIN_SIZE', 'ERR_NO_KEY'].includes(code);
+          if (cfg.stopAfterFirstSuccess && ambiguous) {
+            haltedOnAmbiguous = true;
+            for (const rest of candidates.slice(i + 1)) {
+              log('buy-table.skip', {
+                ref: `${rest.city}/${rest.tradeDate}`,
+                reason: `lane_halted — ambiguous post failure (${code}) may hide a fill; halting this tick (stop_after_first_success)`,
+              });
+            }
+            break;
+          }
         }
       }
     }
@@ -694,7 +734,10 @@ export async function buyTableTick(ctx: JobCtx, deps: BuyTableTickDeps): Promise
     stakeUsd,
     cities: allowlist.length,
     maxEntryAttempts: cfg.maxEntryAttempts,
+    stopOnFirstSuccess: cfg.stopAfterFirstSuccess,
     laneHalted: gate.laneHalted || haltedAfterFill,
+    haltedOnAmbiguous,
+    zeroFillAdjudicated,
   };
   log('buy-table.tick', stats);
   return stats;

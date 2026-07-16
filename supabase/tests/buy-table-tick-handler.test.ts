@@ -128,6 +128,7 @@ function makeMockDb(state: MockDbState): DbPort & { calls: Array<{ fn: string; a
         case 'bot_order_record_placed':
         case 'bot_order_record_fill':
         case 'bot_order_record_failed':
+        case 'bot_order_record_canceled':
           return [] as unknown as T[];
         case 'bot_order_record_resolution_loss':
           return [
@@ -169,9 +170,13 @@ function makeMockClient(): MakerClobClientish & { postCalls: number } {
   return client;
 }
 
-function harness(state: MockDbState, tradeMode: string | undefined) {
+function harness(
+  state: MockDbState,
+  tradeMode: string | undefined,
+  clientOverride?: Partial<ReturnType<typeof makeMockClient>>,
+) {
   const db = makeMockDb(state);
-  const client = makeMockClient();
+  const client = Object.assign(makeMockClient(), clientOverride);
   const alerts: TradeAlert[] = [];
   const logs: Array<{ msg: string; extra?: Record<string, unknown> }> = [];
   const ctx: JobCtx = {
@@ -456,6 +461,69 @@ describe('buy-table-tick — the 0102 entry rules (verification semantics)', () 
     expect(h.client.postCalls).toBe(1);
     expect(reservesOf(h.db).length).toBe(1);
     expect(h.logs.some((l) => l.msg === 'buy-table.skip' && /lane_halted — first successful buy/.test(String(l.extra?.reason)))).toBe(true);
+  });
+
+  it('F1: a poll-verified ZERO-FILL FAK is adjudicated canceled in-tick (retryable) and does NOT halt the lane', async () => {
+    const h = harness(
+      {
+        mode: 'live', preflightOk: true,
+        configRows: [{ key: 'buy_table.stop_after_first_success', value: 'true' }, ...RETRY3],
+        captures: [
+          capture({ eventId: 'ev-1', ask: 0.12, hoursToClose: 6 }),
+          capture({ eventId: 'ev-2', ask: 0.12, hoursToClose: 7 }),
+        ],
+      },
+      'live',
+      // the venue accepts the FAK but matches NOTHING (ask moved) — Fill-And-Kill dies at post
+      { getOrder: async () => ({ status: 'canceled', original_size: 41, size_matched: 0 }) },
+    );
+    const stats = await buyTableTick(h.ctx, h.deps);
+    expect(stats.zeroFillAdjudicated).toBe(2); // both zero-fills adjudicated → both markets retryable next tick
+    expect(stats.laneHalted).toBe(false); // no fill happened — rule 2 must NOT trigger
+    expect(stats.haltedOnAmbiguous).toBe(false);
+    expect(h.db.calls.filter((c) => c.fn === 'bot_order_record_canceled').length).toBe(2);
+    expect(reservesOf(h.db).length).toBe(2); // no halt — the lane moved to the next candidate
+  });
+
+  it('F2: an AMBIGUOUS post failure (shapeless venue response — possible hidden fill) HALTS the tick', async () => {
+    const h = harness(
+      {
+        mode: 'live', preflightOk: true,
+        configRows: [{ key: 'buy_table.stop_after_first_success', value: 'true' }],
+        captures: [
+          capture({ eventId: 'ev-1', ask: 0.12, hoursToClose: 6 }),
+          capture({ eventId: 'ev-2', ask: 0.12, hoursToClose: 7 }),
+        ],
+      },
+      'live',
+      { postOrder: async () => ({}) }, // no orderID, no explicit rejection → ERR_CLOB_POST (state unknown)
+    );
+    const stats = await buyTableTick(h.ctx, h.deps);
+    expect(stats.failed).toBe(1);
+    expect(stats.haltedOnAmbiguous).toBe(true);
+    expect(reservesOf(h.db).length).toBe(1); // the second candidate was never attempted
+    expect(h.alerts.some((a) => a.kind === 'BUY_TABLE_POST_FAILED')).toBe(true);
+    expect(h.alerts.some((a) => a.kind === 'ORDER_NEEDS_RECONCILE')).toBe(true);
+    expect(h.logs.some((l) => l.msg === 'buy-table.skip' && /ambiguous post failure/.test(String(l.extra?.reason)))).toBe(true);
+  });
+
+  it('F2 boundary: a CLEAN venue rejection does NOT halt — the lane moves to the next candidate (rule 1)', async () => {
+    const h = harness(
+      {
+        mode: 'live', preflightOk: true,
+        configRows: [{ key: 'buy_table.stop_after_first_success', value: 'true' }],
+        captures: [
+          capture({ eventId: 'ev-1', ask: 0.12, hoursToClose: 6 }),
+          capture({ eventId: 'ev-2', ask: 0.12, hoursToClose: 7 }),
+        ],
+      },
+      'live',
+      { postOrder: async () => ({ success: false, errorMsg: 'rejected: insufficient balance' }) },
+    );
+    const stats = await buyTableTick(h.ctx, h.deps);
+    expect(stats.failed).toBe(2); // both attempted, both cleanly rejected
+    expect(stats.haltedOnAmbiguous).toBe(false);
+    expect(reservesOf(h.db).length).toBe(2);
   });
 
   it('rule 2 does NOT halt on fill-less attempts (a failed row is not a success)', async () => {
