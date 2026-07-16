@@ -239,7 +239,8 @@ _Claude keeps this block current every material cycle. Whole status in 20 second
    accruing toward n≥40. Efficiency-monitor S1/S2 verdict drift. `/paper-trade`, `/monitor` RPCs healthy.
 5. **Tripwires.** ⑤ (trade_config.mode) every cycle; ①–④ sweep every ~2–3 days.
 6. **Watch items.** price_cap 0.40 → re-surface daily until the operator lowers it · active_until
-   07-20 → surface before expiry (his call to bump) · city_sim_config runway 09-30 → surface ~09-25.
+   **07-31 (operator-extended 07-16 18:49Z, was 07-20)** → surface before expiry · city_sim_config
+   runway 09-30 → surface ~09-25.
 7. **Calm-day build queue (all-green cycles only, in order).** ① **F4 cloud reconcile sweep** (C18d:
    stuck `intent`/`placed` rows have no cloud sweep — the daemon's startup sweep never ported; port it
    into the tick at `reconcileEveryTicks` cadence, full tests, deploy on a quiet tick). ② opening_captures
@@ -278,6 +279,19 @@ checkpoints to align on: 06:17Z Action · 10:00/13:50/20:45Z city ticks · 07:00
 
 ## Cycle log
 
+- **C25 (2026-07-16 ~19:00Z) — OPERATOR CHECK-IN: "can we buy US markets?" answered + his active_until
+  extension observed.** (1) Diag run (read-only): lane blocked on exactly ONE interlock reason — the
+  expired override; **`active_until` now 2026-07-31 (operator's own /trading edit at 18:49:29Z — the
+  07-20 watch item is superseded)**; 8/8 markets skip on lead_window, next candidate window ~00:00Z.
+  (2) US answer, verified live: **Polymarket US-city °F markets are FULLY supported today** — houston
+  is already allowlisted; 10 more US cities (atlanta austin chicago dallas denver los-angeles miami
+  nyc san-francisco seattle) are in the 45-city capture universe with fresh house-seeded captures
+  (300–650/city/24h, latest 18:51Z) and are ONE /trading allowlist edit away (config read per tick —
+  no code, no deploy). **Kalshi (the US-regulated venue) is NOT supported**: execution is
+  Polymarket-CLOB-only (§15 seam); a Kalshi rail would need operator-side US-KYC account + API keys +
+  USD funding, plus a new venue adapter/ledger surface — and no strategy reason exists (signal #10
+  cross-venue KILLed on the 1–10-contract capacity wall). Heartbeats C21–C24 (15:28/16:29/17:30/18:31Z)
+  all-green: 7/7 ticks each hour, 0 failed jobs, 0 orders, override down, cap 0.40.
 - **C20 (2026-07-16 ~14:05–14:30Z) — PR #23 landed + F4 BUILT/DEPLOYED/VERIFIED (the calm-day queue's
   top item).** (1) PR #23 was stuck CONFLICTING/DIRTY — CI never fires on a conflicted PR (GitHub can't
   build the merge ref); root cause: main's #22 squash was never reconciled back into the loop branch.
