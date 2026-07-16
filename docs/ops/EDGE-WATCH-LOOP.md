@@ -37,6 +37,14 @@ _Claude keeps this block current every material cycle. Whole status in 20 second
     regrowth; DB total 2,376 MB; next tiers market_snapshots 432 MB, bucket_probabilities 346 MB). The
     C96 dump→prune→VACUUM-FULL playbook stands ready; if it threatens the Micro before you're back I
     archive-verify-then-prune off-peak and log it here first.
+  - **↳ C19a (~14:00Z): REAL BREAKAGE FOUND + FIXED — the efficiency-monitor Action died 07-15 AND
+    07-16** (both days' snapshots lost, accrual stalled since 07-14). Root cause: GitHub's scheduled-run
+    drift (2–3.5h; fires landed ~08:35Z) put the start inside the script's own reserved :32–:42 UTC
+    window, whose guard HARD-THREW. Fixed: the guard now waits until :43 (bounded ≤11 min; +5 tests);
+    recovered today by manual dispatch → **snapshot id=9 as-of 07-16: S1 KILL n=4,742 · S2 12 troughs**
+    (nothing lost — the walk is cumulative, the missed days folded in). Fix must live on main →
+    **PR #23** (also ships the deployed C18 build, closing the main-vs-prod drift). City race verified
+    same cycle: 13:50Z -b fired on the second, ankara ×2 placed.
 - **▶▶ C18 (2026-07-16 ~11:05–12:00Z, operator IN-SESSION: "today we verify functionality") — "no buys
   recognized" TROUBLESHOT → NOTHING BROKEN; verification tooling shipped; one config revert + one ledger
   reconcile, both operator-instructed.**
@@ -273,7 +281,17 @@ checkpoints to align on: 06:17Z Action · 10:00/13:50/20:45Z city ticks · 07:00
   ok except 1 transient metar fail 07-15 17:34Z (47 ok since); live_orders = only the reconciled 07-12 row,
   0 live fills ever; **storage: DB 2,376 MB, opening_captures 832 MB regrown from 75 MB post-07-07-prune
   (~85 MB/day) → standing watch item #3 in the rota**, market_snapshots 432 MB, bucket_probabilities
-  346 MB, job_runs 28 MB. Boundary intact: read-only cycle, docs-only commit. — OPERATOR IN-SESSION: "no buys recognized" troubleshoot + "today we
+  346 MB, job_runs 28 MB. Boundary intact: read-only cycle, docs-only commit.
+  **↳ C19a (~13:40–14:05Z) — efficiency-monitor Action 2-day failure ROOT-CAUSED + FIXED + RECOVERED.**
+  `gh run list` showed schedule fires 07-15 08:36Z + 07-16 08:35Z both failed in ~16–20s; log tail =
+  the script's OWN reserved-window guard (`:32–:42` hard-throw at efficiency-monitor-run.ts:198). The
+  06-17Z cron drifts 2–3.5h under GitHub congestion (07-13 09:48 ok · 07-14 08:28 ok · 07-15/16 ~08:35
+  DEAD — ~50% daily loss odds). Fix: extracted `reservedWindowWaitMs()` (pure, 5 tests) — the guard now
+  sleeps to :43 instead of dying; yml header documents drift-vs-drop. Recovery dispatch 13:44Z succeeded
+  (44s) → snapshot id=9 as-of 07-16 (S1 KILL n=4,742 — up from 3,735 at C11, null tightening; S2 12
+  troughs, was 10). Typecheck + new tests green. **PR #23 → main** (squash; carries the whole C18 build
+  — prod Edge already runs it, main lagged). Also verified this cycle: 13:50Z -b tick ok (ankara ×2),
+  false-alarm on "missed -b" was local clock skew (DB now() is authoritative — use it, not local time). — OPERATOR IN-SESSION: "no buys recognized" troubleshoot + "today we
   verify functionality".** Full detail in ⚑ C18. Facts established: the C17 lapse landed exactly as designed
   (override expired 07-15 00:00Z; preflight fails on that single reason; mode/window/loss all green);
   independently the tick has 0 candidates every tick — lead-window dead zone (~00:00–10:00Z is the only
