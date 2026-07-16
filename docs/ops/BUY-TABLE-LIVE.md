@@ -86,7 +86,15 @@ default 5; the executor re-checks the live book's own floor at placement). Ledge
    - To pause: `trade_config_set(p_mode := 'off')` or set `config buy_table.tick_enabled = 'false'` (tick
      no-ops) or `trade_gate_override_clear()` (live posts blocked; dry-run recording continues).
 
-5. **Verify** (after 20–30 min):
+5. **Verify** (after 20–30 min). The one-command way (local, read-only — prints a CAN-A-BUY-HAPPEN-NOW
+   verdict, the interlock reasons, the per-market skip funnel via the tick's own selector, the
+   next-window estimate, and any dangling intents):
+
+   ```bash
+   pnpm tsx scripts/diag-buy-lane.ts        # add --json for machine-readable
+   ```
+
+   Or the raw SQL reads it wraps:
 
    ```sql
    -- the tick is claiming per-fire period keys and completing
@@ -99,6 +107,16 @@ default 5; the executor re-checks the live book's own floor at placement). Ledge
    -- the deadman is silent
    select public.buy_table_deadman_check();
    ```
+
+## ⚠ Candidate scarcity — "0 candidates" is the NORMAL state (C18, 2026-07-16)
+
+Do not read a quiet lane as a broken lane. Two structural facts keep the candidate count at zero most of
+the time: **(1) the [2, 12]h lead window is a mid-day-UTC dead zone** — the daily-weather markets for the
+allowlisted cities resolve ~12:00Z, so they sit inside the window only roughly **00:00–10:00Z**; outside
+that stretch every market skips `lead_window` by construction. **(2) the ≤15¢ cap rarely coincides with
+our predicted bucket** while in-window (zero natural candidates from launch 07-11 through 07-16). A
+healthy tick therefore logs `candidates: 0` all afternoon/evening UTC. The one-command check that tells
+"quiet by design" apart from "actually blocked" is `pnpm tsx scripts/diag-buy-lane.ts`.
 
 ## ⚠ Capture-universe coverage (read this before picking the allowlist)
 

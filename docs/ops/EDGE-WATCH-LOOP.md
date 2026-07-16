@@ -15,6 +15,35 @@
 
 _Claude keeps this block current every material cycle. Whole status in 20 seconds._
 
+- **▶▶ C18 (2026-07-16 ~11:05–12:00Z, operator IN-SESSION: "today we verify functionality") — "no buys
+  recognized" TROUBLESHOT → NOTHING BROKEN; verification tooling shipped; one config revert + one ledger
+  reconcile, both operator-instructed.**
+  - **Why no buys — two independent gates, both by design:** ① the C17 planned lapse LANDED — the override
+    expired 07-15 00:00Z, so `trade_live_preflight('buy-table')` fails on exactly that one reason (everything
+    else green: mode live, window 07-20, loss $0); ② the tick has had **0 candidates every tick anyway** —
+    the [2,12]h lead window is a mid-day-UTC dead zone for the 4 allowlisted cities (their markets sit at
+    ~0.6 / 24.6 / 48.6h to close; the window populates only ~00:00–10:00Z, and at the 15¢ cap no natural
+    candidate has EVER appeared). The tick itself is healthy: every */10 fire ok, degraded:false.
+  - **NEW REMOTE CHECK TOOL (committed `86c5c3e`): `pnpm tsx scripts/diag-buy-lane.ts`** — read-only,
+    one command, prints CAN-A-BUY-HAPPEN-NOW + the interlock reasons + the per-market skip funnel (reuses
+    the tick's OWN selector — zero drift) + the next-window estimate + dangling intents. Use it FIRST for
+    any future "why no buys". (+ fixed a pre-existing suite time-bomb: trading-db.test.ts's hardcoded
+    07-06 seeds aged out of the 7-day lookback — red daily since ~07-13; seeds now track the constant.
+    Suite 3211 green.)
+  - **Local credential smoke PASS** (safe steps 1–3): creds derive (sigType 2, funder SET), authenticated
+    read OK, 0 open orders at venue → the 07-12 shapeless-post root cause (missing sig-type/funder) is
+    FIXED in `.env.local`; **the EDGE-secret copy stays unproven until the first clean live post.**
+  - **The 07-12 stuck shanghai intent RECONCILED** `intent→failed` via `bot_order_record_failed`
+    (operator-authorized in-session; venue-confirmed nothing resting; market long resolved) — open
+    exposure $4.95→$0, dangling intents 0, audit reason on the row.
+  - **`buy_table.price_cap` 0.33 → 0.15 REVERTED** (operator-instructed; the 0.33 was the operator's own
+    phone-side probe while racing the 07-12 issue — the block was never price, it's the lead window).
+  - **OPERATOR — to verify a live buy today:** ① renew the gate override from /trading (≤14d) — the ONLY
+    closed gate; ② optional write-path proof, local: `pnpm tsx scripts/trade-smoke.ts --live-smoke
+    --i-know-no-preflight` (needs TRADE_MODE=live in `.env.local`; ~$0 place+cancel far from market);
+    ③ next natural candidate window opens ~**2026-07-17 00:00Z** — and at 15¢ a natural candidate is rare,
+    so if today MUST see a strategy buy, the honest lever is a temporary lead/cap widening (your call,
+    revert after).
 - **▶▶ C17 (2026-07-12 ~15:10Z) — OPERATOR DECISION: the live lane's dates LAPSE NATURALLY (no renewal);
   everything else runs and collects.** Per the pre-absence recommendation: the gate override expires
   **07-15 00:00Z** and `active_until` **07-20** — neither will be renewed; the lane keeps hunting (unpaged,
@@ -156,10 +185,23 @@ _Claude keeps this block current every material cycle. Whole status in 20 second
 | ② | Polymarket fee/rebate/rewards program | a program flip at the root (REC-8 lineage, like the 06-24 rewards funding) | no signal; whale-watch+Slack cover the big-print side | 07-10 C1 |
 | ③ | New-instrument volume (precip/wind/snow) | ~10× regime change vs the $802/24h read (floor $7k, signal #9) | not swept C1 (occasional) | — |
 | ④ | Cross-venue true both-book depth | growth vs the 1–10-contract KILL read (#10) | not swept C1 (occasional) | — |
-| ⑤ | trade_config.mode | anything ≠ off/dry-run → fold v16 Phase-C monitoring in as a lane | **`live` — OPERATOR-SET 07-11 12:56Z** (authorized live test, not a reopen). Still inert: active_until null + no gate PASS/override + daemon not running (ledger last wrote 07-07, 0 live rows). Phase-C monitoring folds in the moment the daemon actually runs live. | 07-11 C11 |
+| ⑤ | trade_config.mode | anything ≠ off/dry-run → fold v16 Phase-C monitoring in as a lane | **`live` — OPERATOR-SET 07-11 12:56Z** (authorized live test, not a reopen). C18 state: mode live + window 07-20 BUT the override expired 07-15 (C17 planned lapse) → preflight fails → lane inert as designed; 0 live posts ever (the one 07-12 attempt failed shapeless, reconciled `failed` at C18). | 07-16 C18 |
 
 ## Cycle log
 
+- **C18 (2026-07-16 ~11:05–12:00Z) — OPERATOR IN-SESSION: "no buys recognized" troubleshoot + "today we
+  verify functionality".** Full detail in ⚑ C18. Facts established: the C17 lapse landed exactly as designed
+  (override expired 07-15 00:00Z; preflight fails on that single reason; mode/window/loss all green);
+  independently the tick has 0 candidates every tick — lead-window dead zone (~00:00–10:00Z is the only
+  populated stretch for the 4 cities) and 0-ever at the 15¢ cap. Actions: built + committed
+  `scripts/diag-buy-lane.ts` (+10 tests; read-only remote verdict tool, reuses the tick's own selector);
+  fixed the trading-db.test.ts stale-date time-bomb (red daily since ~07-13; suite back to 3211 green);
+  ran the SAFE credential smoke (PASS: sigType 2 + funder set + authenticated read — the 07-12 root cause
+  fixed locally, Edge copy unproven until a clean post); reconciled the 07-12 stuck shanghai intent
+  `intent→failed` (operator-authorized; venue-confirmed 0 open; exposure $4.95→$0); reverted
+  `buy_table.price_cap` 0.33→0.15 (operator-instructed — the 0.33 was the operator's phone probe).
+  Boundary intact: no trade placed, no keys touched, no authorization extended (the override renewal
+  stays the operator's click; the `--live-smoke` write-path probe left for the operator to run).
 - **C16 (2026-07-12 ~14:40Z) — OPERATOR: "halt all slack posts … until I tell you otherwise" → TOTAL Slack
   silence applied.** Lever: `alerts_slack_allow_kinds` `'DAILY_DIGEST,…,ORDER_NEEDS_RECONCILE'` (the 0092+0095
   14-kind routing table, verbatim restore string in the ⚑ block) → `''`, with `alerts_slack_paused` staying
