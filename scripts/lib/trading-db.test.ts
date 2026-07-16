@@ -131,6 +131,14 @@ describe('makeTradingDb ⋈ the real 0082 RPCs (PGlite)', () => {
   let pg: PGlite;
   let tdb: ScriptTradingDb;
 
+  // The open-entry seeds must sit INSIDE the listOpenEntryRows lookback, which is relative to now()
+  // (trade_date >= now() − OPEN_ENTRY_LOOKBACK_DAYS). A hardcoded calendar date is a time-bomb: it ages
+  // out of the window and fails the suite every day thereafter. Tie the "recent held position" date to
+  // the constant instead (comfortably inside the window; mE stays explicitly stale as the excluded case).
+  const RECENT_TRADE_DATE = new Date(Date.now() - Math.floor(OPEN_ENTRY_LOOKBACK_DAYS / 2) * 86_400_000)
+    .toISOString()
+    .slice(0, 10);
+
   beforeAll(async () => {
     pg = await freshDb();
     const sdb: ScriptDb = {
@@ -180,9 +188,9 @@ describe('makeTradingDb ⋈ the real 0082 RPCs (PGlite)', () => {
   it('the idempotency-critical ledger chain round-trips: reserve → exists → placed → fill → filled stays visible', async () => {
     const ledger = rpcOrderLedger(tdb);
     const intent = {
-      mode: 'dry-run' as const, intentKey: 'mA|BUY|entry|2026-07-06', clientOrderId: 'cid-1',
+      mode: 'dry-run' as const, intentKey: `mA|BUY|entry|${RECENT_TRADE_DATE}`, clientOrderId: 'cid-1',
       marketId: 'mA', tokenId: 'tokA', side: 'BUY' as const, purpose: 'entry' as const,
-      orderType: 'GTC' as const, price: 0.15, size: 66, tradeDate: '2026-07-06',
+      orderType: 'GTC' as const, price: 0.15, size: 66, tradeDate: RECENT_TRADE_DATE,
     };
     expect(await ledger.reserveIntent(intent)).toBe('reserved');
     expect(await ledger.reserveIntent({ ...intent, clientOrderId: 'cid-1b' })).toBe('exists'); // never a double
@@ -202,9 +210,9 @@ describe('makeTradingDb ⋈ the real 0082 RPCs (PGlite)', () => {
   it('recordCanceled frees the key (row invisible to by_intent) and the intent re-reserves cleanly', async () => {
     const ledger = rpcOrderLedger(tdb);
     const intent = {
-      mode: 'dry-run' as const, intentKey: 'mB|SELL|time_stop|2026-07-06', clientOrderId: 'cid-2',
+      mode: 'dry-run' as const, intentKey: `mB|SELL|time_stop|${RECENT_TRADE_DATE}`, clientOrderId: 'cid-2',
       marketId: 'mB', tokenId: 'tokB', side: 'SELL' as const, purpose: 'time_stop' as const,
-      orderType: 'FAK' as const, price: 0.2, size: 26, tradeDate: '2026-07-06',
+      orderType: 'FAK' as const, price: 0.2, size: 26, tradeDate: RECENT_TRADE_DATE,
     };
     expect(await ledger.reserveIntent(intent)).toBe('reserved');
     await ledger.recordPlaced('cid-2', 'venue-2');
@@ -232,8 +240,8 @@ describe('makeTradingDb ⋈ the real 0082 RPCs (PGlite)', () => {
   it('listOpenEntryRows enumerates exactly the open BUY/entry rows: filled kept, canceled/SELL/other-mode/stale-date excluded', async () => {
     const ledger = rpcOrderLedger(tdb);
     // a live-mode entry (other mode), a canceled entry, and a stale-dated entry — all must be excluded
-    await ledger.reserveIntent({ mode: 'live', intentKey: 'mC|BUY|entry|2026-07-06', clientOrderId: 'cid-3', marketId: 'mC', tokenId: 'tokC', side: 'BUY', purpose: 'entry', orderType: 'GTC', price: 0.1, size: 10, tradeDate: '2026-07-06' });
-    await ledger.reserveIntent({ mode: 'dry-run', intentKey: 'mD|BUY|entry|2026-07-06', clientOrderId: 'cid-4', marketId: 'mD', tokenId: 'tokD', side: 'BUY', purpose: 'entry', orderType: 'GTC', price: 0.1, size: 10, tradeDate: '2026-07-06' });
+    await ledger.reserveIntent({ mode: 'live', intentKey: `mC|BUY|entry|${RECENT_TRADE_DATE}`, clientOrderId: 'cid-3', marketId: 'mC', tokenId: 'tokC', side: 'BUY', purpose: 'entry', orderType: 'GTC', price: 0.1, size: 10, tradeDate: RECENT_TRADE_DATE });
+    await ledger.reserveIntent({ mode: 'dry-run', intentKey: `mD|BUY|entry|${RECENT_TRADE_DATE}`, clientOrderId: 'cid-4', marketId: 'mD', tokenId: 'tokD', side: 'BUY', purpose: 'entry', orderType: 'GTC', price: 0.1, size: 10, tradeDate: RECENT_TRADE_DATE });
     await ledger.recordCanceled('cid-4');
     await ledger.reserveIntent({ mode: 'dry-run', intentKey: 'mE|BUY|entry|2026-05-01', clientOrderId: 'cid-5', marketId: 'mE', tokenId: 'tokE', side: 'BUY', purpose: 'entry', orderType: 'GTC', price: 0.1, size: 10, tradeDate: '2026-05-01' });
     await pg.query(`update live_orders set trade_date = (now() - interval '30 days')::date where client_order_id = 'cid-5'`);
@@ -246,7 +254,7 @@ describe('makeTradingDb ⋈ the real 0082 RPCs (PGlite)', () => {
     expect(ids).not.toContain('mD'); // canceled
     expect(ids).not.toContain('mE'); // outside the lookback
     const mA = open.find((r) => r.marketId === 'mA')!;
-    expect(mA).toEqual({ marketId: 'mA', tokenId: 'tokA', tradeDate: '2026-07-06' }); // date as YYYY-MM-DD text
+    expect(mA).toEqual({ marketId: 'mA', tokenId: 'tokA', tradeDate: RECENT_TRADE_DATE }); // date as YYYY-MM-DD text
 
     const live = await tdb.listOpenEntryRows('live');
     expect(live.map((r) => r.marketId)).toEqual(['mC']);
