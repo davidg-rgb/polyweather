@@ -1,5 +1,11 @@
-# EDGE-WATCH-LOOP — continuous evaluation (v17)
+# EDGE-WATCH-LOOP — continuous evaluation (v18)
 
+> **v18 (2026-07-16, operator-instructed): MULTI-DAY AUTONOMOUS SESSION.** The operator's standing order:
+> "long build session across multiple days … autonomous fixing machine that makes sure this project works";
+> he connects remotely on occasion. Everything in v17 stands; v18 adds the **Cycle rota** below (run every
+> self-paced wakeup) + explicit escalation rules + a calm-day build queue. Idle is still correct — but
+> broken is fixed without waiting.
+>
 > **What this is.** The v17 EDGE-WATCH loop (started 2026-07-10, from the strategic-fork answer in
 > `FASTTRACK-PLAN.md`): **forward adjudication + structural tripwires + the new-idea filter — nothing else.**
 > The prior is settled and not re-litigated: twelve of twelve signals dead (`FINDINGS.md`); BREAKEVEN-SKILL
@@ -15,6 +21,87 @@
 
 _Claude keeps this block current every material cycle. Whole status in 20 seconds._
 
+- **▶▶ C19 (2026-07-16 ~13:45Z, operator-instructed) — MULTI-DAY AUTONOMOUS SESSION STARTED (v18).**
+  The loop now self-paces around the clock: every wakeup runs the **Cycle rota** (section below), fixes
+  breakage within the escalation rules, and works the calm-day build queue when all green. **C19 baseline
+  ALL-GREEN:** jobs 24h clean (1 transient metar fail 07-15 17:34, 47 ok since; buy-table-tick 144/144;
+  every C15 lane on schedule), 0 live orders beyond the reconciled 07-12 row (0 live fills ever), lane
+  inert on the expired override exactly as designed, Slack dark per C16.
+  - **Yours (surfaced, not acted):** ① **override renewal from /trading — the ONLY closed gate**; after a
+    renewal the first natural candidate window is ~00:00–10:00Z (any day), and at cap 0.40 three of the
+    four cities were admitted on 07-16 prices. ② **price_cap still 0.40** (C18b: you lower it yourself —
+    I re-surface this every day until it changes, per your instruction). ③ **active_until 2026-07-20** —
+    the run-window closes then; bump it from /trading if the lane should keep hunting past it. ④ Slack
+    stays dark until your word (restore string in ⚑ C16).
+  - **Storage watch OPENED: `opening_captures` is 832 MB** (75 MB after the 07-07 prune → ~85 MB/day
+    regrowth; DB total 2,376 MB; next tiers market_snapshots 432 MB, bucket_probabilities 346 MB). The
+    C96 dump→prune→VACUUM-FULL playbook stands ready; if it threatens the Micro before you're back I
+    archive-verify-then-prune off-peak and log it here first.
+  - **↳ C19a (~14:00Z): REAL BREAKAGE FOUND + FIXED — the efficiency-monitor Action died 07-15 AND
+    07-16** (both days' snapshots lost, accrual stalled since 07-14). Root cause: GitHub's scheduled-run
+    drift (2–3.5h; fires landed ~08:35Z) put the start inside the script's own reserved :32–:42 UTC
+    window, whose guard HARD-THREW. Fixed: the guard now waits until :43 (bounded ≤11 min; +5 tests);
+    recovered today by manual dispatch → **snapshot id=9 as-of 07-16: S1 KILL n=4,742 · S2 12 troughs**
+    (nothing lost — the walk is cumulative, the missed days folded in). Fix must live on main →
+    **PR #23** (also ships the deployed C18 build, closing the main-vs-prod drift). City race verified
+    same cycle: 13:50Z -b fired on the second, ankara ×2 placed.
+- **▶▶ C18 (2026-07-16 ~11:05–12:00Z, operator IN-SESSION: "today we verify functionality") — "no buys
+  recognized" TROUBLESHOT → NOTHING BROKEN; verification tooling shipped; one config revert + one ledger
+  reconcile, both operator-instructed.**
+  - **Why no buys — two independent gates, both by design:** ① the C17 planned lapse LANDED — the override
+    expired 07-15 00:00Z, so `trade_live_preflight('buy-table')` fails on exactly that one reason (everything
+    else green: mode live, window 07-20, loss $0); ② the tick has had **0 candidates every tick anyway** —
+    the [2,12]h lead window is a mid-day-UTC dead zone for the 4 allowlisted cities (their markets sit at
+    ~0.6 / 24.6 / 48.6h to close; the window populates only ~00:00–10:00Z, and at the 15¢ cap no natural
+    candidate has EVER appeared). The tick itself is healthy: every */10 fire ok, degraded:false.
+  - **NEW REMOTE CHECK TOOL (committed `86c5c3e`): `pnpm tsx scripts/diag-buy-lane.ts`** — read-only,
+    one command, prints CAN-A-BUY-HAPPEN-NOW + the interlock reasons + the per-market skip funnel (reuses
+    the tick's OWN selector — zero drift) + the next-window estimate + dangling intents. Use it FIRST for
+    any future "why no buys". (+ fixed a pre-existing suite time-bomb: trading-db.test.ts's hardcoded
+    07-06 seeds aged out of the 7-day lookback — red daily since ~07-13; seeds now track the constant.
+    Suite 3211 green.)
+  - **Local credential smoke PASS** (safe steps 1–3): creds derive (sigType 2, funder SET), authenticated
+    read OK, 0 open orders at venue → the 07-12 shapeless-post root cause (missing sig-type/funder) is
+    FIXED in `.env.local`; **the EDGE-secret copy stays unproven until the first clean live post.**
+  - **The 07-12 stuck shanghai intent RECONCILED** `intent→failed` via `bot_order_record_failed`
+    (operator-authorized in-session; venue-confirmed nothing resting; market long resolved) — open
+    exposure $4.95→$0, dangling intents 0, audit reason on the row.
+  - **`buy_table.price_cap` 0.33 → 0.15 REVERTED** (operator-instructed; the 0.33 was the operator's own
+    phone-side probe while racing the 07-12 issue — the block was never price, it's the lead window).
+  - **OPERATOR — to verify a live buy today:** ① renew the gate override from /trading (≤14d) — the ONLY
+    closed gate; ② optional write-path proof, local: `pnpm tsx scripts/trade-smoke.ts --live-smoke
+    --i-know-no-preflight` (needs TRADE_MODE=live in `.env.local`; ~$0 place+cancel far from market);
+    ③ next natural candidate window opens ~**2026-07-17 00:00Z** — and at 15¢ a natural candidate is rare,
+    so if today MUST see a strategy buy, the honest lever is a temporary lead/cap widening (your call,
+    revert after).
+  - **↳ C18b (07-16 ~12:20Z, operator-instructed): `buy_table.price_cap` raised 0.15 → 0.40 TEMPORARILY
+    for the verification** ("increase cap for today, I'll lower it myself later — viable entry point given
+    the cities min"). Basis, measured off the live captures at ~12:10Z: tonight's-window (07-17) predicted-
+    bucket asks houston 0.32 · shanghai 0.35 · mexico-city 0.36 · karachi 0.49 → min 0.32 + drift headroom
+    = 0.40 (admits 3/4 cities on current prices; karachi's 49¢ favorite excluded; worst case 4×$5=$20,
+    inside the $25/$30 kills). **⚑ THE OPERATOR LOWERS IT BACK — if this note is stale and the cap still
+    reads 0.40, surface it.** A live buy tonight still additionally needs the override renewal (his click).
+  - **↳ C18c (07-16 ~14:20Z, operator-instructed): the ENTRY RULES shipped (migration 0102 + handler +
+    REDEPLOYED to prod)** — "if trade fails → reset and get the next entry; if trade successful → no
+    further buying trials." Rule 1: `buy_table.max_entry_attempts` (LIVE `3`, default `1` = the old
+    one-EVER gate) — only PROVABLY-dead attempts retry (clean-rejection `failed` / zero-fill `canceled`);
+    unknown-state rows (stuck `intent`, unfilled `placed` — the needs-reconcile classes) still always
+    block, so the 07-12 double-place discipline holds. Rule 2: `buy_table.stop_after_first_success`
+    (LIVE `true`) — the first REAL fill halts all further entries, including same-tick; visible as
+    `stats.laneHalted` + a by-design blocker in the diag tool. Defaults reproduce the original lane
+    exactly (both flags are the operator's to flip back, no redeploy needed — config is read per tick).
+    Suite 3,220 green; deploy verified on the next scheduled tick.
+- **▶▶ C17 (2026-07-12 ~15:10Z) — OPERATOR DECISION: the live lane's dates LAPSE NATURALLY (no renewal);
+  everything else runs and collects.** Per the pre-absence recommendation: the gate override expires
+  **07-15 00:00Z** and `active_until` **07-20** — neither will be renewed; the lane keeps hunting (unpaged,
+  Slack dark) until 07-15, then goes quietly inert by design (ticks keep running, candidates skip at
+  preflight; preflight-skip alerts are suppressed unrecorded under C16, so nothing accumulates). Nothing is
+  cleared early — the remaining ~2.5 live days stand as authorized. **All data collection continues
+  unattended:** opening-capture (5-min, 45 cities), buy-table-tick, §12-R city race (runway 09-30 ×4 cities),
+  google panel hourly, whale/metar/poll on the C15 lanes, efficiency-monitor Action 06:17Z. To revive the
+  live lane later: /trading → gate-override panel (≤14d) + bump active_until — both remote, both yours.
+  (Also resolved: the 07-11 ankara allowlist drop was confirmed INTENTIONAL — [houston, karachi,
+  mexico-city, shanghai] is the intended set.)
 - **▶▶ C16 (2026-07-12 ~14:45Z) — ALL SLACK POSTS HALTED (your order: "halt all slack posts … until I tell you
   otherwise").** `alerts_slack_paused` was already `true`; the 14-kind allowlist that pushed through it is now
   EMPTY (`alerts_slack_allow_kinds=''`) → every kind (digest, deadmen, buy-table/order CRITICALs) is skipped
@@ -30,7 +117,7 @@ _Claude keeps this block current every material cycle. Whole status in 20 second
   measurement fidelity kept (google replay is deterministic over stored captures; the buy-table lane + google
   panel read opening_captures, whose 5-min capture cadence is UNTOUCHED). Rollback lines in cycle log C15.
 - **▶▶ C14 (2026-07-12, operator-requested pre-absence verification) — the system is REMOTE-OPERABLE; two
-  renewal dates are YOURS while away:**
+  renewal dates are YOURS while away: ← SETTLED at C17 (operator: let both lapse; see ▶▶ C17 above)**
   1. **Gate override expires 07-15 00:00Z** — the live lane's gate branch fails then (run window alone is not
      enough). **You can now renew it FROM /trading**: the new "gate override" panel (under Interlock gate)
      sets/renews/clears via `trade_gate_override_set` (≤14d per renewal, confirmed + audited). `active_until`
@@ -127,6 +214,41 @@ _Claude keeps this block current every material cycle. Whole status in 20 second
      silent-pause gotcha doesn't eat the ledger if you still want it accruing.
 - **Nothing needs you right now beyond #1** (and #1 only costs unaccrued Houston/Ankara data-days while it waits).
 
+## Cycle rota (v18 — run every wakeup, in this order)
+
+1. **Buy lane (highest priority).** `job_runs` buy-table-tick clean since last cycle; any new
+   `live_orders` rows with `strategy='buy-table'`; override state (has the operator renewed?). **If a
+   real post/fill appears** — the first ever — that becomes the cycle's whole job: verify ledger
+   transitions, caps honored, `stop_after_first_success` halt (`stats.laneHalted`), zero-fill FAK
+   adjudication (C18d F1), no dangling intents; then track it to grading. For any "why no buys":
+   `pnpm tsx scripts/diag-buy-lane.ts` FIRST (read-only, one command).
+2. **Cron/job health.** `job_runs` failures last 24h ≈ 0 (a failed daily re-fires same day — verify
+   attempt 2 landed); deadmen quiet; efficiency-monitor Action fired 06:17Z (`gh run list`; on a skip,
+   manual-dispatch — C2 precedent).
+3. **Storage (~daily).** DB + top-table sizes. Alarm bars: DB > 3.5 GB or `opening_captures` > 2 GB →
+   run the C96 archive→prune→VACUUM-FULL playbook off-peak, archive verified before any delete, board
+   log first. Baseline C19: DB 2,376 MB · captures 832 MB (~85 MB/day).
+4. **Forward instruments.** City race: 10:00/13:50/20:45Z lanes placed + grading current. Google panel
+   accruing toward n≥40. Efficiency-monitor S1/S2 verdict drift. `/paper-trade`, `/monitor` RPCs healthy.
+5. **Tripwires.** ⑤ (trade_config.mode) every cycle; ①–④ sweep every ~2–3 days.
+6. **Watch items.** price_cap 0.40 → re-surface daily until the operator lowers it · active_until
+   07-20 → surface before expiry (his call to bump) · city_sim_config runway 09-30 → surface ~09-25.
+7. **Calm-day build queue (all-green cycles only, in order).** ① **F4 cloud reconcile sweep** (C18d:
+   stuck `intent`/`placed` rows have no cloud sweep — the daemon's startup sweep never ported; port it
+   into the tick at `reconcileEveryTicks` cadence, full tests, deploy on a quiet tick). ② opening_captures
+   archive prep (dump tooling dry-run so the prune is one command when needed). ③ Anything newly broken
+   beats the queue. Suite + typecheck green after every change; board updated every material cycle.
+
+**Escalation rules.** *Autonomous (do, then log):* code/test/cron fixes, edge-fn redeploys with in-session
+precedent (buy-table-tick, health-monitor, daily-digest), failed-daily re-runs, GH Action manual dispatch,
+docs/commits on this branch, read-only DB/venue checks. *Operator-only (surface, never act):* gate
+override, mode, caps/price_cap, active_until, allowlist, Slack re-enable, anything placing/canceling
+orders, credentials, capital. *Hard never:* trade, touch keys, re-enable Slack without his word.
+
+**Pacing.** Self-paced wakeups (≤1h apart by clamp). Quiet: ~60 min. Event windows (a renewal lands, the
+00:00–10:00Z candidate stretch while armed, a first fill, an incident, a deploy): 15–30 min. Scheduled
+checkpoints to align on: 06:17Z Action · 10:00/13:50/20:45Z city ticks · 07:00Z digest job.
+
 ## State snapshot (C1 baseline, 2026-07-09 ~23:30Z)
 
 - **Efficiency monitor (Lane 1①):** 3 snapshots; latest as-of 07-09: **S1 KILL** — n=3,530 / 45 cities /
@@ -145,10 +267,66 @@ _Claude keeps this block current every material cycle. Whole status in 20 second
 | ② | Polymarket fee/rebate/rewards program | a program flip at the root (REC-8 lineage, like the 06-24 rewards funding) | no signal; whale-watch+Slack cover the big-print side | 07-10 C1 |
 | ③ | New-instrument volume (precip/wind/snow) | ~10× regime change vs the $802/24h read (floor $7k, signal #9) | not swept C1 (occasional) | — |
 | ④ | Cross-venue true both-book depth | growth vs the 1–10-contract KILL read (#10) | not swept C1 (occasional) | — |
-| ⑤ | trade_config.mode | anything ≠ off/dry-run → fold v16 Phase-C monitoring in as a lane | **`live` — OPERATOR-SET 07-11 12:56Z** (authorized live test, not a reopen). Still inert: active_until null + no gate PASS/override + daemon not running (ledger last wrote 07-07, 0 live rows). Phase-C monitoring folds in the moment the daemon actually runs live. | 07-11 C11 |
+| ⑤ | trade_config.mode | anything ≠ off/dry-run → fold v16 Phase-C monitoring in as a lane | **`live` — OPERATOR-SET 07-11 12:56Z** (authorized live test, not a reopen). C18 state: mode live + window 07-20 BUT the override expired 07-15 (C17 planned lapse) → preflight fails → lane inert as designed; 0 live posts ever (the one 07-12 attempt failed shapeless, reconciled `failed` at C18). C19: unchanged — mode live, override expired + not renewed, 0 live posts. | 07-16 C19 |
 
 ## Cycle log
 
+- **C19 (2026-07-16 ~13:45Z) — v18 MULTI-DAY AUTONOMOUS SESSION INIT + baseline.** Operator instruction
+  (in-session): prepare a multi-day self-running loop — "evaluate current build, current buys, data
+  storage etc … autonomous fixing machine that makes sure this project works"; he checks in remotely.
+  Wrote the v18 rota/escalation/build-queue (sections above). Baseline reads (light selects): trade_config
+  mode live · window 07-20 · allowlist 4 cities · $5 · caps 25/40/100 · kill 30/25%; buy_table cap **0.40**
+  (C18b temp stands) · attempts 3 · stop_after_first_success true · lead [2,12]h · tick enabled; override
+  EXPIRED 07-15 not renewed (lane inert by design); Slack paused + allowlist '' (C16 holds); jobs 24h all
+  ok except 1 transient metar fail 07-15 17:34Z (47 ok since); live_orders = only the reconciled 07-12 row,
+  0 live fills ever; **storage: DB 2,376 MB, opening_captures 832 MB regrown from 75 MB post-07-07-prune
+  (~85 MB/day) → standing watch item #3 in the rota**, market_snapshots 432 MB, bucket_probabilities
+  346 MB, job_runs 28 MB. Boundary intact: read-only cycle, docs-only commit.
+  **↳ C19a (~13:40–14:05Z) — efficiency-monitor Action 2-day failure ROOT-CAUSED + FIXED + RECOVERED.**
+  `gh run list` showed schedule fires 07-15 08:36Z + 07-16 08:35Z both failed in ~16–20s; log tail =
+  the script's OWN reserved-window guard (`:32–:42` hard-throw at efficiency-monitor-run.ts:198). The
+  06-17Z cron drifts 2–3.5h under GitHub congestion (07-13 09:48 ok · 07-14 08:28 ok · 07-15/16 ~08:35
+  DEAD — ~50% daily loss odds). Fix: extracted `reservedWindowWaitMs()` (pure, 5 tests) — the guard now
+  sleeps to :43 instead of dying; yml header documents drift-vs-drop. Recovery dispatch 13:44Z succeeded
+  (44s) → snapshot id=9 as-of 07-16 (S1 KILL n=4,742 — up from 3,735 at C11, null tightening; S2 12
+  troughs, was 10). Typecheck + new tests green. **PR #23 → main** (squash; carries the whole C18 build
+  — prod Edge already runs it, main lagged). Also verified this cycle: 13:50Z -b tick ok (ankara ×2),
+  false-alarm on "missed -b" was local clock skew (DB now() is authoritative — use it, not local time). — OPERATOR IN-SESSION: "no buys recognized" troubleshoot + "today we
+  verify functionality".** Full detail in ⚑ C18. Facts established: the C17 lapse landed exactly as designed
+  (override expired 07-15 00:00Z; preflight fails on that single reason; mode/window/loss all green);
+  independently the tick has 0 candidates every tick — lead-window dead zone (~00:00–10:00Z is the only
+  populated stretch for the 4 cities) and 0-ever at the 15¢ cap. Actions: built + committed
+  `scripts/diag-buy-lane.ts` (+10 tests; read-only remote verdict tool, reuses the tick's own selector);
+  fixed the trading-db.test.ts stale-date time-bomb (red daily since ~07-13; suite back to 3211 green);
+  ran the SAFE credential smoke (PASS: sigType 2 + funder set + authenticated read — the 07-12 root cause
+  fixed locally, Edge copy unproven until a clean post); reconciled the 07-12 stuck shanghai intent
+  `intent→failed` (operator-authorized; venue-confirmed 0 open; exposure $4.95→$0); reverted
+  `buy_table.price_cap` 0.33→0.15 (operator-instructed — the 0.33 was the operator's phone probe).
+  Boundary intact: no trade placed, no keys touched, no authorization extended (the override renewal
+  stays the operator's click; the `--live-smoke` write-path probe left for the operator to run).
+  **↳ C18b (~12:20Z): cap raised 0.15→0.40 TEMPORARILY on operator instruction** (verification day; he
+  lowers it himself later) — sized off measured tonight's-window predicted-bucket asks (min houston 0.32
+  + headroom; karachi 0.49 excluded; see ⚑ C18b). Watch item: if the cap still reads 0.40 in a later
+  cycle, surface it to the operator.
+  **↳ C18c (~14:20Z): the operator's entry rules BUILT + DEPLOYED** (0102 + deriveEntryGate + redeploy;
+  see ⚑ C18c): retry-after-provably-dead-failure (max 3 attempts/market, unknown-state rows still hard-block)
+  + halt-all-buying-after-first-fill (live `true`). Live config: cap 0.40 · attempts 3 · stop-on-success on.
+  Suite 3,220 green, typecheck clean. Boundary intact: config + code only, operator-instructed; the override
+  renewal (the actual arming click) remains his.
+  **↳ C18d (~14:40Z, operator-requested code review of the C18 build) — 2 real defects found in C18c,
+  FIXED + REDEPLOYED same cycle:** **F1 (HIGH)**: a zero-fill FAK (the most likely live failure — ask
+  drifts above worstPrice between the 5-min capture and the post; FAK dies at post) landed as `placed`/0
+  = unknown-state = PERMANENT market block — rule 1 would never have fired on it. Fix: in-tick
+  adjudication to `canceled` (poll-verified dead by the FAK contract) → retryable; `stats.zeroFillAdjudicated`.
+  **F2 (MEDIUM)**: an ambiguous post failure (ERR_CLOB/ERR_CLOB_POST — possible hidden fill) let the same
+  tick keep buying seconds later; with stop-on-success on it now halts the tick's remainder
+  (`stats.haltedOnAmbiguous`); clean rejections/pre-venue throws still continue (rule 1). **F3 (LOW)**:
+  stats now echo `stopOnFirstSuccess`. Known gap ISOLATED not fixed (F4): the cloud lane has no reconcile
+  sweep for stuck intent/placed rows (the daemon's startup sweep never ported) — rare, diag-visible,
+  deliberate no-rush pre-window; candidate for a calm-day port. +3 tests (36 handler total), suite
+  **3,223 green**, redeployed ~14:37Z, tick-verified. Everything else in the C18 build verified clean
+  (gate defaults = legacy byte-exact, strategy scoping, no attempt burn on preflight-block, migration
+  idempotency, diag shares the gate).
 - **C16 (2026-07-12 ~14:40Z) — OPERATOR: "halt all slack posts … until I tell you otherwise" → TOTAL Slack
   silence applied.** Lever: `alerts_slack_allow_kinds` `'DAILY_DIGEST,…,ORDER_NEEDS_RECONCILE'` (the 0092+0095
   14-kind routing table, verbatim restore string in the ⚑ block) → `''`, with `alerts_slack_paused` staying
@@ -220,6 +398,8 @@ _Claude keeps this block current every material cycle. Whole status in 20 second
   (arms table) separately INERT: `city_live_arms` is empty on prod. Tripwire ⑤ updated (operator-authorized,
   not a reopen). Watch item: **ankara was dropped from the allowlist at 13:57Z** — flagged to the operator as
   possibly accidental (the paper §12-R race is unaffected; the allowlist only gates the live daemon).
+  **↳ RESOLVED (07-12, operator): the ankara drop was ON PURPOSE — allowlist [houston, karachi, mexico-city,
+  shanghai] is the intended set; do not re-flag.**
 - **C10 (2026-07-11 ~13:20Z) — OPERATOR: allowlist picker REGRESSION (0093's UI was narrower than the DB) →
   fixed via 0094 (APPLIED); day-1 verifications part-done.** The operator could not add ANY new city to the
   /trading buying allowlist: the 0093 checkbox picker's options came from `dash_city_live().arms` — and prod's

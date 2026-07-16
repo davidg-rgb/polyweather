@@ -128,6 +128,7 @@ function makeMockDb(state: MockDbState): DbPort & { calls: Array<{ fn: string; a
         case 'bot_order_record_placed':
         case 'bot_order_record_fill':
         case 'bot_order_record_failed':
+        case 'bot_order_record_canceled':
           return [] as unknown as T[];
         case 'bot_order_record_resolution_loss':
           return [
@@ -169,9 +170,13 @@ function makeMockClient(): MakerClobClientish & { postCalls: number } {
   return client;
 }
 
-function harness(state: MockDbState, tradeMode: string | undefined) {
+function harness(
+  state: MockDbState,
+  tradeMode: string | undefined,
+  clientOverride?: Partial<ReturnType<typeof makeMockClient>>,
+) {
   const db = makeMockDb(state);
-  const client = makeMockClient();
+  const client = Object.assign(makeMockClient(), clientOverride);
   const alerts: TradeAlert[] = [];
   const logs: Array<{ msg: string; extra?: Record<string, unknown> }> = [];
   const ctx: JobCtx = {
@@ -199,17 +204,29 @@ const reservesOf = (db: { calls: Array<{ fn: string; args: Record<string, unknow
 // parseBuyTableConfig
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 describe('parseBuyTableConfig', () => {
-  it('falls back to the 0095 defaults and honors overrides', () => {
+  it('falls back to the 0095/0102 defaults and honors overrides', () => {
     expect(parseBuyTableConfig([])).toEqual({
       priceCap: 0.15, leadMaxH: 12, leadMinH: 2, tickEnabled: true, cityRanges: {},
+      maxEntryAttempts: 1, stopAfterFirstSuccess: false,
     });
     expect(
       parseBuyTableConfig([
         { key: 'buy_table.price_cap', value: '0.10' },
         { key: 'buy_table.lead_max_h', value: '24' },
         { key: 'buy_table.tick_enabled', value: 'false' },
+        { key: 'buy_table.max_entry_attempts', value: '3' },
+        { key: 'buy_table.stop_after_first_success', value: 'true' },
       ]),
-    ).toEqual({ priceCap: 0.1, leadMaxH: 24, leadMinH: 2, tickEnabled: false, cityRanges: {} });
+    ).toEqual({
+      priceCap: 0.1, leadMaxH: 24, leadMinH: 2, tickEnabled: false, cityRanges: {},
+      maxEntryAttempts: 3, stopAfterFirstSuccess: true,
+    });
+  });
+
+  it('0102: a zero/negative/fractional max_entry_attempts hand-edit falls back FAIL-SAFE to 1', () => {
+    for (const bad of ['0', '-2', '1.5', 'x']) {
+      expect(parseBuyTableConfig([{ key: 'buy_table.max_entry_attempts', value: bad }]).maxEntryAttempts).toBe(1);
+    }
   });
 
   it('0097: parses buy_table.city_price_ranges into slug-keyed cityRanges (normalized lower/trim)', () => {
@@ -323,8 +340,8 @@ describe('buy-table-tick — the lead window (C25 sweet-spot, [lead_min_h, lead_
   });
 });
 
-describe('buy-table-tick — one entry per market EVER (no re-entry, no chase)', () => {
-  it('a prior entry row — even a terminal failed one — blocks a re-entry', async () => {
+describe('buy-table-tick — one entry per market EVER (the DEFAULT gate, 0102 rules off)', () => {
+  it('a prior entry row — even a terminal failed one — blocks a re-entry at the default max_entry_attempts=1', async () => {
     const marketId = 'c-ev-1-1';
     const intentKey = orderIntentKey({ marketId, side: 'BUY', purpose: 'entry', tradeDate: '2026-07-11' });
     const h = harness(
@@ -341,6 +358,187 @@ describe('buy-table-tick — one entry per market EVER (no re-entry, no chase)',
     expect(stats.candidates).toBe(0);
     expect(reservesOf(h.db).length).toBe(0);
     expect(h.logs.some((l) => l.msg === 'buy-table.skip' && /already_entered/.test(String(l.extra?.reason)))).toBe(true);
+  });
+});
+
+describe('buy-table-tick — the 0102 entry rules (verification semantics)', () => {
+  const marketId = 'c-ev-1-1';
+  const intentKey = orderIntentKey({ marketId, side: 'BUY', purpose: 'entry', tradeDate: '2026-07-11' });
+  const row = (status: string, sizeMatched = 0): BuyTableEntryRow => ({
+    marketId, tokenId: 'y-ev-1-1', tradeDate: '2026-07-11', intentKey, status, sizeMatched,
+  });
+  const RETRY3 = [{ key: 'buy_table.max_entry_attempts', value: '3' }];
+
+  it('rule 1: a PROVABLY-dead attempt (clean-rejection failed row) is RETRIED under max_entry_attempts=3', async () => {
+    const h = harness(
+      { mode: 'off', configRows: RETRY3, captures: [capture({ eventId: 'ev-1', ask: 0.12, hoursToClose: 6 })], entries: [row('failed')] },
+      'dry-run',
+    );
+    const stats = await buyTableTick(h.ctx, h.deps);
+    expect(stats.candidates).toBe(1);
+    expect(reservesOf(h.db).length).toBe(1);
+  });
+
+  it('rule 1: a zero-fill canceled row is also retryable; the attempt CAP still ends it (3 rows ≥ 3)', async () => {
+    const one = harness(
+      { mode: 'off', configRows: RETRY3, captures: [capture({ eventId: 'ev-1', ask: 0.12, hoursToClose: 6 })], entries: [row('canceled')] },
+      'dry-run',
+    );
+    expect((await buyTableTick(one.ctx, one.deps)).candidates).toBe(1);
+
+    const capped = harness(
+      {
+        mode: 'off', configRows: RETRY3,
+        captures: [capture({ eventId: 'ev-1', ask: 0.12, hoursToClose: 6 })],
+        entries: [row('failed'), row('failed'), row('failed')],
+      },
+      'dry-run',
+    );
+    const stats = await buyTableTick(capped.ctx, capped.deps);
+    expect(stats.candidates).toBe(0);
+    expect(capped.logs.some((l) => l.msg === 'buy-table.skip' && /already_entered/.test(String(l.extra?.reason)))).toBe(true);
+  });
+
+  it('rule 1 boundary: UNKNOWN-state rows (stuck intent / unfilled placed) ALWAYS block, retries or not', async () => {
+    for (const unknown of [row('intent'), row('placed', 0)]) {
+      const h = harness(
+        { mode: 'off', configRows: RETRY3, captures: [capture({ eventId: 'ev-1', ask: 0.12, hoursToClose: 6 })], entries: [unknown] },
+        'dry-run',
+      );
+      const stats = await buyTableTick(h.ctx, h.deps);
+      expect(stats.candidates).toBe(0);
+      expect(reservesOf(h.db).length).toBe(0);
+    }
+  });
+
+  it('rule 1 boundary: a market with a REAL fill (position) is never re-entered, retries or not', async () => {
+    const h = harness(
+      { mode: 'off', configRows: RETRY3, captures: [capture({ eventId: 'ev-1', ask: 0.12, hoursToClose: 6 })], entries: [row('filled', 33)] },
+      'dry-run',
+    );
+    const stats = await buyTableTick(h.ctx, h.deps);
+    expect(stats.candidates).toBe(0);
+  });
+
+  it('rule 2: a fill ANYWHERE in the mode + stop_after_first_success halts ALL new entries (fresh market skipped)', async () => {
+    const otherKey = orderIntentKey({ marketId: 'c-other-1', side: 'BUY', purpose: 'entry', tradeDate: '2026-07-10' });
+    const h = harness(
+      {
+        mode: 'off',
+        configRows: [{ key: 'buy_table.stop_after_first_success', value: 'true' }],
+        captures: [capture({ eventId: 'ev-1', ask: 0.12, hoursToClose: 6 })],
+        entries: [
+          { marketId: 'c-other-1', tokenId: 'y-other', tradeDate: '2026-07-10', intentKey: otherKey, status: 'filled', sizeMatched: 41 },
+        ],
+      },
+      'dry-run',
+    );
+    const stats = await buyTableTick(h.ctx, h.deps);
+    expect(stats.laneHalted).toBe(true);
+    expect(stats.candidates).toBe(0);
+    expect(stats.dryRun).toBe(0);
+    expect(reservesOf(h.db).length).toBe(0);
+    expect(h.logs.some((l) => l.msg === 'buy-table.skip' && /lane_halted/.test(String(l.extra?.reason)))).toBe(true);
+  });
+
+  it('rule 2 in-tick: the FIRST live fill stops the same tick\'s remaining candidates (one buy, then quiet)', async () => {
+    const h = harness(
+      {
+        mode: 'live',
+        preflightOk: true,
+        configRows: [{ key: 'buy_table.stop_after_first_success', value: 'true' }],
+        captures: [
+          capture({ eventId: 'ev-1', ask: 0.12, hoursToClose: 6 }),
+          capture({ eventId: 'ev-2', ask: 0.12, hoursToClose: 7 }),
+        ],
+      },
+      'live',
+    );
+    const stats = await buyTableTick(h.ctx, h.deps);
+    // the mock venue fills the first FAK (getOrder → matched) → the second candidate is never posted
+    expect(stats.placed).toBe(1);
+    expect(stats.laneHalted).toBe(true);
+    expect(h.client.postCalls).toBe(1);
+    expect(reservesOf(h.db).length).toBe(1);
+    expect(h.logs.some((l) => l.msg === 'buy-table.skip' && /lane_halted — first successful buy/.test(String(l.extra?.reason)))).toBe(true);
+  });
+
+  it('F1: a poll-verified ZERO-FILL FAK is adjudicated canceled in-tick (retryable) and does NOT halt the lane', async () => {
+    const h = harness(
+      {
+        mode: 'live', preflightOk: true,
+        configRows: [{ key: 'buy_table.stop_after_first_success', value: 'true' }, ...RETRY3],
+        captures: [
+          capture({ eventId: 'ev-1', ask: 0.12, hoursToClose: 6 }),
+          capture({ eventId: 'ev-2', ask: 0.12, hoursToClose: 7 }),
+        ],
+      },
+      'live',
+      // the venue accepts the FAK but matches NOTHING (ask moved) — Fill-And-Kill dies at post
+      { getOrder: async () => ({ status: 'canceled', original_size: 41, size_matched: 0 }) },
+    );
+    const stats = await buyTableTick(h.ctx, h.deps);
+    expect(stats.zeroFillAdjudicated).toBe(2); // both zero-fills adjudicated → both markets retryable next tick
+    expect(stats.laneHalted).toBe(false); // no fill happened — rule 2 must NOT trigger
+    expect(stats.haltedOnAmbiguous).toBe(false);
+    expect(h.db.calls.filter((c) => c.fn === 'bot_order_record_canceled').length).toBe(2);
+    expect(reservesOf(h.db).length).toBe(2); // no halt — the lane moved to the next candidate
+  });
+
+  it('F2: an AMBIGUOUS post failure (shapeless venue response — possible hidden fill) HALTS the tick', async () => {
+    const h = harness(
+      {
+        mode: 'live', preflightOk: true,
+        configRows: [{ key: 'buy_table.stop_after_first_success', value: 'true' }],
+        captures: [
+          capture({ eventId: 'ev-1', ask: 0.12, hoursToClose: 6 }),
+          capture({ eventId: 'ev-2', ask: 0.12, hoursToClose: 7 }),
+        ],
+      },
+      'live',
+      { postOrder: async () => ({}) }, // no orderID, no explicit rejection → ERR_CLOB_POST (state unknown)
+    );
+    const stats = await buyTableTick(h.ctx, h.deps);
+    expect(stats.failed).toBe(1);
+    expect(stats.haltedOnAmbiguous).toBe(true);
+    expect(reservesOf(h.db).length).toBe(1); // the second candidate was never attempted
+    expect(h.alerts.some((a) => a.kind === 'BUY_TABLE_POST_FAILED')).toBe(true);
+    expect(h.alerts.some((a) => a.kind === 'ORDER_NEEDS_RECONCILE')).toBe(true);
+    expect(h.logs.some((l) => l.msg === 'buy-table.skip' && /ambiguous post failure/.test(String(l.extra?.reason)))).toBe(true);
+  });
+
+  it('F2 boundary: a CLEAN venue rejection does NOT halt — the lane moves to the next candidate (rule 1)', async () => {
+    const h = harness(
+      {
+        mode: 'live', preflightOk: true,
+        configRows: [{ key: 'buy_table.stop_after_first_success', value: 'true' }],
+        captures: [
+          capture({ eventId: 'ev-1', ask: 0.12, hoursToClose: 6 }),
+          capture({ eventId: 'ev-2', ask: 0.12, hoursToClose: 7 }),
+        ],
+      },
+      'live',
+      { postOrder: async () => ({ success: false, errorMsg: 'rejected: insufficient balance' }) },
+    );
+    const stats = await buyTableTick(h.ctx, h.deps);
+    expect(stats.failed).toBe(2); // both attempted, both cleanly rejected
+    expect(stats.haltedOnAmbiguous).toBe(false);
+    expect(reservesOf(h.db).length).toBe(2);
+  });
+
+  it('rule 2 does NOT halt on fill-less attempts (a failed row is not a success)', async () => {
+    const h = harness(
+      {
+        mode: 'off',
+        configRows: [{ key: 'buy_table.stop_after_first_success', value: 'true' }, ...RETRY3],
+        captures: [capture({ eventId: 'ev-1', ask: 0.12, hoursToClose: 6 })],
+        entries: [row('failed')],
+      },
+      'dry-run',
+    );
+    const stats = await buyTableTick(h.ctx, h.deps);
+    expect(stats.laneHalted).toBe(false);
+    expect(stats.candidates).toBe(1);
   });
 });
 
@@ -523,7 +721,10 @@ describe('buy-table-tick — hold-to-close resolution-loss booking', () => {
 // The pure helpers directly (edge shapes)
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 describe('selectBuyTableCandidates — pure edge shapes', () => {
-  const baseCfg = { priceCap: 0.15, leadMaxH: 12, leadMinH: 2, tickEnabled: true, cityRanges: {} };
+  const baseCfg = {
+    priceCap: 0.15, leadMaxH: 12, leadMinH: 2, tickEnabled: true, cityRanges: {},
+    maxEntryAttempts: 1, stopAfterFirstSuccess: false,
+  };
 
   it('skips unseeded captures (no houseProb → no forecast center to buy)', () => {
     const cap = capture({ eventId: 'ev-1', ask: 0.12, hoursToClose: 6 });

@@ -18,7 +18,9 @@
 #
 #   pnpm tsx scripts/research/efficiency-monitor-run.ts --record
 #
-# ~06:00 UTC keeps the run clear of the reserved :32–:42 cron window (the driver also guards it).
+# ~06:00 UTC keeps the run clear of the reserved :32–:42 cron window. GitHub's schedule DRIFT (2–3.5h
+# observed) can still land the start inside it — since 2026-07-16 the driver WAITS until :43 in that case
+# (the 07-15/07-16 drifted runs died on the old hard-throw and lost both days' snapshots).
 # 06:17, not 06:00 (2026-07-12): GitHub drops scheduled runs at congested round-minute slots — the 07-10
 # 06:00Z run silently skipped (loop board ⚑; new schedules are the most drop-prone) and needed a manual
 # dispatch. An off-:00 minute is the standard mitigation; nobody is around to hand-dispatch while the

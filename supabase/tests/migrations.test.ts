@@ -454,6 +454,10 @@ describe('migrations 0001–0010', () => {
       // pg_class.reltuples estimates (instant); the gap matrix re-stated as ONE set-based anti-join over the
       // p_days slice (also de-fragilizes the snapshot-forecasts tick that calls it). Payloads unchanged.
       '0101_system_health_perf.sql',
+      // 0102 = the buy-table entry rules (2026-07-16 C18c, operator verification semantics): config
+      // defaults for buy_table.max_entry_attempts ('1') + buy_table.stop_after_first_success ('false') —
+      // DML-only seeds; the gate logic lives in the handler (deriveEntryGate). Defaults = original behavior.
+      '0102_buy_table_entry_rules.sql',
     ]);
   });
 });
