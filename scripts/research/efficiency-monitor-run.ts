@@ -9,7 +9,7 @@
  *   S1 · regime + forecast cheap-subset (forward-confirms KILL-GATE 2 + C24)
  *   S2 · ladder-geometry troughs on the day-before ask ladder (forward-confirms C23-T2/T3)
  *
- * Run (outside the reserved :32-:42 UTC cron window):
+ * Run (a start inside the reserved :32-:42 UTC cron window waits until :43 automatically):
  *   pnpm tsx scripts/research/efficiency-monitor-run.ts --from 2026-04-21 --switch 2026-06-15 \
  *     --to 2026-07-08 --live-slot 10Z --leads 1,2 [--json]
  */
@@ -188,14 +188,32 @@ export async function walkMonitorEvents(args: WalkArgs, deps: { db: Db; log: (m:
   return out;
 }
 
+/**
+ * ms to wait before starting if `now` is inside the reserved :32–:42 UTC window (else 0).
+ * The window shields the C15 minute-lanes (whale :32 / metar :34 / health :37) on the Micro from this
+ * heavy full-history walk. GitHub's scheduled-run drift (2–3.5h observed) can land the daily run inside
+ * it — the guard must WAIT it out, not die: the 07-15/07-16 runs both drifted to ~08:35Z and the old
+ * hard-throw cost each day's snapshot.
+ */
+export function reservedWindowWaitMs(now: Date): number {
+  const m = now.getUTCMinutes();
+  if (m < 32 || m > 42) return 0;
+  const resume = new Date(now);
+  resume.setUTCMinutes(43, 0, 0);
+  return resume.getTime() - now.getTime();
+}
+
 const pp = (x: number): string => (Number.isFinite(x) ? (x >= 0 ? '+' : '') + (x * 100).toFixed(2) + 'pp' : 'n/a');
 const pctv = (v: { label: string; nMarkets: number; nCities: number; nDistinctDays: number; winFrac: number; meanNetReturn: number; ciLow: number; ciHigh: number; zeroSkillPassRate: number }): string =>
   `${v.label} · n=${v.nMarkets}/${v.nCities}c/${v.nDistinctDays}d · winFrac ${(v.winFrac * 100).toFixed(1)}% · net ${pp(v.meanNetReturn)} CI [${pp(v.ciLow)}, ${pp(v.ciHigh)}] · zsMC ${(v.zeroSkillPassRate * 100).toFixed(1)}%`;
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   loadEnv();
-  const minute = new Date().getUTCMinutes();
-  if (minute >= 32 && minute <= 42) throw new Error(`${SCRIPT}: inside the reserved :32-:42 UTC window (now :${minute}); retry after :43`);
+  const waitMs = reservedWindowWaitMs(new Date());
+  if (waitMs > 0) {
+    console.log(`${SCRIPT}: inside the reserved :32-:42 UTC window; waiting ${Math.ceil(waitMs / 1000)}s until :43`);
+    await new Promise((res) => setTimeout(res, waitMs));
+  }
   const { values } = parseArgs({ options: { from: { type: 'string' }, switch: { type: 'string' }, to: { type: 'string' }, 'live-slot': { type: 'string' }, leads: { type: 'string' }, json: { type: 'boolean' }, record: { type: 'boolean' } } });
   const args: WalkArgs = {
     // default --to = today (UTC); the walk only scores RESOLVED markets, so unresolved recent days are
