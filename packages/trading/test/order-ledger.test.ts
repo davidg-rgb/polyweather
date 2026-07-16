@@ -57,6 +57,7 @@ describe('rpcOrderLedger — the mode-scoped RPC contract for T3', () => {
       tokenId: 'tokA',
       marketId: '0xc',
       createdAt: '2026-07-05T00:00:00Z',
+      strategy: null,
     });
   });
 
@@ -193,5 +194,11 @@ describe('mapLedgerRow', () => {
   it('null / empty → null', () => {
     expect(mapLedgerRow(null)).toBeNull();
     expect(mapLedgerRow({})).toBeNull();
+  });
+  it('maps the 0085 strategy tag (F4 sweep scope input); absent → null', () => {
+    expect(mapLedgerRow({ intent_key: 'k', client_order_id: 'c', strategy: 'buy-table' })).toMatchObject({
+      strategy: 'buy-table',
+    });
+    expect(mapLedgerRow({ intent_key: 'k', client_order_id: 'c' })).toMatchObject({ strategy: null });
   });
 });

@@ -114,6 +114,7 @@ export function mapLedgerRow(raw: unknown): OrderLedgerRow | null {
       o['created_at'] == null && o['createdAt'] == null
         ? null
         : String(o['created_at'] ?? o['createdAt']),
+    strategy: o['strategy'] == null ? null : String(o['strategy']),
   };
 }
 

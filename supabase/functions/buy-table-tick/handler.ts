@@ -17,7 +17,11 @@
  * buy_table.max_entry_attempts total attempts (default 1 = the original one-attempt-EVER rule).
  * buy_table.stop_after_first_success halts ALL new entries once any entry in this mode has a fill —
  * the operator's verification semantics (one successful buy, then quiet). The ledger's
- * (mode, intent_key) partial-unique index is the hard stop underneath it all.
+ * (mode, intent_key) partial-unique index is the hard stop underneath it all. F4 (C18d): every LIVE
+ * tick opens with the lane-scoped reconcile sweep (executor.reconcileOpenOrders({strategies:
+ * ['buy-table']})) — a stuck 'intent' row left by a crashed/interrupted earlier invocation (the 07-12
+ * class) is adjudicated against venue evidence (adopt/free/hold) BEFORE the entry gate reads the
+ * ledger, so a freed market becomes retryable this same tick instead of blocking forever.
  *
  * TRADE MODE LADDER (the double gate, preserved): the Edge secret TRADE_MODE resolved by the T1
  * `resolveTradeMode` — absent/typo ⇒ dry-run (records the intent in the ledger, NEVER posts), 'off' ⇒
@@ -453,6 +457,44 @@ export async function buyTableTick(ctx: JobCtx, deps: BuyTableTickDeps): Promise
   const stakeUsd = tradeConfig.stakePerBuyUsd;
   const feeRateBps = Math.round(botCfg.takerFeeRate * 10_000);
 
+  // 3.5 · F4 (C18d) — the cloud twin of the daemon's startup reconcile sweep, run BEFORE the lane-ledger
+  //     read so this tick's entry gate already sees any row the sweep adjudicated (a freed row becomes
+  //     retryable under rule 1 THIS tick, not next). Per-tick "startup" semantics hold: the RPC's N9 age
+  //     floor (only intents ≥5 min old are listed) hides any live post→record window, and an Edge
+  //     invocation is dead long before the next */10 fire — every listed row's writer no longer exists.
+  //     STRATEGY-SCOPED to this lane: a PERIODIC sweeper must never adjudicate the daemon's rows mid-run
+  //     (the T2 contract) — foreign/untagged rows wait for their owner's own startup sweep. A sweep
+  //     failure is ISOLATED, never degraded: unknown-state rows simply stay blocked (the entry gate's
+  //     safe direction) and the tick continues.
+  const executor = new MakerExecutor({
+    db,
+    client: deps.liveClient ?? createClobClient,
+    notify: deps.notify,
+    getEnvVar: deps.getEnvVar,
+    log: (entry) => log('buy-table.executor', entry),
+  });
+  let reconcileAdopted = 0;
+  let reconcileFreed = 0;
+  let reconcileHeld = 0;
+  let reconcileFailed = false;
+  if (mode === 'live') {
+    try {
+      const outcomes = await executor.reconcileOpenOrders({ strategies: [BUY_TABLE_STRATEGY] });
+      for (const o of outcomes) {
+        if (o.kind === 'adopted') reconcileAdopted++;
+        else if (o.kind === 'freed') reconcileFreed++;
+        else reconcileHeld++;
+        log('buy-table.reconcile', { kind: o.kind, intentKey: o.intentKey, orderId: o.orderId, reason: o.reason });
+      }
+    } catch (e) {
+      reconcileFailed = true;
+      log('buy-table.reconcile_failed', {
+        error: redactText(errMsg(e)),
+        note: 'sweep failure is isolated — unknown-state rows stay blocked (safe direction); tick continues',
+      });
+    }
+  }
+
   // 4 · lane ledger read — EVERY intent key the lane has ever used (the one-entry-ever gate) + the
   //     held rows for the resolution sweep. Absent RPC (0095 not applied) ⇒ STAGED-DARK skip; a failed
   //     read ⇒ tick DEGRADED (placing without the ever-gate could re-enter past a freed terminal key).
@@ -606,13 +648,6 @@ export async function buyTableTick(ctx: JobCtx, deps: BuyTableTickDeps): Promise
   let zeroFillAdjudicated = 0;
   const blocked = mode === 'live' && preflightOk !== true;
   if (candidates.length > 0 && !blocked) {
-    const executor = new MakerExecutor({
-      db,
-      client: deps.liveClient ?? createClobClient,
-      notify: deps.notify,
-      getEnvVar: deps.getEnvVar,
-      log: (entry) => log('buy-table.executor', entry),
-    });
     for (const [i, c] of candidates.entries()) {
       try {
         const result = await executor.placeTaker({
@@ -738,6 +773,10 @@ export async function buyTableTick(ctx: JobCtx, deps: BuyTableTickDeps): Promise
     laneHalted: gate.laneHalted || haltedAfterFill,
     haltedOnAmbiguous,
     zeroFillAdjudicated,
+    reconcileAdopted,
+    reconcileFreed,
+    reconcileHeld,
+    reconcileFailed,
   };
   log('buy-table.tick', stats);
   return stats;

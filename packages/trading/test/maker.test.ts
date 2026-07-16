@@ -969,3 +969,49 @@ describe('MakerExecutor.reconcileOpenOrders — the startup sweep (HIGH-2)', () 
     expect(alerts[0]!.body).not.toContain('hunter2secret42');
   });
 });
+
+describe('MakerExecutor.reconcileOpenOrders — the F4 strategy scope (the cloud periodic caller)', () => {
+  const tagged = (strategy: string | null | undefined, cid: string): OrderLedgerRow =>
+    row({ clientOrderId: cid, status: 'intent', orderId: null, ...(strategy === undefined ? {} : { strategy }) });
+
+  it('filter: only rows carrying a listed strategy tag are swept; foreign + untagged rows stay untouched', async () => {
+    const client = mockClient({ getOpenOrders: vi.fn(async () => []), getTrades: vi.fn(async () => []) });
+    const { ledger, rows } = mockLedger([
+      tagged('buy-table', 'cid-lane'),
+      tagged('maker-exit', 'cid-daemon'),
+      tagged(undefined, 'cid-pre0085'),
+    ]);
+    const exec = new MakerExecutor(deps('live', client, ledger));
+
+    const out = await exec.reconcileOpenOrders({ strategies: ['buy-table'] });
+
+    expect(out).toEqual([expect.objectContaining({ kind: 'freed', clientOrderId: 'cid-lane' })]);
+    expect(rows.get('cid-lane')!.status).toBe('failed');
+    expect(rows.get('cid-daemon')!.status).toBe('intent'); // the daemon's row: not ours to adjudicate
+    expect(rows.get('cid-pre0085')!.status).toBe('intent'); // untagged = another runner's — untouched
+    expect(client.getOpenOrders).toHaveBeenCalledTimes(1); // evidence read ONLY for the lane's row
+  });
+
+  it('filter with no matching rows: returns [] and the venue client is never constructed', async () => {
+    const client = mockClient();
+    const clientFactory = vi.fn(async () => client);
+    const { ledger, calls } = mockLedger([tagged('maker-exit', 'cid-daemon')]);
+    const exec = new MakerExecutor({ ...deps('live', client, ledger), client: clientFactory });
+
+    expect(await exec.reconcileOpenOrders({ strategies: ['buy-table'] })).toEqual([]);
+    expect(clientFactory).not.toHaveBeenCalled();
+    expect(calls.filter((c) => c.fn !== 'listDanglingIntents')).toEqual([]);
+  });
+
+  it('no opts: the unfiltered startup sweep is byte-identical — tagged AND untagged rows all swept (the daemon path)', async () => {
+    const client = mockClient({ getOpenOrders: vi.fn(async () => []), getTrades: vi.fn(async () => []) });
+    const { ledger, rows } = mockLedger([tagged('buy-table', 'cid-lane'), tagged(undefined, 'cid-pre0085')]);
+    const exec = new MakerExecutor(deps('live', client, ledger));
+
+    const out = await exec.reconcileOpenOrders();
+
+    expect(out).toHaveLength(2);
+    expect(rows.get('cid-lane')!.status).toBe('failed');
+    expect(rows.get('cid-pre0085')!.status).toBe('failed');
+  });
+});

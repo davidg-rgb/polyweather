@@ -37,6 +37,13 @@ _Claude keeps this block current every material cycle. Whole status in 20 second
     regrowth; DB total 2,376 MB; next tiers market_snapshots 432 MB, bucket_probabilities 346 MB). The
     C96 dump→prune→VACUUM-FULL playbook stands ready; if it threatens the Micro before you're back I
     archive-verify-then-prune off-peak and log it here first.
+  - **↳ C20 (~14:25Z): PR #23 MERGED to main (CI green — main now matches deployed prod) + the F4
+    calm-day build item is DONE: the cloud buy-table tick now opens every LIVE tick with the
+    lane-scoped reconcile sweep** (the daemon startup sweep's periodic twin — a stuck 'intent' row
+    like the 07-12 shanghai one is now auto-adjudicated against venue evidence and, if freed, the
+    market is retryable the SAME tick; foreign/daemon rows untouched; sweep failure isolated).
+    Suite 3,237 green · deployed ~14:21Z · verified on the 14:23Z tick (reconcileFailed:false).
+    The PR-#23 conflict lesson: the loop branch must merge origin/main back after every squash.
   - **↳ C19a (~14:00Z): REAL BREAKAGE FOUND + FIXED — the efficiency-monitor Action died 07-15 AND
     07-16** (both days' snapshots lost, accrual stalled since 07-14). Root cause: GitHub's scheduled-run
     drift (2–3.5h; fires landed ~08:35Z) put the start inside the script's own reserved :32–:42 UTC
@@ -271,6 +278,21 @@ checkpoints to align on: 06:17Z Action · 10:00/13:50/20:45Z city ticks · 07:00
 
 ## Cycle log
 
+- **C20 (2026-07-16 ~14:05–14:30Z) — PR #23 landed + F4 BUILT/DEPLOYED/VERIFIED (the calm-day queue's
+  top item).** (1) PR #23 was stuck CONFLICTING/DIRTY — CI never fires on a conflicted PR (GitHub can't
+  build the merge ref); root cause: main's #22 squash was never reconciled back into the loop branch.
+  Merged origin/main in (board kept ours — the C17-C19 superset), CI went green (3m30s), **squash-merged
+  14:08Z**, reconciled the new squash back immediately. Rule captured: after every squash-merge, merge
+  origin/main → loop right away. (2) **F4**: `reconcileOpenOrders` gained an opts.strategies scope
+  (packages/trading — unfiltered = daemon byte-identical; OrderLedgerRow + mapLedgerRow now carry the
+  0085 strategy tag), and the tick handler opens every LIVE tick with the 'buy-table'-scoped sweep
+  BEFORE the entries read (freed → retryable same tick; N9 ≥5-min floor + 10-min cadence vs Edge
+  wall-clock = every listed row's writer provably dead; failure isolated, never degraded). +14 tests
+  (5 handler incl. an end-to-end freed-then-rebought-same-tick + held-on-ambiguity, 3 executor scope,
+  5 monitor guard from C19a, 1 mapper), **suite 3,237 green**, typecheck clean. Deployed
+  `--no-verify-jwt` ~14:21Z; the 14:23:03Z scheduled tick ran the new build clean (reconcileFailed
+  false / 0-0-0 counts — nothing dangling, as expected). Boundary intact: no trade, no keys; the sweep
+  only adjudicates ledger rows against venue evidence, the same discipline the daemon ships.
 - **C19 (2026-07-16 ~13:45Z) — v18 MULTI-DAY AUTONOMOUS SESSION INIT + baseline.** Operator instruction
   (in-session): prepare a multi-day self-running loop — "evaluate current build, current buys, data
   storage etc … autonomous fixing machine that makes sure this project works"; he checks in remotely.

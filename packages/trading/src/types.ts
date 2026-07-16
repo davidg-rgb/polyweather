@@ -142,6 +142,11 @@ export interface OrderLedgerRow {
   marketId: string;
   /** row creation time (ISO) when the DB provides it — reconcile recency input; null otherwise. */
   createdAt: string | null;
+  /** the strategy tag on the row (0085 `live_orders.strategy` — 'maker-exit' | 'city-taker' |
+   *  'buy-table'). Optional/null when the source RPC predates 0085 or a mock omits it. F4: a PERIODIC
+   *  sweeper (the cloud buy-table tick) scopes `reconcileOpenOrders` to its own tag via this field —
+   *  untagged rows can only be another runner's and are left for that runner's own startup sweep. */
+  strategy?: string | null;
 }
 
 /** The write payload for `reserveIntent` (the pre-placement intent reservation). Mode-scoped (F4). */
