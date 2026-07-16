@@ -992,10 +992,22 @@ export class MakerExecutor {
    * Non-live modes return [] without touching the venue (dry-run rows carry synthetic orderIds and are
    * never dangling in this sense). Outcome `reason` strings are redacted at the source (LOW-B) — T2
    * may log or persist them.
+   *
+   * F4 (the cloud twin, C18d): `opts.strategies` scopes the sweep to rows carrying one of the given
+   * strategy tags. This is what makes a PERIODIC caller (the buy-table Edge tick) safe alongside the
+   * T2 contract above: the tick sweeps ONLY its own lane's rows (whose writer — the previous Edge
+   * invocation — is provably dead: bot_order_list_dangling's ≥5-min N9 age floor plus the 10-min tick
+   * cadence vs the Edge wall-clock cap), while the daemon's rows — tagged otherwise or untagged
+   * pre-0085 — are never touched mid-daemon-run and wait for the daemon's own startup sweep.
+   * Omitted ⇒ the unfiltered startup sweep, byte-identical to the pre-F4 behavior.
    */
-  async reconcileOpenOrders(): Promise<ReconcileOutcome[]> {
+  async reconcileOpenOrders(opts?: { strategies?: readonly string[] }): Promise<ReconcileOutcome[]> {
     if (this.mode !== 'live') return [];
-    const rows = await this.ledger.listDanglingIntents('live');
+    const all = await this.ledger.listDanglingIntents('live');
+    const rows =
+      opts?.strategies == null
+        ? all
+        : all.filter((r) => r.strategy != null && opts.strategies!.includes(r.strategy));
     if (rows.length === 0) return [];
     const client = await this.deps.client();
     const out: ReconcileOutcome[] = [];

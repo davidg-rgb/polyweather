@@ -80,10 +80,24 @@ interface MockDbState {
   preflightOk?: boolean | 'throw';
   configRows?: { key: string; value: string }[];
   cityAllowlist?: string[] | null;
+  /** F4: snake_case live_orders jsonb rows served by bot_order_list_dangling ({rows:[…]} envelope). */
+  dangling?: Array<Record<string, unknown>> | 'throw';
 }
 
 function makeMockDb(state: MockDbState): DbPort & { calls: Array<{ fn: string; args: Record<string, unknown> }> } {
   const calls: Array<{ fn: string; args: Record<string, unknown> }> = [];
+  // F4 statefulness: a record_failed/record_canceled landing on a dangling row's client_order_id flips
+  // the seeded entry rows sharing its intent_key to the terminal status — so the buy_table_entries read
+  // AFTER the sweep sees post-adjudication state, exactly like the real ledger would.
+  let entriesState = Array.isArray(state.entries) ? [...state.entries] : state.entries;
+  const adjudicate = (clientOrderId: unknown, status: string): void => {
+    if (!Array.isArray(state.dangling) || !Array.isArray(entriesState)) return;
+    const hit = state.dangling.find((d) => d['client_order_id'] === clientOrderId);
+    if (!hit) return;
+    entriesState = entriesState.map((e) =>
+      e.intentKey === hit['intent_key'] ? { ...e, status } : e,
+    );
+  };
   return {
     calls,
     async rpc<T>(fn: string, args: Record<string, unknown>): Promise<T[]> {
@@ -108,11 +122,14 @@ function makeMockDb(state: MockDbState): DbPort & { calls: Array<{ fn: string; a
             },
           ] as unknown as T[];
         case 'buy_table_entries':
-          if (state.entries === 'throw') throw new Error('rpc buy_table_entries failed: boom');
-          if (state.entries === 'missing') {
+          if (entriesState === 'throw') throw new Error('rpc buy_table_entries failed: boom');
+          if (entriesState === 'missing') {
             throw new Error('rpc buy_table_entries failed: function public.buy_table_entries(p_mode => text) does not exist');
           }
-          return [{ buy_table_entries: { rows: state.entries ?? [] } }] as unknown as T[];
+          return [{ buy_table_entries: { rows: entriesState ?? [] } }] as unknown as T[];
+        case 'bot_order_list_dangling':
+          if (state.dangling === 'throw') throw new Error('rpc bot_order_list_dangling failed: boom');
+          return [{ bot_order_list_dangling: { rows: state.dangling ?? [] } }] as unknown as T[];
         case 'convergence_capture_inputs':
           if (state.captures === 'throw') throw new Error('rpc convergence_capture_inputs failed: timeout');
           return [
@@ -127,8 +144,12 @@ function makeMockDb(state: MockDbState): DbPort & { calls: Array<{ fn: string; a
           return [{ bot_order_reserve_intent: 'reserved' }] as unknown as T[];
         case 'bot_order_record_placed':
         case 'bot_order_record_fill':
+          return [] as unknown as T[];
         case 'bot_order_record_failed':
+          adjudicate(args['p_client_order_id'], 'failed');
+          return [] as unknown as T[];
         case 'bot_order_record_canceled':
+          adjudicate(args['p_client_order_id'], 'canceled');
           return [] as unknown as T[];
         case 'bot_order_record_resolution_loss':
           return [
@@ -806,5 +827,125 @@ describe('resolvedAgainstEntries — pure edge shapes', () => {
     expect(
       resolvedAgainstEntries({ entries, captures: [cap], resolutions: [{ id: 'ev-1', winnerIdx: 2, gradingMismatch: false }] }),
     ).toEqual([]); // sizeMatched 0 + terminal failed — nothing bookable
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────
+// F4 (C18d) — the lane-scoped reconcile sweep: the cloud twin of the daemon's startup sweep, run
+// every LIVE tick BEFORE the entries read. A stuck 'intent' row (the 07-12 class) is adjudicated
+// against venue evidence; a freed market becomes retryable the SAME tick.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────
+
+describe('buy-table-tick — the F4 lane-scoped reconcile sweep', () => {
+  const marketId = 'c-ev-1-1';
+  const intentKey = orderIntentKey({ marketId, side: 'BUY', purpose: 'entry', tradeDate: '2026-07-11' });
+  const entryRow = (status: string, sizeMatched = 0): BuyTableEntryRow => ({
+    marketId, tokenId: 'y-ev-1-1', tradeDate: '2026-07-11', intentKey, status, sizeMatched,
+  });
+  const danglingRow = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
+    mode: 'live', intent_key: intentKey, client_order_id: 'cid-stuck', status: 'intent', order_id: null,
+    side: 'BUY', purpose: 'entry', price: 0.15, size: 33, size_matched: 0,
+    token_id: 'y-ev-1-1', market_id: marketId, created_at: '2026-07-11T09:00:00Z',
+    strategy: 'buy-table', ...over,
+  });
+
+  it('END-TO-END: a stuck intent is FREED by the sweep and the market is re-bought the SAME tick', async () => {
+    const h = harness(
+      {
+        mode: 'live',
+        preflightOk: true,
+        configRows: [{ key: 'buy_table.max_entry_attempts', value: '2' }],
+        captures: [capture({ eventId: 'ev-1', ask: 0.12, hoursToClose: 6 })],
+        entries: [entryRow('intent')], // pre-sweep: unknown-state → would block forever
+        dangling: [danglingRow()],
+      },
+      'live',
+    );
+    const stats = await buyTableTick(h.ctx, h.deps);
+
+    expect(stats.reconcileFreed).toBe(1);
+    expect(stats.reconcileFailed).toBe(false);
+    // ordering is the mechanism: sweep (list + adjudicate) strictly BEFORE the entries read
+    const idx = (fn: string): number => h.db.calls.findIndex((c) => c.fn === fn);
+    expect(idx('bot_order_list_dangling')).toBeGreaterThanOrEqual(0);
+    expect(idx('bot_order_list_dangling')).toBeLessThan(idx('bot_order_record_failed'));
+    expect(idx('bot_order_record_failed')).toBeLessThan(idx('buy_table_entries'));
+    // the payoff: the freed row reads 'failed' (retryable under attempts=2) → the market was bought
+    expect(stats.candidates).toBe(1);
+    expect(h.client.postCalls).toBe(1);
+  });
+
+  it('scope: foreign-strategy and untagged rows are left untouched — venue evidence is never read', async () => {
+    let openOrdersReads = 0;
+    const h = harness(
+      {
+        mode: 'live',
+        dangling: [
+          danglingRow({ strategy: 'maker-exit', client_order_id: 'cid-daemon' }),
+          danglingRow({ strategy: null, client_order_id: 'cid-pre0085', intent_key: 'other|BUY|entry|2026-07-11' }),
+        ],
+      },
+      'live',
+      { getOpenOrders: async () => { openOrdersReads++; return []; } },
+    );
+    const stats = await buyTableTick(h.ctx, h.deps);
+
+    expect(stats.reconcileAdopted).toBe(0);
+    expect(stats.reconcileFreed).toBe(0);
+    expect(stats.reconcileHeld).toBe(0);
+    expect(openOrdersReads).toBe(0);
+    expect(h.db.calls.some((c) => c.fn === 'bot_order_record_failed' || c.fn === 'bot_order_record_placed')).toBe(false);
+  });
+
+  it('dry-run: the sweep never runs (bot_order_list_dangling is not called)', async () => {
+    const h = harness({ mode: 'off', dangling: [danglingRow()] }, 'dry-run');
+    await buyTableTick(h.ctx, h.deps);
+    expect(h.db.calls.some((c) => c.fn === 'bot_order_list_dangling')).toBe(false);
+  });
+
+  it('a sweep failure is ISOLATED: reconcileFailed=true, tick not degraded, placement still runs', async () => {
+    const h = harness(
+      {
+        mode: 'live',
+        preflightOk: true,
+        captures: [capture({ eventId: 'ev-1', ask: 0.12, hoursToClose: 6 })],
+        dangling: 'throw',
+      },
+      'live',
+    );
+    const stats = await buyTableTick(h.ctx, h.deps);
+
+    expect(stats.reconcileFailed).toBe(true);
+    expect(stats.degraded).toBe(false);
+    expect(stats.candidates).toBe(1);
+    expect(h.client.postCalls).toBe(1);
+    expect(h.logs.some((l) => l.msg === 'buy-table.reconcile_failed')).toBe(true);
+  });
+
+  it('held on ambiguity: the row stays blocking (no re-entry), a RECONCILE_AMBIGUOUS WARN fires', async () => {
+    const venueOrder = (id: string) => ({
+      id, status: 'live', side: 'BUY', asset_id: 'y-ev-1-1',
+      original_size: '33', size_matched: '0', price: '0.15', order_type: 'FAK',
+    });
+    const h = harness(
+      {
+        mode: 'live',
+        preflightOk: true,
+        configRows: [{ key: 'buy_table.max_entry_attempts', value: '2' }],
+        captures: [capture({ eventId: 'ev-1', ask: 0.12, hoursToClose: 6 })],
+        entries: [entryRow('intent')],
+        dangling: [danglingRow()],
+      },
+      'live',
+      { getOpenOrders: async () => [venueOrder('0xV1'), venueOrder('0xV2')] },
+    );
+    const stats = await buyTableTick(h.ctx, h.deps);
+
+    expect(stats.reconcileHeld).toBe(1);
+    expect(h.alerts.some((a) => a.kind === 'RECONCILE_AMBIGUOUS' && a.severity === 'WARN')).toBe(true);
+    // the intent row was NOT adjudicated → unknown-state still blocks the market
+    expect(stats.candidates).toBe(0);
+    expect(h.client.postCalls).toBe(0);
+    expect(h.logs.some((l) => l.msg === 'buy-table.skip' && /already_entered/.test(String(l.extra?.reason)))).toBe(true);
   });
 });
