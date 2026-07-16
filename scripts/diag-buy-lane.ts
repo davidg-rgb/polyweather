@@ -21,10 +21,12 @@ import postgres from 'postgres';
 import { loadEnv } from './lib/load-env.ts';
 import { parseBotConfig, type RawCaptureRow, type RawResolution } from '../packages/core/src/index.ts';
 import {
+  deriveEntryGate,
   parseBuyTableConfig,
   selectBuyTableCandidates,
   type BuyTableCandidate,
   type BuyTableCfg,
+  type BuyTableEntryRow,
   type BuyTableSkip,
 } from '../supabase/functions/buy-table-tick/handler.ts';
 
@@ -84,11 +86,19 @@ export function buyLaneVerdict(args: {
   candidateCount: number;
   topSkips: Array<{ tag: string; n: number }>;
   nextWindowOpenIso: string | null;
+  /** 0102 rule 2: a real fill exists and stop_after_first_success is on — by-design halt, not a fault. */
+  laneHalted?: boolean;
 }): LaneVerdict {
   const blockers: string[] = [];
   const notes: string[] = [];
 
   if (!args.tickEnabled) blockers.push("config buy_table.tick_enabled='false' — the tick no-ops entirely");
+  if (args.laneHalted) {
+    blockers.push(
+      'lane halted BY RULE — a successful buy exists and buy_table.stop_after_first_success is on ' +
+        '(the verification goal is met; flip the flag to false to buy again)',
+    );
+  }
   if (args.mode !== 'live') blockers.push(`trade_config.mode='${args.mode}' — needs 'live' (else dry-run/off: never posts)`);
   if (args.mode === 'live' && !args.preflightOk) {
     for (const r of args.preflightReasons.length ? args.preflightReasons : ['preflight not ok'])
@@ -107,7 +117,8 @@ export function buyLaneVerdict(args: {
       'dry-run records the intent but never posts). This tool cannot read Edge secrets — verify via a successful live post or the smoke test.',
   );
 
-  const canBuyNow = args.tickEnabled && args.mode === 'live' && args.preflightOk && args.candidateCount > 0;
+  const canBuyNow =
+    args.tickEnabled && !args.laneHalted && args.mode === 'live' && args.preflightOk && args.candidateCount > 0;
   return { canBuyNow, blockers, notes };
 }
 
@@ -178,15 +189,16 @@ export async function buildReport(sql: ReturnType<typeof postgres>, citiesOverri
   const resolutions: RawResolution[] = Array.isArray(capRow.env?.resolutions) ? capRow.env!.resolutions! : [];
 
   const entRow = (await sql`select public.buy_table_entries('live') as env`)[0] as {
-    env: { rows?: Array<{ intentKey: string }> } | null;
+    env: { rows?: BuyTableEntryRow[] } | null;
   };
-  const existingIntentKeys = new Set((entRow.env?.rows ?? []).map((r) => r.intentKey));
+  const entries: BuyTableEntryRow[] = entRow.env?.rows ?? [];
 
-  // the funnel — the tick's OWN pure selector, byte-for-byte
+  // the funnel — the tick's OWN pure gate + selector, byte-for-byte (0102 entry rules included)
+  const gate = deriveEntryGate(entries, buyTableCfg);
   const { candidates, skips } = selectBuyTableCandidates({
     captures,
     resolutions,
-    existingIntentKeys,
+    existingIntentKeys: gate.blockedIntentKeys,
     cfg: buyTableCfg,
     stakeUsd,
     minOrderSizeShares: botCfg.minOrderSizeShares,
@@ -243,6 +255,7 @@ export async function buildReport(sql: ReturnType<typeof postgres>, citiesOverri
     candidateCount: candidates.length,
     topSkips: skipHistogram,
     nextWindowOpenIso: iso(nextOpenMs),
+    laneHalted: gate.laneHalted,
   });
 
   return {
@@ -256,6 +269,9 @@ export async function buildReport(sql: ReturnType<typeof postgres>, citiesOverri
       priceCap: buyTableCfg.priceCap,
       leadWindowH: [buyTableCfg.leadMinH, buyTableCfg.leadMaxH],
       tick_enabled: buyTableCfg.tickEnabled,
+      maxEntryAttempts: buyTableCfg.maxEntryAttempts,
+      stopAfterFirstSuccess: buyTableCfg.stopAfterFirstSuccess,
+      laneHalted: gate.laneHalted,
       updated_at: tc.updated_at,
     },
     buyTableCfg,

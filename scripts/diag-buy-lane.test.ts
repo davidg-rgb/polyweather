@@ -98,6 +98,12 @@ describe('buyLaneVerdict', () => {
     expect(v.blockers.some((b) => b.includes('lead_window') && b.includes('2026-07-17'))).toBe(true);
   });
 
+  it('0102: laneHalted (stop_after_first_success met) blocks GREEN and is worded as by-design', () => {
+    const v = buyLaneVerdict({ ...base, laneHalted: true });
+    expect(v.canBuyNow).toBe(false);
+    expect(v.blockers.some((b) => b.includes('halted BY RULE') && b.includes('stop_after_first_success'))).toBe(true);
+  });
+
   it('flags a disabled tick and a non-live mode independently', () => {
     const off = buyLaneVerdict({ ...base, mode: 'dry-run' });
     expect(off.canBuyNow).toBe(false);

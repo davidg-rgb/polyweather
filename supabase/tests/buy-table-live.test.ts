@@ -36,8 +36,8 @@ afterAll(async () => {
 });
 
 // ══════════════════════════════════════════════════════════════════════════════════════════════════════════
-describe('0095 config defaults', () => {
-  it('seeds buy_table.price_cap 0.15 / lead 2–12h / tick_enabled true', async () => {
+describe('0095 config defaults (+ the 0102 entry-rule defaults)', () => {
+  it('seeds buy_table.price_cap 0.15 / lead 2–12h / tick_enabled true / entry rules OFF (1 attempt, no halt)', async () => {
     const cfg = await rows<{ key: string; value: string }>(
       db,
       `select key, value from config where key like 'buy_table.%' order by key`,
@@ -47,6 +47,9 @@ describe('0095 config defaults', () => {
       'buy_table.lead_max_h': '12',
       'buy_table.lead_min_h': '2',
       'buy_table.tick_enabled': 'true',
+      // 0102: defaults reproduce the original one-attempt-EVER behavior exactly
+      'buy_table.max_entry_attempts': '1',
+      'buy_table.stop_after_first_success': 'false',
     });
   });
 

@@ -10,9 +10,14 @@
  * the C25 calibrated sweet-spot lead (hoursToClose ∈ [buy_table.lead_min_h, buy_table.lead_max_h] =
  * [2, 12] — no entries in the final 2h; the record shows near-close entries are the worst), stake =
  * trade_config.stake_per_buy_usd, cities = trade_config.city_allowlist, HOLD TO RESOLUTION (no exits —
- * no TP, no stop-loss, no time-stop). ONE entry per market EVER (no re-entry, no chase): the code-side
- * gate reads buy_table_entries (ANY status — a terminal 'failed' row still blocks), and the ledger's
- * (mode, intent_key) partial-unique index is the hard stop underneath it.
+ * no TP, no stop-loss, no time-stop). Entry idempotency = the 0102 ENTRY GATE (deriveEntryGate) over the
+ * ANY-status buy_table_entries read: a market with a REAL fill (position) or an unknown-state row (stuck
+ * 'intent' / unfilled 'placed' — the needs-reconcile classes) is ALWAYS blocked; a PROVABLY-dead attempt
+ * (clean venue rejection → 'failed', zero-fill 'canceled') may be retried up to
+ * buy_table.max_entry_attempts total attempts (default 1 = the original one-attempt-EVER rule).
+ * buy_table.stop_after_first_success halts ALL new entries once any entry in this mode has a fill —
+ * the operator's verification semantics (one successful buy, then quiet). The ledger's
+ * (mode, intent_key) partial-unique index is the hard stop underneath it all.
  *
  * TRADE MODE LADDER (the double gate, preserved): the Edge secret TRADE_MODE resolved by the T1
  * `resolveTradeMode` — absent/typo ⇒ dry-run (records the intent in the ledger, NEVER posts), 'off' ⇒
@@ -84,6 +89,16 @@ export interface BuyTableCfg {
   /** 0097: per-city [min, max] entry-price overrides (config buy_table.city_price_ranges — a jsonb text map
    *  keyed by lower-cased cities.slug). An absent slug means the global [0, priceCap]. */
   cityRanges: Record<string, { min: number; max: number }>;
+  /** 0102 rule 1: total placement attempts allowed per market (ledger rows per intent key). Default 1 =
+   *  the original one-attempt-EVER behavior. >1 lets a PROVABLY-dead attempt (a clean venue rejection →
+   *  status 'failed', or an explicit zero-fill cancel) be retried on a later tick. Unknown-state rows
+   *  ('intent', or 'placed' with no fill — the needs-reconcile classes) ALWAYS block regardless: retrying
+   *  an order the venue may hold could double-place, and no cap makes that safe. */
+  maxEntryAttempts: number;
+  /** 0102 rule 2: once ANY entry in this mode has a real fill (we own shares), the lane stops opening
+   *  NEW entries entirely — including later candidates inside the same tick. The operator's verification
+   *  semantics: one successful buy, then quiet. Default false = the original behavior. */
+  stopAfterFirstSuccess: boolean;
 }
 
 const num = (v: string | undefined, dflt: number): number => {
@@ -121,13 +136,68 @@ function parseCityRanges(raw: string | undefined): Record<string, { min: number;
 export function parseBuyTableConfig(rows: { key: string; value: string }[]): BuyTableCfg {
   const map = new Map((Array.isArray(rows) ? rows : []).map((r) => [r.key, r.value]));
   const enabledRaw = (map.get('buy_table.tick_enabled') ?? 'true').trim().toLowerCase();
+  const stopRaw = (map.get('buy_table.stop_after_first_success') ?? 'false').trim().toLowerCase();
+  // attempts: an integer ≥ 1 (a fractional/zero/negative hand-edit falls back to the safe default 1).
+  const attemptsRaw = num(map.get('buy_table.max_entry_attempts'), 1);
   return {
     priceCap: num(map.get('buy_table.price_cap'), 0.15),
     leadMaxH: num(map.get('buy_table.lead_max_h'), 12),
     leadMinH: num(map.get('buy_table.lead_min_h'), 2),
     tickEnabled: enabledRaw === 'true' || enabledRaw === '1',
     cityRanges: parseCityRanges(map.get('buy_table.city_price_ranges')),
+    maxEntryAttempts: Number.isInteger(attemptsRaw) && attemptsRaw >= 1 ? attemptsRaw : 1,
+    stopAfterFirstSuccess: stopRaw === 'true' || stopRaw === '1',
   };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────
+// 0102 entry rules — the pure gate over the lane's ledger history (rule 1: bounded retry after a
+// PROVABLY-dead attempt · rule 2: first real fill halts all further entries).
+// ─────────────────────────────────────────────────────────────────────────────────────────────────
+
+export interface EntryGate {
+  /** Intent keys the selector must not re-enter (position held / unknown venue state / attempt cap). */
+  blockedIntentKeys: ReadonlySet<string>;
+  /** Rule 2: a real fill exists in this mode and stop_after_first_success is on — place NOTHING. */
+  laneHalted: boolean;
+}
+
+/** A row with a REAL fill — we own shares (partial fills count: money is deployed). */
+const hasFill = (e: BuyTableEntryRow): boolean =>
+  Number(e.sizeMatched) > 0 || e.status === 'partial' || e.status === 'filled';
+
+/** A row whose venue state is UNKNOWN (the executor's needs-reconcile classes): a stuck 'intent'
+ *  (shapeless post — the venue may hold the order) or a 'placed' row with no recorded fill (either a
+ *  dead zero-fill FAK or a fill-poll failure hiding a real fill — indistinguishable from the ledger).
+ *  These ALWAYS block their market: a blind retry could double-place/double-buy. */
+const isUnknownState = (e: BuyTableEntryRow): boolean =>
+  e.status === 'intent' || (e.status === 'placed' && !(Number(e.sizeMatched) > 0));
+
+/**
+ * Derive the entry gate from the lane's full (mode-scoped, ANY-status) ledger history. Per intent key:
+ * blocked when a fill exists (never rebuy into a position), OR any row is in an unknown venue state,
+ * OR total attempts (rows) ≥ maxEntryAttempts. With the default maxEntryAttempts=1 this reproduces the
+ * original one-attempt-EVER gate exactly (any row blocks). Terminal 'failed' (clean venue rejection)
+ * and zero-fill 'canceled' rows are the ONLY retryable classes — the same line the executor draws when
+ * deciding whether to free a key.
+ */
+export function deriveEntryGate(entries: BuyTableEntryRow[], cfg: BuyTableCfg): EntryGate {
+  const rows = Array.isArray(entries) ? entries : [];
+  const byKey = new Map<string, BuyTableEntryRow[]>();
+  for (const e of rows) {
+    if (!e?.intentKey) continue;
+    const list = byKey.get(e.intentKey);
+    if (list) list.push(e);
+    else byKey.set(e.intentKey, [e]);
+  }
+  const blocked = new Set<string>();
+  let anyFill = false;
+  for (const [key, group] of byKey) {
+    const filled = group.some(hasFill);
+    anyFill ||= filled;
+    if (filled || group.some(isUnknownState) || group.length >= cfg.maxEntryAttempts) blocked.add(key);
+  }
+  return { blockedIntentKeys: blocked, laneHalted: cfg.stopAfterFirstSuccess && anyFill };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
@@ -261,7 +331,10 @@ export function selectBuyTableCandidates(args: {
     const marketId = String(pick.conditionId);
     const intentKey = orderIntentKey({ marketId, side: 'BUY', purpose: 'entry', tradeDate: r.targetDate });
     if (existingIntentKeys.has(intentKey)) {
-      skips.push({ ref, reason: `already_entered (${marketId} ${r.targetDate}) — one entry per market EVER` });
+      skips.push({
+        ref,
+        reason: `already_entered (${marketId} ${r.targetDate}) — entry gate (position held / unknown state / attempt cap)`,
+      });
       continue;
     }
 
@@ -473,19 +546,30 @@ export async function buyTableTick(ctx: JobCtx, deps: BuyTableTickDeps): Promise
     }
   }
 
-  // 7 · candidates (pure) — the BUY-TABLE gates over the latest capture per market.
-  const existingIntentKeys = new Set(entries.map((e) => e.intentKey));
-  const { candidates, skips } = degraded
-    ? { candidates: [], skips: [{ ref: 'ALL', reason: 'degraded — failed read is never "no candidates"' }] }
+  // 7 · candidates (pure) — the BUY-TABLE gates over the latest capture per market, behind the 0102
+  //     entry gate (rule 1: bounded retry only after PROVABLY-dead attempts; rule 2: a real fill +
+  //     stop_after_first_success halts ALL new entries — the operator's one-verified-buy semantics).
+  const gate = deriveEntryGate(entries, cfg);
+  let { candidates, skips } = degraded
+    ? { candidates: [] as BuyTableCandidate[], skips: [{ ref: 'ALL', reason: 'degraded — failed read is never "no candidates"' }] }
     : selectBuyTableCandidates({
         captures,
         resolutions,
-        existingIntentKeys,
+        existingIntentKeys: gate.blockedIntentKeys,
         cfg,
         stakeUsd,
         minOrderSizeShares: botCfg.minOrderSizeShares,
         now,
       });
+  if (gate.laneHalted && candidates.length > 0) {
+    skips = skips.concat(
+      candidates.map((c) => ({
+        ref: `${c.city}/${c.tradeDate}`,
+        reason: 'lane_halted — a successful buy exists and stop_after_first_success is on (working as designed)',
+      })),
+    );
+    candidates = [];
+  }
   for (const s of skips) log('buy-table.skip', { ref: s.ref, reason: s.reason });
 
   // 8 · the LIVE interlock — trade_live_preflight('buy-table'), read this tick, gating every placement.
@@ -516,6 +600,7 @@ export async function buyTableTick(ctx: JobCtx, deps: BuyTableTickDeps): Promise
   let dryRun = 0;
   let duplicate = 0;
   let failed = 0;
+  let haltedAfterFill = false;
   const blocked = mode === 'live' && preflightOk !== true;
   if (candidates.length > 0 && !blocked) {
     const executor = new MakerExecutor({
@@ -525,7 +610,7 @@ export async function buyTableTick(ctx: JobCtx, deps: BuyTableTickDeps): Promise
       getEnvVar: deps.getEnvVar,
       log: (entry) => log('buy-table.executor', entry),
     });
-    for (const c of candidates) {
+    for (const [i, c] of candidates.entries()) {
       try {
         const result = await executor.placeTaker({
           marketId: c.marketId,
@@ -553,6 +638,18 @@ export async function buyTableTick(ctx: JobCtx, deps: BuyTableTickDeps): Promise
           hoursToClose: Math.round(c.hoursToClose * 10) / 10,
           reason: result.reason,
         });
+        // 0102 rule 2, in-tick: the first REAL fill halts the rest of this tick's candidates too —
+        // one successful buy, then quiet (later ticks halt via deriveEntryGate reading the fill row).
+        if (cfg.stopAfterFirstSuccess && (result.sizeMatched ?? 0) > 0) {
+          haltedAfterFill = true;
+          for (const rest of candidates.slice(i + 1)) {
+            log('buy-table.skip', {
+              ref: `${rest.city}/${rest.tradeDate}`,
+              reason: 'lane_halted — first successful buy this tick; stop_after_first_success is on',
+            });
+          }
+          break;
+        }
       } catch (e) {
         failed++;
         const message = redactText(errMsg(e));
@@ -596,6 +693,8 @@ export async function buyTableTick(ctx: JobCtx, deps: BuyTableTickDeps): Promise
     leadWindowH: [cfg.leadMinH, cfg.leadMaxH],
     stakeUsd,
     cities: allowlist.length,
+    maxEntryAttempts: cfg.maxEntryAttempts,
+    laneHalted: gate.laneHalted || haltedAfterFill,
   };
   log('buy-table.tick', stats);
   return stats;
