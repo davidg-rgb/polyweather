@@ -44,6 +44,13 @@ _Claude keeps this block current every material cycle. Whole status in 20 second
     ③ next natural candidate window opens ~**2026-07-17 00:00Z** — and at 15¢ a natural candidate is rare,
     so if today MUST see a strategy buy, the honest lever is a temporary lead/cap widening (your call,
     revert after).
+  - **↳ C18b (07-16 ~12:20Z, operator-instructed): `buy_table.price_cap` raised 0.15 → 0.40 TEMPORARILY
+    for the verification** ("increase cap for today, I'll lower it myself later — viable entry point given
+    the cities min"). Basis, measured off the live captures at ~12:10Z: tonight's-window (07-17) predicted-
+    bucket asks houston 0.32 · shanghai 0.35 · mexico-city 0.36 · karachi 0.49 → min 0.32 + drift headroom
+    = 0.40 (admits 3/4 cities on current prices; karachi's 49¢ favorite excluded; worst case 4×$5=$20,
+    inside the $25/$30 kills). **⚑ THE OPERATOR LOWERS IT BACK — if this note is stale and the cap still
+    reads 0.40, surface it.** A live buy tonight still additionally needs the override renewal (his click).
 - **▶▶ C17 (2026-07-12 ~15:10Z) — OPERATOR DECISION: the live lane's dates LAPSE NATURALLY (no renewal);
   everything else runs and collects.** Per the pre-absence recommendation: the gate override expires
   **07-15 00:00Z** and `active_until` **07-20** — neither will be renewed; the lane keeps hunting (unpaged,
@@ -202,6 +209,10 @@ _Claude keeps this block current every material cycle. Whole status in 20 second
   `buy_table.price_cap` 0.33→0.15 (operator-instructed — the 0.33 was the operator's phone probe).
   Boundary intact: no trade placed, no keys touched, no authorization extended (the override renewal
   stays the operator's click; the `--live-smoke` write-path probe left for the operator to run).
+  **↳ C18b (~12:20Z): cap raised 0.15→0.40 TEMPORARILY on operator instruction** (verification day; he
+  lowers it himself later) — sized off measured tonight's-window predicted-bucket asks (min houston 0.32
+  + headroom; karachi 0.49 excluded; see ⚑ C18b). Watch item: if the cap still reads 0.40 in a later
+  cycle, surface it to the operator.
 - **C16 (2026-07-12 ~14:40Z) — OPERATOR: "halt all slack posts … until I tell you otherwise" → TOTAL Slack
   silence applied.** Lever: `alerts_slack_allow_kinds` `'DAILY_DIGEST,…,ORDER_NEEDS_RECONCILE'` (the 0092+0095
   14-kind routing table, verbatim restore string in the ⚑ block) → `''`, with `alerts_slack_paused` staying
