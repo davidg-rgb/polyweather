@@ -281,6 +281,17 @@ checkpoints to align on: 06:17Z Action · 10:00/13:50/20:45Z city ticks · 07:00
 
 ## Cycle log
 
+- **C32 (2026-07-17 ~08:47Z) — the C19a monitor fix VERIFIED ON A SCHEDULED RUN (watch item closed) +
+  the override-never-clicked troubleshoot delivered.** Today's efficiency-monitor Action fired 08:29Z
+  scheduled and succeeded (1m07s) → snapshot id=10 (S1 KILL n=4,889, +147/day accrual; S2 14 troughs)
+  — first clean scheduled run since the 07-15/07-16 deaths; the wait-guard fix holds. Earlier (C28–C31,
+  operator asked "why no trades" twice): full troubleshoot delivered with proof — the override table has
+  ONE row in its entire history (07-11, expired 07-15) and Vercel prod logs show ZERO gate-override API
+  hits in 14h → **the renewal click never reached the server; his active_until edit (18:49Z, landed)
+  was the config editor, not the override panel.** Exact click-path given (Interlock gate card → Gate
+  override panel → set → CONFIRM step). Mexico-city candidate held all morning (in-window to ~11:50Z);
+  google-panel incremental-replay build HELD until the first-buy event resolves (one risky change
+  domain at a time). All lanes green throughout.
 - **C27 (2026-07-17 ~06:15–06:40Z) — FIRST NATURAL CANDIDATE EVER (blocked only by the override) + a
   growing google-panel failure diagnosed.** (1) **Since 00:03Z every buy-table tick has held 1 candidate
   — mexico-city/2026-07-17 (in-window until ~11:50Z; houston/07-17 misses only on price, ask 0.489 >
