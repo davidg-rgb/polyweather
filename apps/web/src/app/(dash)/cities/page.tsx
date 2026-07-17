@@ -11,6 +11,7 @@
  * the trading rail stays under its interlock.
  */
 import type { ReactElement } from 'react';
+import { wilsonInterval } from '@weather-edge/core';
 import { CitiesTable, SMALL_N_FLOOR, rateColor, type CitiesTableRow } from '../../../components/CitiesTable.tsx';
 import { fmtAgo, fmtDate, fmtDateTime, num } from '../../../lib/format.ts';
 import { getCityPredictions, type CityPredictionStat } from '../../../lib/loaders.ts';
@@ -54,13 +55,20 @@ export default async function CitiesPage(): Promise<ReactElement> {
 
   const statByCity = new Map<string, CityPredictionStat>(view.stats.map((s) => [s.city, s]));
 
-  // The table rows: server-derived, display-ready, serializable (the client component only filters).
+  // The table rows: server-derived, display-ready, serializable (the client component only filters/sorts).
   const rows: CitiesTableRow[] = view.rows.map((r) => {
     const stat = statByCity.get(r.city);
     const resolvesMs = r.resolvesAt ? Date.parse(r.resolvesAt) : NaN;
     const capturedMs = r.capturedAt ? Date.parse(r.capturedAt) : NaN;
     const hoursToClose = Number.isFinite(resolvesMs) ? (resolvesMs - nowMs) / 3_600_000 : null;
     const n = num(stat?.n) ?? 0;
+    const hits = num(stat?.hits) ?? 0;
+    const rate = num(stat?.rate);
+    const ask = num(r.ask);
+    // The CONSERVATIVE upside per $1: the Wilson-95% lower bound of the city's success rate against the
+    // live ask (the entry-watch idiom — rank by the lower bound, never the point estimate, so a thin
+    // record's wide interval sinks its number instead of letting a cheap ask masquerade as edge).
+    const pLb = n > 0 ? wilsonInterval(hits, n).lo : null;
     return {
       city: r.city,
       displayName: r.displayName,
@@ -70,9 +78,12 @@ export default async function CitiesPage(): Promise<ReactElement> {
       captureAgeMin: Number.isFinite(capturedMs) ? (nowMs - capturedMs) / 60_000 : null,
       predLabel: r.predLabel,
       predProb: num(r.predProb),
-      ask: num(r.ask),
-      rate: num(stat?.rate),
+      ask,
+      rate,
       n,
+      pLb,
+      evLb: pLb !== null && ask !== null && ask > 0 ? pLb / ask - 1 : null,
+      evPoint: rate !== null && ask !== null && ask > 0 ? rate / ask - 1 : null,
       inWindow: hoursToClose !== null && hoursToClose >= leadMinH && hoursToClose <= leadMaxH,
     };
   });
@@ -208,6 +219,16 @@ export default async function CitiesPage(): Promise<ReactElement> {
             {leadMaxH}]h to close, read live from <span className="mono">buy_table.*</span> config). The ask
             column is what a taker pays for our pick right now — context, not a recommendation; the measured
             record of buying this pick cheap is a KILL (<span className="mono">BUY-TABLE.md</span>).
+          </li>
+          <li className="small">
+            <strong>Upside /$1 is deliberately conservative.</strong> It is the expected return per $1 staked
+            on our pick at the current ask <em>if the city&apos;s true win rate sits at the Wilson-95% lower
+            bound of its record</em> — the entry-watch lesson: rank by the lower bound, never the point
+            estimate. A thin record widens the interval and sinks the number, so a cheap ask on n=3 cannot
+            masquerade as edge (that illusion is exactly how the ≤15¢ gate failed). Hover a cell for the
+            decomposition. It is a context metric, not a trade signal — all twelve tested signals are dead
+            (<span className="mono">FINDINGS.md</span>), and the graded rate measures the <em>last pre-close</em>{' '}
+            pick, while a row you see mid-life may still change its pick before close.
           </li>
         </ul>
       </div>

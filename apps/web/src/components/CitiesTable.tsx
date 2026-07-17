@@ -38,8 +38,39 @@ export interface CitiesTableRow {
   rate: number | null;
   /** the rate's sample size. */
   n: number;
+  /** Wilson-95% LOWER bound of the city's success rate (server-computed from hits/n; null when n = 0). */
+  pLb: number | null;
+  /** CONSERVATIVE upside per $1 staked: pLb/ask − 1 — the expected return buying our pick at this ask if
+   *  the city's true last-look win rate sits at the pessimistic end its record supports. The entry-watch
+   *  idiom: rank by the lower bound, never the point estimate — small n widens the interval and sinks the
+   *  number, so thin records cannot masquerade as cheap edge. null when ask or history is missing. */
+  evLb: number | null;
+  /** the POINT-estimate twin (rate/ask − 1) — tooltip context only, never the ranked number. */
+  evPoint: number | null;
   /** hoursToClose ∈ [leadMinH, leadMaxH] — the live lane's entry window. */
   inWindow: boolean;
+}
+
+/** The sortable columns of the open-markets table. */
+export type CitiesSortKey = 'close' | 'ask' | 'rate' | 'upside';
+export type CitiesSortDir = 'asc' | 'desc';
+
+/** Each column's natural first-click direction: cheapest ask / soonest close first; best rate/upside first. */
+const DEFAULT_DIR: Record<CitiesSortKey, CitiesSortDir> = { close: 'asc', ask: 'asc', rate: 'desc', upside: 'desc' };
+
+const sortVal = (r: CitiesTableRow, key: CitiesSortKey): number | null =>
+  key === 'close' ? r.hoursToClose : key === 'ask' ? r.ask : key === 'rate' ? r.rate : r.evLb;
+
+/** Stable sort with nulls LAST regardless of direction (a missing value is never "best" or "cheapest"). */
+export function sortCityRows(rows: CitiesTableRow[], key: CitiesSortKey, dir: CitiesSortDir): CitiesTableRow[] {
+  return [...rows].sort((a, b) => {
+    const va = sortVal(a, key);
+    const vb = sortVal(b, key);
+    if (va === null && vb === null) return 0;
+    if (va === null) return 1;
+    if (vb === null) return -1;
+    return dir === 'asc' ? va - vb : vb - va;
+  });
 }
 
 const dayLabel = (offset: number, date: string): string =>
@@ -48,6 +79,8 @@ const dayLabel = (offset: number, date: string): string =>
 const fmtHours = (h: number | null): string => (h === null ? '—' : `${h.toFixed(1)}h`);
 const fmtCents = (v: number | null): string => (v === null ? '—' : `${Math.round(v * 100)}¢`);
 const fmtPct0 = (v: number | null): string => (v === null ? '—' : `${Math.round(v * 100)}%`);
+const fmtSignedPct0 = (v: number | null): string =>
+  v === null ? '—' : `${v > 0 ? '+' : ''}${Math.round(v * 100)}%`;
 
 /**
  * The success-rate cell tone: grey under the n floor; otherwise a subtle green→amber→red ramp on the
@@ -61,6 +94,37 @@ export function rateColor(rate: number | null, n: number): string {
   return 'var(--ams-red)';
 }
 
+/** A clickable column header — toggles direction on re-click, switches key (at its natural direction) otherwise. */
+function SortTh({
+  label,
+  colKey,
+  sortKey,
+  sortDir,
+  onSort,
+  title,
+}: {
+  label: string;
+  colKey: CitiesSortKey;
+  sortKey: CitiesSortKey;
+  sortDir: CitiesSortDir;
+  onSort: (key: CitiesSortKey) => void;
+  title?: string;
+}): ReactElement {
+  const active = sortKey === colKey;
+  return (
+    <th className="num" aria-sort={active ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}>
+      <button
+        type="button"
+        onClick={() => onSort(colKey)}
+        title={title ?? `sort by ${label}`}
+        style={{ background: 'none', border: 'none', padding: 0, font: 'inherit', color: 'inherit', cursor: 'pointer' }}
+      >
+        {label} <span className="muted small">{active ? (sortDir === 'asc' ? '▲' : '▼') : '↕'}</span>
+      </button>
+    </th>
+  );
+}
+
 export function CitiesTable({
   rows,
   leadMinH,
@@ -72,10 +136,23 @@ export function CitiesTable({
 }): ReactElement {
   const [dayTab, setDayTab] = useState<number | null>(null); // null = all days
   const [windowOnly, setWindowOnly] = useState(false);
+  const [sortKey, setSortKey] = useState<CitiesSortKey>('close'); // default: time-to-close ascending
+  const [sortDir, setSortDir] = useState<CitiesSortDir>('asc');
+
+  const onSort = (key: CitiesSortKey): void => {
+    if (key === sortKey) {
+      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortKey(key);
+      setSortDir(DEFAULT_DIR[key]);
+    }
+  };
 
   const offsets = [...new Set(rows.map((r) => r.dayOffset))].sort((a, b) => a - b);
-  const visible = rows.filter(
-    (r) => (dayTab === null || r.dayOffset === dayTab) && (!windowOnly || r.inWindow),
+  const visible = sortCityRows(
+    rows.filter((r) => (dayTab === null || r.dayOffset === dayTab) && (!windowOnly || r.inWindow)),
+    sortKey,
+    sortDir,
   );
 
   if (rows.length === 0) {
@@ -120,9 +197,17 @@ export function CitiesTable({
                 <th>city</th>
                 <th>active day</th>
                 <th>our prediction</th>
-                <th className="num">market ask</th>
-                <th className="num">time to close</th>
-                <th className="num">historic success</th>
+                <SortTh label="market ask" colKey="ask" sortKey={sortKey} sortDir={sortDir} onSort={onSort} />
+                <SortTh label="time to close" colKey="close" sortKey={sortKey} sortDir={sortDir} onSort={onSort} />
+                <SortTh label="historic success" colKey="rate" sortKey={sortKey} sortDir={sortDir} onSort={onSort} />
+                <SortTh
+                  label="upside /$1"
+                  colKey="upside"
+                  sortKey={sortKey}
+                  sortDir={sortDir}
+                  onSort={onSort}
+                  title="conservative expected return per $1: the Wilson-95% LOWER bound of the city's success rate, divided by the ask, minus 1 — thin records sink, they never masquerade as cheap edge"
+                />
               </tr>
             </thead>
             <tbody>
@@ -172,6 +257,28 @@ export function CitiesTable({
                   <td className="num">
                     <span style={{ color: rateColor(r.rate, r.n), fontWeight: 600 }}>{fmtPct0(r.rate)}</span>{' '}
                     <span className="muted small">(n={r.n})</span>
+                  </td>
+                  <td
+                    className="num mono"
+                    title={
+                      r.evLb === null
+                        ? 'needs both a graded history and a live ask'
+                        : `Wilson-95% lower bound ${fmtPct0(r.pLb)} of the ${fmtPct0(r.rate)} (n=${r.n}) record, at a ${fmtCents(r.ask)} ask → ${fmtSignedPct0(r.evLb)} per $1 staked (point-estimate twin ${fmtSignedPct0(r.evPoint)}). Context, not a signal — the measured record of trading this pick is a KILL.`
+                    }
+                  >
+                    <span
+                      style={{
+                        fontWeight: 600,
+                        color:
+                          r.evLb === null || r.n < SMALL_N_FLOOR
+                            ? 'var(--ams-muted)'
+                            : r.evLb > 0
+                              ? 'var(--ams-tertiary)'
+                              : 'var(--ams-red)',
+                      }}
+                    >
+                      {fmtSignedPct0(r.evLb)}
+                    </span>
                   </td>
                 </tr>
               ))}
