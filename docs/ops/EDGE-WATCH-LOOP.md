@@ -242,12 +242,11 @@ _Claude keeps this block current every material cycle. Whole status in 20 second
    **07-31 (operator-extended 07-16 18:49Z, was 07-20)** → surface before expiry · city_sim_config
    runway 09-30 → surface ~09-25.
 7. **Calm-day build queue (all-green cycles only, in order).** ① ~~F4 cloud reconcile sweep~~ **DONE
-   C20** (deployed + tick-verified + merged, PR #24). ② **google-paper-panel incremental replay**
-   (C27: the hourly full-window TS replay outgrows the Edge wall as the post-prune window refills —
-   persist per-event replay results, re-replay only open/new events, cfg-hash invalidation; est all
-   runs dead by ~07-24 untreated). ③ opening_captures archive prep (dump tooling dry-run so the prune
-   is one command when needed). ④ Anything newly broken beats the queue. Suite + typecheck green after
-   every change; board updated every material cycle.
+   C20** (deployed + tick-verified + merged, PR #24). ② ~~google-paper-panel incremental replay~~
+   **DONE C34** (0103 applied + fn deployed ~10:15Z 07-17; first incremental tick verification = the
+   next :24 run — check stats.incremental=true + duration collapse; then PR to main). ③ opening_captures
+   archive prep (dump tooling dry-run so the prune is one command when needed). ④ Anything newly broken
+   beats the queue. Suite + typecheck green after every change; board updated every material cycle.
 
 **Escalation rules.** *Autonomous (do, then log):* code/test/cron fixes, edge-fn redeploys with in-session
 precedent (buy-table-tick, health-monitor, daily-digest), failed-daily re-runs, GH Action manual dispatch,
@@ -281,6 +280,21 @@ checkpoints to align on: 06:17Z Action · 10:00/13:50/20:45Z city ticks · 07:00
 
 ## Cycle log
 
+- **C34 (2026-07-17 ~09:50–10:15Z) — the google-panel INCREMENTAL REPLAY built + APPLIED + DEPLOYED
+  (queue item ② done; the C27 wall-death fix).** Failure rate was climbing into daytime (09:24Z run
+  reaped). Build: core decomposition `buildGoogleView = assembleGoogleView(buildGoogleReplayUnits(…))`
+  — existing tests = the equivalence proof — + `googleReplayCacheKey` (engine version g1 + every
+  replay-relevant cfg field; cities scope deliberately excluded) + `replayGoogleEvent` per-event units;
+  **migration 0103 APPLIED** (google_replay_cache RLS-deny-all + event index + cache read/write with
+  self-prune + google_paper_inputs_v2 event-filtered, v1 untouched); handler now replays ONLY
+  open/uncached events (a RESOLVED non-gm event's unit is deterministic forever) and staged-dark falls
+  back to the legacy full path if any 0103 RPC is absent/failing — the panel can never die of its own
+  cache. +10 tests (5 core equivalence/jsonb-round-trip, 5 handler incl. gm-exclusion + fallbacks),
+  **suite 3,247 green**, typecheck clean. Deployed `--no-verify-jwt` ~10:15Z. **VERIFY next :24 tick:
+  stats.incremental=true, duration collapse (~290s → expect <60s), then it rides the next PR to main.**
+  First run warms the cache (replays everything once, cacheWrites≈all-resolved); steady state replays
+  only ~2-6 open events. Deploy-hold rationale dropped deliberately: the panel is fully isolated from
+  the trading lane, and every undeployed hour risked another reaped run.
 - **C32 (2026-07-17 ~08:47Z) — the C19a monitor fix VERIFIED ON A SCHEDULED RUN (watch item closed) +
   the override-never-clicked troubleshoot delivered.** Today's efficiency-monitor Action fired 08:29Z
   scheduled and succeeded (1m07s) → snapshot id=10 (S1 KILL n=4,889, +147/day accrual; S2 14 troughs)
