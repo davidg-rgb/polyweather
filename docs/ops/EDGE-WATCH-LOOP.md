@@ -280,6 +280,16 @@ checkpoints to align on: 06:17Z Action · 10:00/13:50/20:45Z city ticks · 07:00
 
 ## Cycle log
 
+- **C35 (2026-07-17 ~10:35–10:45Z) — first incremental tick CAUGHT A REAL 0103 BUG → 0104 hotfix
+  applied + guard added, same cycle.** The 10:24Z tick ran incremental in **6.2s** (vs ~290s — the
+  collapse works) but **45/45 city fetches failed**: the v2 event filter compared `uuid = text[]`
+  (42883, runtime-only — DDL application can't catch it; the index/cache RPCs worked, which is what
+  made v2 the standout). An EMPTY view overwrote the good dash snapshot → **row 574 deleted, dash
+  restored**. Fixes: **0104 APPLIED** (`event_id::text = any(...)`; verified live: 191 caps for one
+  filtered event) + the migrations suite now exercises the exact call shape + a C35 handler guard —
+  an all-failed fetch (0 folded events + errors) SKIPS the record entirely (never blank a good
+  snapshot) — **redeployed ~10:42Z**. +5 tests, typecheck clean. **VERIFY 11:24Z tick:
+  incremental=true, cityErrors 0, cacheWrites ≈ all resolved events (first warm), duration <60s.**
 - **C34 (2026-07-17 ~09:50–10:15Z) — the google-panel INCREMENTAL REPLAY built + APPLIED + DEPLOYED
   (queue item ② done; the C27 wall-death fix).** Failure rate was climbing into daytime (09:24Z run
   reaped). Build: core decomposition `buildGoogleView = assembleGoogleView(buildGoogleReplayUnits(…))`
