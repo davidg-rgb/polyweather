@@ -280,6 +280,17 @@ checkpoints to align on: 06:17Z Action · 10:00/13:50/20:45Z city ticks · 07:00
 
 ## Cycle log
 
+- **C37 (2026-07-17 ~11:37–11:50Z) — the warm pass couldn't fit the wall + a second latent bug found →
+  BOTH fixed; cache BOOTSTRAPPED (376 rows).** The 11:24Z warm run was reaped with the cache still at
+  0 rows: the first design wrote the cache once at the END, so a reaped bootstrap made zero progress
+  forever. Fix 1 (handler, redeployed ~11:50Z): the incremental pool now replays + cache-writes PER
+  CITY — every run's progress is durable, bootstrap converges unattended. Fix 2 (**0105 APPLIED**):
+  the write RPC's type guard returned 0 on the driver's DOUBLE-ENCODED jsonb-string payload (the
+  project's known trap — found because the new local warm script wrote 0×45; fn now unwraps; the
+  migrations suite exercises the exact shape). New `scripts/research/google-cache-warm.ts` (local, no
+  isolate wall, re-runnable after any cache-key bump) finished the bootstrap in one run: **376 rows**.
+  Migrations 104/104, typecheck clean, pushed. **VERIFY 12:24Z tick: incremental=true, cityErrors 0,
+  cacheUnitsUsed ~376-ish, replayed ~open-only, duration <60s — then PR 0103+0104+0105 to main.**
 - **C35 (2026-07-17 ~10:35–10:45Z) — first incremental tick CAUGHT A REAL 0103 BUG → 0104 hotfix
   applied + guard added, same cycle.** The 10:24Z tick ran incremental in **6.2s** (vs ~290s — the
   collapse works) but **45/45 city fetches failed**: the v2 event filter compared `uuid = text[]`
