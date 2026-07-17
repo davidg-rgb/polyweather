@@ -280,6 +280,19 @@ checkpoints to align on: 06:17Z Action · 10:00/13:50/20:45Z city ticks · 07:00
 
 ## Cycle log
 
+- **C43 (2026-07-17 ~16:55Z) — OPERATOR: "Activate the override - see if it works" → OVERRIDE SET
+  (id=2, expires 2026-07-31 00:00Z) — THE LANE IS ARMED for the first time with a passing interlock.**
+  Direct insert per the 07-11 precedent (operator's explicit written instruction quoted in the audit
+  note; operator_guard blocks the MCP session's RPC; expiry aligned to his active_until, inside the
+  14-day cap). **Verified: `trade_live_preflight('buy-table')` now returns ok:true** — the only
+  remaining condition is a candidate; the window opens ~00:00Z nightly. Root cause of the never-click
+  (same session, C42→C43 troubleshoot): he WAS on /trading (Vercel 16:16Z hits) but the panel's
+  set-button is disabled until reason+date are BOTH filled, and setting requires a SECOND "Confirm
+  override" click in an amber banner ABOVE the form — zero gate-override API hits ever. Expected
+  tonight: first candidate after 00:00Z → ~$5 FAK ≤0.40 → `stop_after_first_success` halts after ONE
+  fill; worst case one $5 stake; kills $30/25% stand. TRADE_MODE's Edge copy gets its final proof at
+  the first post — post-failure CRITICALs are Slack-DARK (C16), so the scheduled 00:17Z one-shot wake
+  is the reporting channel. Loop otherwise stays PAUSED (operator's C42 order).
 - **C38 (2026-07-17 ~12:30–12:35Z) — INCREMENTAL PANEL VERIFIED LIVE + SHIPPED TO MAIN (the C27→C38
   arc CLOSED).** The 12:24Z tick: **ok in 13.7s** (vs ~290s + daily reaps — ~21×), incremental=true,
   cacheUnitsUsed 376 + replayed 119 open events, cityErrors 0, snapshot 575 recorded, gate accruing
