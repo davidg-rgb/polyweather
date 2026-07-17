@@ -241,11 +241,13 @@ _Claude keeps this block current every material cycle. Whole status in 20 second
 6. **Watch items.** price_cap 0.40 → re-surface daily until the operator lowers it · active_until
    **07-31 (operator-extended 07-16 18:49Z, was 07-20)** → surface before expiry · city_sim_config
    runway 09-30 → surface ~09-25.
-7. **Calm-day build queue (all-green cycles only, in order).** ① **F4 cloud reconcile sweep** (C18d:
-   stuck `intent`/`placed` rows have no cloud sweep — the daemon's startup sweep never ported; port it
-   into the tick at `reconcileEveryTicks` cadence, full tests, deploy on a quiet tick). ② opening_captures
-   archive prep (dump tooling dry-run so the prune is one command when needed). ③ Anything newly broken
-   beats the queue. Suite + typecheck green after every change; board updated every material cycle.
+7. **Calm-day build queue (all-green cycles only, in order).** ① ~~F4 cloud reconcile sweep~~ **DONE
+   C20** (deployed + tick-verified + merged, PR #24). ② **google-paper-panel incremental replay**
+   (C27: the hourly full-window TS replay outgrows the Edge wall as the post-prune window refills —
+   persist per-event replay results, re-replay only open/new events, cfg-hash invalidation; est all
+   runs dead by ~07-24 untreated). ③ opening_captures archive prep (dump tooling dry-run so the prune
+   is one command when needed). ④ Anything newly broken beats the queue. Suite + typecheck green after
+   every change; board updated every material cycle.
 
 **Escalation rules.** *Autonomous (do, then log):* code/test/cron fixes, edge-fn redeploys with in-session
 precedent (buy-table-tick, health-monitor, daily-digest), failed-daily re-runs, GH Action manual dispatch,
@@ -279,6 +281,22 @@ checkpoints to align on: 06:17Z Action · 10:00/13:50/20:45Z city ticks · 07:00
 
 ## Cycle log
 
+- **C27 (2026-07-17 ~06:15–06:40Z) — FIRST NATURAL CANDIDATE EVER (blocked only by the override) + a
+  growing google-panel failure diagnosed.** (1) **Since 00:03Z every buy-table tick has held 1 candidate
+  — mexico-city/2026-07-17 (in-window until ~11:50Z; houston/07-17 misses only on price, ask 0.489 >
+  cap 0.40) — and every tick skips it on `preflight: false` = the expired override, exactly as designed.**
+  The C18b sizing was right: at cap 0.40 the 00:00–10:00Z window produces candidates. One operator click
+  (override renewal) → the first live buy lands within 10 min. (2) **google-paper-panel: 4 of the last
+  ~10 hourly runs reaped ("exceeded wall limit, ADR-12")**; runtime 64s (07-12) → 114–150s (07-16 day)
+  → 281–290s (overnight) — the post-07-07-prune 21d replay window is REFILLING (full ~07-28, est ~590s
+  > the Edge wall ≈400s → all runs die by ~07-24 untreated). MEASURED: the SQL read is NOT the cost
+  (nyc slim scan+window = 187ms warm) — the cost is Deno-side TS replay CPU over all events hourly.
+  Correct fix (top of the calm-day queue): **incremental replay — persist per-event results (a resolved
+  event's deterministic replay never changes), re-replay only open/new events, cfg-hash invalidation.**
+  Panel data still accruing meanwhile (44 ok / 4 failed per 48h). (3) 20:45Z -c tick verified (houston
+  ×2, on the second). (4) Today's monitor Action not yet fired (yesterday's drift ~08:35Z; manual
+  dispatch if nothing by ~10:00Z — the fixed guard's first scheduled test is TODAY). Heartbeats C26
+  (19:58Z) green; override still down through the night.
 - **C25 (2026-07-16 ~19:00Z) — OPERATOR CHECK-IN: "can we buy US markets?" answered + his active_until
   extension observed.** (1) Diag run (read-only): lane blocked on exactly ONE interlock reason — the
   expired override; **`active_until` now 2026-07-31 (operator's own /trading edit at 18:49:29Z — the
