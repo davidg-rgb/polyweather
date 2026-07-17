@@ -458,6 +458,22 @@ describe('migrations 0001–0010', () => {
       // defaults for buy_table.max_entry_attempts ('1') + buy_table.stop_after_first_success ('false') —
       // DML-only seeds; the gate logic lives in the handler (deriveEntryGate). Defaults = original behavior.
       '0102_buy_table_entry_rules.sql',
+      // 0103 = google-paper-panel INCREMENTAL replay (loop C27/C34): the hourly full-window TS replay
+      // outgrew the ~400s Edge isolate wall as the post-07-07-prune capture window refilled (runs reaped
+      // by health-monitor). google_replay_cache (RLS deny-all) + event index/cache read/cache write RPCs +
+      // google_paper_inputs_v2 (0086's inputs + an event-id filter; v1 untouched — the handler staged-dark
+      // falls back to the full legacy path when these are absent).
+      '0103_google_replay_cache.sql',
+      // 0104 = 0103 hotfix (C35): google_paper_inputs_v2's event filter compared uuid = text[] and raised
+      // 42883 on EVERY event-filtered call (the 10:24Z first incremental tick failed 45/45 cities and
+      // recorded an empty view). event_id::text = any(p_event_ids); the SQL-surface suite below exercises
+      // exactly that call shape so the class cannot recur silently.
+      '0104_google_inputs_v2_uuid_cast.sql',
+      // 0105 = 0103 hotfix 2 (C37): the cache write's type guard returned 0 on a DOUBLE-ENCODED jsonb
+      // string payload (the postgres-js/DbPort param path — the project's known double-encoding trap);
+      // the local warm run built every unit and wrote nothing. The fn now unwraps a string-typed payload
+      // once before the array guard.
+      '0105_google_cache_write_unwrap.sql',
     ]);
   });
 });
@@ -1645,5 +1661,52 @@ describe('0093 allowlist validation — trade_config_set normalizes + validates 
         rows(tdb, `select public.trade_config_set(p_city_allowlist := array['karachi'])`),
       ),
     ).rejects.toThrow(/ERR_FORBIDDEN/);
+  });
+});
+
+describe('0103/0104 google incremental-replay SQL surface', () => {
+  it('google_paper_inputs_v2 accepts an event-id filter against the uuid column (the 0104 regression)', async () => {
+    // the 0103 bug: `event_id = any(text[])` raised 42883 (uuid = text) on EVERY event-filtered call —
+    // runtime-only, so DDL application alone could never catch it. Exercise the exact call shape.
+    const r = await rows<{ ok: boolean }>(
+      db,
+      `select public.google_paper_inputs_v2(2, array['amsterdam'], array['00000000-0000-0000-0000-000000000000']) is not null as ok`,
+    );
+    expect(r[0]!.ok).toBe(true);
+  });
+
+  it('cache write unwraps a DOUBLE-ENCODED string payload (the 0105 regression — the DbPort param path)', async () => {
+    const r = await rows<{ n: number }>(
+      db,
+      `select public.google_replay_cache_write('k-dbl', to_jsonb('[{"eventId":"e-dbl","kind":"traded"}]'::text)) as n`,
+    );
+    expect(Number(r[0]!.n)).toBe(1);
+    const hit = await rows<{ n: number }>(
+      db,
+      `select jsonb_array_length(public.google_replay_cache_read('k-dbl', array['e-dbl'])->'rows') as n`,
+    );
+    expect(Number(hit[0]!.n)).toBe(1);
+  });
+
+  it('cache write/read round-trips a unit under its key; foreign keys and ids read empty', async () => {
+    await rows(db, `select public.google_replay_cache_write('k-test', '[{"eventId":"e1","kind":"traded"}]'::jsonb)`);
+    const hit = await rows<{ n: number }>(
+      db,
+      `select jsonb_array_length(public.google_replay_cache_read('k-test', array['e1'])->'rows') as n`,
+    );
+    expect(Number(hit[0]!.n)).toBe(1);
+    const missKey = await rows<{ n: number }>(
+      db,
+      `select jsonb_array_length(public.google_replay_cache_read('k-other', array['e1'])->'rows') as n`,
+    );
+    expect(Number(missKey[0]!.n)).toBe(0);
+  });
+
+  it('google_paper_event_index returns the {rows:[…]} envelope', async () => {
+    const r = await rows<{ ok: boolean }>(
+      db,
+      `select (public.google_paper_event_index(2, array['amsterdam'])->'rows') is not null as ok`,
+    );
+    expect(r[0]!.ok).toBe(true);
   });
 });

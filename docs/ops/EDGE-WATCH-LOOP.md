@@ -239,11 +239,13 @@ _Claude keeps this block current every material cycle. Whole status in 20 second
    accruing toward n≥40. Efficiency-monitor S1/S2 verdict drift. `/paper-trade`, `/monitor` RPCs healthy.
 5. **Tripwires.** ⑤ (trade_config.mode) every cycle; ①–④ sweep every ~2–3 days.
 6. **Watch items.** price_cap 0.40 → re-surface daily until the operator lowers it · active_until
-   07-20 → surface before expiry (his call to bump) · city_sim_config runway 09-30 → surface ~09-25.
-7. **Calm-day build queue (all-green cycles only, in order).** ① **F4 cloud reconcile sweep** (C18d:
-   stuck `intent`/`placed` rows have no cloud sweep — the daemon's startup sweep never ported; port it
-   into the tick at `reconcileEveryTicks` cadence, full tests, deploy on a quiet tick). ② opening_captures
-   archive prep (dump tooling dry-run so the prune is one command when needed). ③ Anything newly broken
+   **07-31 (operator-extended 07-16 18:49Z, was 07-20)** → surface before expiry · city_sim_config
+   runway 09-30 → surface ~09-25.
+7. **Calm-day build queue (all-green cycles only, in order).** ① ~~F4 cloud reconcile sweep~~ **DONE
+   C20** (deployed + tick-verified + merged, PR #24). ② ~~google-paper-panel incremental replay~~
+   **DONE C34** (0103 applied + fn deployed ~10:15Z 07-17; first incremental tick verification = the
+   next :24 run — check stats.incremental=true + duration collapse; then PR to main). ③ opening_captures
+   archive prep (dump tooling dry-run so the prune is one command when needed). ④ Anything newly broken
    beats the queue. Suite + typecheck green after every change; board updated every material cycle.
 
 **Escalation rules.** *Autonomous (do, then log):* code/test/cron fixes, edge-fn redeploys with in-session
@@ -278,6 +280,82 @@ checkpoints to align on: 06:17Z Action · 10:00/13:50/20:45Z city ticks · 07:00
 
 ## Cycle log
 
+- **C37 (2026-07-17 ~11:37–11:50Z) — the warm pass couldn't fit the wall + a second latent bug found →
+  BOTH fixed; cache BOOTSTRAPPED (376 rows).** The 11:24Z warm run was reaped with the cache still at
+  0 rows: the first design wrote the cache once at the END, so a reaped bootstrap made zero progress
+  forever. Fix 1 (handler, redeployed ~11:50Z): the incremental pool now replays + cache-writes PER
+  CITY — every run's progress is durable, bootstrap converges unattended. Fix 2 (**0105 APPLIED**):
+  the write RPC's type guard returned 0 on the driver's DOUBLE-ENCODED jsonb-string payload (the
+  project's known trap — found because the new local warm script wrote 0×45; fn now unwraps; the
+  migrations suite exercises the exact shape). New `scripts/research/google-cache-warm.ts` (local, no
+  isolate wall, re-runnable after any cache-key bump) finished the bootstrap in one run: **376 rows**.
+  Migrations 104/104, typecheck clean, pushed. **VERIFY 12:24Z tick: incremental=true, cityErrors 0,
+  cacheUnitsUsed ~376-ish, replayed ~open-only, duration <60s — then PR 0103+0104+0105 to main.**
+- **C35 (2026-07-17 ~10:35–10:45Z) — first incremental tick CAUGHT A REAL 0103 BUG → 0104 hotfix
+  applied + guard added, same cycle.** The 10:24Z tick ran incremental in **6.2s** (vs ~290s — the
+  collapse works) but **45/45 city fetches failed**: the v2 event filter compared `uuid = text[]`
+  (42883, runtime-only — DDL application can't catch it; the index/cache RPCs worked, which is what
+  made v2 the standout). An EMPTY view overwrote the good dash snapshot → **row 574 deleted, dash
+  restored**. Fixes: **0104 APPLIED** (`event_id::text = any(...)`; verified live: 191 caps for one
+  filtered event) + the migrations suite now exercises the exact call shape + a C35 handler guard —
+  an all-failed fetch (0 folded events + errors) SKIPS the record entirely (never blank a good
+  snapshot) — **redeployed ~10:42Z**. +5 tests, typecheck clean. **VERIFY 11:24Z tick:
+  incremental=true, cityErrors 0, cacheWrites ≈ all resolved events (first warm), duration <60s.**
+- **C34 (2026-07-17 ~09:50–10:15Z) — the google-panel INCREMENTAL REPLAY built + APPLIED + DEPLOYED
+  (queue item ② done; the C27 wall-death fix).** Failure rate was climbing into daytime (09:24Z run
+  reaped). Build: core decomposition `buildGoogleView = assembleGoogleView(buildGoogleReplayUnits(…))`
+  — existing tests = the equivalence proof — + `googleReplayCacheKey` (engine version g1 + every
+  replay-relevant cfg field; cities scope deliberately excluded) + `replayGoogleEvent` per-event units;
+  **migration 0103 APPLIED** (google_replay_cache RLS-deny-all + event index + cache read/write with
+  self-prune + google_paper_inputs_v2 event-filtered, v1 untouched); handler now replays ONLY
+  open/uncached events (a RESOLVED non-gm event's unit is deterministic forever) and staged-dark falls
+  back to the legacy full path if any 0103 RPC is absent/failing — the panel can never die of its own
+  cache. +10 tests (5 core equivalence/jsonb-round-trip, 5 handler incl. gm-exclusion + fallbacks),
+  **suite 3,247 green**, typecheck clean. Deployed `--no-verify-jwt` ~10:15Z. **VERIFY next :24 tick:
+  stats.incremental=true, duration collapse (~290s → expect <60s), then it rides the next PR to main.**
+  First run warms the cache (replays everything once, cacheWrites≈all-resolved); steady state replays
+  only ~2-6 open events. Deploy-hold rationale dropped deliberately: the panel is fully isolated from
+  the trading lane, and every undeployed hour risked another reaped run.
+- **C32 (2026-07-17 ~08:47Z) — the C19a monitor fix VERIFIED ON A SCHEDULED RUN (watch item closed) +
+  the override-never-clicked troubleshoot delivered.** Today's efficiency-monitor Action fired 08:29Z
+  scheduled and succeeded (1m07s) → snapshot id=10 (S1 KILL n=4,889, +147/day accrual; S2 14 troughs)
+  — first clean scheduled run since the 07-15/07-16 deaths; the wait-guard fix holds. Earlier (C28–C31,
+  operator asked "why no trades" twice): full troubleshoot delivered with proof — the override table has
+  ONE row in its entire history (07-11, expired 07-15) and Vercel prod logs show ZERO gate-override API
+  hits in 14h → **the renewal click never reached the server; his active_until edit (18:49Z, landed)
+  was the config editor, not the override panel.** Exact click-path given (Interlock gate card → Gate
+  override panel → set → CONFIRM step). Mexico-city candidate held all morning (in-window to ~11:50Z);
+  google-panel incremental-replay build HELD until the first-buy event resolves (one risky change
+  domain at a time). All lanes green throughout.
+- **C27 (2026-07-17 ~06:15–06:40Z) — FIRST NATURAL CANDIDATE EVER (blocked only by the override) + a
+  growing google-panel failure diagnosed.** (1) **Since 00:03Z every buy-table tick has held 1 candidate
+  — mexico-city/2026-07-17 (in-window until ~11:50Z; houston/07-17 misses only on price, ask 0.489 >
+  cap 0.40) — and every tick skips it on `preflight: false` = the expired override, exactly as designed.**
+  The C18b sizing was right: at cap 0.40 the 00:00–10:00Z window produces candidates. One operator click
+  (override renewal) → the first live buy lands within 10 min. (2) **google-paper-panel: 4 of the last
+  ~10 hourly runs reaped ("exceeded wall limit, ADR-12")**; runtime 64s (07-12) → 114–150s (07-16 day)
+  → 281–290s (overnight) — the post-07-07-prune 21d replay window is REFILLING (full ~07-28, est ~590s
+  > the Edge wall ≈400s → all runs die by ~07-24 untreated). MEASURED: the SQL read is NOT the cost
+  (nyc slim scan+window = 187ms warm) — the cost is Deno-side TS replay CPU over all events hourly.
+  Correct fix (top of the calm-day queue): **incremental replay — persist per-event results (a resolved
+  event's deterministic replay never changes), re-replay only open/new events, cfg-hash invalidation.**
+  Panel data still accruing meanwhile (44 ok / 4 failed per 48h). (3) 20:45Z -c tick verified (houston
+  ×2, on the second). (4) Today's monitor Action not yet fired (yesterday's drift ~08:35Z; manual
+  dispatch if nothing by ~10:00Z — the fixed guard's first scheduled test is TODAY). Heartbeats C26
+  (19:58Z) green; override still down through the night.
+- **C25 (2026-07-16 ~19:00Z) — OPERATOR CHECK-IN: "can we buy US markets?" answered + his active_until
+  extension observed.** (1) Diag run (read-only): lane blocked on exactly ONE interlock reason — the
+  expired override; **`active_until` now 2026-07-31 (operator's own /trading edit at 18:49:29Z — the
+  07-20 watch item is superseded)**; 8/8 markets skip on lead_window, next candidate window ~00:00Z.
+  (2) US answer, verified live: **Polymarket US-city °F markets are FULLY supported today** — houston
+  is already allowlisted; 10 more US cities (atlanta austin chicago dallas denver los-angeles miami
+  nyc san-francisco seattle) are in the 45-city capture universe with fresh house-seeded captures
+  (300–650/city/24h, latest 18:51Z) and are ONE /trading allowlist edit away (config read per tick —
+  no code, no deploy). **Kalshi (the US-regulated venue) is NOT supported**: execution is
+  Polymarket-CLOB-only (§15 seam); a Kalshi rail would need operator-side US-KYC account + API keys +
+  USD funding, plus a new venue adapter/ledger surface — and no strategy reason exists (signal #10
+  cross-venue KILLed on the 1–10-contract capacity wall). Heartbeats C21–C24 (15:28/16:29/17:30/18:31Z)
+  all-green: 7/7 ticks each hour, 0 failed jobs, 0 orders, override down, cap 0.40.
 - **C20 (2026-07-16 ~14:05–14:30Z) — PR #23 landed + F4 BUILT/DEPLOYED/VERIFIED (the calm-day queue's
   top item).** (1) PR #23 was stuck CONFLICTING/DIRTY — CI never fires on a conflicted PR (GitHub can't
   build the merge ref); root cause: main's #22 squash was never reconciled back into the loop branch.

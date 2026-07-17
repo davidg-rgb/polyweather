@@ -8,7 +8,16 @@
  */
 import { describe, expect, it } from 'vitest';
 import { GOOGLE_DEFAULTS, type GoogleBracketCfg } from '../src/sim/google-bucket-replay.ts';
-import { buildGoogleView, GOOGLE_TP_VARIANTS, type RawGooglePrediction } from '../src/sim/google-bucket-view.ts';
+import {
+  assembleGoogleView,
+  buildGoogleReplayUnits,
+  buildGoogleView,
+  GOOGLE_REPLAY_ENGINE_VERSION,
+  GOOGLE_TP_VARIANTS,
+  googleReplayCacheKey,
+  type GoogleEventReplay,
+  type RawGooglePrediction,
+} from '../src/sim/google-bucket-view.ts';
 import type { RawBucket, RawCaptureRow } from '../src/sim/opening-bracket-ingest.ts';
 
 // pins askMax 0.15 + excludeFahrenheit false so the existing 0.14-ask °C fixtures are insulated from the
@@ -294,5 +303,65 @@ describe('buildGoogleView — °C-only mode excludes US °F markets', () => {
     expect(v.nExcludedFahrenheit).toBe(0);
     expect(v.nGoogleEvents).toBe(2);
     expect(v.entries.map((e) => e.eventId).sort()).toEqual(['CELS', 'FAHR']);
+  });
+});
+
+// ── 0103 incremental replay: the decomposition + the jsonb-cache round-trip ──────────────────────────────
+describe('incremental replay (0103) — buildGoogleReplayUnits + assembleGoogleView', () => {
+  const tpEvent: RawCaptureRow[] = [
+    row('TP', '2026-07-01T08:00:00.000Z', 0.2, { execAsk: 0.14, execBid: 0.1 }),
+    row('TP', '2026-07-01T08:00:30.000Z', 0.3, { execAsk: 0.14, execBid: 0.35 }),
+  ];
+  const openEvent: RawCaptureRow[] = [
+    row('OPEN', '2026-07-01T08:00:00.000Z', 0.2, { execAsk: 0.14, execBid: 0.1 }),
+    row('OPEN', '2026-07-01T08:00:30.000Z', 0.3, { execAsk: 0.14, execBid: 0.12 }),
+  ];
+  const noGoogleEvent: RawCaptureRow[] = [row('NG', '2026-07-01T08:00:00.000Z', 0.2)];
+  const captures = [...tpEvent, ...openEvent, ...noGoogleEvent];
+  const googleRows = [gp('TP'), gp('OPEN')]; // NG has no Google feed
+
+  it('assembleGoogleView(buildGoogleReplayUnits(...)) is buildGoogleView — the composition is exact', () => {
+    const direct = buildGoogleView(captures, [], googleRows, cfg);
+    const units = buildGoogleReplayUnits(captures, [], googleRows, cfg);
+    expect(units).toHaveLength(3);
+    expect(assembleGoogleView(units, cfg)).toEqual(direct);
+  });
+
+  it('units survive a JSON round-trip (the jsonb cache) and fold identically', () => {
+    const direct = buildGoogleView(captures, [], googleRows, cfg);
+    const units = buildGoogleReplayUnits(captures, [], googleRows, cfg);
+    const thawed = JSON.parse(JSON.stringify(units)) as GoogleEventReplay[];
+    expect(assembleGoogleView(thawed, cfg)).toEqual(direct);
+  });
+
+  it('mixing cache-thawed and fresh units folds identically — the handler merge path', () => {
+    const direct = buildGoogleView(captures, [], googleRows, cfg);
+    const units = buildGoogleReplayUnits(captures, [], googleRows, cfg);
+    const mixed = [JSON.parse(JSON.stringify(units[0])) as GoogleEventReplay, ...units.slice(1)];
+    expect(assembleGoogleView(mixed, cfg)).toEqual(direct);
+  });
+
+  it('classifies units: traded / no_google; the unit carries the fold inputs', () => {
+    const units = buildGoogleReplayUnits(captures, [], googleRows, cfg);
+    const byId = new Map(units.map((u) => [u.eventId, u]));
+    expect(byId.get('TP')!.kind).toBe('traded');
+    expect(byId.get('TP')!.entry?.exitKind).toBe('take_profit');
+    expect(byId.get('TP')!.panelRow?.executed).toBe(true);
+    expect(byId.get('TP')!.variants).toHaveLength(GOOGLE_TP_VARIANTS.length);
+    expect(byId.get('OPEN')!.kind).toBe('traded');
+    expect(byId.get('OPEN')!.panelRow).toBeNull(); // mtm mark — never a gate row
+    expect(byId.get('NG')!.kind).toBe('no_google');
+    expect(byId.get('NG')!.variants).toBeNull();
+  });
+
+  it('googleReplayCacheKey pins the engine version + every replay-relevant cfg field; cities scope excluded', () => {
+    const k = googleReplayCacheKey(cfg);
+    expect(k).toContain(GOOGLE_REPLAY_ENGINE_VERSION);
+    expect(googleReplayCacheKey({ ...cfg, askMax: 0.12 })).not.toBe(k);
+    expect(googleReplayCacheKey({ ...cfg, excludeFahrenheit: true })).not.toBe(k);
+    expect(googleReplayCacheKey({ ...cfg, maxEntryAgeH: cfg.maxEntryAgeH + 1 })).not.toBe(k);
+    expect(googleReplayCacheKey({ ...cfg, perPositionUsd: cfg.perPositionUsd + 1 })).not.toBe(k);
+    // the cities scope selects WHICH events exist, not how any one event replays — not part of the key.
+    expect(googleReplayCacheKey({ ...cfg, cities: ['elsewhere'] })).toBe(k);
   });
 });

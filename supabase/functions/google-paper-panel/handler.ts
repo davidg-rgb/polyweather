@@ -1,29 +1,38 @@
 /**
- * google-paper-panel — the 15-min Google-picks-bucket forward-paper view tick (migration 0086).
+ * google-paper-panel — the hourly Google-picks-bucket forward-paper view tick (migration 0086; INCREMENTAL
+ * REPLAY since 0103).
  *
  * The Google twin of convergence-panel (0069). One idempotent run:
- *   1. pull the RAW fresh-allowlist capture series + the venue resolution map + the per-event latest Google
- *      forecast PER CITY (google_paper_inputs, service-role), through a bounded worker pool.
- *   2. run the PURE Google-bucket replay view (buildGoogleView → replayGoogleBracket over the frozen "Test 2"
- *      thresholds: buy execAsk < 0.15, NO stop-loss, hold-to-resolution as the floor — with FIVE take-profit exit
- *      variants {0.30..0.50} swept over the SAME fixed entry so the operator can compare which exit is most
- *      favourable; the canonical tpAbs 0.30 variant headlines. A taker strategy on the bucket Google points at).
- *   3. store the small view (record_google_paper) — the page reads only that snapshot.
+ *   1. read the light per-event INDEX of the fresh window (google_paper_event_index) + the cached replay
+ *      units (google_replay_cache_read, keyed by engine-version+cfg). A RESOLVED, non-gm event's replay is
+ *      deterministic forever — its cached unit is reused; only OPEN/new events get their capture series
+ *      fetched (google_paper_inputs_v2, event-filtered, per city through the bounded pool) and re-replayed.
+ *      Newly-resolved units are written back (google_replay_cache_write). CPU/wall now scales with the
+ *      handful of open events, not the whole 21-day window — the fix for the runs dying at the ~400s
+ *      isolate wall as the post-07-07-prune window refilled (loop C27/C34, 2026-07-17).
+ *   2. assemble the PURE view (assembleGoogleView over cached+fresh units — byte-identical to the legacy
+ *      buildGoogleView by construction) and store the small snapshot (record_google_paper).
  *
- * SCOPE = the live `bot.cities` CAPTURE universe (~45 cities), NOT the 10-city §9R TRADABLE allowlist: the
- * strategy runs across ALL cities (the Google forecast, not a house seed, picks the bucket), and the capture
- * stream already spans the full universe. Falls back to BOT_DEFAULTS.cities if the config row is absent. PARAMS
- * stay pinned to GOOGLE_DEFAULTS in code (the loop never mutates the shared bot.* keys). NOT trading — read-only
- * analytics; the bot rail stays paper/DORMANT (FINDINGS.md). A capture gap just yields a smaller/empty view,
- * never a failed job; the per-city fetch-error count is surfaced in the view so the page can flag an undercount.
+ * FALLBACK (staged-dark): if the 0103 index/cache RPCs are absent or fail, the tick runs the LEGACY full
+ * path — fetch every city's full series (google_paper_inputs v1) + buildGoogleView — exactly the pre-0103
+ * behavior. The panel must never die because its cache did.
+ *
+ * SCOPE = the live `bot.cities` CAPTURE universe (~45 cities), NOT the 10-city §9R TRADABLE allowlist. PARAMS
+ * stay pinned to GOOGLE_DEFAULTS in code. NOT trading — read-only analytics; the bot rail stays paper/DORMANT
+ * (FINDINGS.md). A capture gap just yields a smaller/empty view, never a failed job; the per-city fetch-error
+ * count is surfaced in the view so the page can flag an undercount.
  */
 import type { JobCtx, JobStats } from '../_shared/runJob.ts';
 import { retryWrite, withTimeout } from '../_shared/retry.ts';
 import {
   BOT_DEFAULTS,
+  assembleGoogleView,
+  buildGoogleReplayUnits,
   buildGoogleView,
   googleCfg,
+  googleReplayCacheKey,
   parseBotConfig,
+  type GoogleEventReplay,
   type RawCaptureRow,
   type RawGooglePrediction,
   type RawResolution,
@@ -38,27 +47,17 @@ const PANEL_DAYS = 21;
  * none); the overall budget degrades to a PARTIAL view (skipped cities count into cityErrors, which the page
  * already surfaces) — a partial snapshot beats a dead tick.
  *
- * CITY_TIMEOUT_MS must OUTLAST the RPC's own `statement_timeout='40s'` (0086) — 45s = 40s + 5s transport margin.
- * FETCH_CONCURRENCY 3 (not 5) keeps per-call latency near the uncontended ~6.5s floor: 5 concurrent heavy reads
- * self-contend on Micro compute and balloon per-call latency past the timeout (the 2026-07-06 maker-exit
- * incident). At 3 all ~45 cities clear well inside the 270s budget (~15 waves × ~12s ≈ 190s).
+ * CITY_TIMEOUT_MS must OUTLAST the RPC's own `statement_timeout='40s'` (0086/0103) — 45s = 40s + 5s transport
+ * margin. FETCH_CONCURRENCY 3 (not 5) keeps per-call latency near the uncontended floor (the 2026-07-06
+ * maker-exit incident). On the incremental path only the cities holding OPEN/uncached events are fetched at
+ * all, so the pool usually runs a handful of small event-filtered calls.
  */
 const FETCH_CONCURRENCY = 3;
 /** exported for a tripwire test — must OUTLAST the RPC's 40s statement_timeout. */
 export const CITY_TIMEOUT_MS = 45_000;
 const FETCH_BUDGET_MS = 270_000;
 
-/**
- * terminal-write retry tuning (mirrors convergence-panel / maker-exit-panel — see _shared/retry.ts for the
- * idempotency argument). One transient "upstream request timeout" on the single snapshot insert must not discard
- * the minutes of per-city fetch already done; record_google_paper is a pure insert + prune-to-200 (no upsert, no
- * uniqueness) and dash_google_paper reads only the latest row, so a retry is safe.
- *
- * ARITHMETIC — stays under the ~400s isolate wall with margin (mirror convergence-panel + the 270s budget):
- *   fetch phase worst case  = FETCH_BUDGET_MS (270s) + one in-flight city's CITY_TIMEOUT_MS tail (45s) = 315s.
- *   terminal-write phase worst case = 3 attempts × 15s + (3s + 8s) backoffs = 56s.
- *   total = 315s + 56s = 371s, leaving a ~29s margin even in the all-hang case (the common case is ~250s).
- */
+/** terminal-write retry tuning (mirrors convergence-panel / maker-exit-panel; see _shared/retry.ts). */
 const RECORD_WRITE_RETRIES = 2;
 const RECORD_WRITE_BACKOFF_MS = [3_000, 8_000];
 const RECORD_WRITE_TIMEOUT_MS = 15_000;
@@ -79,6 +78,31 @@ interface GoogleInputs {
   google: RawGooglePrediction[];
 }
 
+/** One row of google_paper_event_index (0103). */
+interface IndexRow {
+  eventId: string;
+  city: string;
+  targetDate: string;
+  resolved: boolean;
+  gm: boolean;
+}
+
+const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e));
+
+const REPLAY_KINDS = new Set(['no_google', 'excluded_f', 'unbucketable', 'traded']);
+/** Defensive shape check on a cache-deserialized unit — a malformed row is dropped, never folded. */
+function isReplayUnit(u: unknown): u is GoogleEventReplay {
+  if (u == null || typeof u !== 'object') return false;
+  const o = u as Record<string, unknown>;
+  return (
+    typeof o['eventId'] === 'string' &&
+    typeof o['city'] === 'string' &&
+    typeof o['targetDate'] === 'string' &&
+    typeof o['kind'] === 'string' &&
+    REPLAY_KINDS.has(o['kind'])
+  );
+}
+
 export async function googlePaperPanel(ctx: JobCtx, deps: GooglePaperPanelDeps): Promise<JobStats> {
   const { db, log } = ctx;
 
@@ -92,61 +116,192 @@ export async function googlePaperPanel(ctx: JobCtx, deps: GooglePaperPanelDeps):
     /* config unreadable → the conservative 10-city fallback */
   }
   const cfg = googleCfg(scopeCities);
-
-  // 1) raw inputs (captures + resolutions + per-event Google forecast) for the fresh-allowlist window — fetched
-  //    PER CITY through the bounded worker pool; merge the per-city results. Interleaved arrival order is safe:
-  //    buildEvents groups per event and sorts ticks by capturedAt internally.
+  const cacheKey = googleReplayCacheKey(cfg);
   const fetchConcurrency = deps.fetchConcurrency ?? FETCH_CONCURRENCY;
   const cityTimeoutMs = deps.cityTimeoutMs ?? CITY_TIMEOUT_MS;
   const fetchBudgetMs = deps.fetchBudgetMs ?? FETCH_BUDGET_MS;
+
+  // 1) INCREMENTAL PREFLIGHT — the event index + the cache read. ANY failure (absent RPC pre-0103, a
+  //    timeout, a shapeless result) drops this run to the legacy full path; the panel never dies of cache.
+  let index: IndexRow[] | null = null;
+  try {
+    const r = await withTimeout(
+      db.rpc<{ google_paper_event_index: { rows?: unknown } | null }>('google_paper_event_index', {
+        p_days: PANEL_DAYS,
+        p_cities: cfg.cities,
+      }),
+      cityTimeoutMs,
+      `google_paper_event_index timed out after ${cityTimeoutMs}ms`,
+    );
+    const rows = r[0]?.google_paper_event_index?.rows;
+    if (Array.isArray(rows)) {
+      index = rows.filter(
+        (x): x is IndexRow => x != null && typeof (x as IndexRow).eventId === 'string' && typeof (x as IndexRow).city === 'string',
+      );
+    }
+  } catch (e) {
+    log('event index unavailable — legacy full replay this run', { error: errMsg(e) });
+  }
+
+  let cachedRaw: GoogleEventReplay[] | null = null;
+  if (index != null) {
+    try {
+      const r = await withTimeout(
+        db.rpc<{ google_replay_cache_read: { rows?: unknown } | null }>('google_replay_cache_read', {
+          p_cache_key: cacheKey,
+          p_event_ids: index.map((x) => x.eventId),
+        }),
+        cityTimeoutMs,
+        `google_replay_cache_read timed out after ${cityTimeoutMs}ms`,
+      );
+      const rows = r[0]?.google_replay_cache_read?.rows;
+      if (Array.isArray(rows)) cachedRaw = rows.filter(isReplayUnit);
+    } catch (e) {
+      log('cache read unavailable — legacy full replay this run', { error: errMsg(e) });
+    }
+  }
+  const incremental = index != null && cachedRaw != null;
+
+  // 2) plan the fetch: legacy = every city, full series (v1). incremental = only the cities holding an
+  //    event that NEEDS replay (open, or resolved-but-uncached), event-filtered (v2).
+  let jobs: Array<{ city: string; eventIds: string[] | null }>;
+  if (incremental) {
+    const cachedIds = new Set(cachedRaw!.map((u) => u.eventId));
+    const needByCity = new Map<string, string[]>();
+    for (const row of index!) {
+      if (row.gm) continue; // grading-mismatch: excluded from the population entirely
+      if (row.resolved && cachedIds.has(row.eventId)) continue; // frozen + cached — nothing to do
+      const list = needByCity.get(row.city);
+      if (list) list.push(row.eventId);
+      else needByCity.set(row.city, [row.eventId]);
+    }
+    jobs = [...needByCity.entries()].map(([city, eventIds]) => ({ city, eventIds }));
+  } else {
+    jobs = cfg.cities.map((city) => ({ city, eventIds: null }));
+  }
+
+  // 3) the bounded per-city pool. LEGACY jobs just fetch-and-merge; INCREMENTAL jobs fetch → replay →
+  //    WRITE THAT CITY'S frozen units to the cache IMMEDIATELY (C37: the warm pass replays everything and
+  //    the first design wrote the cache once at the END — a reaped bootstrap run made ZERO progress and
+  //    restarted from scratch forever. Per-city writes make every run's progress durable: even a reaped
+  //    warm run caches the cities it finished, and the bootstrap converges across runs unattended).
   const captures: RawCaptureRow[] = [];
   const resolutions: RawResolution[] = [];
   const google: RawGooglePrediction[] = [];
+  const freshUnitsAcc: GoogleEventReplay[] = [];
+  const freezeIds = new Set((index ?? []).filter((r) => r.resolved && !r.gm).map((r) => r.eventId));
+  let captureRows = 0;
   let cityErrors = 0;
   let budgetSkipped = 0;
+  let cacheWrites = 0;
   const fetchStarted = Date.now();
-  let nextCity = 0;
+  let nextJob = 0;
   const worker = async (): Promise<void> => {
     for (;;) {
-      const i = nextCity++;
-      if (i >= cfg.cities.length) return;
-      const city = cfg.cities[i]!;
+      const i = nextJob++;
+      if (i >= jobs.length) return;
+      const job = jobs[i]!;
       if (Date.now() - fetchStarted > fetchBudgetMs) {
         budgetSkipped++;
         cityErrors++;
         continue;
       }
       try {
+        const rpcName = job.eventIds == null ? 'google_paper_inputs' : 'google_paper_inputs_v2';
+        const args: Record<string, unknown> =
+          job.eventIds == null
+            ? { p_days: PANEL_DAYS, p_cities: [job.city] }
+            : { p_days: PANEL_DAYS, p_cities: [job.city], p_event_ids: job.eventIds };
         const r = await withTimeout(
-          db.rpc<{ google_paper_inputs: GoogleInputs }>('google_paper_inputs', {
-            p_days: PANEL_DAYS,
-            p_cities: [city],
-          }),
+          db.rpc<Record<string, GoogleInputs | null>>(rpcName, args),
           cityTimeoutMs,
-          `google_paper_inputs(${city}) timed out after ${cityTimeoutMs}ms`,
+          `${rpcName}(${job.city}) timed out after ${cityTimeoutMs}ms`,
         );
-        const inp = r[0]?.google_paper_inputs ?? { captures: [], resolutions: [], google: [] };
-        if (Array.isArray(inp.captures)) captures.push(...inp.captures);
-        if (Array.isArray(inp.resolutions)) resolutions.push(...inp.resolutions);
-        if (Array.isArray(inp.google)) google.push(...inp.google);
+        const inp = r[0]?.[rpcName] ?? { captures: [], resolutions: [], google: [] };
+        const caps = Array.isArray(inp.captures) ? inp.captures : [];
+        captureRows += caps.length;
+        if (job.eventIds == null) {
+          // LEGACY: merge raw inputs; the single full replay happens after the pool.
+          captures.push(...caps);
+          if (Array.isArray(inp.resolutions)) resolutions.push(...inp.resolutions);
+          if (Array.isArray(inp.google)) google.push(...inp.google);
+        } else {
+          // INCREMENTAL: replay THIS city now and freeze its resolved units before moving on.
+          const units = buildGoogleReplayUnits(
+            caps,
+            Array.isArray(inp.resolutions) ? inp.resolutions : [],
+            Array.isArray(inp.google) ? inp.google : [],
+            cfg,
+          );
+          freshUnitsAcc.push(...units);
+          const toWrite = units.filter((u) => freezeIds.has(u.eventId));
+          if (toWrite.length > 0) {
+            try {
+              const w = await withTimeout(
+                db.rpc<{ google_replay_cache_write: number }>('google_replay_cache_write', {
+                  p_cache_key: cacheKey,
+                  p_rows: toWrite,
+                }),
+                RECORD_WRITE_TIMEOUT_MS,
+                `google_replay_cache_write(${job.city}) timed out after ${RECORD_WRITE_TIMEOUT_MS}ms`,
+              );
+              cacheWrites += Number(w[0]?.google_replay_cache_write ?? 0);
+            } catch (e) {
+              log('cache write failed (non-fatal — units re-replay next run)', { city: job.city, error: errMsg(e) });
+            }
+          }
+        }
       } catch (e) {
         cityErrors++;
-        log('city inputs fetch failed (non-fatal)', { city, error: e instanceof Error ? e.message : String(e) });
+        log('city inputs fetch failed (non-fatal)', { city: job.city, error: errMsg(e) });
       }
     }
   };
-  await Promise.all(
-    Array.from({ length: Math.max(1, Math.min(fetchConcurrency, cfg.cities.length)) }, () => worker()),
-  );
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(fetchConcurrency, Math.max(jobs.length, 1))) }, () => worker()));
   if (budgetSkipped > 0) {
     log('fetch budget exhausted — partial view', { budgetSkipped, budgetMs: fetchBudgetMs });
   }
 
-  // 2) the pure view (entries / per-day / fictive money / Google coverage / §9R-E gate). cityErrors is threaded
-  //    in so the page can flag when capture-universe cities were dropped this tick (a silent gate undercount).
-  const view = { ...buildGoogleView(captures, resolutions, google, cfg), days: PANEL_DAYS, cityErrors };
+  // 4) the pure view. incremental: fold cached-frozen units + the per-city fresh units the pool already
+  //    replayed (and cache-wrote) as it went; legacy: the single full replay exactly as pre-0103.
+  let view: Record<string, unknown>;
+  let cacheUnitsUsed = 0;
+  let replayedEvents = 0;
+  if (incremental) {
+    replayedEvents = freshUnitsAcc.length;
+    const freshIds = new Set(freshUnitsAcc.map((u) => u.eventId));
+    const gmIds = new Set(index!.filter((r) => r.gm).map((r) => r.eventId));
+    const indexIds = new Set(index!.map((r) => r.eventId));
+    // cached units count only while still in the window, not gm-flipped since caching, and not recomputed.
+    const usableCached = cachedRaw!.filter((u) => indexIds.has(u.eventId) && !gmIds.has(u.eventId) && !freshIds.has(u.eventId));
+    cacheUnitsUsed = usableCached.length;
+    view = { ...assembleGoogleView([...usableCached, ...freshUnitsAcc], cfg), days: PANEL_DAYS, cityErrors };
+  } else {
+    view = { ...buildGoogleView(captures, resolutions, google, cfg), days: PANEL_DAYS, cityErrors };
+  }
 
-  // 3) store the small snapshot — BOUNDED RETRY (see the tuning block for the idempotency + wall-clock argument).
+  // 4.5) GUARD (C35): an ALL-FAILED fetch must never overwrite a good snapshot with an empty view (the
+  //      10:24Z 07-17 incident: 45/45 v2 calls raised on the 0103 uuid-cast bug and an empty panel
+  //      replaced the real one on the dash). Zero folded events + at least one fetch error ⇒ skip the
+  //      record — the dash keeps the last good snapshot; cityErrors/the deadman surface the incident.
+  //      A legitimately empty universe (no fresh events, no errors) still records.
+  const foldedEvents = Number((view as { nFreshEvents?: unknown }).nFreshEvents ?? 0);
+  if (foldedEvents === 0 && cityErrors > 0) {
+    const skipStats: JobStats = {
+      asOf: deps.now.toISOString(),
+      incremental,
+      cityErrors,
+      budgetSkipped,
+      captureRows,
+      cacheWrites,
+      skippedEmptyRecord: true,
+      snapshotId: 0,
+    };
+    log('empty view with fetch errors — snapshot NOT recorded (keeping the last good one)', skipStats);
+    return skipStats;
+  }
+
+  // 5) store the small snapshot — BOUNDED RETRY (idempotent insert; dash reads only the latest row).
   const w = await retryWrite(
     () => db.rpc<{ record_google_paper: number }>('record_google_paper', { p_view: view }),
     {
@@ -155,26 +310,29 @@ export async function googlePaperPanel(ctx: JobCtx, deps: GooglePaperPanelDeps):
       attemptTimeoutMs: RECORD_WRITE_TIMEOUT_MS,
       label: 'record_google_paper',
       onRetry: (attempt, e) =>
-        log('record_google_paper write failed — retrying', {
-          attempt: attempt + 1,
-          error: e instanceof Error ? e.message : String(e),
-        }),
+        log('record_google_paper write failed — retrying', { attempt: attempt + 1, error: errMsg(e) }),
     },
     deps.retrySleep,
   );
   const snapshotId = Number(w[0]?.record_google_paper ?? 0);
 
+  const v = view as { nFreshEvents: number; nGoogleEvents: number; nNoGoogleEvents: number; entries: unknown[]; gate: { nMarkets: number; label: string } };
   const stats: JobStats = {
     asOf: deps.now.toISOString(),
+    incremental,
+    indexEvents: index?.length ?? null,
+    cacheUnitsUsed,
+    replayedEvents,
+    cacheWrites,
     cityErrors,
     budgetSkipped,
-    captureRows: captures.length,
-    freshEvents: view.nFreshEvents,
-    googleEvents: view.nGoogleEvents,
-    noGoogleEvents: view.nNoGoogleEvents,
-    entries: view.entries.length,
-    nMarkets: view.gate.nMarkets,
-    label: view.gate.label,
+    captureRows,
+    freshEvents: v.nFreshEvents,
+    googleEvents: v.nGoogleEvents,
+    noGoogleEvents: v.nNoGoogleEvents,
+    entries: v.entries.length,
+    nMarkets: v.gate.nMarkets,
+    label: v.gate.label,
     snapshotId,
   };
   log('google-paper-panel complete', stats);
