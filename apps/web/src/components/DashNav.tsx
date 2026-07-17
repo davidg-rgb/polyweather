@@ -29,6 +29,7 @@ export const DASH_NAV: ReadonlyArray<readonly [string, string]> = [
   ['/', 'overview'], // the analytics front door — forecast skill vs. market (reference idiom)
   ['/efficiency', 'efficiency'], // THE VERDICT — the falsified-lever proof (reference idiom)
   ...(INCLUDE_SIGNALS ? ([['/signals', 'signals']] as const) : []), // the verdict explorer — flagship (N1), immediately after /efficiency
+  ['/cities', 'cities'], // the CITIES PREDICTION TABLE — per-city pick + success rate + time to close (dash_city_predictions, 0106)
   ['/monitor', 'monitor'], // forward paper CONFIRMATION of C23/C24 — §9R-E gate over time (dash_efficiency_monitor, 0091)
   ['/convergence', 'google'], // "Test 2" — Google-picks-bucket taker forward-paper panel (dash_google_paper)
   ['/maker-exit', 'maker-exit'], // the maker-exit variant — first +EV config (dash_maker_exit)

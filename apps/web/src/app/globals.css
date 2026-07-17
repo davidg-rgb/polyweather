@@ -295,3 +295,15 @@ svg.equity { display: block; max-width: 100%; height: auto; }
 .ams-dash details.detail[open] > summary::before { content: '▾ '; }
 .ams-dash details.detail > summary:hover { color: var(--ams-text); }
 .ams-dash details.detail > summary:focus-visible { outline: 1px solid var(--ams-secondary); outline-offset: 2px; border-radius: 4px; }
+
+/* ── WS-A mobile pass (/trading, 2026-07-17): the interlock verdict stays pinned while the operator
+   scrolls the long console on a phone, and the form controls clear the 44px touch-target floor.
+   Sticky needs an OPAQUE surface (the glass banner is translucent) so content never ghosts through
+   while pinned; scroll-margin keeps the #gate-override anchor clear of the pinned banner. ─────────── */
+.ams-dash #gate-override { scroll-margin-top: 6rem; }
+@media (max-width: 720px) {
+  .ams-dash .sticky-verdict { position: sticky; top: 0; z-index: 40; background: #08131f; }
+  .ams-dash .form-row button,
+  .ams-dash .form-row input,
+  .ams-dash .form-row select { min-height: 44px; }
+}
