@@ -469,6 +469,11 @@ describe('migrations 0001–0010', () => {
       // recorded an empty view). event_id::text = any(p_event_ids); the SQL-surface suite below exercises
       // exactly that call shape so the class cannot recur silently.
       '0104_google_inputs_v2_uuid_cast.sql',
+      // 0105 = 0103 hotfix 2 (C37): the cache write's type guard returned 0 on a DOUBLE-ENCODED jsonb
+      // string payload (the postgres-js/DbPort param path — the project's known double-encoding trap);
+      // the local warm run built every unit and wrote nothing. The fn now unwraps a string-typed payload
+      // once before the array guard.
+      '0105_google_cache_write_unwrap.sql',
     ]);
   });
 });
@@ -1668,6 +1673,19 @@ describe('0103/0104 google incremental-replay SQL surface', () => {
       `select public.google_paper_inputs_v2(2, array['amsterdam'], array['00000000-0000-0000-0000-000000000000']) is not null as ok`,
     );
     expect(r[0]!.ok).toBe(true);
+  });
+
+  it('cache write unwraps a DOUBLE-ENCODED string payload (the 0105 regression — the DbPort param path)', async () => {
+    const r = await rows<{ n: number }>(
+      db,
+      `select public.google_replay_cache_write('k-dbl', to_jsonb('[{"eventId":"e-dbl","kind":"traded"}]'::text)) as n`,
+    );
+    expect(Number(r[0]!.n)).toBe(1);
+    const hit = await rows<{ n: number }>(
+      db,
+      `select jsonb_array_length(public.google_replay_cache_read('k-dbl', array['e-dbl'])->'rows') as n`,
+    );
+    expect(Number(hit[0]!.n)).toBe(1);
   });
 
   it('cache write/read round-trips a unit under its key; foreign keys and ids read empty', async () => {

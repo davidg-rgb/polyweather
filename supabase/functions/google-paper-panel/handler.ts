@@ -180,12 +180,20 @@ export async function googlePaperPanel(ctx: JobCtx, deps: GooglePaperPanelDeps):
     jobs = cfg.cities.map((city) => ({ city, eventIds: null }));
   }
 
-  // 3) the bounded per-city fetch pool (unchanged shape; the incremental path just has far fewer, smaller jobs).
+  // 3) the bounded per-city pool. LEGACY jobs just fetch-and-merge; INCREMENTAL jobs fetch → replay →
+  //    WRITE THAT CITY'S frozen units to the cache IMMEDIATELY (C37: the warm pass replays everything and
+  //    the first design wrote the cache once at the END — a reaped bootstrap run made ZERO progress and
+  //    restarted from scratch forever. Per-city writes make every run's progress durable: even a reaped
+  //    warm run caches the cities it finished, and the bootstrap converges across runs unattended).
   const captures: RawCaptureRow[] = [];
   const resolutions: RawResolution[] = [];
   const google: RawGooglePrediction[] = [];
+  const freshUnitsAcc: GoogleEventReplay[] = [];
+  const freezeIds = new Set((index ?? []).filter((r) => r.resolved && !r.gm).map((r) => r.eventId));
+  let captureRows = 0;
   let cityErrors = 0;
   let budgetSkipped = 0;
+  let cacheWrites = 0;
   const fetchStarted = Date.now();
   let nextJob = 0;
   const worker = async (): Promise<void> => {
@@ -210,9 +218,39 @@ export async function googlePaperPanel(ctx: JobCtx, deps: GooglePaperPanelDeps):
           `${rpcName}(${job.city}) timed out after ${cityTimeoutMs}ms`,
         );
         const inp = r[0]?.[rpcName] ?? { captures: [], resolutions: [], google: [] };
-        if (Array.isArray(inp.captures)) captures.push(...inp.captures);
-        if (Array.isArray(inp.resolutions)) resolutions.push(...inp.resolutions);
-        if (Array.isArray(inp.google)) google.push(...inp.google);
+        const caps = Array.isArray(inp.captures) ? inp.captures : [];
+        captureRows += caps.length;
+        if (job.eventIds == null) {
+          // LEGACY: merge raw inputs; the single full replay happens after the pool.
+          captures.push(...caps);
+          if (Array.isArray(inp.resolutions)) resolutions.push(...inp.resolutions);
+          if (Array.isArray(inp.google)) google.push(...inp.google);
+        } else {
+          // INCREMENTAL: replay THIS city now and freeze its resolved units before moving on.
+          const units = buildGoogleReplayUnits(
+            caps,
+            Array.isArray(inp.resolutions) ? inp.resolutions : [],
+            Array.isArray(inp.google) ? inp.google : [],
+            cfg,
+          );
+          freshUnitsAcc.push(...units);
+          const toWrite = units.filter((u) => freezeIds.has(u.eventId));
+          if (toWrite.length > 0) {
+            try {
+              const w = await withTimeout(
+                db.rpc<{ google_replay_cache_write: number }>('google_replay_cache_write', {
+                  p_cache_key: cacheKey,
+                  p_rows: toWrite,
+                }),
+                RECORD_WRITE_TIMEOUT_MS,
+                `google_replay_cache_write(${job.city}) timed out after ${RECORD_WRITE_TIMEOUT_MS}ms`,
+              );
+              cacheWrites += Number(w[0]?.google_replay_cache_write ?? 0);
+            } catch (e) {
+              log('cache write failed (non-fatal — units re-replay next run)', { city: job.city, error: errMsg(e) });
+            }
+          }
+        }
       } catch (e) {
         cityErrors++;
         log('city inputs fetch failed (non-fatal)', { city: job.city, error: errMsg(e) });
@@ -224,43 +262,20 @@ export async function googlePaperPanel(ctx: JobCtx, deps: GooglePaperPanelDeps):
     log('fetch budget exhausted — partial view', { budgetSkipped, budgetMs: fetchBudgetMs });
   }
 
-  // 4) the pure view. incremental: fold cached-frozen units + freshly-replayed units (assembleGoogleView —
-  //    byte-identical to buildGoogleView by construction); legacy: the full replay exactly as pre-0103.
+  // 4) the pure view. incremental: fold cached-frozen units + the per-city fresh units the pool already
+  //    replayed (and cache-wrote) as it went; legacy: the single full replay exactly as pre-0103.
   let view: Record<string, unknown>;
   let cacheUnitsUsed = 0;
   let replayedEvents = 0;
-  let cacheWrites = 0;
   if (incremental) {
-    const freshUnits = buildGoogleReplayUnits(captures, resolutions, google, cfg);
-    replayedEvents = freshUnits.length;
-    const freshIds = new Set(freshUnits.map((u) => u.eventId));
+    replayedEvents = freshUnitsAcc.length;
+    const freshIds = new Set(freshUnitsAcc.map((u) => u.eventId));
     const gmIds = new Set(index!.filter((r) => r.gm).map((r) => r.eventId));
     const indexIds = new Set(index!.map((r) => r.eventId));
     // cached units count only while still in the window, not gm-flipped since caching, and not recomputed.
     const usableCached = cachedRaw!.filter((u) => indexIds.has(u.eventId) && !gmIds.has(u.eventId) && !freshIds.has(u.eventId));
     cacheUnitsUsed = usableCached.length;
-    const units = [...usableCached, ...freshUnits];
-    view = { ...assembleGoogleView(units, cfg), days: PANEL_DAYS, cityErrors };
-
-    // write back the units frozen this run (resolved + non-gm per the fresh index) — BEFORE the snapshot
-    // write so a failed record still warms the cache. Non-fatal: a failed write just means a re-replay.
-    const freezeIds = new Set(index!.filter((r) => r.resolved && !r.gm).map((r) => r.eventId));
-    const toWrite = freshUnits.filter((u) => freezeIds.has(u.eventId));
-    if (toWrite.length > 0) {
-      try {
-        const w = await withTimeout(
-          db.rpc<{ google_replay_cache_write: number }>('google_replay_cache_write', {
-            p_cache_key: cacheKey,
-            p_rows: toWrite,
-          }),
-          RECORD_WRITE_TIMEOUT_MS,
-          `google_replay_cache_write timed out after ${RECORD_WRITE_TIMEOUT_MS}ms`,
-        );
-        cacheWrites = Number(w[0]?.google_replay_cache_write ?? 0);
-      } catch (e) {
-        log('cache write failed (non-fatal — units re-replay next run)', { error: errMsg(e), attempted: toWrite.length });
-      }
-    }
+    view = { ...assembleGoogleView([...usableCached, ...freshUnitsAcc], cfg), days: PANEL_DAYS, cityErrors };
   } else {
     view = { ...buildGoogleView(captures, resolutions, google, cfg), days: PANEL_DAYS, cityErrors };
   }
@@ -277,7 +292,8 @@ export async function googlePaperPanel(ctx: JobCtx, deps: GooglePaperPanelDeps):
       incremental,
       cityErrors,
       budgetSkipped,
-      captureRows: captures.length,
+      captureRows,
+      cacheWrites,
       skippedEmptyRecord: true,
       snapshotId: 0,
     };
@@ -310,7 +326,7 @@ export async function googlePaperPanel(ctx: JobCtx, deps: GooglePaperPanelDeps):
     cacheWrites,
     cityErrors,
     budgetSkipped,
-    captureRows: captures.length,
+    captureRows,
     freshEvents: v.nFreshEvents,
     googleEvents: v.nGoogleEvents,
     noGoogleEvents: v.nNoGoogleEvents,
