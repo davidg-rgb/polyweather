@@ -4,9 +4,16 @@
  * loader mocked to prove (a) it never throws, (b) the table rows + tiles + the buy-window highlight + the
  * small-n grey rule + the no-open-market panel all reach the DOM, and (c) the staged-dark path renders.
  */
+import { wilsonInterval } from '@weather-edge/core';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
+
+/** The page's conservative-upside formula, recomputed independently for dynamic expectations. */
+const upsideStr = (hits: number, n: number, ask: number): string => {
+  const v = wilsonInterval(hits, n).lo / ask - 1;
+  return `${v > 0 ? '+' : ''}${Math.round(v * 100)}%`;
+};
 
 vi.mock('../src/lib/supabase.ts', () => ({ serverDb: async () => ({}) }));
 
@@ -79,6 +86,22 @@ describe('/cities page renders', () => {
 
     // unseeded capture renders the honest empty state, not a fabricated pick
     expect(html).toContain('unseeded');
+
+    // the sortable headers render with the default time-to-close ascending sort + idle arrows
+    expect(html).toContain('aria-sort="ascending"'); // the active 'time to close' column
+    expect(html).toContain('upside /$1'); // the new metric column header
+    expect(html).toContain('↕'); // inactive columns advertise sortability
+
+    // the conservative-upside column: values recomputed independently from the fixture
+    // seoul: wilson95lo(11,18)/0.38 − 1 (≈ +2%) — a well-sampled record near its ask
+    expect(html).toContain(upsideStr(11, 18, 0.38));
+    // denver: wilson95lo(1,3)/0.12 − 1 (≈ −49%) — the thin-record longshot sinks, muted under the n floor
+    expect(html).toContain(upsideStr(1, 3, 0.12));
+    // perth has no ask and no history → the em-dash cell (null upside)
+    expect(html).toContain('needs both a graded history and a live ask');
+    // the footnote pins the metric's honesty framing
+    expect(html).toContain('deliberately conservative');
+    expect(html).toContain('Wilson-95% lower');
 
     // "all available cities" literal: amsterdam has no open market → the idle panel
     expect(html).toContain('No open market right now');
