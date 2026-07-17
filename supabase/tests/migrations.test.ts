@@ -464,6 +464,11 @@ describe('migrations 0001–0010', () => {
       // google_paper_inputs_v2 (0086's inputs + an event-id filter; v1 untouched — the handler staged-dark
       // falls back to the full legacy path when these are absent).
       '0103_google_replay_cache.sql',
+      // 0104 = 0103 hotfix (C35): google_paper_inputs_v2's event filter compared uuid = text[] and raised
+      // 42883 on EVERY event-filtered call (the 10:24Z first incremental tick failed 45/45 cities and
+      // recorded an empty view). event_id::text = any(p_event_ids); the SQL-surface suite below exercises
+      // exactly that call shape so the class cannot recur silently.
+      '0104_google_inputs_v2_uuid_cast.sql',
     ]);
   });
 });
@@ -1651,5 +1656,39 @@ describe('0093 allowlist validation — trade_config_set normalizes + validates 
         rows(tdb, `select public.trade_config_set(p_city_allowlist := array['karachi'])`),
       ),
     ).rejects.toThrow(/ERR_FORBIDDEN/);
+  });
+});
+
+describe('0103/0104 google incremental-replay SQL surface', () => {
+  it('google_paper_inputs_v2 accepts an event-id filter against the uuid column (the 0104 regression)', async () => {
+    // the 0103 bug: `event_id = any(text[])` raised 42883 (uuid = text) on EVERY event-filtered call —
+    // runtime-only, so DDL application alone could never catch it. Exercise the exact call shape.
+    const r = await rows<{ ok: boolean }>(
+      db,
+      `select public.google_paper_inputs_v2(2, array['amsterdam'], array['00000000-0000-0000-0000-000000000000']) is not null as ok`,
+    );
+    expect(r[0]!.ok).toBe(true);
+  });
+
+  it('cache write/read round-trips a unit under its key; foreign keys and ids read empty', async () => {
+    await rows(db, `select public.google_replay_cache_write('k-test', '[{"eventId":"e1","kind":"traded"}]'::jsonb)`);
+    const hit = await rows<{ n: number }>(
+      db,
+      `select jsonb_array_length(public.google_replay_cache_read('k-test', array['e1'])->'rows') as n`,
+    );
+    expect(Number(hit[0]!.n)).toBe(1);
+    const missKey = await rows<{ n: number }>(
+      db,
+      `select jsonb_array_length(public.google_replay_cache_read('k-other', array['e1'])->'rows') as n`,
+    );
+    expect(Number(missKey[0]!.n)).toBe(0);
+  });
+
+  it('google_paper_event_index returns the {rows:[…]} envelope', async () => {
+    const r = await rows<{ ok: boolean }>(
+      db,
+      `select (public.google_paper_event_index(2, array['amsterdam'])->'rows') is not null as ok`,
+    );
+    expect(r[0]!.ok).toBe(true);
   });
 });

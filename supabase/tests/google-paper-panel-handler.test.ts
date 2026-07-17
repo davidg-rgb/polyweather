@@ -220,3 +220,26 @@ describe('google-paper-panel — the 0103 incremental replay', () => {
     expect(view.cityErrors).toBe(1);
   });
 });
+
+describe('google-paper-panel — the C35 empty-record guard', () => {
+  it('an ALL-FAILED fetch (zero folded events + errors) never records — the last good snapshot survives', async () => {
+    const h = harness({
+      index: [{ eventId: 'E3', city: 'amsterdam', targetDate: DATE, resolved: false, gm: false }],
+      cached: [],
+      v2Throws: true,
+    });
+    const stats = await googlePaperPanel(h.ctx, h.deps);
+    expect(stats.skippedEmptyRecord).toBe(true);
+    expect(stats.snapshotId).toBe(0);
+    expect(h.db.recorded).toHaveLength(0);
+    expect(callsOf(h.db, 'record_google_paper')).toHaveLength(0);
+  });
+
+  it('a legitimately empty universe (no fresh events, no errors) still records', async () => {
+    const h = harness({ index: [], cached: [] });
+    const stats = await googlePaperPanel(h.ctx, h.deps);
+    expect(stats.skippedEmptyRecord).toBeUndefined();
+    expect(h.db.recorded).toHaveLength(1);
+    expect(stats.snapshotId).toBe(7);
+  });
+});

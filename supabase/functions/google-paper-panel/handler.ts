@@ -265,6 +265,26 @@ export async function googlePaperPanel(ctx: JobCtx, deps: GooglePaperPanelDeps):
     view = { ...buildGoogleView(captures, resolutions, google, cfg), days: PANEL_DAYS, cityErrors };
   }
 
+  // 4.5) GUARD (C35): an ALL-FAILED fetch must never overwrite a good snapshot with an empty view (the
+  //      10:24Z 07-17 incident: 45/45 v2 calls raised on the 0103 uuid-cast bug and an empty panel
+  //      replaced the real one on the dash). Zero folded events + at least one fetch error ⇒ skip the
+  //      record — the dash keeps the last good snapshot; cityErrors/the deadman surface the incident.
+  //      A legitimately empty universe (no fresh events, no errors) still records.
+  const foldedEvents = Number((view as { nFreshEvents?: unknown }).nFreshEvents ?? 0);
+  if (foldedEvents === 0 && cityErrors > 0) {
+    const skipStats: JobStats = {
+      asOf: deps.now.toISOString(),
+      incremental,
+      cityErrors,
+      budgetSkipped,
+      captureRows: captures.length,
+      skippedEmptyRecord: true,
+      snapshotId: 0,
+    };
+    log('empty view with fetch errors — snapshot NOT recorded (keeping the last good one)', skipStats);
+    return skipStats;
+  }
+
   // 5) store the small snapshot — BOUNDED RETRY (idempotent insert; dash reads only the latest row).
   const w = await retryWrite(
     () => db.rpc<{ record_google_paper: number }>('record_google_paper', { p_view: view }),
