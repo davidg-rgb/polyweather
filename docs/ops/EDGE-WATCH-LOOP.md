@@ -280,6 +280,13 @@ checkpoints to align on: 06:17Z Action · 10:00/13:50/20:45Z city ticks · 07:00
 
 ## Cycle log
 
+- **C38 (2026-07-17 ~12:30–12:35Z) — INCREMENTAL PANEL VERIFIED LIVE + SHIPPED TO MAIN (the C27→C38
+  arc CLOSED).** The 12:24Z tick: **ok in 13.7s** (vs ~290s + daily reaps — ~21×), incremental=true,
+  cacheUnitsUsed 376 + replayed 119 open events, cityErrors 0, snapshot 575 recorded, gate accruing
+  (n=19 INSUFFICIENT — the real record, restored). **PR #25 squash-merged 12:34Z** (0103+0104+0105 +
+  handler + warm script), loop branch reconciled. The google panel's death-by-growth is permanently
+  fixed; steady-state runs replay only open events. (One poll-markets statement timeout 12:12Z — the
+  known Micro class, n=1, watch only.) Buy lane throughout: no override, no orders, ticks green.
 - **C37 (2026-07-17 ~11:37–11:50Z) — the warm pass couldn't fit the wall + a second latent bug found →
   BOTH fixed; cache BOOTSTRAPPED (376 rows).** The 11:24Z warm run was reaped with the cache still at
   0 rows: the first design wrote the cache once at the END, so a reaped bootstrap made zero progress
