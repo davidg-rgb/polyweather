@@ -205,6 +205,115 @@ function exitKindOf(reason: string): GoogleExitKind {
   return 'open_marked'; // mtm_unresolved / mtm_grading_mismatch
 }
 
+// ─────────────────────────────────────────────────────────────────────────────────────────────────
+// Incremental replay (0103) — the per-event unit + the pure fold. buildGoogleView is their composition,
+// so the existing view tests prove the decomposition byte-equivalent. The Edge handler caches units for
+// RESOLVED, non-gm events (deterministic forever: captures frozen, resolution settled, cfg pinned) and
+// re-replays only open/new events — the fix for the hourly full-window replay outgrowing the Edge wall.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────
+
+/** Bump when replayGoogleBracket / bucketing / variant semantics change — invalidates every cached unit. */
+export const GOOGLE_REPLAY_ENGINE_VERSION = 'g1';
+
+/** The cache-validity key: engine version + every cfg field a per-event replay depends on. */
+export function googleReplayCacheKey(cfg: GoogleBracketCfg): string {
+  return [
+    GOOGLE_REPLAY_ENGINE_VERSION,
+    cfg.askMin,
+    cfg.askMax,
+    cfg.tpAbs,
+    cfg.slAbs,
+    cfg.excludeFahrenheit ? 1 : 0,
+    cfg.maxEntryAgeH,
+    cfg.perPositionUsd,
+    `tp:${GOOGLE_TP_VARIANTS.join(',')}`,
+  ].join('|');
+}
+
+/** One TP-variant's fold inputs (everything the accumulator consumes). */
+export interface GoogleVariantFold {
+  executed: boolean;
+  netPnlUsd: number;
+  netReturn: number;
+  exitKind: GoogleExitKind;
+}
+
+/** One event's frozen replay unit — the cacheable atom of the incremental panel. */
+export interface GoogleEventReplay {
+  eventId: string;
+  city: string;
+  targetDate: string;
+  /** how the event folded (unbucketable = Google present but its forecast couldn't map to the ladder). */
+  kind: 'no_google' | 'excluded_f' | 'unbucketable' | 'traded';
+  /** the canonical (tpAbs 0.30) entry row — null unless kind='traded' AND that replay executed cleanly. */
+  entry: GoogleEntry | null;
+  /** the §9R-E gate row (canonical, realized-only) — null for mtm marks and non-trades. */
+  panelRow: OpeningMarketResult | null;
+  /** per-TP-variant folds in GOOGLE_TP_VARIANTS order — null unless kind='traded'. */
+  variants: GoogleVariantFold[] | null;
+}
+
+/** Replay ONE gm-excluded fresh event into its fold unit (pure; junk → a classified non-trade, never a throw). */
+export function replayGoogleEvent(
+  e: ReturnType<typeof buildEvents>[number],
+  g: { tmaxC: number | null; unit: Unit } | undefined,
+  cfg: GoogleBracketCfg,
+  resolvesAt: string | null,
+): GoogleEventReplay {
+  const base = { eventId: e.eventId, city: e.city, targetDate: e.targetDate, entry: null, panelRow: null, variants: null };
+  if (!g || g.tmaxC == null) return { ...base, kind: 'no_google' };
+  if (cfg.excludeFahrenheit && g.unit === 'F') return { ...base, kind: 'excluded_f' };
+  const ladder = e.ticks.find((t) => Array.isArray(t.buckets) && t.buckets.length > 0)?.buckets ?? [];
+  const predIdx = googleBucketIdx(ladder, g.tmaxC, g.unit);
+  if (predIdx == null) return { ...base, kind: 'unbucketable' };
+
+  const variantTrades = GOOGLE_TP_VARIANTS.map((tpAbs) =>
+    replayGoogleBracket(e, predIdx, { ...cfg, tpAbs, slAbs: 0 }, resolvesAt),
+  );
+  const variants: GoogleVariantFold[] = variantTrades.map((vt) => ({
+    executed: vt.executed && Number.isFinite(vt.netPnlUsd) && Number.isFinite(vt.netReturn),
+    netPnlUsd: Number.isFinite(vt.netPnlUsd) ? vt.netPnlUsd : 0,
+    netReturn: Number.isFinite(vt.netReturn) ? vt.netReturn : 0,
+    exitKind: exitKindOf(vt.exitReason),
+  }));
+
+  const t = variantTrades[CANONICAL_TP_IDX]!;
+  let entry: GoogleEntry | null = null;
+  let panelRow: OpeningMarketResult | null = null;
+  if (t.executed && Number.isFinite(t.netPnlUsd) && Number.isFinite(t.netReturn)) {
+    const kind = exitKindOf(t.exitReason);
+    const native = g.unit === 'F' ? cToF(g.tmaxC) : g.tmaxC;
+    entry = {
+      eventId: e.eventId,
+      city: e.city,
+      targetDate: e.targetDate,
+      googleTmaxC: g.tmaxC,
+      predictedNative: Math.floor(native),
+      entryLabel: t.entryLabel,
+      entryAgeH: t.entryAgeH,
+      entryPrice: t.entryPrice,
+      stakeUsd: t.stakeUsd,
+      exitKind: kind,
+      exitReason: t.exitReason,
+      exitPrice: t.exitPrice,
+      netPnlUsd: t.netPnlUsd,
+      netReturn: t.netReturn,
+      status: kind === 'open_marked' ? 'open' : 'realized',
+    };
+    if (!t.exitReason.includes('mtm_')) {
+      panelRow = {
+        city: e.city,
+        targetDate: e.targetDate,
+        netPnlUsd: t.netPnlUsd,
+        stakeUsd: t.stakeUsd,
+        netReturn: t.netReturn,
+        executed: true,
+      };
+    }
+  }
+  return { ...base, kind: 'traded', entry, panelRow, variants };
+}
+
 /**
  * Build the /convergence (Google-picks-bucket) view from the raw capture series + resolution rows + the
  * per-event Google forecasts. cfg supplies the thresholds (askMax/tpAbs/slAbs), the stake, and the cities scope
@@ -216,6 +325,19 @@ export function buildGoogleView(
   google: RawGooglePrediction[],
   cfg: GoogleBracketCfg,
 ): GoogleView {
+  return assembleGoogleView(buildGoogleReplayUnits(captures, resolutions, google, cfg), cfg);
+}
+
+/**
+ * The ingest half of buildGoogleView: raw capture series (+ resolutions + Google forecasts) → per-event
+ * replay units, gm-excluded. The incremental Edge handler calls this over the OPEN/uncached events only.
+ */
+export function buildGoogleReplayUnits(
+  captures: RawCaptureRow[],
+  resolutions: RawResolution[],
+  google: RawGooglePrediction[],
+  cfg: GoogleBracketCfg,
+): GoogleEventReplay[] {
   const caps = Array.isArray(captures) ? captures : [];
   const resMap = new Map<string, Resolution>(
     (Array.isArray(resolutions) ? resolutions : []).map((r) => [
@@ -247,6 +369,18 @@ export function buildGoogleView(
   // gate counts all derive from the SAME gm-excluded population (one source of truth, matching the taker views).
   const considered = events.filter((e) => !e.resolution.gradingMismatch);
 
+  return considered.map((e) =>
+    replayGoogleEvent(e, googleByEvent.get(e.eventId), cfg, resolvesAtByEvent.get(e.eventId) ?? null),
+  );
+}
+
+/**
+ * Fold per-event replay units into the GoogleView — the aggregation half of buildGoogleView (pure; the
+ * decomposition is proven byte-equivalent by the existing buildGoogleView tests). The incremental Edge
+ * handler calls this over cached-resolved + freshly-replayed units.
+ */
+export function assembleGoogleView(unitsIn: GoogleEventReplay[], cfg: GoogleBracketCfg): GoogleView {
+  const units = Array.isArray(unitsIn) ? unitsIn : [];
   const entries: GoogleEntry[] = [];
   const panelRows: OpeningMarketResult[] = []; // REALIZED (non-mtm) trades — the §9R-E gate basis
   const citiesNoGoogle = new Set<string>();
@@ -269,84 +403,38 @@ export function buildGoogleView(
     nWins: 0,
   }));
 
-  for (const e of considered) {
-    const g = googleByEvent.get(e.eventId);
-    if (!g || g.tmaxC == null) {
-      // no Google feed for this market — it simply cannot be a Google-bucket trade (never a crash).
+  for (const u of units) {
+    if (u.kind === 'no_google') {
       nNoGoogleEvents++;
-      citiesNoGoogle.add(e.city);
+      citiesNoGoogle.add(u.city);
       continue;
     }
-    if (cfg.excludeFahrenheit && g.unit === 'F') {
-      // °C-only mode (operator-set): US °F markets went 0/6 in the forward sweep (floor-vs-rounding bucket-mapping
-      // suspect). Excluded from the strategy — counted here for transparency, never entered/scored.
+    if (u.kind === 'excluded_f') {
       nExcludedFahrenheit++;
       continue;
     }
-    // the ladder labels are constant per event; use the first tick that carries buckets.
-    const ladder = e.ticks.find((t) => Array.isArray(t.buckets) && t.buckets.length > 0)?.buckets ?? [];
-    const predIdx = googleBucketIdx(ladder, g.tmaxC, g.unit);
-    if (predIdx == null) continue; // Google present but its forecast couldn't be bucketed (junk ladder)
+    if (u.kind === 'unbucketable') continue; // Google present but its forecast couldn't be bucketed (junk ladder)
     nGoogleEvents++;
 
-    // replay the SAME fixed entry (execAsk < askMax, SL disabled) against every TP-only exit variant. The entry
-    // is TP-independent, so the executed population is identical across variants by construction.
-    const resolvesAt = resolvesAtByEvent.get(e.eventId) ?? null;
-    const variantTrades = GOOGLE_TP_VARIANTS.map((tpAbs) =>
-      replayGoogleBracket(e, predIdx, { ...cfg, tpAbs, slAbs: 0 }, resolvesAt),
-    );
-
-    // fold each executed variant into its accumulator (exit mix: TP-hit vs held-to-resolution vs open-marked).
+    const folds = Array.isArray(u.variants) ? u.variants : [];
     for (let vi = 0; vi < GOOGLE_TP_VARIANTS.length; vi++) {
-      const vt = variantTrades[vi]!;
-      if (!vt.executed || !Number.isFinite(vt.netPnlUsd) || !Number.isFinite(vt.netReturn)) continue;
+      const f = folds[vi];
+      if (!f || !f.executed) continue;
       const acc = variantAcc[vi]!;
-      const vk = exitKindOf(vt.exitReason);
       acc.nTrades++;
-      acc.sumReturn += vt.netReturn;
-      acc.netPnlUsd += vt.netPnlUsd;
-      if (vk === 'take_profit') acc.nTpHit++;
-      if (vk === 'resolution_win' || vk === 'resolution_lose') acc.nHeldToResolution++;
-      if (vk !== 'open_marked') {
+      acc.sumReturn += f.netReturn;
+      acc.netPnlUsd += f.netPnlUsd;
+      if (f.exitKind === 'take_profit') acc.nTpHit++;
+      if (f.exitKind === 'resolution_win' || f.exitKind === 'resolution_lose') acc.nHeldToResolution++;
+      if (f.exitKind !== 'open_marked') {
         acc.nRealized++;
-        acc.realizedPnlUsd += vt.netPnlUsd;
-        if (vt.netPnlUsd > 0) acc.nWins++;
+        acc.realizedPnlUsd += f.netPnlUsd;
+        if (f.netPnlUsd > 0) acc.nWins++;
       }
     }
 
-    // the CANONICAL (tpAbs 0.30) variant drives the existing single-config sections (entries/money/per-day/gate).
-    const t = variantTrades[CANONICAL_TP_IDX]!;
-    if (!t.executed || !Number.isFinite(t.netPnlUsd) || !Number.isFinite(t.netReturn)) continue;
-    const kind = exitKindOf(t.exitReason);
-    const native = g.unit === 'F' ? cToF(g.tmaxC) : g.tmaxC;
-    entries.push({
-      eventId: e.eventId,
-      city: e.city,
-      targetDate: e.targetDate,
-      googleTmaxC: g.tmaxC,
-      predictedNative: Math.floor(native),
-      entryLabel: t.entryLabel,
-      entryAgeH: t.entryAgeH,
-      entryPrice: t.entryPrice,
-      stakeUsd: t.stakeUsd,
-      exitKind: kind,
-      exitReason: t.exitReason,
-      exitPrice: t.exitPrice,
-      netPnlUsd: t.netPnlUsd,
-      netReturn: t.netReturn,
-      status: kind === 'open_marked' ? 'open' : 'realized',
-    });
-    // in-flight (mtm) marks are ENTERED but NOT scored by the gate (it certifies CLOSED net profit only).
-    if (!t.exitReason.includes('mtm_')) {
-      panelRows.push({
-        city: e.city,
-        targetDate: e.targetDate,
-        netPnlUsd: t.netPnlUsd,
-        stakeUsd: t.stakeUsd,
-        netReturn: t.netReturn,
-        executed: true,
-      });
-    }
+    if (u.entry) entries.push(u.entry);
+    if (u.panelRow) panelRows.push(u.panelRow);
   }
 
   // ── the five-TP-variant exit comparison (same fixed entry population; only the TP level moves) ─────────────
@@ -367,7 +455,7 @@ export function buildGoogleView(
 
   // ── per-day chances: considered (gm-excluded fresh events) vs entered, per target day ─────────────────
   const consideredByDay = new Map<string, number>();
-  for (const e of considered) consideredByDay.set(e.targetDate, (consideredByDay.get(e.targetDate) ?? 0) + 1);
+  for (const u of units) consideredByDay.set(u.targetDate, (consideredByDay.get(u.targetDate) ?? 0) + 1);
   const dayAgg = new Map<string, { entered: number; stake: number; net: number }>();
   for (const en of entries) {
     const d = dayAgg.get(en.targetDate) ?? { entered: 0, stake: 0, net: 0 };
@@ -445,7 +533,7 @@ export function buildGoogleView(
     excludeFahrenheit: cfg.excludeFahrenheit,
     maxEntryAgeH: cfg.maxEntryAgeH,
     perEntryStakeUsd: cfg.perPositionUsd,
-    nFreshEvents: considered.length,
+    nFreshEvents: units.length,
     nGoogleEvents,
     nNoGoogleEvents,
     nExcludedFahrenheit,

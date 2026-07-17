@@ -458,6 +458,12 @@ describe('migrations 0001–0010', () => {
       // defaults for buy_table.max_entry_attempts ('1') + buy_table.stop_after_first_success ('false') —
       // DML-only seeds; the gate logic lives in the handler (deriveEntryGate). Defaults = original behavior.
       '0102_buy_table_entry_rules.sql',
+      // 0103 = google-paper-panel INCREMENTAL replay (loop C27/C34): the hourly full-window TS replay
+      // outgrew the ~400s Edge isolate wall as the post-07-07-prune capture window refilled (runs reaped
+      // by health-monitor). google_replay_cache (RLS deny-all) + event index/cache read/cache write RPCs +
+      // google_paper_inputs_v2 (0086's inputs + an event-id filter; v1 untouched — the handler staged-dark
+      // falls back to the full legacy path when these are absent).
+      '0103_google_replay_cache.sql',
     ]);
   });
 });
