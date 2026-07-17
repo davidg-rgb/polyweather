@@ -1861,6 +1861,75 @@ export async function getDataAccuracy(db: WebDb): Promise<DataAccuracyView | nul
   };
 }
 
+// --- /cities — per-city prediction table (dash_city_predictions, 0106) --------------------------------------
+
+/** One per-city historic success-rate row (folded city_prediction_grades — mismatch/unseeded excluded). */
+export interface CityPredictionStat {
+  city: string;
+  displayName: string;
+  unit: string | null;
+  /** graded events with a seeded prediction (the rate's denominator) — ALWAYS shown beside the rate. */
+  n: unknown;
+  hits: unknown;
+  /** hits/n as a 0..1 fraction; null when n = 0. */
+  rate: unknown;
+  lastGradedDate: string | null;
+}
+
+/** One OPEN captured market: our current argmax-houseProb pick + its ask + the resolution clock. */
+export interface CityPredictionRow {
+  city: string;
+  displayName: string;
+  unit: string | null;
+  /** station-local market day (YYYY-MM-DD). */
+  targetDate: string;
+  resolvesAt: string | null;
+  /** when the latest capture tick was taken (staleness honesty). */
+  capturedAt: string | null;
+  predIdx: unknown;
+  predLabel: string | null;
+  predProb: unknown;
+  /** the predicted bucket's execAsk (fallback bestAsk) — what the market charges for our pick right now. */
+  ask: unknown;
+}
+
+export interface CityPredictionsView {
+  generatedAt: string | null;
+  /** live buy_table.* tunables — the buy-window highlight tracks the lane's real config. */
+  config: { leadMinH: unknown; leadMaxH: unknown; priceCap: unknown } | null;
+  stats: CityPredictionStat[];
+  rows: CityPredictionRow[];
+}
+
+interface CityPredictionsPayload {
+  generatedAt: string | null;
+  config: CityPredictionsView['config'];
+  stats: CityPredictionStat[] | null;
+  rows: CityPredictionRow[] | null;
+}
+
+/**
+ * The /cities prediction table (dash_city_predictions, 0106): every open city-day market with our
+ * argmax-houseProb pick (EXACTLY the buy-table selector's pick) + the per-city historic success rate over
+ * the folded grades. Degrades to null (not a thrown 500) if the RPC errors or is not applied yet, so the
+ * page can deploy ahead of the 0106 migration.
+ */
+export async function getCityPredictions(db: WebDb): Promise<CityPredictionsView | null> {
+  let v: CityPredictionsPayload | null;
+  try {
+    v = await one<CityPredictionsPayload>(db, 'dash_city_predictions', {});
+  } catch {
+    return null;
+  }
+  if (!v) return null;
+  return {
+    generatedAt: v.generatedAt ?? null,
+    config: v.config ?? null,
+    stats: v.stats ?? [],
+    rows: v.rows ?? [],
+  };
+}
+
 // --- /convergence — opening-convergence forward-paper overview (dash_convergence, 0069) ---------------------
 
 /** The /convergence snapshot feed: the latest computed view + when the Edge tick produced it. */

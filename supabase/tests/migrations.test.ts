@@ -474,6 +474,12 @@ describe('migrations 0001–0010', () => {
       // the local warm run built every unit and wrote nothing. The fn now unwraps a string-typed payload
       // once before the array guard.
       '0105_google_cache_write_unwrap.sql',
+      // 0106 = the CITIES PREDICTION TABLE data layer (UI-POLISH-HANDOFF.md WS-B): city_prediction_grades
+      // (one row per graded capture-stream event — the last pre-resolution argmax-houseProb pick vs the
+      // resolved winner) folded by exception-swallowed market_events grading triggers (the 0100 write-time
+      // idiom) + a one-time backfill + dash_city_predictions() (operator read, jsonb OBJECT, added to
+      // WEB_AUTHENTICATED below). No cron change (count stays 35).
+      '0106_city_predictions.sql',
     ]);
   });
 });
@@ -972,6 +978,7 @@ describe('0034: internal-RPC lockdown — anon/authenticated revoked except the 
     'buy_table_price_range_set',  // 0097: operator-guarded per-city buy-table [min,max] override write (self-guards)
     'buy_table_price_cap_set',  // 0097: operator-guarded global buy_table.price_cap write (self-guards)
     'buy_table_live_cycles',  // 0099/0100: /trading live-cycle lo/hi columns operator read (fail-soft, self-guards)
+    'dash_city_predictions',  // 0106: /cities prediction table operator read (open markets + per-city success rates; self-guards)
     'go_live_gate_inputs',
     'operator_halt', 'operator_resume', 'operator_update_config', 'operator_verify_station',
     'operator_set_champion', 'operator_skip_bet', 'operator_manual_bet',
