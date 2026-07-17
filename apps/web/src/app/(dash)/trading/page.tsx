@@ -122,31 +122,57 @@ function NotAppliedState(): ReactElement {
   );
 }
 
-/** The headline: the master mode + the live-mode interlock verdict (ok + the collected blocking reasons). */
+/**
+ * WS-A #5: true when the interlock's ONLY blocking reason is the gate branch (no forward-paper PASS and no
+ * active override) — the exact state the operator was stuck in for two days (C42→C43). One click on the
+ * override panel fixes it, so the banner surfaces a primary call-to-action instead of making the operator
+ * diagnose which of the eight sections matters. NOT exported (Next rejects unknown page-module exports; the
+ * behavior is pinned by the render tests) and NOT imported from trading-controls (calling a function across
+ * the 'use client' boundary throws in RSC).
+ */
+function gateOnlyBlocking(ok: boolean, reasons: string[]): boolean {
+  return !ok && reasons.length === 1 && /forward paper gate|trade_gate_override/i.test(reasons[0] ?? '');
+}
+
+/** The headline: the master mode + the live-mode interlock verdict (ok + the collected blocking reasons).
+ * Sticky on mobile (the `sticky-verdict` class) so the posture stays visible while scrolling the long console. */
 function VerdictBanner({ config, preflight }: { config: TradeConfig | null; preflight: TradePreflight | null }): ReactElement {
   const mode = config?.mode ?? preflight?.checks?.mode ?? 'off';
   const m = MODE_META[mode] ?? { label: mode.toUpperCase(), color: MUTED, note: '' };
   const ok = preflight?.ok ?? false;
+  const reasons = preflight?.reasons ?? [];
   // ok === true means the interlock would PERMIT a live entry — the "hot" state under a dormant rail; ok === false
   // is the safe resting state (no live entries this tick). Never a green pass/fail — it is a posture readout.
   const verdictColor = ok ? AMBER : SKY;
   const verdictLabel = ok ? 'CLEAR — interlock permits live entries' : 'BLOCKED — no live entries';
   return (
-    <div className="info-banner" style={{ borderLeftColor: m.color }}>
+    <div className="info-banner sticky-verdict" style={{ borderLeftColor: m.color }}>
       <strong style={{ color: m.color }}>MODE {m.label}.</strong>{' '}
       {m.note ? <span>{m.note}. </span> : null}
       Live-mode interlock (<span className="mono">trade_live_preflight</span>):{' '}
       <strong style={{ color: verdictColor }}>{verdictLabel}.</strong>{' '}
       A real post needs BOTH the env <span className="mono">TRADE_MODE=live</span> AND this interlock to clear per
       placement.
-      {preflight && !ok && (preflight.reasons ?? []).length > 0 ? (
+      {preflight && !ok && reasons.length > 0 ? (
         <ul style={{ margin: '0.5rem 0 0', paddingLeft: '1.1rem' }}>
-          {(preflight.reasons ?? []).map((r, i) => (
+          {reasons.map((r, i) => (
             <li key={i} className="small" style={{ color: MUTED }}>
               {r}
             </li>
           ))}
         </ul>
+      ) : null}
+      {preflight && gateOnlyBlocking(ok, reasons) ? (
+        <div style={{ marginTop: '0.5rem' }}>
+          <a
+            className="pill"
+            href="#gate-override"
+            style={{ fontSize: '0.78rem', textDecoration: 'none' }}
+            title="every other check clears — an active override arms the lane"
+          >
+            1 click from armed — set the gate override ↓
+          </a>
+        </div>
       ) : null}
       {preflight && ok ? (
         <div className="sub" style={{ marginTop: '0.4rem', color: AMBER }}>

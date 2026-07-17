@@ -158,6 +158,16 @@ describe('/trading page renders', () => {
     expect(html).toContain('renew override'); // fixture has an ACTIVE override → the renew + clear affordances
     expect(html).toContain('clear override');
 
+    // WS-A (2026-07-17): the friction fixes — the sticky verdict class, the gate-only CTA (the fixture's
+    // single blocking reason IS the gate branch), the pre-filled 14-day expiry, and the not-ready hint.
+    expect(html).toContain('sticky-verdict');
+    expect(html).toContain('1 click from armed'); // the VerdictBanner call-to-action…
+    expect(html).toContain('href="#gate-override"'); // …scroll-links to the panel…
+    expect(html).toContain('id="gate-override"'); // …which carries the anchor
+    const { defaultOverrideExpiry } = await import('../src/components/trading-controls.tsx');
+    expect(html).toContain(`value="${defaultOverrideExpiry(Date.now())}"`); // WS-A #1 pre-filled expiry
+    expect(html).toContain('enter a reason to enable'); // WS-A #2 inline hint (reason still empty at first render)
+
     // daily-loss kill meter + today's cashflow (ASCII substrings — avoid apostrophe/minus/dot mismatch)
     expect(html).toContain('realized loss');
     expect(html).toContain('$18.00'); // today's realized loss
@@ -308,6 +318,8 @@ describe('/trading page renders', () => {
     const html = renderToStaticMarkup(await TradingPage());
     expect(html).toContain('MODE OFF');
     expect(html).not.toContain('0082 NOT APPLIED');
+    // WS-A #5: TWO blocking reasons (mode + run window) → the gate-only CTA must NOT render.
+    expect(html).not.toContain('1 click from armed');
     expect(html).toContain('No open LIVE orders.');
     expect(html).toContain('No open LIVE positions.');
     expect(html).toContain('No config changes recorded.');
