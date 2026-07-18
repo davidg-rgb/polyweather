@@ -280,6 +280,28 @@ checkpoints to align on: 06:17Z Action · 10:00/13:50/20:45Z city ticks · 07:00
 
 ## Cycle log
 
+- **C45 (2026-07-18 ~06:30Z, INTERACTIVE operator session — not a loop wake) — C44 ROOT CAUSE PROVEN +
+  FIXED: Polymarket REGION-BLOCKS the order endpoint for the Edge runtime's default egress (geolocated
+  DE); tick pinned to eu-west-1 (migration 0108, APPLIED).** Operator asked "can you fix it yourself?" →
+  yes, and done. Evidence chain: (1) the C44 leading hypothesis is DISPROVEN — `supabase secrets list`
+  (names/digests only) shows POLY_SIGNATURE_TYPE + POLY_FUNDER_ADDRESS set since 07-11 14:55Z alongside
+  the key; (2) overnight the failure burned BOTH markets' bounded attempts: 6 identical live-post
+  failures 00:03–00:53Z (karachi + one more, all `failed`, venue-confirmed never posted, $0 moved — the
+  3/market bound worked); (3) a NEW keyless diagnostic Edge fn `clob-egress-probe` (deployed; no secrets,
+  no signed order — an empty unauthenticated POST) invoked over the cron's own pg_net path shows the
+  runtime egresses on an AWS IP Cloudflare geolocates **DE/FRA**: GET /time → 200 but POST /order → 403
+  `{"error":"Trading restricted in your region…"}` — Germany is on Polymarket's restricted list, market
+  data is exempt. That IS the deterministic "shapeless" HIGH-A transport failure (both 07-12 and C44).
+  (4) Region sweep via the `x-region` header: **eu-west-1 (Dublin) → POST /order 401 "missing address
+  header" = the CLOB API itself answering (REACHABLE)**; eu-central-1 (DE) + ap-southeast-2 (AU) → 403
+  blocked. **Fix: 0108 re-schedules the buy-table-tick cron with `'x-region','eu-west-1'` in the headers**
+  (also codifies the C15 minute lane 3,13,…,53 into the lineage). Interlock/override/bounds untouched;
+  boundary held (no order placed by Claude, no credential touched — the probe is keyless by construction).
+  **Next live proof: tonight's ~00:03Z window (07-19 markets — the two 07-18 markets stay blocked by the
+  attempt bound, by design).** C44 items (a) resolved (secrets were never missing), (b) moot (Edge posts
+  work from Dublin; the local daemon stays the fallback), (c) the C16 alert gap REMAINS OPEN — post
+  failures still push nowhere and record nothing; operator's call (re-allowlist = Slack pushes, vs a
+  record-only path).
 - **C44 (2026-07-18 ~00:20Z) — FIRST-LIVE-BUY verification wake: the interlock/candidate machinery WORKED
   end-to-end; both live posts FAILED at the venue-transport layer (no order ever reached Polymarket, $0
   moved); the failure is DETERMINISTIC and its CRITICAL alerts were silently unrecorded (the C16 gap).**

@@ -77,6 +77,13 @@ default 5; the executor re-checks the live book's own floor at placement). Ledge
 3. **Deploy the function:** `supabase functions deploy buy-table-tick --no-verify-jwt` (JWT verification OFF like every sibling cron fn — the gateway 401s cron posts otherwise; auth stays in-function via x-cron-secret). The cron starts POSTing immediately;
    until this deploy it 404s harmlessly and the deadman stays silent.
 
+   > **Region pin (0108, standing):** the tick cron invokes with `x-region: eu-west-1`. The Edge runtime's
+   > default egress geolocates **DE**, and Polymarket 403-region-blocks its ORDER endpoint there while
+   > leaving market-data GETs open — every pre-0108 live post failed on exactly this (C44/C45,
+   > EDGE-WATCH-LOOP.md). Dublin reaches the order endpoint. If posts ever fail "shapeless" again, run the
+   > keyless `clob-egress-probe` Edge fn first — it prints the egress ip/loc and the order-endpoint verdict
+   > from inside the runtime.
+
 4. **Arm the interlock** (the placement gate — do this last):
    - `/trading` console (or SQL): `trade_config_set(p_mode := 'live', p_active_until := current_date + N)`
      with the stake at `$5` and the `city_allowlist` you want (0093 validates slugs).
