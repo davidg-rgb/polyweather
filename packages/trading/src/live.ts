@@ -706,17 +706,20 @@ export class MakerExecutor {
       await this.ledger.recordPlaced(clientOrderId, orderId);
 
       const poll = parseOrderFillPoll(await client.getOrder(orderId), orderId, requestedSize);
+      let avgPrice: number | null = null; // 0110: surfaced to the caller so a fill notification can say the price paid
       if (poll.filled) {
         // p_size_matched is CUMULATIVE (T3 schema appends only positive deltas to live_fills).
         const matched = poll.sizeMatched || requestedSize;
         const avg = poll.avgPrice ?? result.limitPrice ?? 0;
+        avgPrice = avg;
         await this.ledger.recordFill(clientOrderId, matched, avg, 'filled', feeFor(matched, avg));
       } else if (poll.partial) {
         const avg = poll.avgPrice ?? result.limitPrice ?? 0;
+        avgPrice = avg;
         await this.ledger.recordFill(clientOrderId, poll.sizeMatched, avg, 'partial', feeFor(poll.sizeMatched, avg));
       }
       // resting (maker unmatched): stays 'placed'; the loop repolls / reprices / cancels via the chokepoint.
-      return { ...result, status: 'placed', orderId, sizeMatched: poll.sizeMatched };
+      return { ...result, status: 'placed', orderId, sizeMatched: poll.sizeMatched, avgPrice };
     } catch (e) {
       // MEDIUM-4: every string that leaves the executor (ledger error column, alert body, thrown
       // message) is redacted — a venue/HTTP error can echo auth-header or signature material.

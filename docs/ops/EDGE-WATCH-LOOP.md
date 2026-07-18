@@ -21,6 +21,29 @@
 
 _Claude keeps this block current every material cycle. Whole status in 20 seconds._
 
+- **▶▶ 2026-07-18 ~18:25Z (operator-directed) — SLACK RE-OPENED FOR BUY FILLS ONLY (C16 narrowed by exactly
+  one kind, not lifted).** Operator: "Open up slack to push info on buy orders, what was bought and at what
+  price." No fill-success alert kind existed (0095's kinds are all failure classes) → built `BUY_TABLE_FILLED`
+  (INFO): every LIVE fill pushes city · bucket · shares · **actual avg fill price** (the venue poll's, threaded
+  through the executor as `OrderPlacementResult.avgPrice`) · cost · hours to close. Migration `0110` appends the
+  kind to the C16-emptied allowlist → prod allowlist is now exactly `BUY_TABLE_FILLED` (verified). Everything
+  else (whale/deadman/digest/ORDER_* CRITICALs) stays dark per the standing C16 order — **failure alerts still
+  push NOWHERE; keep reading Edge logs/diag for those.** Fn redeployed; suite 3,295 green. Slack delivery itself
+  is proven on the first fill (webhook last delivered 07-12; an undelivered push lands sent=false and the
+  health-monitor resend sweep retries it).
+- **▶▶ 2026-07-18 ~18:00Z (operator-directed, interactive session) — CONTINUOUS BUYING IS ON (the expected
+  state is now an ACTIVELY BUYING lane, not a quiet one).** Operator: "I want buying to be active … set
+  everything up for it to run continuously." Set live (direct writes, trigger-audited, authorization = the
+  chat instruction): `stop_after_first_success` → **false** (the post-ankara self-halt is OFF), allowlist →
+  the 4 measured-strongest cities with max-caps set below each city's measured prediction success rate
+  (EV = rate − ask): **ankara 0.45** (92% success, n=13) · **wellington 0.40** (79%) · **helsinki 0.35**
+  (69%) · **kuala-lumpur 0.30** (57%); `active_until` → **2026-09-15**. Dropped from the allowlist:
+  karachi/shanghai/mexico-city/chongqing/houston (measured 46–57% — negative-EV at their caps).
+  diag-buy-lane verdict post-change: interlock **ok:true**, laneHalted false, only blocker = lead_window
+  (next buy window ~**2026-07-19 00:00Z**; expect up to ~4 × $5 buys/day). **The ONE remaining expiry:
+  gate override id=2 ends 2026-07-31 00:00Z** (DB-capped ≤14d — the §9R deadman, not defeatable): buying
+  stops there unless renewed from /trading. Loop: re-surface the renewal daily from ~07-28. Slack stays
+  dark per C16 — fills push nowhere; monitoring is pull-only (/trading, diag-buy-lane).
 - **▶▶ 2026-07-18 (operator-directed, interactive session) — BUY-TABLE PRICE INPUT IS NOW MAX-ONLY (0109).**
   The 0097 per-city **[min, max]** purchase range lost its min everywhere: the lane buys whenever the
   predicted bucket's ask is **at or below the effective cap** (per-city max when set, else the global

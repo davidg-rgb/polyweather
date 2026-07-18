@@ -374,5 +374,9 @@ export interface OrderPlacementResult {
   limitPrice: number | null;
   size: number;
   sizeMatched: number;
+  /** the fill poll's average price (0110: what a fill notification reports as "at what price") — present
+   *  ONLY when the immediate post-place poll saw a fill/partial; absent on every other path. Falls back to
+   *  the limit price when the venue's poll omits it (the same fallback the ledger's recordFill uses). */
+  avgPrice?: number | null;
   reason?: string;
 }

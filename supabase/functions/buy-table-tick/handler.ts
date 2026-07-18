@@ -674,6 +674,22 @@ export async function buyTableTick(ctx: JobCtx, deps: BuyTableTickDeps): Promise
           hoursToClose: Math.round(c.hoursToClose * 10) / 10,
           reason: result.reason,
         });
+        // 0110 (operator directive 2026-07-18): every LIVE fill pushes to Slack — what was bought and at
+        // what price. claim_alert-gated like every push (BUY_TABLE_FILLED is the ONE allowlisted kind under
+        // the C16 halt); notifySlack never throws, so a Slack outage cannot disturb the placement loop.
+        if (mode === 'live' && (result.sizeMatched ?? 0) > 0) {
+          const shares = result.sizeMatched ?? 0;
+          const px = result.avgPrice ?? result.limitPrice ?? c.ask;
+          await deps.notify({
+            kind: 'BUY_TABLE_FILLED',
+            severity: 'INFO',
+            title: `Buy filled: ${c.city} ${c.label ?? c.marketId} · ${c.tradeDate}`,
+            body:
+              `${shares} sh @ ${px.toFixed(2)} = $${(shares * px).toFixed(2)} (fees excl)` +
+              ` · ${c.hoursToClose.toFixed(1)}h to close · hold to resolution`,
+            dedupeKey: `buy-table-fill:${result.clientOrderId ?? `${c.marketId}:${c.tradeDate}`}`,
+          });
+        }
         // 0102 F1: a poll-verified ZERO-FILL FAK is provably DEAD at the venue (Fill-And-Kill cannot
         // rest — it matches at post or dies), but the ledger row stays 'placed'/0, which the entry gate
         // reads as unknown-state → a permanent market block. Adjudicate it to 'canceled' NOW so the

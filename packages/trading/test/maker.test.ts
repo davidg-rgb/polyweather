@@ -547,7 +547,8 @@ describe('MakerExecutor.placeTaker — FAK exit leg', () => {
     expect(client.postOrder).toHaveBeenCalledWith(expect.anything(), 'FAK');
     expect((client.postOrder as Mock).mock.calls[0]).toHaveLength(2);
     expect(client.createOrder).toHaveBeenCalledWith(expect.objectContaining({ side: 'SELL', price: 0.31 }), expect.anything());
-    expect(r).toMatchObject({ status: 'placed', orderType: 'FAK', postOnly: false, sizeMatched: 74 });
+    // 0110: the fill poll's avg price rides the result so callers can report the price actually paid.
+    expect(r).toMatchObject({ status: 'placed', orderType: 'FAK', postOnly: false, sizeMatched: 74, avgPrice: 0.31 });
   });
 
   it('dry-run taker: reserves + synthetic recordPlaced, never posts', async () => {

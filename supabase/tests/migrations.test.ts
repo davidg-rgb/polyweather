@@ -497,6 +497,11 @@ describe('migrations 0001–0010', () => {
       // deleted; dash_trading() re-stated with priceConfig { globalMax, cityCaps }. No table/cron change
       // (count stays 35).
       '0109_buy_table_city_caps.sql',
+      // 0110 = the BUY_TABLE_FILLED Slack push allowlisted (operator directive 2026-07-18, continuous
+      // buying ON): the tick now pushes every LIVE fill — what was bought and at what price. DML-only
+      // append to alerts_slack_allow_kinds (the 0095 idiom); on prod's C16-emptied list this makes the
+      // allowlist exactly {BUY_TABLE_FILLED} — buys push, everything else stays dark. No object change.
+      '0110_buy_table_fill_alert.sql',
     ]);
   });
 });

@@ -487,6 +487,33 @@ describe('buy-table-tick — the 0102 entry rules (verification semantics)', () 
     expect(h.logs.some((l) => l.msg === 'buy-table.skip' && /lane_halted — first successful buy/.test(String(l.extra?.reason)))).toBe(true);
   });
 
+  it('0110: a LIVE fill pushes BUY_TABLE_FILLED — what was bought and at what price (the poll avg, not the ask)', async () => {
+    const h = harness(
+      { mode: 'live', preflightOk: true, captures: [capture({ eventId: 'ev-1', ask: 0.12, hoursToClose: 6 })] },
+      'live',
+    );
+    const stats = await buyTableTick(h.ctx, h.deps);
+    expect(stats.placed).toBe(1);
+    const fill = h.alerts.find((a) => a.kind === 'BUY_TABLE_FILLED');
+    expect(fill).toBeDefined();
+    expect(fill!.severity).toBe('INFO');
+    expect(fill!.title).toContain('testville');
+    expect(fill!.title).toContain('30°C'); // the predicted bucket's label — what was bought
+    expect(fill!.body).toContain('33 sh @ 0.15'); // the venue poll's avg fill price (mock getOrder), NOT the 0.12 ask
+    expect(fill!.body).toContain('$4.95'); // 33 × 0.15
+    expect(fill!.dedupeKey).toMatch(/^buy-table-fill:/); // per-order key — every distinct buy pushes once
+  });
+
+  it('0110: dry-run records the intent but pushes NO fill alert (no fill exists off-venue)', async () => {
+    const h = harness(
+      { mode: 'off', captures: [capture({ eventId: 'ev-1', ask: 0.12, hoursToClose: 6 })] },
+      'dry-run',
+    );
+    const stats = await buyTableTick(h.ctx, h.deps);
+    expect(stats.dryRun).toBe(1);
+    expect(h.alerts.filter((a) => a.kind === 'BUY_TABLE_FILLED')).toEqual([]);
+  });
+
   it('F1: a poll-verified ZERO-FILL FAK is adjudicated canceled in-tick (retryable) and does NOT halt the lane', async () => {
     const h = harness(
       {
