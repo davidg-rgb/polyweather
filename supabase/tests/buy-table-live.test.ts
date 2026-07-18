@@ -198,17 +198,21 @@ describe("0095 trade_live_preflight('buy-table') — the generic interlock tagge
 });
 
 // ══════════════════════════════════════════════════════════════════════════════════════════════════════════
-describe('0095 crons — the */10 edge tick with the §8.1 body periodKey + the pure-SQL deadman', () => {
-  it('buy-table-tick is registered */10 with vault secrets AND a fire-time body periodKey', async () => {
+describe('0095/0108 crons — the laned edge tick with the §8.1 body periodKey + the pure-SQL deadman', () => {
+  it('buy-table-tick is registered on the C15 minute lane with vault secrets, the region pin AND a fire-time body periodKey', async () => {
     const [j] = await rows<{ schedule: string; command: string }>(
       db,
       `select schedule, command from cron.job where jobname = 'buy-table-tick'`,
     );
     expect(j).toBeTruthy();
-    expect(j!.schedule).toBe('*/10 * * * *');
+    // 0108: the C15 compute-shed minute lane codified (was 0095's */10 — quarter minutes are contended).
+    expect(j!.schedule).toBe('3,13,23,33,43,53 * * * *');
     expect(j!.command).toContain(`vault.decrypted_secrets where name = 'project_url'`);
     expect(j!.command).toContain(`vault.decrypted_secrets where name = 'cron_secret'`);
     expect(j!.command).toContain('/functions/v1/buy-table-tick');
+    // 0108 — the C44 root-cause fix: pin execution to eu-west-1 (the default egress geolocated DE and
+    // Polymarket 403-region-blocks its ORDER endpoint there; Dublin reaches it — the keyless probe proof).
+    expect(j!.command).toContain(`'x-region', 'eu-west-1'`);
     // §8.1 — the periodKey is stamped into the BODY at fire time (now() evaluates per fire).
     expect(j!.command).toContain(`body := jsonb_build_object('periodKey', 'buy-table-tick:' || to_char(now()`);
     // 4cb1e77: 10s (the generic 4500 was shorter than a cold Edge boot — the launch-day fix).

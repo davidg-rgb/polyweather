@@ -484,6 +484,11 @@ describe('migrations 0001–0010', () => {
       // links each row to its live book — a pure additive re-create of dash_city_predictions(), grants
       // and guard identical to 0106 §5. No new object, no cron change.
       '0107_city_predictions_market_link.sql',
+      // 0108: the C44 root-cause fix — buy-table-tick's cron invocation pinned to eu-west-1 via the
+      // x-region header (the default Edge egress geolocates DE and Polymarket 403-region-blocks its ORDER
+      // endpoint; Dublin reaches it — proven by the keyless clob-egress-probe) + the C15 minute lane
+      // codified. Command-only re-schedule of the existing job (cron count stays 35).
+      '0108_buy_table_tick_region_pin.sql',
     ]);
   });
 });
@@ -1128,7 +1133,8 @@ describe('pg_cron registrations (§7.22, W11)', () => {
       'market-depth-prune':       '40 3 * * *',
       // 0095: the BUY-TABLE cloud live lane tick (http_post edge-fn job; W11-checked — its command
       // additionally stamps a per-tick periodKey into the request BODY at fire time, the §8.1 idiom).
-      'buy-table-tick':           '*/10 * * * *',
+      // 0108: re-laned to the C15 compute-shed minutes + pinned to eu-west-1 (the C44 geoblock fix).
+      'buy-table-tick':           '3,13,23,33,43,53 * * * *',
       // 0095: the lane deadman (pure-SQL cron like the 0066/0089 deadmen — excluded from W11 below).
       'buy-table-deadman':        '*/15 * * * *',
     };

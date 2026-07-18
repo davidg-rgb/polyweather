@@ -276,10 +276,82 @@ checkpoints to align on: 06:17Z Action · 10:00/13:50/20:45Z city ticks · 07:00
 | ② | Polymarket fee/rebate/rewards program | a program flip at the root (REC-8 lineage, like the 06-24 rewards funding) | no signal; whale-watch+Slack cover the big-print side | 07-10 C1 |
 | ③ | New-instrument volume (precip/wind/snow) | ~10× regime change vs the $802/24h read (floor $7k, signal #9) | not swept C1 (occasional) | — |
 | ④ | Cross-venue true both-book depth | growth vs the 1–10-contract KILL read (#10) | not swept C1 (occasional) | — |
-| ⑤ | trade_config.mode | anything ≠ off/dry-run → fold v16 Phase-C monitoring in as a lane | **`live` — OPERATOR-SET 07-11 12:56Z** (authorized live test, not a reopen). C18 state: mode live + window 07-20 BUT the override expired 07-15 (C17 planned lapse) → preflight fails → lane inert as designed; 0 live posts ever (the one 07-12 attempt failed shapeless, reconciled `failed` at C18). C19: unchanged — mode live, override expired + not renewed, 0 live posts. | 07-16 C19 |
+| ⑤ | trade_config.mode | anything ≠ off/dry-run → fold v16 Phase-C monitoring in as a lane | **`live` — OPERATOR-SET 07-11 12:56Z** (authorized live test, not a reopen). C18 state: mode live + window 07-20 BUT the override expired 07-15 (C17 planned lapse) → preflight fails → lane inert as designed; 0 live posts ever (the one 07-12 attempt failed shapeless, reconciled `failed` at C18). C19: unchanged — mode live, override expired + not renewed, 0 live posts. **C44 (07-18 00:03Z): first ARMED candidates — 2 live post ATTEMPTS, both failed pre-venue (transport class, $0 moved, venue-confirmed never posted); see C44.** | 07-18 C44 |
 
 ## Cycle log
 
+- **C45 (2026-07-18 ~06:30Z, INTERACTIVE operator session — not a loop wake) — C44 ROOT CAUSE PROVEN +
+  FIXED: Polymarket REGION-BLOCKS the order endpoint for the Edge runtime's default egress (geolocated
+  DE); tick pinned to eu-west-1 (migration 0108, APPLIED).** Operator asked "can you fix it yourself?" →
+  yes, and done. Evidence chain: (1) the C44 leading hypothesis is DISPROVEN — `supabase secrets list`
+  (names/digests only) shows POLY_SIGNATURE_TYPE + POLY_FUNDER_ADDRESS set since 07-11 14:55Z alongside
+  the key; (2) overnight the failure burned BOTH markets' bounded attempts: 6 identical live-post
+  failures 00:03–00:53Z (karachi + one more, all `failed`, venue-confirmed never posted, $0 moved — the
+  3/market bound worked); (3) a NEW keyless diagnostic Edge fn `clob-egress-probe` (deployed; no secrets,
+  no signed order — an empty unauthenticated POST) invoked over the cron's own pg_net path shows the
+  runtime egresses on an AWS IP Cloudflare geolocates **DE/FRA**: GET /time → 200 but POST /order → 403
+  `{"error":"Trading restricted in your region…"}` — Germany is on Polymarket's restricted list, market
+  data is exempt. That IS the deterministic "shapeless" HIGH-A transport failure (both 07-12 and C44).
+  (4) Region sweep via the `x-region` header: **eu-west-1 (Dublin) → POST /order 401 "missing address
+  header" = the CLOB API itself answering (REACHABLE)**; eu-central-1 (DE) + ap-southeast-2 (AU) → 403
+  blocked. **Fix: 0108 re-schedules the buy-table-tick cron with `'x-region','eu-west-1'` in the headers**
+  (also codifies the C15 minute lane 3,13,…,53 into the lineage). Interlock/override/bounds untouched;
+  boundary held (no order placed by Claude, no credential touched — the probe is keyless by construction).
+  **Next live proof: tonight's ~00:03Z window (07-19 markets — the two 07-18 markets stay blocked by the
+  attempt bound, by design).** C44 items (a) resolved (secrets were never missing), (b) moot (Edge posts
+  work from Dublin; the local daemon stays the fallback), (c) the C16 alert gap REMAINS OPEN — post
+  failures still push nowhere and record nothing; operator's call (re-allowlist = Slack pushes, vs a
+  record-only path).
+- **C44 (2026-07-18 ~00:20Z) — FIRST-LIVE-BUY verification wake: the interlock/candidate machinery WORKED
+  end-to-end; both live posts FAILED at the venue-transport layer (no order ever reached Polymarket, $0
+  moved); the failure is DETERMINISTIC and its CRITICAL alerts were silently unrecorded (the C16 gap).**
+  Pre-window ticks (23:33/23:43/23:53Z): 0 candidates, 8 skips — correct (lead window shut). **00:03Z: the
+  window opened and everything up to the venue worked**: preflightOk=true (override id=2 satisfied the gate
+  branch — the C42 blocker is gone), 1 candidate = karachi 2026-07-18 bucket "32°C" @ ask 0.27 (≤ cap 0.40),
+  18 sh (=$4.86 of the $5 stake), lead window honored. The post: `failed:1, placed:0` — ledger row created
+  then left at **'intent'** with no order_id = the executor's HIGH-A class (postOrder INVOKED — so the
+  Edge wallet key + client construction are fine — but it threw without a decisive response). 00:13Z: the F4
+  lane-scoped sweep adjudicated row 1 → `failed` ("reconcile: confirmed never posted — no open order, no
+  matching trade" = venue-verified nothing posted), then attempt 2 ran and failed IDENTICALLY (row 2 at
+  'intent', awaiting the 00:23 sweep). max_entry_attempts=3 → one bounded retry remains, then karachi
+  blocks; stop_after_first_success=true untouched (no fill). **Diagnosis:** deterministic transport-layer
+  failure of the CLOB postOrder from the Edge runtime — the exact "Edge copy unproven until first clean
+  post" unknown from C18, and the SAME signature as the 07-12 shanghai failure. **Leading hypothesis
+  (per the 07-12 postmortem evidence): the Edge secrets are missing the `POLY_SIGNATURE_TYPE` /
+  `POLY_FUNDER_ADDRESS` mirror** — the local smoke passed only AFTER those were set locally, and CLOB
+  *GETs work fine from this same Edge runtime*, making an IP/geo block second-ranked. The PR #20 response
+  snapshot IS deployed (fn v8), so the Edge console logs now carry the redacted venue response verbatim
+  (Supabase dashboard → buy-table-tick → Logs) — but only there, because
+  **BUY_TABLE_POST_FAILED / ORDER_NEEDS_RECONCILE CRITICALs were silently suppressed AND unrecorded** —
+  C16 emptied the allowlist and claim_alert drops un-allowlisted kinds entirely (the known gotcha, now
+  live-money-relevant: there is NO record-without-push path today). Boundary held: no orders placed/canceled
+  by Claude, no credentials touched, Slack dark. **Operator decides:** (a) check/set the
+  `POLY_SIGNATURE_TYPE` + `POLY_FUNDER_ADDRESS` Edge secrets (runbook §2 — a proxy-funded wallet NEEDS
+  them) and read the verbatim response snapshot in the dashboard console logs to confirm; (b) if it turns
+  out to be an egress block instead, the LOCAL daemon `scripts/trade-bot.ts` (T2) is the built non-Edge
+  alternative; (c) whether the two ORDER-class CRITICALs should be re-allowlisted (they would push to
+  Slack — the halt is operator-owned) or a record-only path built. NOTE: attempts are BOUNDED (3) — no
+  renewal of attempts without a config change, so the failure cannot burn more than 3 rows per market.
+- **C43 (2026-07-17 ~16:55Z) — OPERATOR: "Activate the override - see if it works" → OVERRIDE SET
+  (id=2, expires 2026-07-31 00:00Z) — THE LANE IS ARMED for the first time with a passing interlock.**
+  Direct insert per the 07-11 precedent (operator's explicit written instruction quoted in the audit
+  note; operator_guard blocks the MCP session's RPC; expiry aligned to his active_until, inside the
+  14-day cap). **Verified: `trade_live_preflight('buy-table')` now returns ok:true** — the only
+  remaining condition is a candidate; the window opens ~00:00Z nightly. Root cause of the never-click
+  (same session, C42→C43 troubleshoot): he WAS on /trading (Vercel 16:16Z hits) but the panel's
+  set-button is disabled until reason+date are BOTH filled, and setting requires a SECOND "Confirm
+  override" click in an amber banner ABOVE the form — zero gate-override API hits ever. Expected
+  tonight: first candidate after 00:00Z → ~$5 FAK ≤0.40 → `stop_after_first_success` halts after ONE
+  fill; worst case one $5 stake; kills $30/25% stand. TRADE_MODE's Edge copy gets its final proof at
+  the first post — post-failure CRITICALs are Slack-DARK (C16), so the scheduled 00:17Z one-shot wake
+  is the reporting channel. Loop otherwise stays PAUSED (operator's C42 order).
+- **C38 (2026-07-17 ~12:30–12:35Z) — INCREMENTAL PANEL VERIFIED LIVE + SHIPPED TO MAIN (the C27→C38
+  arc CLOSED).** The 12:24Z tick: **ok in 13.7s** (vs ~290s + daily reaps — ~21×), incremental=true,
+  cacheUnitsUsed 376 + replayed 119 open events, cityErrors 0, snapshot 575 recorded, gate accruing
+  (n=19 INSUFFICIENT — the real record, restored). **PR #25 squash-merged 12:34Z** (0103+0104+0105 +
+  handler + warm script), loop branch reconciled. The google panel's death-by-growth is permanently
+  fixed; steady-state runs replay only open events. (One poll-markets statement timeout 12:12Z — the
+  known Micro class, n=1, watch only.) Buy lane throughout: no override, no orders, ticks green.
 - **C37 (2026-07-17 ~11:37–11:50Z) — the warm pass couldn't fit the wall + a second latent bug found →
   BOTH fixed; cache BOOTSTRAPPED (376 rows).** The 11:24Z warm run was reaped with the cache still at
   0 rows: the first design wrote the cache once at the END, so a reaped bootstrap made zero progress
