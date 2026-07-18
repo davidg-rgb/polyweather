@@ -859,13 +859,16 @@ describe('0099/0100 buy_table_live_cycles() — per live cycle, the trigger-fed 
 });
 
 // ══════════════════════════════════════════════════════════════════════════════════════════════════════════
-describe('0095 Slack allowlist — the lane push kinds survive the prod pause gate', () => {
+describe('0095/0110 Slack allowlist — the lane push kinds survive the prod pause gate', () => {
   it('appends BUY_TABLE_* + the executor ORDER_* kinds without disturbing the 0092 routing', async () => {
     const [r] = await rows<{ value: string }>(db, `select value from config where key = 'alerts_slack_allow_kinds'`);
     const kinds = r!.value.split(',');
     for (const k of ['BUY_TABLE_DEADMAN', 'BUY_TABLE_DEGRADED', 'BUY_TABLE_POST_FAILED', 'ORDER_FAIL', 'ORDER_NEEDS_RECONCILE']) {
       expect(kinds, `allowlist missing ${k}`).toContain(k);
     }
+    // 0110: the fill push (operator 2026-07-18 — "what was bought and at what price") is allowlisted,
+    // else claim_alert suppresses it UNRECORDED (the known new-kind gotcha).
+    expect(kinds).toContain('BUY_TABLE_FILLED');
     // the 0092 backbone stays intact
     expect(kinds).toContain('DAILY_DIGEST');
     expect(kinds).not.toContain('WHALE_TRADE');
