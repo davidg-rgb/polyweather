@@ -294,17 +294,22 @@ checkpoints to align on: 06:17Z Action · 10:00/13:50/20:45Z city ticks · 07:00
   'intent', awaiting the 00:23 sweep). max_entry_attempts=3 → one bounded retry remains, then karachi
   blocks; stop_after_first_success=true untouched (no fill). **Diagnosis:** deterministic transport-layer
   failure of the CLOB postOrder from the Edge runtime — the exact "Edge copy unproven until first clean
-  post" unknown from C18. Leading hypothesis: Polymarket blocking the Supabase-Edge/Deno-Deploy egress IP
-  (geo/Cloudflare — the local `--live-smoke` passed from the operator's machine; the delta IS the runtime);
-  the verbatim error is ONLY in the Edge console logs (Supabase dashboard → buy-table-tick → Logs) because
+  post" unknown from C18, and the SAME signature as the 07-12 shanghai failure. **Leading hypothesis
+  (per the 07-12 postmortem evidence): the Edge secrets are missing the `POLY_SIGNATURE_TYPE` /
+  `POLY_FUNDER_ADDRESS` mirror** — the local smoke passed only AFTER those were set locally, and CLOB
+  *GETs work fine from this same Edge runtime*, making an IP/geo block second-ranked. The PR #20 response
+  snapshot IS deployed (fn v8), so the Edge console logs now carry the redacted venue response verbatim
+  (Supabase dashboard → buy-table-tick → Logs) — but only there, because
   **BUY_TABLE_POST_FAILED / ORDER_NEEDS_RECONCILE CRITICALs were silently suppressed AND unrecorded** —
   C16 emptied the allowlist and claim_alert drops un-allowlisted kinds entirely (the known gotcha, now
   live-money-relevant: there is NO record-without-push path today). Boundary held: no orders placed/canceled
-  by Claude, no credentials touched, Slack dark. **Operator decides:** (a) read the verbatim postOrder error
-  in the dashboard console logs; (b) if geo-block confirmed, the placement leg needs a non-Edge egress —
-  the LOCAL daemon `scripts/trade-bot.ts` (T2) is the built alternative; (c) whether the two ORDER-class
-  CRITICALs should be re-allowlisted (they would push to Slack — the halt is operator-owned) or a
-  record-only path built.
+  by Claude, no credentials touched, Slack dark. **Operator decides:** (a) check/set the
+  `POLY_SIGNATURE_TYPE` + `POLY_FUNDER_ADDRESS` Edge secrets (runbook §2 — a proxy-funded wallet NEEDS
+  them) and read the verbatim response snapshot in the dashboard console logs to confirm; (b) if it turns
+  out to be an egress block instead, the LOCAL daemon `scripts/trade-bot.ts` (T2) is the built non-Edge
+  alternative; (c) whether the two ORDER-class CRITICALs should be re-allowlisted (they would push to
+  Slack — the halt is operator-owned) or a record-only path built. NOTE: attempts are BOUNDED (3) — no
+  renewal of attempts without a config change, so the failure cannot burn more than 3 rows per market.
 - **C43 (2026-07-17 ~16:55Z) — OPERATOR: "Activate the override - see if it works" → OVERRIDE SET
   (id=2, expires 2026-07-31 00:00Z) — THE LANE IS ARMED for the first time with a passing interlock.**
   Direct insert per the 07-11 precedent (operator's explicit written instruction quoted in the audit
