@@ -64,7 +64,8 @@ export interface ClobClientish {
    *  live fill first proving the migration (see MakerExecutor.place / docs §5). The response's
    *  `success`/`errorMsg` fields distinguish a CLEAN VENUE REJECTION (success=false, request processed, no
    *  order created → safe to free the intent) from a transport throw or a shapeless response (order state
-   *  UNKNOWN → the intent must be held for reconcile — HIGH-A). */
+   *  UNKNOWN → the intent must be held for reconcile — HIGH-A). C46: HTTP-level failures surface as v2's
+   *  http-helper shape `{error, status}` (no success field) — a 4xx there is ALSO a clean rejection. */
   postOrder(
     order: unknown,
     orderType: OrderType,
@@ -649,8 +650,23 @@ export class MakerExecutor {
             redactText(`venue rejected the order: ${posted.errorMsg ?? 'no errorMsg in response'}`),
           );
         }
+        // C46: v2's http-helper returns HTTP-level failures as {error, status} — NO success field at all —
+        // so before this branch every venue 4xx (geoblock 403, "maker address not allowed" 400, bad-creds
+        // 401) was mis-classed SHAPELESS and its reason lived only in console logs. A 4xx means the request
+        // was processed and REFUSED — no order exists (Cloudflare 4xx blocks never reach the origin; origin
+        // 4xx refuses before creating) — the same decisive semantics as success:false, so free the key and
+        // put the venue's verbatim words in the ledger reason. 5xx / missing status stays shapeless below:
+        // the order state is genuinely unknown there and MUST be held for reconcile.
+        const httpErr = posted as { error?: unknown; status?: unknown } | null | undefined;
+        const httpStatus = Number(httpErr?.status);
+        if (typeof httpErr?.error === 'string' && Number.isInteger(httpStatus) && httpStatus >= 400 && httpStatus < 500) {
+          throw new ExecutionError(
+            'ERR_CLOB_REJECTED',
+            redactText(`venue rejected the order (http ${httpStatus}): ${httpErr.error.slice(0, 300)}`),
+          );
+        }
         // A response arrived but carries no orderID and no explicit rejection — order state UNKNOWN.
-        // The snapshot names WHAT came back (401-auth JSON vs a CF/geo block page vs a venue glitch) —
+        // The snapshot names WHAT came back (a 5xx JSON vs a venue glitch) —
         // the 2026-07-12 shanghai stuck-intent was undiagnosable without it.
         throw new ExecutionError(
           'ERR_CLOB_POST',
