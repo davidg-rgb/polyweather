@@ -280,6 +280,25 @@ checkpoints to align on: 06:17Z Action · 10:00/13:50/20:45Z city ticks · 07:00
 
 ## Cycle log
 
+- **C46e (2026-07-18 14:33Z) — ✅ FIRST LIVE FILL EVER — THE OPERATOR'S VERIFICATION IS COMPLETE.**
+  Operator supplied the dedicated account (@crayzwman, trading wallet 0xD082A28C…6901). Pre-set
+  verification (all public reads): the wallet is a DEPLOYED new-type deposit wallet (EIP-1822 UUPS clone →
+  sigType 3), `owner()` == the dedicated signing key's EOA (0xe3C2C877…7E36 — identity chain closed), and
+  it holds **$107.80 pUSD** (the C46d "never funded" verdict was an artifact of checking USDC — the new
+  system wraps deposits into pUSD at 0xC011a7E1…DFB; the 0x3468 funder was indeed wrong regardless — a
+  codeless, transferless address). Fix executed FROM CHAT (operator had no cmd access): Edge secrets
+  POLY_FUNDER_ADDRESS→0xD082A28C…6901 + POLY_SIGNATURE_TYPE→3 set 14:21Z via the authenticated CLI (both
+  public-class values; the key untouched); one tick-cycle skipped for env propagation; window opened
+  (lead_max 26) at ~14:30Z. **14:33:05Z: ankara/2026-07-19 "32°C" FAK 6 sh @ 0.44 = $2.64 — size_matched
+  6.0, status `filled`, venue order 0x6c6202e7…4fe1; position venue-confirmed on the public data-api.**
+  The entire production chain is proven live: candidate selection → interlock (override id=2) → sizing →
+  Dublin-pinned egress (0108) → clob-client-v2 sigType-3 deposit-wallet signing → venue accept → fill →
+  ledger. Post-fill state: rule 2 (stop_after_first_success) halts new entries — one successful buy, then
+  quiet, as designed; trial config RESTORED (stake $5, 6-city allowlist, cap 0.40, lead [2,12]);
+  .env.local funder/sigType synced to match. Open position: 6 sh ankara 32°C, resolves 07-19 12:00Z
+  (win → $6.00, lose → $0; risk $2.64). Operator decisions ahead: un-halt policy (stop_after_first_success
+  stays true = lane stays quiet after this), the C16 alert gap, and whether the lane continues at all now
+  that functionality is proven against the standing KILL record.
 - **C46d (2026-07-18 ~12:45Z, same session) — ON-CHAIN TRACE: the dedicated wallet was NEVER FUNDED and the
   configured funder has no on-chain existence — the verification buy is blocked on ACCOUNT SETUP, not
   software or secrets syntax.** Operator asked to fix it through chat (no local cmd access) → public-only
