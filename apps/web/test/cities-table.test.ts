@@ -10,6 +10,7 @@ import { sortCityRows, type CitiesTableRow } from '../src/components/CitiesTable
 const row = (over: Partial<CitiesTableRow>): CitiesTableRow => ({
   city: 'x',
   displayName: 'X',
+  marketUrl: 'https://polymarket.com/event/highest-temperature-in-x-on-july-18-2026',
   targetDate: '2026-07-18',
   dayOffset: 0,
   hoursToClose: 5,

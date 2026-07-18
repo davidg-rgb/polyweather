@@ -24,7 +24,8 @@ const FULL = {
   ],
   rows: [
     {
-      city: 'seoul', displayName: 'Seoul', unit: 'C', targetDate: '2026-07-18',
+      city: 'seoul', displayName: 'Seoul', unit: 'C', slug: 'highest-temperature-in-seoul-on-july-18-2026',
+      targetDate: '2026-07-18',
       resolvesAt: '2026-07-18T06:00:00Z', capturedAt: '2026-07-17T17:55:00Z',
       predIdx: 4, predLabel: '31°C', predProb: 0.44, ask: 0.38,
     },
@@ -39,6 +40,7 @@ describe('getCityPredictions (0106)', () => {
     expect(v.config).toEqual({ leadMinH: 2, leadMaxH: 12, priceCap: 0.4 });
     expect(v.stats[0]!.city).toBe('seoul');
     expect(v.rows[0]!.predLabel).toBe('31°C');
+    expect(v.rows[0]!.slug).toBe('highest-temperature-in-seoul-on-july-18-2026'); // 0107 permalink slug
   });
 
   it('coerces null/absent stats/rows/config when generatedAt is present', async () => {
