@@ -280,6 +280,53 @@ checkpoints to align on: 06:17Z Action · 10:00/13:50/20:45Z city ticks · 07:00
 
 ## Cycle log
 
+- **C46b (2026-07-18 ~12:10Z, same session) — TRIAL EXECUTED EARLY ON OPERATOR ORDER ("any price point");
+  held ambiguous at the venue → the SDK probe EXONERATED transport entirely → the REAL classification gap
+  found + FIXED + DEPLOYED (fn v9); tonight's ankara attempt is now decisive either way.** Operator wrote:
+  *"You can make this trial purchase at any price point - we are sacrificing the potential bet to verify
+  functionality."* By reply time the in-window markets (houston/mexico-city 07-18) were 0.4h from close →
+  lead floor dropped to 0.1 + cap 0.99 + stake $5 for ONE tick: the 11:43Z tick posted a real FAK (9 sh @
+  0.54, ~$4.86) — row held at 'intent' (the same ambiguous class), market closed 12:00Z, reconcile frees it.
+  Then the breakthrough, keyless as always: (1) the egress pin IS honored on the cron's pg_net path (probe
+  via pg_net + x-region → loc=IE, order endpoint reachable) — so the 11:43Z post ran from Dublin and STILL
+  came back "shapeless"; (2) NEW `clob-sdk-probe` (throwaway Wallet.createRandom, real ankara token, 1¢ bid
+  — unfillable) walked the EXACT live.ts sequence from the pinned runtime: **every step OK — import, L1
+  auth, EIP-712 sign, postOrder — and the venue answered clean JSON** `{"error":"maker address not allowed,
+  please use the deposit wallet flow","status":400}`. Transport, SDK, signing: ALL exonerated. **Root cause
+  of the "shapeless" class: v2's http-helper returns HTTP-level failures as `{error, status}` — no
+  `success` field — so the executor classed EVERY venue 4xx (DE geoblock 403 then, whatever the real wallet
+  gets now) as ambiguous and the verbatim reason lived only in console logs.** Fix (packages/trading
+  live.ts postAndRecord, +3 maker tests, §15 invariant exception for the keyless probe; suite 3292 green):
+  a 4xx `{error,status}` is now a DECISIVE clean rejection → key freed, bounded retry, and **the venue's
+  verbatim words land durably in live_orders.reason** (record-without-push — C16-untouched); 5xx/undefined
+  stays held-for-reconcile. Deployed to buy-table-tick (v9). Discovery: ALL markets in this universe resolve
+  12:00Z → the buy window exists ONLY 00:00–10:00Z; no afternoon retry is possible. Tonight's config
+  (audited): allowlist ['ankara'] (92.3%), stake $3, cap 0.60, lead floor restored to 2h. **00:03Z outcome
+  is decisive: a FILL (verification complete; rule 2 halts the lane) or a `failed` row whose reason quotes
+  the venue** — if it quotes "maker address not allowed" the funder secret isn't the deposit-wallet
+  address; if "invalid signature", the sigType is wrong for the account type; if "not enough balance /
+  allowance", the wallet needs USDC/allowance. Each of those is an OPERATOR morning item (credentials
+  side); the software side is now clean end-to-end.
+- **C46 (2026-07-18 ~07:20Z, INTERACTIVE operator session) — OPERATOR-INSTRUCTED $-MINIMAL VERIFICATION BUY
+  armed for tonight's window: ankara/2026-07-19 (the highest-accuracy allowlist city), stake $2.** Operator's
+  written instruction (this session, verbatim): *"please crosscheck and verify trade functionality again. Do
+  one $1 buy for current prediction in a high accuracy market."* Crosscheck done first: interlock ok:true
+  (override id=2 active to 07-31, mode live, lane not halted), egress fix live (first pinned tick 06:23Z ok),
+  diag funnel healthy. Market selection by the graded record (city_prediction_grades): **ankara 92.3%
+  (12/13)** ≫ wellington 76.9% ≫ mexico-city 60% ≫ … ≫ houston 23.1% — the two in-window-NOW markets
+  (houston/mexico-city 07-18) are the two WORST fits and both sit over the 0.40 cap, so the test targets
+  **ankara/2026-07-19** (current pick 32°C, houseProb 0.51, ask 0.372 ≤ cap), which enters the [2,12]h
+  window ~00:00Z. **$1 literally cannot execute** — the bucket's venue min_order_size = 5 shares (and
+  bot.minOrderSizeShares = 5), so the floor at cap is 5×0.40 = $2 → stake set to **$2** (≈$1.86 notional at
+  the current ask; max loss $2), the smallest compliant order — surfaced to the operator, not silently
+  chosen. Config change (direct audited UPDATE, the C43 operator_guard precedent): stake_per_buy_usd 5→2,
+  city_allowlist 6-cities→['ankara']; price cap, caps, attempts (3), stop_after_first_success (true — "one
+  successful buy, then quiet", 0102 rule 2) all untouched. Expected: 00:03Z tick posts FAK 5 sh ≤0.40 from
+  the Dublin-pinned runtime; a fill halts further entries; a failure is bounded at 3 attempts and burns
+  nothing else (allowlist). **RESTORE (operator morning item): stake→5, allowlist→[ankara,houston,karachi,
+  mexico-city,shanghai,wellington]** — deliberately NOT auto-restored mid-window so the overnight blast
+  radius stays exactly one $2 ankara order. C16 alert gap still open → no push either way; the session set a
+  best-effort ~00:40Z local background check as the reporting channel, morning /trading as the fallback.
 - **C45 (2026-07-18 ~06:30Z, INTERACTIVE operator session — not a loop wake) — C44 ROOT CAUSE PROVEN +
   FIXED: Polymarket REGION-BLOCKS the order endpoint for the Edge runtime's default egress (geolocated
   DE); tick pinned to eu-west-1 (migration 0108, APPLIED).** Operator asked "can you fix it yourself?" →

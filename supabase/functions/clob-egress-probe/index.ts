@@ -65,3 +65,5 @@ deno?.serve(async () => {
     headers: { 'content-type': 'application/json' },
   });
 });
+
+export {}; // module scope — keeps the top-level `deno` binding from colliding with sibling probe scripts
