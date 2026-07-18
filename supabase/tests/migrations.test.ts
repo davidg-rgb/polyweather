@@ -489,6 +489,14 @@ describe('migrations 0001–0010', () => {
       // endpoint; Dublin reaches it — proven by the keyless clob-egress-probe) + the C15 minute lane
       // codified. Command-only re-schedule of the existing job (cron count stays 35).
       '0108_buy_table_tick_region_pin.sql',
+      // 0109 = per-city MAX-ONLY price caps (operator directive 2026-07-18): the 0097 [min, max] range
+      // input loses its min everywhere — the lane buys whenever the ask ≤ the effective cap. New config
+      // key buy_table.city_price_caps (a FLAT jsonb text map slug → max; NOT seeded) + operator RPC
+      // buy_table_city_cap_set (0093 slug idiom; null max clears; 0 < max ≤ 0.99 RAISES); the old
+      // buy_table_price_range_set is DROPPED and buy_table.city_price_ranges folded to its maxes then
+      // deleted; dash_trading() re-stated with priceConfig { globalMax, cityCaps }. No table/cron change
+      // (count stays 35).
+      '0109_buy_table_city_caps.sql',
     ]);
   });
 });
@@ -984,7 +992,7 @@ describe('0034: internal-RPC lockdown — anon/authenticated revoked except the 
     'dash_city_live',  // 0085: /trading CITY-LIVE winners board + arms + maker-twin operator read
     'city_live_arms_get',  // 0085: /trading per-city Live toggle table operator read (operator_guard)
     'city_live_arm_set',  // 0085: operator-guarded per-city Live toggle write (self-guards via operator_guard)
-    'buy_table_price_range_set',  // 0097: operator-guarded per-city buy-table [min,max] override write (self-guards)
+    'buy_table_city_cap_set',  // 0109: operator-guarded per-city buy-table MAX override write (self-guards; 0097's range RPC dropped)
     'buy_table_price_cap_set',  // 0097: operator-guarded global buy_table.price_cap write (self-guards)
     'buy_table_live_cycles',  // 0099/0100: /trading live-cycle lo/hi columns operator read (fail-soft, self-guards)
     'dash_city_predictions',  // 0106: /cities prediction table operator read (open markets + per-city success rates; self-guards)

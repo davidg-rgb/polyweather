@@ -2257,14 +2257,14 @@ export interface BuyTableTotals {
 }
 
 /**
- * dash_trading.buyTable.priceConfig (0097) — the operator price-range config the buy-table tick trades by:
- * the global cap (buy_table.price_cap) + the per-city [min, max] override map (buy_table.city_price_ranges,
- * keyed by lower-cased cities.slug; an absent slug = the global [0, globalMax] default). Numerics are
- * jsonb-string-safe (file convention) — the page coerces with num().
+ * dash_trading.buyTable.priceConfig (0109, max-only since the min-bid input was removed) — the operator
+ * price config the buy-table tick trades by: the global cap (buy_table.price_cap) + the per-city MAX
+ * override map (buy_table.city_price_caps, a flat map keyed by lower-cased cities.slug; an absent slug =
+ * the global cap). Numerics are jsonb-string-safe (file convention) — the page coerces with num().
  */
 export interface BuyTablePriceConfig {
   globalMax: unknown;
-  cityRanges: Record<string, { min: unknown; max: unknown }>;
+  cityCaps: Record<string, unknown>;
 }
 
 /**
@@ -2285,7 +2285,7 @@ export interface BuyTableLiveCycle {
 }
 
 /** dash_trading.buyTable (0096) — { rows, totals }; null on a pre-0096 payload (the section notes it).
- *  0097 adds priceConfig — null on a pre-0097 payload (the price-ranges panel notes it).
+ *  0097/0109 add priceConfig — null on a pre-0097 payload (the price-caps panel notes it).
  *  liveCycles rides the SEPARATE buy_table_live_cycles() RPC (0099 — the 0098 inline read took the whole
  *  console down on a statement timeout) and is merged in by getTrading; null when that RPC is absent OR
  *  failed (the panel hides its cycle columns + renders one honest unavailable note for both). */

@@ -21,6 +21,16 @@
 
 _Claude keeps this block current every material cycle. Whole status in 20 seconds._
 
+- **▶▶ 2026-07-18 (operator-directed, interactive session) — BUY-TABLE PRICE INPUT IS NOW MAX-ONLY (0109).**
+  The 0097 per-city **[min, max]** purchase range lost its min everywhere: the lane buys whenever the
+  predicted bucket's ask is **at or below the effective cap** (per-city max when set, else the global
+  `buy_table.price_cap`). Rationale: every live override sat at min 0 anyway — the min input was pure
+  foot-gun surface. Shipped end-to-end: migration `0109` (new flat `buy_table.city_price_caps` map + RPC
+  `buy_table_city_cap_set`; the old range RPC dropped, existing ranges folded to their maxes — all 9 city
+  maxes preserved verbatim, behavior unchanged at cutover), the tick's gate, the §8.2 route, the `/trading`
+  "Buy-table price caps" panel (min column gone). Also fixed in passing: `derive-deposit-wallet.ts`'s §15
+  boundary violation (key read moved into `live.ts` `deriveOwnerIdentity`; the invariants suite had been red
+  since C46d) + `buy-table-tick` codified `verify_jwt=false` in `config.toml`. Suite 3,293 green.
 - **▶▶ C19 (2026-07-16 ~13:45Z, operator-instructed) — MULTI-DAY AUTONOMOUS SESSION STARTED (v18).**
   The loop now self-paces around the clock: every wakeup runs the **Cycle rota** (section below), fixes
   breakage within the escalation rules, and works the calm-day build queue when all green. **C19 baseline
@@ -280,6 +290,61 @@ checkpoints to align on: 06:17Z Action · 10:00/13:50/20:45Z city ticks · 07:00
 
 ## Cycle log
 
+- **C46e (2026-07-18 14:33Z) — ✅ FIRST LIVE FILL EVER — THE OPERATOR'S VERIFICATION IS COMPLETE.**
+  Operator supplied the dedicated account (@crayzwman, trading wallet 0xD082A28C…6901). Pre-set
+  verification (all public reads): the wallet is a DEPLOYED new-type deposit wallet (EIP-1822 UUPS clone →
+  sigType 3), `owner()` == the dedicated signing key's EOA (0xe3C2C877…7E36 — identity chain closed), and
+  it holds **$107.80 pUSD** (the C46d "never funded" verdict was an artifact of checking USDC — the new
+  system wraps deposits into pUSD at 0xC011a7E1…DFB; the 0x3468 funder was indeed wrong regardless — a
+  codeless, transferless address). Fix executed FROM CHAT (operator had no cmd access): Edge secrets
+  POLY_FUNDER_ADDRESS→0xD082A28C…6901 + POLY_SIGNATURE_TYPE→3 set 14:21Z via the authenticated CLI (both
+  public-class values; the key untouched); one tick-cycle skipped for env propagation; window opened
+  (lead_max 26) at ~14:30Z. **14:33:05Z: ankara/2026-07-19 "32°C" FAK 6 sh @ 0.44 = $2.64 — size_matched
+  6.0, status `filled`, venue order 0x6c6202e7…4fe1; position venue-confirmed on the public data-api.**
+  The entire production chain is proven live: candidate selection → interlock (override id=2) → sizing →
+  Dublin-pinned egress (0108) → clob-client-v2 sigType-3 deposit-wallet signing → venue accept → fill →
+  ledger. Post-fill state: rule 2 (stop_after_first_success) halts new entries — one successful buy, then
+  quiet, as designed; trial config RESTORED (stake $5, 6-city allowlist, cap 0.40, lead [2,12]);
+  .env.local funder/sigType synced to match. Open position: 6 sh ankara 32°C, resolves 07-19 12:00Z
+  (win → $6.00, lose → $0; risk $2.64). Operator decisions ahead: un-halt policy (stop_after_first_success
+  stays true = lane stays quiet after this), the C16 alert gap, and whether the lane continues at all now
+  that functionality is proven against the standing KILL record.
+- **C46d (2026-07-18 ~12:45Z, same session) — ON-CHAIN TRACE: the dedicated wallet was NEVER FUNDED and the
+  configured funder has no on-chain existence — the verification buy is blocked on ACCOUNT SETUP, not
+  software or secrets syntax.** Operator asked to fix it through chat (no local cmd access) → public-only
+  diagnostics: new `scripts/derive-deposit-wallet.ts` (loadEnv in-process, prints ONLY public identity —
+  the deriveClobApiKeyPreview idiom) shows owner EOA 0xe3C2C877…7E36, funder 0x3468f892…489C (≠ EOA),
+  sigType 2. Public Polygon RPC + Blockscout: the funder has **no contract code, zero USDC, zero token
+  transfers ever** (it is nobody's Safe/proxy/deposit wallet — plausibly the UI's one-time deposit-funding
+  address copied at setup, or an unconsummated Magic counterfactual); the owner EOA likewise has **zero
+  transfers ever**. Conclusion: no Polymarket account/deposit exists for this key pair — even perfect
+  secrets would next fail on balance/allowance. OPERATOR-ONLY next step (keys + capital, his side of the
+  boundary): create/log into polymarket.com WITH the dedicated wallet (import the key into a browser
+  wallet), deposit a small USDC amount, then hand over the account's TRADING wallet address (the profile
+  address — PUBLIC; not the one-time funding address). Claude then verifies it on-chain (code + USDC
+  present), sets POLY_FUNDER_ADDRESS + POLY_SIGNATURE_TYPE (3 for the new deposit-wallet type / 2 for a
+  Safe — determined from the deployed bytecode, not guessed) via the authenticated CLI, opens the window
+  for one tick, and the ledger records the outcome. SDK-side readiness already confirmed (clob-client-v2
+  1.0.8 carries POLY_1271; executor passes sigType through — no code change). Lane state unchanged:
+  allowlist ['ankara'] $3 cap 0.60 window [2,12], ankara/07-19 holds 2 attempts.
+- **C46c (2026-07-18 ~12:20Z, same session) — THE REAL WALLET'S VENUE VERDICT IS RECORDED (fn v9 worked
+  first try): `http 400: maker address not allowed, please use the deposit wallet flow` — the LAST blocker
+  is the WALLET SETUP, an operator credentials item; the software chain is proven clean end-to-end.**
+  Operator ordered the purchase completed immediately, rules skipped → lead_max lifted to 26 for one
+  window; the 12:13Z tick posted ankara/07-19 (FAK 7 sh @ 0.39) from Dublin and the venue REFUSED it with
+  the exact same error the throwaway-wallet probe got — now durably in `live_orders.reason` (the C46 fix's
+  first live proof: decisive 4xx classification + record-without-push). Meaning: the address in
+  `POLY_FUNDER_ADDRESS` is not a Polymarket-created DEPOSIT wallet (the venue no longer accepts raw-EOA
+  makers; every order must trade through the account's proxy). Lane state: lead_max restored to 12
+  immediately (attempt burn stopped — ankara/07-19 keeps 2 of 3 attempts); allowlist ['ankara'], stake $3,
+  cap 0.60, mode live, override to 07-31. **Operator fix (BUY-TABLE-LIVE.md §2; values never in chat):
+  set `POLY_FUNDER_ADDRESS` = the DEPOSIT WALLET address shown in the Polymarket UI for the dedicated
+  account (not the signer EOA), `POLY_SIGNATURE_TYPE` = 2 for a browser-wallet account / 1 for an
+  email-Magic account (Edge currently carries 2), keep `POLY_PRIVATE_KEY` = the account-owner key, and
+  make sure USDC is deposited INTO the Polymarket account.** If the secrets are fixed before ~09:50Z
+  07-19, the natural 00:00–10:00Z window auto-retries ankara (attempts 2/3) — a fill halts the lane (rule
+  2, verification complete). If not fixed, ankara/07-19 exhausts harmlessly and each new day brings a
+  fresh market. Restore-after-verification items unchanged: stake→5, 6-city allowlist, cap→0.40.
 - **C46b (2026-07-18 ~12:10Z, same session) — TRIAL EXECUTED EARLY ON OPERATOR ORDER ("any price point");
   held ambiguous at the venue → the SDK probe EXONERATED transport entirely → the REAL classification gap
   found + FIXED + DEPLOYED (fn v9); tonight's ankara attempt is now decisive either way.** Operator wrote:

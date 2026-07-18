@@ -187,7 +187,7 @@ describe('/api/admin/trading/city-arm → city_live_arm_set', () => {
   });
 });
 
-describe('/api/admin/trading/buy-table-price → buy_table_price_cap_set / buy_table_price_range_set (0097)', () => {
+describe('/api/admin/trading/buy-table-price → buy_table_price_cap_set / buy_table_city_cap_set (0109, max-only)', () => {
   it('globalMax → buy_table_price_cap_set passthrough; 200 + the new cap', async () => {
     const calls: RpcCall[] = [];
     const d = makeDeps({ calls, rpc: () => ({ buy_table_price_cap_set: { priceCap: 0.2 } }) });
@@ -199,52 +199,60 @@ describe('/api/admin/trading/buy-table-price → buy_table_price_cap_set / buy_t
     expect(calls[0]!.args).toEqual({ p_max: 0.2 });
   });
 
-  it('city + min/max → buy_table_price_range_set passthrough VERBATIM (the DB normalizes, not the route)', async () => {
+  it('city + max → buy_table_city_cap_set passthrough VERBATIM (the DB normalizes, not the route); no min anywhere', async () => {
     const calls: RpcCall[] = [];
     const d = makeDeps({
       calls,
-      rpc: () => ({ buy_table_price_range_set: { cityPriceRanges: { karachi: { min: 0.05, max: 0.3 } } } }),
+      rpc: () => ({ buy_table_city_cap_set: { cityPriceCaps: { karachi: 0.3 } } }),
     });
-    const res = await adminBuyTablePrice(req({ city: ' Karachi ', min: 0.05, max: 0.3 }), d);
+    const res = await adminBuyTablePrice(req({ city: ' Karachi ', max: 0.3 }), d);
     expect(res.status).toBe(200);
-    expect(await res.json()).toMatchObject({ ok: true, cityRanges: { karachi: { min: 0.05, max: 0.3 } } });
+    expect(await res.json()).toMatchObject({ ok: true, cityCaps: { karachi: 0.3 } });
     expect(calls).toHaveLength(1);
-    expect(calls[0]!.fn).toBe('buy_table_price_range_set');
-    expect(calls[0]!.args).toEqual({ p_city: ' Karachi ', p_min: 0.05, p_max: 0.3 });
+    expect(calls[0]!.fn).toBe('buy_table_city_cap_set');
+    expect(calls[0]!.args).toEqual({ p_city: ' Karachi ', p_max: 0.3 });
   });
 
-  it('clear: true → p_min/p_max null (the RPC clear contract); min/max ignored', async () => {
+  it('a stray legacy min in the body is ignored — only max reaches the RPC', async () => {
     const calls: RpcCall[] = [];
-    const d = makeDeps({ calls, rpc: () => ({ buy_table_price_range_set: { cityPriceRanges: {} } }) });
+    const d = makeDeps({ calls, rpc: () => ({ buy_table_city_cap_set: { cityPriceCaps: { karachi: 0.3 } } }) });
+    const res = await adminBuyTablePrice(req({ city: 'karachi', min: 0.05, max: 0.3 }), d);
+    expect(res.status).toBe(200);
+    expect(calls[0]!.args).toEqual({ p_city: 'karachi', p_max: 0.3 });
+  });
+
+  it('clear: true → p_max null (the RPC clear contract); max ignored', async () => {
+    const calls: RpcCall[] = [];
+    const d = makeDeps({ calls, rpc: () => ({ buy_table_city_cap_set: { cityPriceCaps: {} } }) });
     const res = await adminBuyTablePrice(req({ city: 'karachi', clear: true }), d);
     expect(res.status).toBe(200);
-    expect(calls[0]!.args).toEqual({ p_city: 'karachi', p_min: null, p_max: null });
+    expect(calls[0]!.args).toEqual({ p_city: 'karachi', p_max: null });
   });
 
-  it('TYPE validation — empty body, non-number bounds, non-number globalMax → 400, no RPC call', async () => {
+  it('TYPE validation — empty body, non-number max, non-number globalMax → 400, no RPC call', async () => {
     const calls: RpcCall[] = [];
     const d = makeDeps({ calls });
     const empty = await adminBuyTablePrice(req({}), d);
     expect(empty.status).toBe(400);
     expect(((await empty.json()) as { details: string[] }).details.some((s) => s.includes('globalMax and/or city'))).toBe(true);
-    const bad = await adminBuyTablePrice(req({ city: 'karachi', min: 'x', max: 0.3, globalMax: 'y' }), d);
+    const bad = await adminBuyTablePrice(req({ city: 'karachi', max: 'x', globalMax: 'y' }), d);
     expect(bad.status).toBe(400);
     const body = (await bad.json()) as { error: string; details: string[] };
     expect(body.error).toBe('ERR_VALIDATION');
-    expect(body.details.some((s) => s.includes('min'))).toBe(true);
+    expect(body.details.some((s) => s.includes('max must be a finite number'))).toBe(true);
     expect(body.details.some((s) => s.includes('globalMax'))).toBe(true);
     expect(calls).toHaveLength(0);
   });
 
-  it('surfaces a DB RAISE VERBATIM (unknown slug / invalid range) — value enforcement is the DB', async () => {
+  it('surfaces a DB RAISE VERBATIM (unknown slug / invalid cap) — value enforcement is the DB', async () => {
     const raise =
-      'rpc buy_table_price_range_set failed: buy_table_price_range_set: unknown city slug: atlantis — must match cities.slug exactly';
+      'rpc buy_table_city_cap_set failed: buy_table_city_cap_set: unknown city slug: atlantis — must match cities.slug exactly';
     const d = makeDeps({
       rpc: () => {
         throw new Error(raise);
       },
     });
-    const res = await adminBuyTablePrice(req({ city: 'atlantis', min: 0.05, max: 0.3 }), d);
+    const res = await adminBuyTablePrice(req({ city: 'atlantis', max: 0.3 }), d);
     expect(res.status).toBe(400);
     const body = (await res.json()) as { error: string; details: string[] };
     expect(body.error).toBe('ERR_DB_CHECK');

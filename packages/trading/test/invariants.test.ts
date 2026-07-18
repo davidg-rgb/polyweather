@@ -137,6 +137,9 @@ describe('trading boundary invariants (§15)', () => {
           p.startsWith('apps/web/') ||
           p === 'scripts/trade-bot.ts' ||
           p === 'scripts/trade-smoke.ts' ||
+          // C46d identity tool: imports ONLY deriveOwnerIdentity (public-class facts; the key derivation
+          // stays inside live.ts — invariant #1 above proves the key is never read in the script itself).
+          p === 'scripts/derive-deposit-wallet.ts' ||
           p === 'scripts/lib/trade-bot-decide.ts' ||
           p === 'scripts/lib/city-live-decide.ts' ||
           p === 'scripts/lib/trading-db.ts' ||

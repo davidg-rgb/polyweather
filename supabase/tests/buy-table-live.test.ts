@@ -7,9 +7,11 @@
  * + migration 0096: dash_trading().buyTable — the lane position ledger (ANY-status rows joined to their
  * market identity + graded won/lost/open/unfilled/failed against the market_events winner, with totals).
  *
- * + migration 0097: the per-city PRICE RANGES — buy_table_price_range_set (0093 slug-validation idiom;
- * null+null clears; 0 ≤ min < max ≤ 0.99) / buy_table_price_cap_set (0 < max ≤ 0.99) and
- * dash_trading().buyTable.priceConfig { globalMax, cityRanges }.
+ * + migration 0097→0109: the per-city price caps, MAX-ONLY since 0109 (operator 2026-07-18 — the min-bid
+ * input is gone; the lane buys whenever the ask ≤ the cap) — buy_table_city_cap_set (0093 slug-validation
+ * idiom; null max clears; 0 < max ≤ 0.99) / buy_table_price_cap_set (0 < max ≤ 0.99) and
+ * dash_trading().buyTable.priceConfig { globalMax, cityCaps }. 0109 also RETIRES the 0097 range surface
+ * (buy_table_price_range_set dropped, buy_table.city_price_ranges folded to maxes + deleted).
  *
  * + migrations 0098→0099→0100: the live-cycle logged lo/hi. 0098 inlined the scan into dash_trading() and
  * took the console down on the authenticated role's 8s statement timeout; 0099 split it into the fail-soft
@@ -517,21 +519,21 @@ describe('0096 dash_trading().buyTable — the BUY-TABLE lane position ledger (A
 });
 
 // ══════════════════════════════════════════════════════════════════════════════════════════════════════════
-describe('0097 buy-table price ranges — the operator RPCs + dash_trading().buyTable.priceConfig', () => {
-  const setRange = (city: string, min: number | null, max: number | null) =>
+describe('0109 buy-table price caps (max-only) — the operator RPCs + dash_trading().buyTable.priceConfig', () => {
+  const setCityCap = (city: string, max: number | null) =>
     asOperator(() =>
-      rows<{ r: { cityPriceRanges: Record<string, { min: number; max: number }> } }>(
+      rows<{ r: { cityPriceCaps: Record<string, number> } }>(
         db,
-        `select public.buy_table_price_range_set($1, $2, $3) as r`,
-        [city, min, max],
+        `select public.buy_table_city_cap_set($1, $2) as r`,
+        [city, max],
       ),
     );
   const setCap = (max: number) =>
     asOperator(() =>
       rows<{ r: { priceCap: number | string } }>(db, `select public.buy_table_price_cap_set($1) as r`, [max]),
     );
-  const rangesConfig = async (): Promise<string | null> => {
-    const r = await rows<{ value: string }>(db, `select value from config where key = 'buy_table.city_price_ranges'`);
+  const capsConfig = async (): Promise<string | null> => {
+    const r = await rows<{ value: string }>(db, `select value from config where key = 'buy_table.city_price_caps'`);
     return r[0]?.value ?? null;
   };
 
@@ -544,50 +546,55 @@ describe('0097 buy-table price ranges — the operator RPCs + dash_trading().buy
   });
 
   afterEach(async () => {
-    await db.exec(`delete from config where key = 'buy_table.city_price_ranges'`);
+    await db.exec(`delete from config where key = 'buy_table.city_price_caps'`);
     await db.exec(`update config set value = '0.15' where key = 'buy_table.price_cap'`);
   });
 
-  it('is NOT seeded — a fresh chain carries no buy_table.city_price_ranges row (absent = no overrides)', async () => {
-    expect(await rangesConfig()).toBeNull();
+  it('is NOT seeded — a fresh chain carries no buy_table.city_price_caps row (absent = no overrides)', async () => {
+    expect(await capsConfig()).toBeNull();
   });
 
-  it('sets a normalized (lower/trim) override and returns the OBJECT envelope', async () => {
-    const out = await setRange('  Karachi ', 0.05, 0.3);
-    expect(out[0]!.r.cityPriceRanges).toEqual({ karachi: { min: 0.05, max: 0.3 } });
-    // the stored config value round-trips as the same map
-    expect(JSON.parse((await rangesConfig())!)).toEqual({ karachi: { min: 0.05, max: 0.3 } });
+  it('the 0097 range surface is RETIRED — the RPC is dropped and the old config key is gone', async () => {
+    const [fn] = await rows<{ oldfn: string | null }>(
+      db,
+      `select to_regprocedure('public.buy_table_price_range_set(text,numeric,numeric)')::text as oldfn`,
+    );
+    expect(fn!.oldfn).toBeNull();
+    const old = await rows<{ value: string }>(
+      db,
+      `select value from config where key = 'buy_table.city_price_ranges'`,
+    );
+    expect(old.length).toBe(0);
+  });
+
+  it('sets a normalized (lower/trim) MAX override and returns the OBJECT envelope (flat map — no min anywhere)', async () => {
+    const out = await setCityCap('  Karachi ', 0.3);
+    expect(out[0]!.r.cityPriceCaps).toEqual({ karachi: 0.3 });
+    // the stored config value round-trips as the same flat map
+    expect(JSON.parse((await capsConfig())!)).toEqual({ karachi: 0.3 });
     // a second city upserts INTO the map without clobbering the first
-    const out2 = await setRange('singapore', 0.1, 0.2);
-    expect(out2[0]!.r.cityPriceRanges).toEqual({
-      karachi: { min: 0.05, max: 0.3 },
-      singapore: { min: 0.1, max: 0.2 },
-    });
+    const out2 = await setCityCap('singapore', 0.2);
+    expect(out2[0]!.r.cityPriceCaps).toEqual({ karachi: 0.3, singapore: 0.2 });
   });
 
   it('RAISES on an unknown slug, naming the offender verbatim (0093 idiom)', async () => {
-    await expect(setRange('atlantis', 0.05, 0.3)).rejects.toThrow(/unknown city slug: atlantis/);
-    expect(await rangesConfig()).toBeNull(); // the failed write stored nothing
+    await expect(setCityCap('atlantis', 0.3)).rejects.toThrow(/unknown city slug: atlantis/);
+    expect(await capsConfig()).toBeNull(); // the failed write stored nothing
   });
 
-  it('RAISES on min ≥ max, min < 0, and max > 0.99 (the range envelope is the DB, not the route)', async () => {
-    await expect(setRange('karachi', 0.3, 0.3)).rejects.toThrow(/need 0 <= min < max <= 0.99/);
-    await expect(setRange('karachi', 0.4, 0.2)).rejects.toThrow(/need 0 <= min < max <= 0.99/);
-    await expect(setRange('karachi', -0.1, 0.2)).rejects.toThrow(/need 0 <= min < max <= 0.99/);
-    await expect(setRange('karachi', 0.1, 1)).rejects.toThrow(/need 0 <= min < max <= 0.99/);
+  it('RAISES outside (0, 0.99] (the cap envelope is the DB, not the route)', async () => {
+    await expect(setCityCap('karachi', 0)).rejects.toThrow(/need 0 < max <= 0.99/);
+    await expect(setCityCap('karachi', -0.1)).rejects.toThrow(/need 0 < max <= 0.99/);
+    await expect(setCityCap('karachi', 1)).rejects.toThrow(/need 0 < max <= 0.99/);
   });
 
-  it('RAISES on a half-set range (one bound null) — never guessed', async () => {
-    await expect(setRange('karachi', 0.1, null)).rejects.toThrow(/BOTH null .* or BOTH set/);
-  });
-
-  it('null+null CLEARS the override (and clearing an absent/stale slug is a harmless no-op)', async () => {
-    await setRange('karachi', 0.05, 0.3);
-    const out = await setRange('karachi', null, null);
-    expect(out[0]!.r.cityPriceRanges).toEqual({});
+  it('a null max CLEARS the override (and clearing an absent/stale slug is a harmless no-op)', async () => {
+    await setCityCap('karachi', 0.3);
+    const out = await setCityCap('karachi', null);
+    expect(out[0]!.r.cityPriceCaps).toEqual({});
     // clearing a slug that was never set (or no longer exists in cities) does not throw
-    const out2 = await setRange('never-set', null, null);
-    expect(out2[0]!.r.cityPriceRanges).toEqual({});
+    const out2 = await setCityCap('never-set', null);
+    expect(out2[0]!.r.cityPriceCaps).toEqual({});
   });
 
   it('buy_table_price_cap_set writes buy_table.price_cap and RAISES outside (0, 0.99]', async () => {
@@ -599,10 +606,10 @@ describe('0097 buy-table price ranges — the operator RPCs + dash_trading().buy
     await expect(setCap(1)).rejects.toThrow(/need 0 < max <= 0.99/);
   });
 
-  it('both RPCs self-guard (a non-operator authenticated caller is ERR_FORBIDDEN) and carry the 0097 grants', async () => {
+  it('both RPCs self-guard (a non-operator authenticated caller is ERR_FORBIDDEN) and carry the 0109 grants', async () => {
     await expect(
       asRole(db, 'authenticated', { email: 'intruder@example.com' }, () =>
-        rows(db, `select public.buy_table_price_range_set('karachi', 0.05, 0.3)`),
+        rows(db, `select public.buy_table_city_cap_set('karachi', 0.3)`),
       ),
     ).rejects.toThrow(/ERR_FORBIDDEN/);
     await expect(
@@ -610,17 +617,17 @@ describe('0097 buy-table price ranges — the operator RPCs + dash_trading().buy
         rows(db, `select public.buy_table_price_cap_set(0.2)`),
       ),
     ).rejects.toThrow(/ERR_FORBIDDEN/);
-    const [g] = await rows<{ range_authd: boolean; range_anon: boolean; cap_authd: boolean; cap_anon: boolean }>(
+    const [g] = await rows<{ city_authd: boolean; city_anon: boolean; cap_authd: boolean; cap_anon: boolean }>(
       db,
-      `select has_function_privilege('authenticated', 'public.buy_table_price_range_set(text,numeric,numeric)', 'EXECUTE') as range_authd,
-              has_function_privilege('anon',          'public.buy_table_price_range_set(text,numeric,numeric)', 'EXECUTE') as range_anon,
+      `select has_function_privilege('authenticated', 'public.buy_table_city_cap_set(text,numeric)', 'EXECUTE') as city_authd,
+              has_function_privilege('anon',          'public.buy_table_city_cap_set(text,numeric)', 'EXECUTE') as city_anon,
               has_function_privilege('authenticated', 'public.buy_table_price_cap_set(numeric)', 'EXECUTE') as cap_authd,
               has_function_privilege('anon',          'public.buy_table_price_cap_set(numeric)', 'EXECUTE') as cap_anon`,
     );
-    expect(g).toEqual({ range_authd: true, range_anon: false, cap_authd: true, cap_anon: false });
+    expect(g).toEqual({ city_authd: true, city_anon: false, cap_authd: true, cap_anon: false });
   });
 
-  it('dash_trading().buyTable gains priceConfig { globalMax, cityRanges } — defaults 0.15 / {}', async () => {
+  it('dash_trading().buyTable carries priceConfig { globalMax, cityCaps } — defaults 0.15 / {}', async () => {
     const [keys] = await asOperator(() =>
       rows<{ keys: string[] }>(
         db,
@@ -630,24 +637,24 @@ describe('0097 buy-table price ranges — the operator RPCs + dash_trading().buy
     // 0099 REVERTED the 0098 liveCycles key — the cycles ride their own fail-soft RPC, never dash_trading.
     expect(keys!.keys).toEqual(['priceConfig', 'rows', 'totals']);
     const [before] = await asOperator(() =>
-      rows<{ v: { globalMax: number | string; cityRanges: Record<string, unknown> } }>(
+      rows<{ v: { globalMax: number | string; cityCaps: Record<string, unknown> } }>(
         db,
         `select public.dash_trading()->'buyTable'->'priceConfig' as v`,
       ),
     );
     expect(Number(before!.v.globalMax)).toBeCloseTo(0.15, 9);
-    expect(before!.v.cityRanges).toEqual({});
+    expect(before!.v.cityCaps).toEqual({});
 
-    await setRange('karachi', 0.05, 0.3);
+    await setCityCap('karachi', 0.3);
     await setCap(0.2);
     const [after] = await asOperator(() =>
-      rows<{ v: { globalMax: number | string; cityRanges: Record<string, { min: number; max: number }> } }>(
+      rows<{ v: { globalMax: number | string; cityCaps: Record<string, number> } }>(
         db,
         `select public.dash_trading()->'buyTable'->'priceConfig' as v`,
       ),
     );
     expect(Number(after!.v.globalMax)).toBeCloseTo(0.2, 9);
-    expect(after!.v.cityRanges).toEqual({ karachi: { min: 0.05, max: 0.3 } });
+    expect(after!.v.cityCaps).toEqual({ karachi: 0.3 });
   });
 
   it('every pre-0097 dash_trading TOP-LEVEL key stays byte-preserved (the 0096 pin, re-asserted)', async () => {

@@ -4,9 +4,9 @@
  * Replaces the LOCAL maker-exit daemon as "the buying function" with an every-10-min Edge tick implementing the
  * BUY-TABLE model (BUY-TABLE.md — the operator knows the measured record is a KILL and has explicitly
  * chosen to run it live small): buy OUR predicted daily-high bucket (argmax houseProb — the same house
- * seed the daemon reads) as a TAKER FAK, ONLY while its executable ask sits inside the city's PRICE RANGE
- * (0097: buy_table.city_price_ranges[slug] = {min, max} when the operator set one from /trading; else the
- * global default [0, buy_table.price_cap] = [0, $0.15] — the original behavior, unchanged), at
+ * seed the daemon reads) as a TAKER FAK, ONLY while its executable ask sits AT OR BELOW the city's PRICE CAP
+ * (0109: buy_table.city_price_caps[slug] = max when the operator set one from /trading; else the global
+ * default buy_table.price_cap = $0.15 — max-only by operator directive 2026-07-18; no minimum bound), at
  * the C25 calibrated sweet-spot lead (hoursToClose ∈ [buy_table.lead_min_h, buy_table.lead_max_h] =
  * [2, 12] — no entries in the final 2h; the record shows near-close entries are the worst), stake =
  * trade_config.stake_per_buy_usd, cities = trade_config.city_allowlist, HOLD TO RESOLUTION (no exits —
@@ -83,7 +83,7 @@ export const BUY_TABLE_STRATEGY = 'buy-table';
 
 export interface BuyTableCfg {
   /** the GLOBAL entry gate: enter only while the executable ask ≤ this (the BUY-TABLE ≤15¢ cheap gate) —
-   *  unless the city has a 0097 range override below. */
+   *  unless the city has a 0109 max override below. */
   priceCap: number;
   /** the C25 sweet-spot window: enter only when hoursToClose ≤ this (≤12h before close). */
   leadMaxH: number;
@@ -91,9 +91,10 @@ export interface BuyTableCfg {
   leadMinH: number;
   /** the operator kill switch for the whole tick (config buy_table.tick_enabled). */
   tickEnabled: boolean;
-  /** 0097: per-city [min, max] entry-price overrides (config buy_table.city_price_ranges — a jsonb text map
-   *  keyed by lower-cased cities.slug). An absent slug means the global [0, priceCap]. */
-  cityRanges: Record<string, { min: number; max: number }>;
+  /** 0109: per-city MAX entry-price overrides (config buy_table.city_price_caps — a flat jsonb text map
+   *  keyed by lower-cased cities.slug, value = the max). An absent slug means the global priceCap. There is
+   *  deliberately NO minimum bound — the lane buys whenever it can at or below the max (operator 2026-07-18). */
+  cityCaps: Record<string, number>;
   /** 0102 rule 1: total placement attempts allowed per market (ledger rows per intent key). Default 1 =
    *  the original one-attempt-EVER behavior. >1 lets a PROVABLY-dead attempt (a clean venue rejection →
    *  status 'failed', or an explicit zero-fill cancel) be retried on a later tick. Unknown-state rows
@@ -113,12 +114,12 @@ const num = (v: string | undefined, dflt: number): number => {
 };
 
 /**
- * Parse the buy_table.city_price_ranges map FAIL-SAFE: malformed JSON, a non-object payload, or an entry
- * whose bounds are non-finite / inverted (min ≥ max) / negative is DROPPED — the city then falls back to the
- * global [0, priceCap] gate (never a wider-than-intended window from a mangled row; the 0097 RPC is the
- * validated write path, so a broken value only ever comes from a hand edit).
+ * Parse the buy_table.city_price_caps map FAIL-SAFE: malformed JSON, a non-object payload, or an entry whose
+ * value is not a finite positive price is DROPPED — the city then falls back to the global priceCap gate
+ * (never a mangled-row surprise; the 0109 RPC is the validated write path, so a broken value only ever
+ * comes from a hand edit).
  */
-function parseCityRanges(raw: string | undefined): Record<string, { min: number; max: number }> {
+function parseCityCaps(raw: string | undefined): Record<string, number> {
   if (raw == null || raw.trim() === '') return {};
   let parsed: unknown;
   try {
@@ -127,12 +128,11 @@ function parseCityRanges(raw: string | undefined): Record<string, { min: number;
     return {};
   }
   if (parsed == null || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
-  const out: Record<string, { min: number; max: number }> = {};
+  const out: Record<string, number> = {};
   for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
-    const min = Number((v as { min?: unknown } | null)?.min);
-    const max = Number((v as { max?: unknown } | null)?.max);
-    if (Number.isFinite(min) && Number.isFinite(max) && min >= 0 && min < max) {
-      out[k.trim().toLowerCase()] = { min, max };
+    const max = Number(v);
+    if (Number.isFinite(max) && max > 0 && max <= 1) {
+      out[k.trim().toLowerCase()] = max;
     }
   }
   return out;
@@ -149,7 +149,7 @@ export function parseBuyTableConfig(rows: { key: string; value: string }[]): Buy
     leadMaxH: num(map.get('buy_table.lead_max_h'), 12),
     leadMinH: num(map.get('buy_table.lead_min_h'), 2),
     tickEnabled: enabledRaw === 'true' || enabledRaw === '1',
-    cityRanges: parseCityRanges(map.get('buy_table.city_price_ranges')),
+    cityCaps: parseCityCaps(map.get('buy_table.city_price_caps')),
     maxEntryAttempts: Number.isInteger(attemptsRaw) && attemptsRaw >= 1 ? attemptsRaw : 1,
     stopAfterFirstSuccess: stopRaw === 'true' || stopRaw === '1',
   };
@@ -311,19 +311,17 @@ export function selectBuyTableCandidates(args: {
       skips.push({ ref, reason: 'no_ask — the predicted bucket has no usable executable ask' });
       continue;
     }
-    // 0097: the price gate honors a per-city [min, max] override when the operator set one; otherwise the
-    // global [0, priceCap] — byte-identical to the original ≤cap gate (min 0 excludes nothing).
-    const override = cfg.cityRanges[String(r.city ?? '').trim().toLowerCase()];
-    if (override != null) {
-      if (ask < override.min - 1e-9 || ask > override.max + 1e-9) {
-        skips.push({
-          ref,
-          reason: `price_range (ask ${ask.toFixed(3)} ∉ [${override.min}, ${override.max}] — per-city override)`,
-        });
-        continue;
-      }
-    } else if (ask > cfg.priceCap + 1e-9) {
-      skips.push({ ref, reason: `price_cap (ask ${ask.toFixed(3)} > cap ${cfg.priceCap})` });
+    // 0109: MAX-ONLY price gate — a per-city cap override REPLACES the global cap when the operator set one;
+    // either way the lane buys whenever the ask is at or below the cap (no minimum bound, ever).
+    const cityCap = cfg.cityCaps[String(r.city ?? '').trim().toLowerCase()];
+    const cap = cityCap ?? cfg.priceCap;
+    if (ask > cap + 1e-9) {
+      skips.push({
+        ref,
+        reason: cityCap != null
+          ? `price_cap (ask ${ask.toFixed(3)} > city cap ${cityCap} — per-city override)`
+          : `price_cap (ask ${ask.toFixed(3)} > cap ${cfg.priceCap})`,
+      });
       continue;
     }
 
@@ -764,7 +762,7 @@ export async function buyTableTick(ctx: JobCtx, deps: BuyTableTickDeps): Promise
     lossesBooked,
     preflightOk,
     priceCap: cfg.priceCap,
-    cityOverrides: Object.keys(cfg.cityRanges).length,
+    cityOverrides: Object.keys(cfg.cityCaps).length,
     leadWindowH: [cfg.leadMinH, cfg.leadMaxH],
     stakeUsd,
     cities: allowlist.length,

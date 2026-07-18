@@ -537,44 +537,45 @@ export function GateOverridePanel({
   );
 }
 
-// ─── (b) Buy-table price ranges panel (0097) ──────────────────────────────────────────────────────────────
+// ─── (b) Buy-table price caps panel (0097 → 0109 max-only) ────────────────────────────────────────────────
 
 /**
- * The BUY-TABLE lane's purchase-price-range editor (migration 0097): the GLOBAL max (buy_table.price_cap →
- * buy_table_price_cap_set) plus a per-city [min, max] override table over the allowlist ∪ overridden cities
- * (buy_table.city_price_ranges → buy_table_price_range_set; clear = back to the global default). Same §8.2
- * contract as the config editor: the route TYPE-validates only; the slug/range VALUE constraints RAISE in the
- * DB and are shown VERBATIM. Data comes from dash_trading().buyTable.priceConfig — null (pre-0097) renders the
- * staged-dark note, never a false empty editor.
+ * The BUY-TABLE lane's purchase-price-cap editor (migration 0109 — the 0097 [min, max] range lost its min by
+ * operator directive 2026-07-18): the GLOBAL max (buy_table.price_cap → buy_table_price_cap_set) plus a
+ * per-city MAX override table over the allowlist ∪ overridden cities (buy_table.city_price_caps →
+ * buy_table_city_cap_set; clear = back to the global cap). The lane buys whenever the ask is at or below the
+ * effective cap — there is no minimum-bid input anywhere. Same §8.2 contract as the config editor: the route
+ * TYPE-validates only; the slug/cap VALUE constraints RAISE in the DB and are shown VERBATIM. Data comes from
+ * dash_trading().buyTable.priceConfig — null (pre-0097) renders the staged-dark note, never a false empty editor.
  *
  * 0098→0099/0100 (operator directive 2026-07-12): the table additionally carries one head-column per LIVE
  * date cycle, each cell stacking the city's LOGGED lo/hi — the min/max the lane's gate price (the predicted
- * bucket's executable ask) has recorded over that cycle's entire live period — so the operator sets
- * [min, max] against observed reality. Data rides the SEPARATE fail-soft buy_table_live_cycles() RPC (the
- * 0098 inline read timed the whole console out); null (absent OR failed) hides the columns + notes it.
+ * bucket's executable ask) has recorded over that cycle's entire live period — so the operator sets the max
+ * against observed reality. Data rides the SEPARATE fail-soft buy_table_live_cycles() RPC (the 0098 inline
+ * read timed the whole console out); null (absent OR failed) hides the columns + notes it.
  */
 const cents = (v: unknown): string => {
   const n = Number(v);
   return Number.isFinite(n) ? `${Math.round(n * 100)}¢` : '—';
 };
 
-export function BuyTablePriceRangesPanel({
+export function BuyTablePriceCapsPanel({
   priceConfig,
   allowlist,
   cityOptions = [],
   liveCycles,
 }: {
-  /** dash_trading().buyTable.priceConfig — null while migration 0097 is unapplied. */
+  /** dash_trading().buyTable.priceConfig — null while migration 0097/0109 is unapplied. */
   priceConfig: BuyTablePriceConfig | null;
   /** trade_config.city_allowlist (null = all cities) — the base row set of the per-city table. */
   allowlist: string[] | null;
-  /** Valid override targets (the buy_table_price_range_set slug domain): slug + display label. */
+  /** Valid override targets (the buy_table_city_cap_set slug domain): slug + display label. */
   cityOptions?: { slug: string; label: string }[];
   /** dash_trading().buyTable.liveCycles (0098) — null while migration 0098 is unapplied. */
   liveCycles?: BuyTableLiveCycle[] | null;
 }): ReactElement {
   const a = useAction();
-  const [edits, setEdits] = useState<Record<string, { min: string; max: string }>>({});
+  const [edits, setEdits] = useState<Record<string, string>>({});
   const [globalEdit, setGlobalEdit] = useState<string>('');
   const [added, setAdded] = useState<string[]>([]);
   const [addSel, setAddSel] = useState<string>('');
@@ -582,26 +583,26 @@ export function BuyTablePriceRangesPanel({
   if (!priceConfig) {
     return (
       <div className="panel">
-        <div className="cap" style={{ marginBottom: '0.25rem' }}>Buy-table price ranges</div>
+        <div className="cap" style={{ marginBottom: '0.25rem' }}>Buy-table price caps</div>
         <p className="muted small" style={{ marginTop: 0 }}>
-          <strong style={{ color: 'var(--ams-amber)' }}>0097 not applied</strong> — the{' '}
+          <strong style={{ color: 'var(--ams-amber)' }}>0097/0109 not applied</strong> — the{' '}
           <span className="mono">dash_trading()</span> payload carries no{' '}
-          <span className="mono">buyTable.priceConfig</span> yet. The per-city purchase-price ranges (global cap +{' '}
-          <span className="mono">buy_table.city_price_ranges</span> overrides) unlock the moment the operator
-          applies migration <span className="mono">0097_buy_table_price_ranges.sql</span>. Until then the lane
+          <span className="mono">buyTable.priceConfig</span> yet. The per-city purchase-price caps (global cap +{' '}
+          <span className="mono">buy_table.city_price_caps</span> overrides) unlock the moment the operator
+          applies migration <span className="mono">0109_buy_table_city_caps.sql</span>. Until then the lane
           trades on the global <span className="mono">buy_table.price_cap</span> alone.
         </p>
       </div>
     );
   }
 
-  const ranges = priceConfig.cityRanges ?? {};
+  const caps = priceConfig.cityCaps ?? {};
   const globalCur = curStr(priceConfig.globalMax);
   const labelOf = (slug: string): string => cityOptions.find((o) => o.slug === slug)?.label ?? slug;
 
   // Rows = allowlist ∪ overridden ∪ locally-added (the add-row below), lower-cased + deduped + sorted.
   const rowSlugs = [
-    ...new Set([...(allowlist ?? []).map((s) => s.toLowerCase()), ...Object.keys(ranges).map((s) => s.toLowerCase()), ...added]),
+    ...new Set([...(allowlist ?? []).map((s) => s.toLowerCase()), ...Object.keys(caps).map((s) => s.toLowerCase()), ...added]),
   ].sort();
   const addable = cityOptions.filter((o) => !rowSlugs.includes(o.slug));
 
@@ -611,16 +612,8 @@ export function BuyTablePriceRangesPanel({
   const cycleDates = [...new Set(cycles.map((c) => c.targetDate))].sort();
   const cycleBy = new Map(cycles.map((c) => [`${c.city}|${c.targetDate}`, c]));
 
-  const minOf = (slug: string): string => edits[slug]?.min ?? curStr(ranges[slug]?.min);
-  const maxOf = (slug: string): string => edits[slug]?.max ?? curStr(ranges[slug]?.max);
-  const patch = (slug: string, key: 'min' | 'max', v: string): void =>
-    setEdits((p) => ({
-      ...p,
-      [slug]: {
-        min: key === 'min' ? v : (p[slug]?.min ?? minOf(slug)),
-        max: key === 'max' ? v : (p[slug]?.max ?? maxOf(slug)),
-      },
-    }));
+  const maxOf = (slug: string): string => edits[slug] ?? curStr(caps[slug]);
+  const patch = (slug: string, v: string): void => setEdits((p) => ({ ...p, [slug]: v }));
 
   const post = (body: Record<string, unknown>, okMsg: string): Promise<void> =>
     a.run(async () => {
@@ -635,15 +628,15 @@ export function BuyTablePriceRangesPanel({
 
   return (
     <div className="panel">
-      <div className="cap" style={{ marginBottom: '0.25rem' }}>Buy-table price ranges</div>
+      <div className="cap" style={{ marginBottom: '0.25rem' }}>Buy-table price caps</div>
       <p className="muted small" style={{ marginTop: 0 }}>
-        The BUY-TABLE lane enters only while the predicted bucket&apos;s executable ask sits inside the city&apos;s{' '}
-        <strong>[min, max]</strong> purchase range. No override = the global default{' '}
-        <span className="mono">[0, {globalCur || '0.15'}]</span>. Range guardrails are the database&apos;s
-        (slug must exist, 0 ≤ min &lt; max ≤ 0.99, cap in (0, 0.99]) and any rejection is shown{' '}
-        <strong>verbatim</strong>. Date columns show each <strong>live cycle&apos;s logged lo / hi</strong> — the
-        lowest and highest the lane&apos;s gate price (the predicted bucket&apos;s ask) has been over that
-        cycle&apos;s entire live period so far — so ranges are set against observed reality.
+        The BUY-TABLE lane buys whenever the predicted bucket&apos;s executable ask is <strong>at or below the
+        city&apos;s max</strong> — there is no minimum. No override = the global cap{' '}
+        <span className="mono">{globalCur || '0.15'}</span>. Cap guardrails are the database&apos;s
+        (slug must exist, 0 &lt; max ≤ 0.99) and any rejection is shown <strong>verbatim</strong>. Date columns
+        show each <strong>live cycle&apos;s logged lo / hi</strong> — the lowest and highest the lane&apos;s gate
+        price (the predicted bucket&apos;s ask) has been over that cycle&apos;s entire live period so far — so
+        the max is set against observed reality.
       </p>
       <div className="form-row" style={{ marginBottom: 8 }}>
         <span>Global max</span>
@@ -677,7 +670,7 @@ export function BuyTablePriceRangesPanel({
             <thead>
               <tr>
                 <th>city</th>
-                <th>current range</th>
+                <th>current max</th>
                 {cycleDates.map((d) => (
                   <th
                     key={d}
@@ -690,23 +683,21 @@ export function BuyTablePriceRangesPanel({
                     </div>
                   </th>
                 ))}
-                <th className="num">min</th>
                 <th className="num">max</th>
                 <th />
               </tr>
             </thead>
             <tbody>
               {rowSlugs.map((slug) => {
-                const r = ranges[slug];
-                const minStr = minOf(slug);
+                const cur = caps[slug];
                 const maxStr = maxOf(slug);
                 return (
                   <tr key={slug}>
                     <td>
                       {labelOf(slug)} <span className="muted small mono">{slug}</span>
                     </td>
-                    <td className="mono small" title={`no override = the global [0, ${globalCur || '0.15'}]`}>
-                      {r ? `[${curStr(r.min)}, ${curStr(r.max)}]` : 'default'}
+                    <td className="mono small" title={`no override = the global cap ${globalCur || '0.15'}`}>
+                      {cur != null ? curStr(cur) : 'default'}
                     </td>
                     {cycleDates.map((d) => {
                       const cyc = cycleBy.get(`${slug}|${d}`);
@@ -729,44 +720,28 @@ export function BuyTablePriceRangesPanel({
                       <input
                         className="mono"
                         type="number"
-                        min="0"
-                        max="0.99"
-                        step="0.01"
-                        placeholder="0"
-                        style={{ width: 80 }}
-                        value={minStr}
-                        onChange={(e) => patch(slug, 'min', evVal(e))}
-                      />
-                    </td>
-                    <td className="num">
-                      <input
-                        className="mono"
-                        type="number"
-                        min="0"
+                        min="0.01"
                         max="0.99"
                         step="0.01"
                         placeholder={globalCur}
                         style={{ width: 80 }}
                         value={maxStr}
-                        onChange={(e) => patch(slug, 'max', evVal(e))}
+                        onChange={(e) => patch(slug, evVal(e))}
                       />
                     </td>
                     <td>
                       <button
-                        disabled={a.busy || minStr.trim() === '' || maxStr.trim() === ''}
+                        disabled={a.busy || maxStr.trim() === ''}
                         onClick={() =>
-                          void post(
-                            { city: slug, min: Number(minStr), max: Number(maxStr) },
-                            `${slug} range set to [${minStr}, ${maxStr}]`,
-                          )
+                          void post({ city: slug, max: Number(maxStr) }, `${slug} max set to ${maxStr}`)
                         }
                       >
                         save
                       </button>{' '}
-                      {r ? (
+                      {cur != null ? (
                         <button
                           disabled={a.busy}
-                          title="remove the override — back to the global [0, max] default"
+                          title="remove the override — back to the global cap"
                           onClick={() => void post({ city: slug, clear: true }, `${slug} override cleared`)}
                         >
                           clear
