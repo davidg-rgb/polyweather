@@ -21,6 +21,8 @@ export const SMALL_N_FLOOR = 8;
 export interface CitiesTableRow {
   city: string;
   displayName: string;
+  /** the live Polymarket book permalink (https://polymarket.com/event/{slug}); null when underivable. */
+  marketUrl: string | null;
   /** station-local market day (YYYY-MM-DD). */
   targetDate: string;
   /** whole-day offset of targetDate vs the render instant's UTC date (0 = today, 1 = tomorrow, …). */
@@ -222,7 +224,19 @@ export function CitiesTable({
                   }
                 >
                   <td>
-                    <strong>{r.displayName}</strong> <span className="muted small mono">{r.city}</span>
+                    {r.marketUrl ? (
+                      <a
+                        href={r.marketUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        title={`open the live ${r.displayName} ${r.targetDate} market on Polymarket`}
+                      >
+                        <strong>{r.displayName}</strong> ↗
+                      </a>
+                    ) : (
+                      <strong>{r.displayName}</strong>
+                    )}{' '}
+                    <span className="muted small mono">{r.city}</span>
                   </td>
                   <td className="mono small">
                     {r.targetDate} <span className="muted">({dayLabel(r.dayOffset, r.targetDate)})</span>

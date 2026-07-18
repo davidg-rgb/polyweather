@@ -14,6 +14,7 @@ import type { ReactElement } from 'react';
 import { wilsonInterval } from '@weather-edge/core';
 import { CitiesTable, SMALL_N_FLOOR, rateColor, type CitiesTableRow } from '../../../components/CitiesTable.tsx';
 import { fmtAgo, fmtDate, fmtDateTime, num } from '../../../lib/format.ts';
+import { polymarketEventUrl } from '../../../lib/market-link.ts';
 import { getCityPredictions, type CityPredictionStat } from '../../../lib/loaders.ts';
 import { serverDb } from '../../../lib/supabase.ts';
 
@@ -72,6 +73,7 @@ export default async function CitiesPage(): Promise<ReactElement> {
     return {
       city: r.city,
       displayName: r.displayName,
+      marketUrl: polymarketEventUrl(r.slug, r.city, r.targetDate),
       targetDate: r.targetDate,
       dayOffset: dayOffsetUtc(r.targetDate, nowMs),
       hoursToClose,

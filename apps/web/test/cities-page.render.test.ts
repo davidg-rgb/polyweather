@@ -8,6 +8,7 @@ import { wilsonInterval } from '@weather-edge/core';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
+import { polymarketEventUrl } from '../src/lib/market-link.ts';
 
 /** The page's conservative-upside formula, recomputed independently for dynamic expectations. */
 const upsideStr = (hits: number, n: number, ask: number): string => {
@@ -33,13 +34,14 @@ const FIXTURE = {
     { city: 'amsterdam', displayName: 'Amsterdam', unit: 'C', n: 15, hits: 6, rate: 0.4, lastGradedDate: '2026-07-16' },
   ],
   rows: [
-    // inside the [2,12]h buy window → rec-row highlight + the "window" pill
+    // inside the [2,12]h buy window → rec-row highlight + the "window" pill; carries the 0107 DB slug
     {
-      city: 'seoul', displayName: 'Seoul', unit: 'C', targetDate: utcDate(0),
+      city: 'seoul', displayName: 'Seoul', unit: 'C', slug: 'highest-temperature-in-seoul-on-july-18-2026',
+      targetDate: utcDate(0),
       resolvesAt: iso(5.5), capturedAt: iso(-0.1),
       predIdx: 4, predLabel: '31°C', predProb: 0.44, ask: 0.38,
     },
-    // outside the window (tomorrow, ~29h) — no highlight
+    // outside the window (tomorrow, ~29h) — no highlight; NO slug (pre-0107 payload → reconstructed link)
     {
       city: 'denver', displayName: 'Denver', unit: 'F', targetDate: utcDate(1),
       resolvesAt: iso(29.7), capturedAt: iso(-0.2),
@@ -69,6 +71,15 @@ describe('/cities page renders', () => {
     // the table: city, prediction + house prob, ask in cents, time to close, rate with n
     expect(html).toContain('Seoul');
     expect(html).toContain('31°C');
+
+    // each open-market city links to its LIVE Polymarket book in a new tab:
+    // seoul via the 0107 DB slug verbatim…
+    expect(html).toContain(
+      'href="https://polymarket.com/event/highest-temperature-in-seoul-on-july-18-2026"',
+    );
+    // …denver (slugless pre-0107 payload) via the reconstructed canonical slug for ITS market day
+    expect(html).toContain(polymarketEventUrl(null, 'denver', utcDate(1))!);
+    expect(html).toContain('target="_blank"');
     expect(html).toContain('44% house');
     expect(html).toContain('38¢');
     expect(html).toContain('5.5h');
