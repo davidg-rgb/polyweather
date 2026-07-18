@@ -227,7 +227,7 @@ const reservesOf = (db: { calls: Array<{ fn: string; args: Record<string, unknow
 describe('parseBuyTableConfig', () => {
   it('falls back to the 0095/0102 defaults and honors overrides', () => {
     expect(parseBuyTableConfig([])).toEqual({
-      priceCap: 0.15, leadMaxH: 12, leadMinH: 2, tickEnabled: true, cityRanges: {},
+      priceCap: 0.15, leadMaxH: 12, leadMinH: 2, tickEnabled: true, cityCaps: {},
       maxEntryAttempts: 1, stopAfterFirstSuccess: false,
     });
     expect(
@@ -239,7 +239,7 @@ describe('parseBuyTableConfig', () => {
         { key: 'buy_table.stop_after_first_success', value: 'true' },
       ]),
     ).toEqual({
-      priceCap: 0.1, leadMaxH: 24, leadMinH: 2, tickEnabled: false, cityRanges: {},
+      priceCap: 0.1, leadMaxH: 24, leadMinH: 2, tickEnabled: false, cityCaps: {},
       maxEntryAttempts: 3, stopAfterFirstSuccess: true,
     });
   });
@@ -250,25 +250,26 @@ describe('parseBuyTableConfig', () => {
     }
   });
 
-  it('0097: parses buy_table.city_price_ranges into slug-keyed cityRanges (normalized lower/trim)', () => {
+  it('0109: parses buy_table.city_price_caps into a slug-keyed flat max map (normalized lower/trim)', () => {
     const cfg = parseBuyTableConfig([
-      { key: 'buy_table.city_price_ranges', value: '{" Karachi ": {"min": 0.05, "max": 0.3}, "singapore": {"min": 0, "max": 0.2}}' },
+      { key: 'buy_table.city_price_caps', value: '{" Karachi ": 0.3, "singapore": 0.2}' },
     ]);
-    expect(cfg.cityRanges).toEqual({ karachi: { min: 0.05, max: 0.3 }, singapore: { min: 0, max: 0.2 } });
+    expect(cfg.cityCaps).toEqual({ karachi: 0.3, singapore: 0.2 });
   });
 
-  it('0097: drops malformed JSON, non-object payloads, and invalid entries FAIL-SAFE (back to the global cap)', () => {
-    expect(parseBuyTableConfig([{ key: 'buy_table.city_price_ranges', value: 'not json' }]).cityRanges).toEqual({});
-    expect(parseBuyTableConfig([{ key: 'buy_table.city_price_ranges', value: '[1,2]' }]).cityRanges).toEqual({});
+  it('0109: drops malformed JSON, non-object payloads, and invalid entries FAIL-SAFE (back to the global cap)', () => {
+    expect(parseBuyTableConfig([{ key: 'buy_table.city_price_caps', value: 'not json' }]).cityCaps).toEqual({});
+    expect(parseBuyTableConfig([{ key: 'buy_table.city_price_caps', value: '[1,2]' }]).cityCaps).toEqual({});
     expect(
       parseBuyTableConfig([
         {
-          key: 'buy_table.city_price_ranges',
-          // inverted min/max, a non-numeric bound, a bare string entry — all dropped; the sane one survives.
-          value: '{"bad": {"min": 0.5, "max": 0.2}, "worse": {"min": "x", "max": 0.2}, "junk": "x", "ok": {"min": 0.1, "max": 0.3}}',
+          key: 'buy_table.city_price_caps',
+          // a non-numeric value, zero, a negative, an above-1 price, a legacy 0097 {min,max} object — all
+          // dropped; the sane flat entry survives.
+          value: '{"bad": "x", "zero": 0, "neg": -0.1, "wild": 1.5, "legacy": {"min": 0.1, "max": 0.3}, "ok": 0.3}',
         },
-      ]).cityRanges,
-    ).toEqual({ ok: { min: 0.1, max: 0.3 } });
+      ]).cityCaps,
+    ).toEqual({ ok: 0.3 });
   });
 });
 
@@ -297,34 +298,36 @@ describe('buy-table-tick — the price gate (executable ask ≤ price_cap)', () 
   });
 });
 
-describe('buy-table-tick — per-city price RANGES (0097) override the global cap', () => {
-  it('honors an override: enters inside [min,max] even ABOVE the global cap; min excludes a too-cheap ask', async () => {
+describe('buy-table-tick — per-city price CAPS (0109, max-only) override the global cap', () => {
+  it('honors an override: enters at or below the city max even ABOVE the global cap; a cheap ask is ALWAYS in (no min)', async () => {
     const h = harness(
       {
         mode: 'off',
-        configRows: [{ key: 'buy_table.city_price_ranges', value: '{"testville": {"min": 0.10, "max": 0.30}}' }],
+        configRows: [{ key: 'buy_table.city_price_caps', value: '{"testville": 0.30}' }],
         captures: [
-          capture({ eventId: 'ev-mid', ask: 0.25, hoursToClose: 6 }), // > global 0.15 cap but inside the override
-          capture({ eventId: 'ev-cheap', ask: 0.05, hoursToClose: 6 }), // below the override MIN — excluded
-          capture({ eventId: 'ev-rich', ask: 0.35, hoursToClose: 6 }), // above the override MAX — excluded
+          capture({ eventId: 'ev-mid', ask: 0.25, hoursToClose: 6 }), // > global 0.15 cap but ≤ the city max
+          capture({ eventId: 'ev-cheap', ask: 0.05, hoursToClose: 6 }), // cheap — IN (there is no minimum bound)
+          capture({ eventId: 'ev-rich', ask: 0.35, hoursToClose: 6 }), // above the city max — excluded
         ],
       },
       'dry-run',
     );
     const stats = await buyTableTick(h.ctx, h.deps);
-    expect(stats.candidates).toBe(1);
+    expect(stats.candidates).toBe(2);
     expect(stats.cityOverrides).toBe(1);
-    expect(reservesOf(h.db).map((r) => r.args['p_market_id'])).toEqual(['c-ev-mid-1']);
-    const rangeSkips = h.logs.filter((l) => l.msg === 'buy-table.skip' && /price_range/.test(String(l.extra?.reason)));
-    expect(rangeSkips.length).toBe(2);
+    expect(reservesOf(h.db).map((r) => r.args['p_market_id']).sort()).toEqual(['c-ev-cheap-1', 'c-ev-mid-1']);
+    const capSkips = h.logs.filter(
+      (l) => l.msg === 'buy-table.skip' && /price_cap .*city cap 0\.3/.test(String(l.extra?.reason)),
+    );
+    expect(capSkips.length).toBe(1);
   });
 
-  it('falls back to the global [0, price_cap] for a city with NO override (the original gate, unchanged)', async () => {
+  it('falls back to the global price_cap for a city with NO override (the original ≤cap gate, unchanged)', async () => {
     const h = harness(
       {
         mode: 'off',
         // an override for a DIFFERENT city must not touch testville's gate
-        configRows: [{ key: 'buy_table.city_price_ranges', value: '{"otherville": {"min": 0.10, "max": 0.30}}' }],
+        configRows: [{ key: 'buy_table.city_price_caps', value: '{"otherville": 0.30}' }],
         captures: [
           capture({ eventId: 'ev-ok', ask: 0.15, hoursToClose: 6 }),
           capture({ eventId: 'ev-no', ask: 0.16, hoursToClose: 6 }),
@@ -743,7 +746,7 @@ describe('buy-table-tick — hold-to-close resolution-loss booking', () => {
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 describe('selectBuyTableCandidates — pure edge shapes', () => {
   const baseCfg = {
-    priceCap: 0.15, leadMaxH: 12, leadMinH: 2, tickEnabled: true, cityRanges: {},
+    priceCap: 0.15, leadMaxH: 12, leadMinH: 2, tickEnabled: true, cityCaps: {},
     maxEntryAttempts: 1, stopAfterFirstSuccess: false,
   };
 

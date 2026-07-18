@@ -16,7 +16,7 @@ seed the maker-exit daemon reads) as a **TAKER FAK**, only when:
 
 | Gate | Value | Source |
 |---|---|---|
-| Executable ask | ≤ **$0.15** | `config buy_table.price_cap` (the BUY-TABLE cheap gate) |
+| Executable ask | ≤ **$0.15** (global), or ≤ the city's max when overridden | `config buy_table.price_cap`, per-city `buy_table.city_price_caps` (0109 — **max-only**: there is no minimum-bid input; the lane buys whenever the ask is at or below the effective cap. Set from `/trading` → Buy-table price caps) |
 | Lead to close | **2–12 h** | `config buy_table.lead_min_h / lead_max_h` (the C25 calibrated sweet-spot is ≤12h; the final 2h is excluded — the record's worst regime: near close the cheap filter keeps only near-certain losers) |
 | Stake per buy | `trade_config.stake_per_buy_usd` (currently **$5**) | `/trading` console |
 | Cities | `trade_config.city_allowlist` | `/trading` console (0093-validated slugs) |

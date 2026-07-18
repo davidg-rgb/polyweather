@@ -21,6 +21,16 @@
 
 _Claude keeps this block current every material cycle. Whole status in 20 seconds._
 
+- **▶▶ 2026-07-18 (operator-directed, interactive session) — BUY-TABLE PRICE INPUT IS NOW MAX-ONLY (0109).**
+  The 0097 per-city **[min, max]** purchase range lost its min everywhere: the lane buys whenever the
+  predicted bucket's ask is **at or below the effective cap** (per-city max when set, else the global
+  `buy_table.price_cap`). Rationale: every live override sat at min 0 anyway — the min input was pure
+  foot-gun surface. Shipped end-to-end: migration `0109` (new flat `buy_table.city_price_caps` map + RPC
+  `buy_table_city_cap_set`; the old range RPC dropped, existing ranges folded to their maxes — all 9 city
+  maxes preserved verbatim, behavior unchanged at cutover), the tick's gate, the §8.2 route, the `/trading`
+  "Buy-table price caps" panel (min column gone). Also fixed in passing: `derive-deposit-wallet.ts`'s §15
+  boundary violation (key read moved into `live.ts` `deriveOwnerIdentity`; the invariants suite had been red
+  since C46d) + `buy-table-tick` codified `verify_jwt=false` in `config.toml`. Suite 3,293 green.
 - **▶▶ C19 (2026-07-16 ~13:45Z, operator-instructed) — MULTI-DAY AUTONOMOUS SESSION STARTED (v18).**
   The loop now self-paces around the clock: every wakeup runs the **Cycle rota** (section below), fixes
   breakage within the escalation rules, and works the calm-day build queue when all green. **C19 baseline

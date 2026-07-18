@@ -100,8 +100,8 @@ const FIXTURE = {
       },
     ],
     totals: { nRows: 2, nOpen: 1, nWon: 1, nLost: 0, costUsd: '19.900000', resolvedPnlUsd: '73.040000' },
-    // 0097: the price-range config — karachi carries an override; singapore (allowlisted) falls to 'default'.
-    priceConfig: { globalMax: 0.15, cityRanges: { karachi: { min: 0.05, max: 0.3 } } },
+    // 0109: the price-cap config (max-only) — karachi carries an override; singapore (allowlisted) falls to 'default'.
+    priceConfig: { globalMax: 0.15, cityCaps: { karachi: 0.3 } },
     // 0098: live-cycle logged lo/hi — karachi spans two cycles (the operator's Houston example numbers),
     // singapore only one (its 07-14 cell must render the em-dash placeholder).
     liveCycles: [
@@ -215,14 +215,15 @@ describe('/trading page renders', () => {
     expect(html).toContain('2 of 4 selected');
     expect(html).toContain('repeat(auto-fill'); // the multi-column responsive grid
 
-    // (a2) 0097 — the buy-table price-ranges panel: global max + the per-city table over allowlist ∪ overridden
-    // (karachi shows its override, singapore shows 'default'), with save/clear wired to the §8.2 route.
-    expect(html).toContain('Buy-table price ranges');
+    // (a2) 0109 — the buy-table price-caps panel (max-only): global max + the per-city MAX table over
+    // allowlist ∪ overridden (karachi shows its override, singapore shows 'default'), save/clear on the §8.2 route.
+    expect(html).toContain('Buy-table price caps');
     expect(html).toContain('save global max');
-    expect(html).toContain('[0.05, 0.3]'); // karachi's stored override
+    expect(html).toContain('there is no minimum'); // the max-only contract, stated in the panel copy
+    expect(html).toContain('0.3'); // karachi's stored max override
     expect(html).toContain('default'); // singapore — allowlisted, no override
     expect(html).toContain('clear'); // the per-row override clear button
-    expect(html).not.toContain('0097 not applied'); // priceConfig present — no staged-dark note
+    expect(html).not.toContain('0097/0109 not applied'); // priceConfig present — no staged-dark note
     // 0098: one head-column per live date cycle, each city cell stacking the logged lo/hi in cents.
     expect(html).toContain('07-13'); // cycle head-column
     expect(html).toContain('07-14'); // second cycle head-column
@@ -255,8 +256,8 @@ describe('/trading page renders', () => {
     }));
     const { default: TradingPage } = await import('../src/app/(dash)/trading/page.tsx');
     const html = renderToStaticMarkup(await TradingPage());
-    expect(html).toContain('Buy-table price ranges'); // the 0097 editor still renders in full
-    expect(html).toContain('[0.05, 0.3]');
+    expect(html).toContain('Buy-table price caps'); // the 0109 editor still renders in full
+    expect(html).toContain('0.3'); // karachi's stored max override
     expect(html).toContain('live-cycle columns unavailable'); // the honest note for absent OR failed reads
     // …and no cycle head-columns pretend to exist (the note itself names "lo / hi", so pin the date headers)
     expect(html).not.toContain('07-13');
@@ -327,9 +328,9 @@ describe('/trading page renders', () => {
     // the section header still renders, never a false empty state.
     expect(html).toContain('Buy-table positions');
     expect(html).toContain('0096 not applied');
-    // 0097: no buyTable ⇒ no priceConfig either — the price-ranges panel renders its OWN staged-dark note.
-    expect(html).toContain('Buy-table price ranges');
-    expect(html).toContain('0097 not applied');
+    // 0109: no buyTable ⇒ no priceConfig either — the price-caps panel renders its OWN staged-dark note.
+    expect(html).toContain('Buy-table price caps');
+    expect(html).toContain('0097/0109 not applied');
     // 0099: the panel early-returns on the missing priceConfig — no second (liveCycles) unavailable note.
     expect(html).not.toContain('live-cycle columns unavailable');
     // the config editor (0082) still renders; only the winners board + arms (0085) show the dark note.

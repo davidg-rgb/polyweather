@@ -338,6 +338,36 @@ export async function deriveClobApiKeyPreview(): Promise<{ apiKeyPreview: string
   return { apiKeyPreview: apiKey ? `${apiKey.slice(0, 8)}…` : '(none returned)', sigType, funderSet };
 }
 
+/**
+ * OFFLINE identity derivation (scripts/derive-deposit-wallet.ts, C46d): the PUBLIC trading identity the
+ * env implies — the owner EOA (new Wallet(key).address), the configured funder + signature type, and
+ * whether the funder IS the owner EOA (the deposit-wallet misconfig check). No venue call, no creds.
+ * All fields are PUBLIC-CLASS (an address rides on every order; the sig type is a 0-3 mode flag) —
+ * the key itself never leaves this file (§15).
+ */
+export async function deriveOwnerIdentity(): Promise<{
+  ownerEoa: string;
+  funder: string | null;
+  sigType: number;
+  funderIsOwner: boolean;
+}> {
+  const key = envVar('POLY_PRIVATE_KEY');
+  if (!key) {
+    throw new ExecutionError('ERR_NO_KEY', 'POLY_PRIVATE_KEY missing from the environment');
+  }
+  const isDeno = (globalThis as { Deno?: unknown }).Deno != null;
+  const ethersSpec = isDeno ? 'npm:ethers@5' : 'ethers';
+  const { Wallet } = (await import(ethersSpec)) as { Wallet: new (k: string) => { address: string } };
+  const ownerEoa = new Wallet(key).address;
+  const funder = envVar('POLY_FUNDER_ADDRESS') ?? null;
+  return {
+    ownerEoa,
+    funder,
+    sigType: Number(envVar('POLY_SIGNATURE_TYPE') ?? 0),
+    funderIsOwner: (funder ?? '').toLowerCase() === ownerEoa.toLowerCase(),
+  };
+}
+
 export class LiveExecutor implements TradeExecutor {
   readonly mode = 'live' as const;
 

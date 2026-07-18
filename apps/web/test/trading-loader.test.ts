@@ -74,8 +74,8 @@ const PAYLOAD = {
       },
     ],
     totals: { nRows: 1, nOpen: 0, nWon: 1, nLost: 0, costUsd: '8.400000', resolvedPnlUsd: '61.600000' },
-    // 0097: the operator price-range config (global cap + per-city overrides).
-    priceConfig: { globalMax: 0.15, cityRanges: { karachi: { min: 0.05, max: 0.3 } } },
+    // 0109: the operator price config (global cap + per-city MAX overrides — max-only, no min).
+    priceConfig: { globalMax: 0.15, cityCaps: { karachi: 0.3 } },
   },
   recentAudit: [{ id: 3, old_value: { mode: 'dry-run' }, new_value: { mode: 'live' }, changed_at: '2026-07-05T09:00:00Z', changed_by: 'service_role' }],
   generatedAt: '2026-07-05T09:05:00Z',
@@ -102,8 +102,8 @@ describe('getTrading — dash_trading passthrough + null-tolerant defaults', () 
     expect(v.buyTable!.rows[0]!.outcome).toBe('won');
     expect(v.buyTable!.rows[0]!.city).toBe('karachi');
     expect(v.buyTable!.totals).toEqual({ nRows: 1, nOpen: 0, nWon: 1, nLost: 0, costUsd: '8.400000', resolvedPnlUsd: '61.600000' });
-    // 0097: priceConfig passes through — global cap + the per-city override map intact.
-    expect(v.buyTable!.priceConfig).toEqual({ globalMax: 0.15, cityRanges: { karachi: { min: 0.05, max: 0.3 } } });
+    // 0109: priceConfig passes through — global cap + the per-city MAX override map intact.
+    expect(v.buyTable!.priceConfig).toEqual({ globalMax: 0.15, cityCaps: { karachi: 0.3 } });
     // 0099: liveCycles is merged in from the SEPARATE buy_table_live_cycles() RPC, order preserved.
     expect(v.buyTable!.liveCycles).toHaveLength(2);
     expect(v.buyTable!.liveCycles![0]).toMatchObject({ city: 'houston', targetDate: '2026-07-13', minAsk: '0.11', maxAsk: '0.34' });

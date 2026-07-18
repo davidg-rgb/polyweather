@@ -33,7 +33,7 @@ import type {
 import { getCityLive, getTrading } from '../../../lib/loaders.ts';
 import { fmtAgo, fmtDate, fmtDateTime, fmtPct, fmtProb, fmtStockholm, fmtUsd, num } from '../../../lib/format.ts';
 import { serverDb } from '../../../lib/supabase.ts';
-import { BuyTablePriceRangesPanel, CityArmsTable, GateOverridePanel, TradeConfigEditor } from '../../../components/trading-controls.tsx';
+import { BuyTablePriceCapsPanel, CityArmsTable, GateOverridePanel, TradeConfigEditor } from '../../../components/trading-controls.tsx';
 
 export const dynamic = 'force-dynamic';
 
@@ -751,8 +751,8 @@ export default async function TradingPage(): Promise<ReactElement> {
   // promotion sections until 0085 lands.
   const cityLive = await getCityLive(db);
 
-  // The valid slug domain for the allowlist picker AND the buy-table price-range table (0094: the FULL
-  // cities.slug domain trade_config_set / buy_table_price_range_set validate against — enrolled (racing)
+  // The valid slug domain for the allowlist picker AND the buy-table price-cap table (0094: the FULL
+  // cities.slug domain trade_config_set / buy_table_city_cap_set validate against — enrolled (racing)
   // cities flagged in the label; pre-0094 payloads degrade to the enrolled arms, the old narrower set).
   const cityOptions: { slug: string; label: string }[] =
     cityLive.kind === 'ok'
@@ -874,11 +874,12 @@ export default async function TradingPage(): Promise<ReactElement> {
       ) : (
         <p className="muted">No config row to edit.</p>
       )}
-      {/* 0097: the BUY-TABLE purchase-price ranges — the global cap + per-city [min,max] overrides the tick
-          trades by. Degrades to its own "0097 not applied" note while priceConfig is absent. 0099/0100 add
-          the live-cycle lo/hi date columns via the separate fail-soft buy_table_live_cycles() RPC — a slow or
-          absent cycles read drops ONLY the columns (the 0098 inline read timed the whole console out). */}
-      <BuyTablePriceRangesPanel
+      {/* 0109 (max-only — the 0097 min bound was removed by operator directive): the BUY-TABLE purchase-price
+          caps — the global cap + per-city MAX overrides the tick trades by; the lane buys whenever the ask is
+          at or below the effective cap. Degrades to its own "not applied" note while priceConfig is absent.
+          0099/0100 add the live-cycle lo/hi date columns via the separate fail-soft buy_table_live_cycles()
+          RPC — a slow or absent cycles read drops ONLY the columns (the 0098 inline read timed the console out). */}
+      <BuyTablePriceCapsPanel
         priceConfig={view.buyTable?.priceConfig ?? null}
         allowlist={config?.city_allowlist ?? null}
         cityOptions={cityOptions}
