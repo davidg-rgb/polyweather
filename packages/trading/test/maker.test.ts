@@ -369,6 +369,58 @@ describe('MakerExecutor.place — maker pricing + mode + idempotency', () => {
     expect(alerts[0]).toMatchObject({ kind: 'ORDER_FAIL', severity: 'CRITICAL' });
   });
 
+  it('C46: a v2 http-helper 4xx ({error, status} — NO success field) is a CLEAN rejection: key freed + the venue verbatim lands in the ledger reason', async () => {
+    // The live C46 catch: v2 returns HTTP-level failures as {error, status}; a 4xx means processed-and-
+    // refused (no order exists) — before this fix every venue 4xx (geoblock 403, "maker address not
+    // allowed" 400) was mis-classed shapeless and its reason lived only in console logs.
+    const client = mockClient({
+      postOrder: vi.fn(
+        async () =>
+          ({ error: 'maker address not allowed, please use the deposit wallet flow', status: 400 }) as unknown as {
+            orderID?: string;
+          },
+      ),
+    });
+    const { ledger, calls, rows } = mockLedger();
+    const alerts: TradeAlert[] = [];
+    const exec = new MakerExecutor(deps('live', client, ledger, { notify: async (a: TradeAlert) => (alerts.push(a), true) }));
+
+    await expect(exec.place(req)).rejects.toMatchObject({ code: 'ERR_CLOB_REJECTED' });
+    expect(calls.some((c) => c.fn === 'recordFailed')).toBe(true);
+    expect(rows.get('cid-fixed')!.status).toBe('failed');
+    // The venue's own words — durable in the ledger reason (record-without-push; C16-safe).
+    const failedCall = calls.find((c) => c.fn === 'recordFailed');
+    expect(String(failedCall!.args[1])).toContain('http 400');
+    expect(String(failedCall!.args[1])).toContain('maker address not allowed');
+    expect(alerts[0]).toMatchObject({ kind: 'ORDER_FAIL', severity: 'CRITICAL' });
+  });
+
+  it('C46: a 5xx {error, status} stays SHAPELESS — order state genuinely unknown, key held for reconcile', async () => {
+    const client = mockClient({
+      postOrder: vi.fn(async () => ({ error: 'internal server error', status: 500 }) as unknown as { orderID?: string }),
+    });
+    const { ledger, calls, rows } = mockLedger();
+    const alerts: TradeAlert[] = [];
+    const exec = new MakerExecutor(deps('live', client, ledger, { notify: async (a: TradeAlert) => (alerts.push(a), true) }));
+
+    await expect(exec.place(req)).rejects.toMatchObject({ code: 'ERR_CLOB_POST' });
+    expect(calls.some((c) => c.fn === 'recordFailed')).toBe(false);
+    expect(rows.get('cid-fixed')!.status).toBe('intent');
+    expect(alerts[0]).toMatchObject({ kind: 'ORDER_NEEDS_RECONCILE', severity: 'CRITICAL' });
+  });
+
+  it('C46: a non-string error field ({error: 123, status: 400}) stays SHAPELESS — never free on an unparseable shape', async () => {
+    const client = mockClient({
+      postOrder: vi.fn(async () => ({ error: 123, status: 400 }) as unknown as { orderID?: string }),
+    });
+    const { ledger, calls, rows } = mockLedger();
+    const exec = new MakerExecutor(deps('live', client, ledger));
+
+    await expect(exec.place(req)).rejects.toMatchObject({ code: 'ERR_CLOB_POST' });
+    expect(calls.some((c) => c.fn === 'recordFailed')).toBe(false);
+    expect(rows.get('cid-fixed')!.status).toBe('intent');
+  });
+
   it('CRITICAL-1 regression: post SUCCEEDS then fill-poll throws → row stays placed (NOT terminal), key NOT re-reservable, needs-reconcile CRITICAL names the order, second place() is duplicate with NO second post', async () => {
     const client = mockClient({ getOrder: vi.fn(async () => Promise.reject(new Error('poll timeout'))) });
     const { ledger, calls, rows } = mockLedger();

@@ -280,6 +280,33 @@ checkpoints to align on: 06:17Z Action · 10:00/13:50/20:45Z city ticks · 07:00
 
 ## Cycle log
 
+- **C46b (2026-07-18 ~12:10Z, same session) — TRIAL EXECUTED EARLY ON OPERATOR ORDER ("any price point");
+  held ambiguous at the venue → the SDK probe EXONERATED transport entirely → the REAL classification gap
+  found + FIXED + DEPLOYED (fn v9); tonight's ankara attempt is now decisive either way.** Operator wrote:
+  *"You can make this trial purchase at any price point - we are sacrificing the potential bet to verify
+  functionality."* By reply time the in-window markets (houston/mexico-city 07-18) were 0.4h from close →
+  lead floor dropped to 0.1 + cap 0.99 + stake $5 for ONE tick: the 11:43Z tick posted a real FAK (9 sh @
+  0.54, ~$4.86) — row held at 'intent' (the same ambiguous class), market closed 12:00Z, reconcile frees it.
+  Then the breakthrough, keyless as always: (1) the egress pin IS honored on the cron's pg_net path (probe
+  via pg_net + x-region → loc=IE, order endpoint reachable) — so the 11:43Z post ran from Dublin and STILL
+  came back "shapeless"; (2) NEW `clob-sdk-probe` (throwaway Wallet.createRandom, real ankara token, 1¢ bid
+  — unfillable) walked the EXACT live.ts sequence from the pinned runtime: **every step OK — import, L1
+  auth, EIP-712 sign, postOrder — and the venue answered clean JSON** `{"error":"maker address not allowed,
+  please use the deposit wallet flow","status":400}`. Transport, SDK, signing: ALL exonerated. **Root cause
+  of the "shapeless" class: v2's http-helper returns HTTP-level failures as `{error, status}` — no
+  `success` field — so the executor classed EVERY venue 4xx (DE geoblock 403 then, whatever the real wallet
+  gets now) as ambiguous and the verbatim reason lived only in console logs.** Fix (packages/trading
+  live.ts postAndRecord, +3 maker tests, §15 invariant exception for the keyless probe; suite 3292 green):
+  a 4xx `{error,status}` is now a DECISIVE clean rejection → key freed, bounded retry, and **the venue's
+  verbatim words land durably in live_orders.reason** (record-without-push — C16-untouched); 5xx/undefined
+  stays held-for-reconcile. Deployed to buy-table-tick (v9). Discovery: ALL markets in this universe resolve
+  12:00Z → the buy window exists ONLY 00:00–10:00Z; no afternoon retry is possible. Tonight's config
+  (audited): allowlist ['ankara'] (92.3%), stake $3, cap 0.60, lead floor restored to 2h. **00:03Z outcome
+  is decisive: a FILL (verification complete; rule 2 halts the lane) or a `failed` row whose reason quotes
+  the venue** — if it quotes "maker address not allowed" the funder secret isn't the deposit-wallet
+  address; if "invalid signature", the sigType is wrong for the account type; if "not enough balance /
+  allowance", the wallet needs USDC/allowance. Each of those is an OPERATOR morning item (credentials
+  side); the software side is now clean end-to-end.
 - **C46 (2026-07-18 ~07:20Z, INTERACTIVE operator session) — OPERATOR-INSTRUCTED $-MINIMAL VERIFICATION BUY
   armed for tonight's window: ankara/2026-07-19 (the highest-accuracy allowlist city), stake $2.** Operator's
   written instruction (this session, verbatim): *"please crosscheck and verify trade functionality again. Do

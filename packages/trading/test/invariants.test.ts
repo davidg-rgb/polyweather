@@ -67,6 +67,9 @@ describe('trading boundary invariants (§15)', () => {
     // non-literal specifiers — hosted incident 2026-06-11), and the ambient
     // npm-specifiers.d.ts declares those literals for tsc. None constructs
     // a client; the runtime boundary stays inside packages/trading.
+    // clob-sdk-probe is the ONE constructing exception (C46): a KEYLESS diagnostic that walks the SDK
+    // path with a Wallet.createRandom() throwaway — it reads NO POLY_* env (the invariant above still
+    // proves the KEY stays inside packages/trading, probe included) and cannot place a fillable order.
     expect(
       offenders(
         '@polymarket/clob-client',
@@ -74,6 +77,7 @@ describe('trading boundary invariants (§15)', () => {
           p.startsWith('packages/trading/') ||
           p === 'supabase/functions/execute-bet/index.ts' ||
           p === 'supabase/functions/buy-table-tick/index.ts' ||
+          p === 'supabase/functions/clob-sdk-probe/index.ts' ||
           p === 'supabase/functions/_shared/npm-specifiers.d.ts',
       ),
     ).toEqual([]);
