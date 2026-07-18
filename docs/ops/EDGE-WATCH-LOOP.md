@@ -276,10 +276,35 @@ checkpoints to align on: 06:17Z Action · 10:00/13:50/20:45Z city ticks · 07:00
 | ② | Polymarket fee/rebate/rewards program | a program flip at the root (REC-8 lineage, like the 06-24 rewards funding) | no signal; whale-watch+Slack cover the big-print side | 07-10 C1 |
 | ③ | New-instrument volume (precip/wind/snow) | ~10× regime change vs the $802/24h read (floor $7k, signal #9) | not swept C1 (occasional) | — |
 | ④ | Cross-venue true both-book depth | growth vs the 1–10-contract KILL read (#10) | not swept C1 (occasional) | — |
-| ⑤ | trade_config.mode | anything ≠ off/dry-run → fold v16 Phase-C monitoring in as a lane | **`live` — OPERATOR-SET 07-11 12:56Z** (authorized live test, not a reopen). C18 state: mode live + window 07-20 BUT the override expired 07-15 (C17 planned lapse) → preflight fails → lane inert as designed; 0 live posts ever (the one 07-12 attempt failed shapeless, reconciled `failed` at C18). C19: unchanged — mode live, override expired + not renewed, 0 live posts. | 07-16 C19 |
+| ⑤ | trade_config.mode | anything ≠ off/dry-run → fold v16 Phase-C monitoring in as a lane | **`live` — OPERATOR-SET 07-11 12:56Z** (authorized live test, not a reopen). C18 state: mode live + window 07-20 BUT the override expired 07-15 (C17 planned lapse) → preflight fails → lane inert as designed; 0 live posts ever (the one 07-12 attempt failed shapeless, reconciled `failed` at C18). C19: unchanged — mode live, override expired + not renewed, 0 live posts. **C44 (07-18 00:03Z): first ARMED candidates — 2 live post ATTEMPTS, both failed pre-venue (transport class, $0 moved, venue-confirmed never posted); see C44.** | 07-18 C44 |
 
 ## Cycle log
 
+- **C44 (2026-07-18 ~00:20Z) — FIRST-LIVE-BUY verification wake: the interlock/candidate machinery WORKED
+  end-to-end; both live posts FAILED at the venue-transport layer (no order ever reached Polymarket, $0
+  moved); the failure is DETERMINISTIC and its CRITICAL alerts were silently unrecorded (the C16 gap).**
+  Pre-window ticks (23:33/23:43/23:53Z): 0 candidates, 8 skips — correct (lead window shut). **00:03Z: the
+  window opened and everything up to the venue worked**: preflightOk=true (override id=2 satisfied the gate
+  branch — the C42 blocker is gone), 1 candidate = karachi 2026-07-18 bucket "32°C" @ ask 0.27 (≤ cap 0.40),
+  18 sh (=$4.86 of the $5 stake), lead window honored. The post: `failed:1, placed:0` — ledger row created
+  then left at **'intent'** with no order_id = the executor's HIGH-A class (postOrder INVOKED — so the
+  Edge wallet key + client construction are fine — but it threw without a decisive response). 00:13Z: the F4
+  lane-scoped sweep adjudicated row 1 → `failed` ("reconcile: confirmed never posted — no open order, no
+  matching trade" = venue-verified nothing posted), then attempt 2 ran and failed IDENTICALLY (row 2 at
+  'intent', awaiting the 00:23 sweep). max_entry_attempts=3 → one bounded retry remains, then karachi
+  blocks; stop_after_first_success=true untouched (no fill). **Diagnosis:** deterministic transport-layer
+  failure of the CLOB postOrder from the Edge runtime — the exact "Edge copy unproven until first clean
+  post" unknown from C18. Leading hypothesis: Polymarket blocking the Supabase-Edge/Deno-Deploy egress IP
+  (geo/Cloudflare — the local `--live-smoke` passed from the operator's machine; the delta IS the runtime);
+  the verbatim error is ONLY in the Edge console logs (Supabase dashboard → buy-table-tick → Logs) because
+  **BUY_TABLE_POST_FAILED / ORDER_NEEDS_RECONCILE CRITICALs were silently suppressed AND unrecorded** —
+  C16 emptied the allowlist and claim_alert drops un-allowlisted kinds entirely (the known gotcha, now
+  live-money-relevant: there is NO record-without-push path today). Boundary held: no orders placed/canceled
+  by Claude, no credentials touched, Slack dark. **Operator decides:** (a) read the verbatim postOrder error
+  in the dashboard console logs; (b) if geo-block confirmed, the placement leg needs a non-Edge egress —
+  the LOCAL daemon `scripts/trade-bot.ts` (T2) is the built alternative; (c) whether the two ORDER-class
+  CRITICALs should be re-allowlisted (they would push to Slack — the halt is operator-owned) or a
+  record-only path built.
 - **C43 (2026-07-17 ~16:55Z) — OPERATOR: "Activate the override - see if it works" → OVERRIDE SET
   (id=2, expires 2026-07-31 00:00Z) — THE LANE IS ARMED for the first time with a passing interlock.**
   Direct insert per the 07-11 precedent (operator's explicit written instruction quoted in the audit
