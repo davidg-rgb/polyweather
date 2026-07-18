@@ -271,9 +271,10 @@ describe('dash_city_predictions (0106 §5)', () => {
     });
 
     const out = await dash();
-    const rws = out.rows as Array<{ city: string; predLabel: string; ask: unknown; resolvesAt: string }>;
+    const rws = out.rows as Array<{ city: string; slug: string; predLabel: string; ask: unknown; resolvesAt: string }>;
     expect(rws).toHaveLength(1);
     expect(rws[0]!.city).toBe('wien');
+    expect(rws[0]!.slug).toBe('ev-wien'); // 0107: the market_events event slug → the polymarket.com/event permalink
     expect(rws[0]!.predLabel).toBe('31°C');
     expect(Number(rws[0]!.ask)).toBeCloseTo(0.12, 6); // idx-1 execAsk (0.11 + idx*0.01)
     expect(rws[0]!.resolvesAt).toBeTruthy();

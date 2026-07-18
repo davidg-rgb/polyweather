@@ -480,6 +480,10 @@ describe('migrations 0001–0010', () => {
       // idiom) + a one-time backfill + dash_city_predictions() (operator read, jsonb OBJECT, added to
       // WEB_AUTHENTICATED below). No cron change (count stays 35).
       '0106_city_predictions.sql',
+      // 0107: /cities open-market rows carry the Polymarket EVENT slug (market_events.slug) so the page
+      // links each row to its live book — a pure additive re-create of dash_city_predictions(), grants
+      // and guard identical to 0106 §5. No new object, no cron change.
+      '0107_city_predictions_market_link.sql',
     ]);
   });
 });

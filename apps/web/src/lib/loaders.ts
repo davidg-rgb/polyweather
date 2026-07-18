@@ -1881,6 +1881,8 @@ export interface CityPredictionRow {
   city: string;
   displayName: string;
   unit: string | null;
+  /** the Polymarket EVENT slug (market_events.slug) → https://polymarket.com/event/{slug}; absent pre-0107. */
+  slug?: string | null;
   /** station-local market day (YYYY-MM-DD). */
   targetDate: string;
   resolvesAt: string | null;
