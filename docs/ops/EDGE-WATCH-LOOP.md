@@ -280,6 +280,26 @@ checkpoints to align on: 06:17Z Action · 10:00/13:50/20:45Z city ticks · 07:00
 
 ## Cycle log
 
+- **C46 (2026-07-18 ~07:20Z, INTERACTIVE operator session) — OPERATOR-INSTRUCTED $-MINIMAL VERIFICATION BUY
+  armed for tonight's window: ankara/2026-07-19 (the highest-accuracy allowlist city), stake $2.** Operator's
+  written instruction (this session, verbatim): *"please crosscheck and verify trade functionality again. Do
+  one $1 buy for current prediction in a high accuracy market."* Crosscheck done first: interlock ok:true
+  (override id=2 active to 07-31, mode live, lane not halted), egress fix live (first pinned tick 06:23Z ok),
+  diag funnel healthy. Market selection by the graded record (city_prediction_grades): **ankara 92.3%
+  (12/13)** ≫ wellington 76.9% ≫ mexico-city 60% ≫ … ≫ houston 23.1% — the two in-window-NOW markets
+  (houston/mexico-city 07-18) are the two WORST fits and both sit over the 0.40 cap, so the test targets
+  **ankara/2026-07-19** (current pick 32°C, houseProb 0.51, ask 0.372 ≤ cap), which enters the [2,12]h
+  window ~00:00Z. **$1 literally cannot execute** — the bucket's venue min_order_size = 5 shares (and
+  bot.minOrderSizeShares = 5), so the floor at cap is 5×0.40 = $2 → stake set to **$2** (≈$1.86 notional at
+  the current ask; max loss $2), the smallest compliant order — surfaced to the operator, not silently
+  chosen. Config change (direct audited UPDATE, the C43 operator_guard precedent): stake_per_buy_usd 5→2,
+  city_allowlist 6-cities→['ankara']; price cap, caps, attempts (3), stop_after_first_success (true — "one
+  successful buy, then quiet", 0102 rule 2) all untouched. Expected: 00:03Z tick posts FAK 5 sh ≤0.40 from
+  the Dublin-pinned runtime; a fill halts further entries; a failure is bounded at 3 attempts and burns
+  nothing else (allowlist). **RESTORE (operator morning item): stake→5, allowlist→[ankara,houston,karachi,
+  mexico-city,shanghai,wellington]** — deliberately NOT auto-restored mid-window so the overnight blast
+  radius stays exactly one $2 ankara order. C16 alert gap still open → no push either way; the session set a
+  best-effort ~00:40Z local background check as the reporting channel, morning /trading as the fallback.
 - **C45 (2026-07-18 ~06:30Z, INTERACTIVE operator session — not a loop wake) — C44 ROOT CAUSE PROVEN +
   FIXED: Polymarket REGION-BLOCKS the order endpoint for the Edge runtime's default egress (geolocated
   DE); tick pinned to eu-west-1 (migration 0108, APPLIED).** Operator asked "can you fix it yourself?" →
