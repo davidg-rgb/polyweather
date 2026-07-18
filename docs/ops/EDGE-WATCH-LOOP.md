@@ -280,6 +280,24 @@ checkpoints to align on: 06:17Z Action · 10:00/13:50/20:45Z city ticks · 07:00
 
 ## Cycle log
 
+- **C46d (2026-07-18 ~12:45Z, same session) — ON-CHAIN TRACE: the dedicated wallet was NEVER FUNDED and the
+  configured funder has no on-chain existence — the verification buy is blocked on ACCOUNT SETUP, not
+  software or secrets syntax.** Operator asked to fix it through chat (no local cmd access) → public-only
+  diagnostics: new `scripts/derive-deposit-wallet.ts` (loadEnv in-process, prints ONLY public identity —
+  the deriveClobApiKeyPreview idiom) shows owner EOA 0xe3C2C877…7E36, funder 0x3468f892…489C (≠ EOA),
+  sigType 2. Public Polygon RPC + Blockscout: the funder has **no contract code, zero USDC, zero token
+  transfers ever** (it is nobody's Safe/proxy/deposit wallet — plausibly the UI's one-time deposit-funding
+  address copied at setup, or an unconsummated Magic counterfactual); the owner EOA likewise has **zero
+  transfers ever**. Conclusion: no Polymarket account/deposit exists for this key pair — even perfect
+  secrets would next fail on balance/allowance. OPERATOR-ONLY next step (keys + capital, his side of the
+  boundary): create/log into polymarket.com WITH the dedicated wallet (import the key into a browser
+  wallet), deposit a small USDC amount, then hand over the account's TRADING wallet address (the profile
+  address — PUBLIC; not the one-time funding address). Claude then verifies it on-chain (code + USDC
+  present), sets POLY_FUNDER_ADDRESS + POLY_SIGNATURE_TYPE (3 for the new deposit-wallet type / 2 for a
+  Safe — determined from the deployed bytecode, not guessed) via the authenticated CLI, opens the window
+  for one tick, and the ledger records the outcome. SDK-side readiness already confirmed (clob-client-v2
+  1.0.8 carries POLY_1271; executor passes sigType through — no code change). Lane state unchanged:
+  allowlist ['ankara'] $3 cap 0.60 window [2,12], ankara/07-19 holds 2 attempts.
 - **C46c (2026-07-18 ~12:20Z, same session) — THE REAL WALLET'S VENUE VERDICT IS RECORDED (fn v9 worked
   first try): `http 400: maker address not allowed, please use the deposit wallet flow` — the LAST blocker
   is the WALLET SETUP, an operator credentials item; the software chain is proven clean end-to-end.**
