@@ -280,6 +280,24 @@ checkpoints to align on: 06:17Z Action · 10:00/13:50/20:45Z city ticks · 07:00
 
 ## Cycle log
 
+- **C46c (2026-07-18 ~12:20Z, same session) — THE REAL WALLET'S VENUE VERDICT IS RECORDED (fn v9 worked
+  first try): `http 400: maker address not allowed, please use the deposit wallet flow` — the LAST blocker
+  is the WALLET SETUP, an operator credentials item; the software chain is proven clean end-to-end.**
+  Operator ordered the purchase completed immediately, rules skipped → lead_max lifted to 26 for one
+  window; the 12:13Z tick posted ankara/07-19 (FAK 7 sh @ 0.39) from Dublin and the venue REFUSED it with
+  the exact same error the throwaway-wallet probe got — now durably in `live_orders.reason` (the C46 fix's
+  first live proof: decisive 4xx classification + record-without-push). Meaning: the address in
+  `POLY_FUNDER_ADDRESS` is not a Polymarket-created DEPOSIT wallet (the venue no longer accepts raw-EOA
+  makers; every order must trade through the account's proxy). Lane state: lead_max restored to 12
+  immediately (attempt burn stopped — ankara/07-19 keeps 2 of 3 attempts); allowlist ['ankara'], stake $3,
+  cap 0.60, mode live, override to 07-31. **Operator fix (BUY-TABLE-LIVE.md §2; values never in chat):
+  set `POLY_FUNDER_ADDRESS` = the DEPOSIT WALLET address shown in the Polymarket UI for the dedicated
+  account (not the signer EOA), `POLY_SIGNATURE_TYPE` = 2 for a browser-wallet account / 1 for an
+  email-Magic account (Edge currently carries 2), keep `POLY_PRIVATE_KEY` = the account-owner key, and
+  make sure USDC is deposited INTO the Polymarket account.** If the secrets are fixed before ~09:50Z
+  07-19, the natural 00:00–10:00Z window auto-retries ankara (attempts 2/3) — a fill halts the lane (rule
+  2, verification complete). If not fixed, ankara/07-19 exhausts harmlessly and each new day brings a
+  fresh market. Restore-after-verification items unchanged: stake→5, 6-city allowlist, cap→0.40.
 - **C46b (2026-07-18 ~12:10Z, same session) — TRIAL EXECUTED EARLY ON OPERATOR ORDER ("any price point");
   held ambiguous at the venue → the SDK probe EXONERATED transport entirely → the REAL classification gap
   found + FIXED + DEPLOYED (fn v9); tonight's ankara attempt is now decisive either way.** Operator wrote:
