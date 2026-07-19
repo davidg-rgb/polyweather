@@ -513,7 +513,7 @@ describe('0096 dash_trading().buyTable — the BUY-TABLE lane position ledger (A
     );
     expect(r!.keys).toEqual([
       'buyTable', 'config', 'dryRun', 'generatedAt', 'openExposureUsd',
-      'openOrders', 'preflight', 'recentAudit', 'today',
+      'openOrders', 'openPositions', 'preflight', 'recentAudit', 'today',
     ]);
   });
 });
@@ -666,7 +666,7 @@ describe('0109 buy-table price caps (max-only) — the operator RPCs + dash_trad
     );
     expect(r!.keys).toEqual([
       'buyTable', 'config', 'dryRun', 'generatedAt', 'openExposureUsd',
-      'openOrders', 'preflight', 'recentAudit', 'today',
+      'openOrders', 'openPositions', 'preflight', 'recentAudit', 'today',
     ]);
   });
 });
@@ -924,5 +924,269 @@ describe('0095/0110 Slack allowlist — the lane push kinds survive the prod pau
     // the 0092 backbone stays intact
     expect(kinds).toContain('DAILY_DIGEST');
     expect(kinds).not.toContain('WHALE_TRADE');
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════════════
+describe('0112 dash_trading().openPositions — held positions marked to the latest captured book', () => {
+  interface OpenPosRow {
+    marketId: string;
+    tokenId: string | null;
+    city: string | null;
+    label: string | null;
+    targetDate: string | null;
+    shares: string | number;
+    avgPrice: string | number | null;
+    costUsd: string | number;
+    curBid: string | number | null;
+    curAsk: string | number | null;
+    curMid: string | number | null;
+    markAt: string | null;
+    valueMidUsd: string | number | null;
+    unrealizedMidUsd: string | number | null;
+    unrealizedBidUsd: string | number | null;
+  }
+  interface OpenPosPayload {
+    rows: OpenPosRow[];
+    totals: {
+      nPositions: number; nMarked: number;
+      costUsd: string | number; valueMidUsd: string | number; valueBidUsd: string | number;
+      unrealizedMidUsd: string | number; unrealizedBidUsd: string | number; oldestMarkAt: string | null;
+    };
+  }
+
+  const openPositions = async (): Promise<OpenPosPayload> => {
+    const [r] = await asOperator(() =>
+      rows<{ v: OpenPosPayload }>(db, `select public.dash_trading()->'openPositions' as v`),
+    );
+    return r!.v;
+  };
+
+  let seq = 0;
+  /** Insert a live_orders row (either side, superuser) + an exact fill; returns the order id. */
+  async function seedOrder(opts: {
+    marketId: string;
+    tokenId: string;
+    side?: 'BUY' | 'SELL';
+    status?: string;
+    matched?: number;
+    avgPrice?: number;
+    feeUsd?: number;
+    mode?: string;
+    strategy?: string;
+    createdAt?: string;
+  }): Promise<string> {
+    seq += 1;
+    const side = opts.side ?? 'BUY';
+    const matched = opts.matched ?? 0;
+    const avg = opts.avgPrice ?? null;
+    const r = await rows<{ id: string }>(
+      db,
+      `insert into public.live_orders
+         (intent_key, client_order_id, market_id, token_id, side, purpose, order_type,
+          price, size, size_matched, avg_price, trade_date, mode, status, strategy, created_at)
+       values ($1, $1 || ':cid', $2, $3, $4, $5, 'FAK',
+               $6, 100, $7, $8, '2026-07-19', $9, $10, $11, coalesce($12::timestamptz, now()))
+       returning id`,
+      [
+        `op-${seq}`, opts.marketId, opts.tokenId, side, side === 'BUY' ? 'entry' : 'take_profit',
+        opts.avgPrice ?? 0.15, matched, avg, opts.mode ?? 'live', opts.status ?? 'filled',
+        opts.strategy ?? 'buy-table', opts.createdAt ?? null,
+      ],
+    );
+    const id = r[0]!.id;
+    if (matched > 0 && avg != null) {
+      await rows(
+        db,
+        `insert into public.live_fills (order_id, fill_price, fill_size, fill_notional, fee_usd)
+         values ($1, $2, $3, $4, $5)`,
+        [id, avg, matched, avg * matched, opts.feeUsd ?? 0],
+      );
+    }
+    return id;
+  }
+
+  /** A market_events + 2-bucket market for a city; returns event id + the bucket condition/token ids. */
+  async function seedMarket(opts: {
+    slugStem: string;
+    winnerIdx?: number | null;
+  }): Promise<{ eventId: string; buckets: Array<{ conditionId: string; tokenYes: string }> }> {
+    const region = (await rows<{ region: string }>(db, `select region from public.clusters limit 1`))[0]!.region;
+    const cityId = (
+      await rows<{ city_id: string }>(
+        db,
+        `select city_id from public.upsert_city($1, $2, 'US', 'C', 'UTC', $3)`,
+        [opts.slugStem, opts.slugStem, region],
+      )
+    )[0]!.city_id;
+    const eventId = (
+      await rows<{ id: string }>(
+        db,
+        `insert into public.market_events
+           (poly_event_id, slug, city_id, target_date, unit, ladder_ok, winning_bucket_idx)
+         values ('pe-' || $1, 'ev-' || $1, $2, '2026-07-19', 'C', true, $3)
+         returning id`,
+        [opts.slugStem, cityId, opts.winnerIdx ?? null],
+      )
+    )[0]!.id;
+    const buckets: Array<{ conditionId: string; tokenYes: string }> = [];
+    for (const idx of [0, 1]) {
+      const conditionId = `cond-${opts.slugStem}-${idx}`;
+      const tokenYes = `tokyes-${opts.slugStem}-${idx}`;
+      await rows(
+        db,
+        `insert into public.market_buckets
+           (event_id, bucket_idx, label, condition_id, token_yes, token_no)
+         values ($1, $2, $3, $4, $5, $5 || '-no')`,
+        [eventId, idx, `${idx === 0 ? '33°C' : '34°C'} bucket`, conditionId, tokenYes],
+      );
+      buckets.push({ conditionId, tokenYes });
+    }
+    return { eventId, buckets };
+  }
+
+  /** One opening_captures tick (buckets as a JSON value; captured_at as a SQL expression). */
+  const seedCapture = (evId: string, city: string, buckets: unknown, atSql = 'now()') =>
+    rows(
+      db,
+      `insert into public.opening_captures
+         (captured_at, event_id, city, target_date, tz_name, resolves_at, is_flat_open, house_seeded, buckets, neg_risk)
+       values (${atSql}, $1, $2, '2026-07-19', 'UTC', '2026-07-19T12:00:00Z', false, true, $3::jsonb, true)`,
+      [evId, city, JSON.stringify(buckets)],
+    );
+
+  afterEach(async () => {
+    await db.exec(`delete from public.live_fills`);
+    await db.exec(`delete from public.live_orders`);
+    await db.exec(`delete from public.buy_table_cycle_ranges`); // the 0100 trigger-fed aggregates
+    await db.exec(`delete from public.opening_captures`);
+    await db.exec(`delete from public.market_buckets`);
+    await db.exec(`delete from public.market_events`);
+  });
+
+  it('empty ledger → { rows: [], totals: zeros } — an OBJECT, never a bare array (0081 tripwire)', async () => {
+    const [shape] = await asOperator(() =>
+      rows<{ outer: string; rowsTyp: string; totalsTyp: string }>(
+        db,
+        `select jsonb_typeof(public.dash_trading()->'openPositions')           as outer,
+                jsonb_typeof(public.dash_trading()->'openPositions'->'rows')   as "rowsTyp",
+                jsonb_typeof(public.dash_trading()->'openPositions'->'totals') as "totalsTyp"`,
+      ),
+    );
+    expect(shape).toEqual({ outer: 'object', rowsTyp: 'array', totalsTyp: 'object' });
+    const v = await openPositions();
+    expect(v.rows).toEqual([]);
+    expect(Number(v.totals.nPositions)).toBe(0);
+    expect(Number(v.totals.nMarked)).toBe(0);
+    expect(Number(v.totals.costUsd)).toBe(0);
+    expect(Number(v.totals.unrealizedMidUsd)).toBe(0);
+  });
+
+  it('marks held positions to the LATEST capture — tokenYes match preferred, idx fallback; unrealized math exact', async () => {
+    const { eventId, buckets } = await seedMarket({ slugStem: 'op-live', winnerIdx: null });
+    // A: 70 sh @ 0.12 + $0.10 fee → cost 8.50 (bucket 0, matched by tokenYes)
+    await seedOrder({
+      marketId: buckets[0]!.conditionId, tokenId: buckets[0]!.tokenYes,
+      matched: 70, avgPrice: 0.12, feeUsd: 0.1, createdAt: '2026-07-19T02:00:00Z',
+    });
+    // B: 50 sh @ 0.10 → cost 5.00 (bucket 1; its capture element has NO tokenYes → idx fallback)
+    await seedOrder({
+      marketId: buckets[1]!.conditionId, tokenId: buckets[1]!.tokenYes,
+      matched: 50, avgPrice: 0.1, createdAt: '2026-07-19T03:00:00Z',
+    });
+    // an OLDER capture whose prices must NOT be used…
+    await seedCapture(eventId, 'op-live', [
+      { idx: 0, tokenYes: buckets[0]!.tokenYes, bestBid: 0.01, bestAsk: 0.02, mid: 0.015 },
+      { idx: 1, bestBid: 0.01, bestAsk: 0.02, mid: 0.015 },
+    ], `now() - interval '2 hours'`);
+    // …and the NEWEST capture that must be the mark.
+    await seedCapture(eventId, 'op-live', [
+      { idx: 0, tokenYes: buckets[0]!.tokenYes, bestBid: 0.30, bestAsk: 0.34, mid: 0.32 },
+      { idx: 1, bestBid: 0.05, bestAsk: 0.07, mid: 0.06 },
+    ]);
+
+    const v = await openPositions();
+    expect(v.rows).toHaveLength(2);
+    // newest first buy first: B (03:00) leads.
+    const [b, a] = v.rows as [OpenPosRow, OpenPosRow];
+    expect(a.city).toBe('op-live');
+    expect(a.label).toBe('33°C bucket');
+    expect(a.targetDate).toBe('2026-07-19');
+    expect(Number(a.shares)).toBeCloseTo(70, 6);
+    expect(Number(a.avgPrice)).toBeCloseTo(0.12, 6);
+    expect(Number(a.costUsd)).toBeCloseTo(8.5, 6);
+    expect(Number(a.curBid)).toBeCloseTo(0.3, 6);
+    expect(Number(a.curMid)).toBeCloseTo(0.32, 6);
+    expect(Number(a.valueMidUsd)).toBeCloseTo(70 * 0.32, 6);          // 22.40
+    expect(Number(a.unrealizedMidUsd)).toBeCloseTo(22.4 - 8.5, 6);    // +13.90
+    expect(Number(a.unrealizedBidUsd)).toBeCloseTo(21 - 8.5, 6);      // +12.50
+    expect(b.label).toBe('34°C bucket');
+    expect(Number(b.curMid)).toBeCloseTo(0.06, 6);                    // idx-fallback element
+    expect(Number(b.unrealizedMidUsd)).toBeCloseTo(50 * 0.06 - 5, 6); // −2.00
+    expect(Number(b.unrealizedBidUsd)).toBeCloseTo(50 * 0.05 - 5, 6); // −2.50
+    // totals over both rows
+    expect(Number(v.totals.nPositions)).toBe(2);
+    expect(Number(v.totals.nMarked)).toBe(2);
+    expect(Number(v.totals.costUsd)).toBeCloseTo(13.5, 6);
+    expect(Number(v.totals.valueMidUsd)).toBeCloseTo(22.4 + 3, 6);
+    expect(Number(v.totals.valueBidUsd)).toBeCloseTo(21 + 2.5, 6);
+    expect(Number(v.totals.unrealizedMidUsd)).toBeCloseTo(13.9 - 2, 6);
+    expect(Number(v.totals.unrealizedBidUsd)).toBeCloseTo(12.5 - 2.5, 6);
+    expect(v.totals.oldestMarkAt).not.toBeNull();
+  });
+
+  it('nets sells at lifetime-average and keeps only the residual held shares', async () => {
+    const { buckets } = await seedMarket({ slugStem: 'op-net', winnerIdx: null });
+    // BUY 100 @ 0.20 ($20), then SELL 40 @ 0.30 → held 60 sh, cost 20 × (1 − 0.4) = $12.
+    await seedOrder({ marketId: buckets[0]!.conditionId, tokenId: buckets[0]!.tokenYes, matched: 100, avgPrice: 0.2 });
+    await seedOrder({ marketId: buckets[0]!.conditionId, tokenId: buckets[0]!.tokenYes, side: 'SELL', matched: 40, avgPrice: 0.3 });
+
+    const v = await openPositions();
+    expect(v.rows).toHaveLength(1);
+    expect(Number(v.rows[0]!.shares)).toBeCloseTo(60, 6);
+    expect(Number(v.rows[0]!.avgPrice)).toBeCloseTo(0.2, 6);
+    expect(Number(v.rows[0]!.costUsd)).toBeCloseTo(12, 6);
+    // fully-sold position disappears
+    await seedOrder({ marketId: buckets[0]!.conditionId, tokenId: buckets[0]!.tokenYes, side: 'SELL', matched: 60, avgPrice: 0.35 });
+    const v2 = await openPositions();
+    expect(v2.rows).toEqual([]);
+  });
+
+  it('excludes resolved markets (they are the buyTable won/lost rows), dry-run rows, and zero-matched rows', async () => {
+    const resolved = await seedMarket({ slugStem: 'op-res', winnerIdx: 0 });
+    await seedOrder({ marketId: resolved.buckets[0]!.conditionId, tokenId: resolved.buckets[0]!.tokenYes, matched: 70, avgPrice: 0.12 });
+    await seedOrder({ marketId: 'm-dry', tokenId: 't-dry', matched: 70, avgPrice: 0.1, mode: 'dry-run' });
+    await seedOrder({ marketId: 'm-none', tokenId: 't-none', status: 'canceled', matched: 0 });
+
+    const v = await openPositions();
+    // the dry-run/zero rows are excluded by mode/matched; the resolved market by its known winner.
+    expect(v.rows.map((r) => r.marketId)).toEqual([]);
+    expect(Number(v.totals.nPositions)).toBe(0);
+  });
+
+  it('a held position with NO capture (or no market join) renders fail-soft with null marks — never hidden', async () => {
+    const { buckets } = await seedMarket({ slugStem: 'op-nomark', winnerIdx: null });
+    await seedOrder({ marketId: buckets[0]!.conditionId, tokenId: buckets[0]!.tokenYes, matched: 70, avgPrice: 0.14 });
+    // a joinless market too — no market_buckets row at all (winner unknowable → fail-soft open)
+    await seedOrder({ marketId: 'cond-unknown', tokenId: 'tok-unknown', matched: 50, avgPrice: 0.1, strategy: 'city-taker' });
+
+    const v = await openPositions();
+    expect(v.rows).toHaveLength(2);
+    const joined = v.rows.find((r) => r.marketId !== 'cond-unknown')!;
+    expect(joined.label).toBe('33°C bucket');
+    expect(joined.curMid).toBeNull();
+    expect(joined.markAt).toBeNull();
+    expect(joined.valueMidUsd).toBeNull();
+    expect(joined.unrealizedMidUsd).toBeNull();
+    const joinless = v.rows.find((r) => r.marketId === 'cond-unknown')!;
+    expect(joinless.city).toBeNull();
+    expect(joinless.label).toBeNull();
+    expect(Number(joinless.costUsd)).toBeCloseTo(5, 6);
+    // totals: positions counted, none marked, unrealized sums stay 0 (marked rows only — honest, not fabricated)
+    expect(Number(v.totals.nPositions)).toBe(2);
+    expect(Number(v.totals.nMarked)).toBe(0);
+    expect(Number(v.totals.costUsd)).toBeCloseTo(9.8 + 5, 6);
+    expect(Number(v.totals.unrealizedMidUsd)).toBe(0);
+    expect(v.totals.oldestMarkAt).toBeNull();
   });
 });

@@ -79,6 +79,33 @@ const FIXTURE = {
   openExposureUsd: '20.00',
   today: { buyUsd: '20.00', sellUsd: '2.00', feeUsd: '0.00', netUsd: '-18.00', lossUsd: '18.00', lossWindowStart: '2026-07-05T00:00:00Z', nFills: 3 },
   dryRun: { openOrders: 4, total: 37 },
+  // 0112: the held-position ledger — one MARKED winner-so-far (Ankara, up at the mid) + one unmarked
+  // position (Helsinki — no capture → the honest "no mark" cell, excluded from the value sums).
+  openPositions: {
+    rows: [
+      {
+        marketId: '0xposANK', tokenId: 'tok-ank-32', strategies: ['buy-table'],
+        city: 'ankara', cityName: 'Ankara', eventSlug: 'ev-ankara', targetDate: '2026-07-05',
+        label: '32°C bucket', bucketIdx: 3, firstBuyAt: '2026-07-05T02:10:00Z',
+        shares: '6.0000', avgPrice: '0.440000', costUsd: '2.640000',
+        curBid: '0.55', curAsk: '0.60', curMid: '0.575',
+        markAt: '2026-07-05T08:55:00Z', resolvesAt: '2026-07-05T12:00:00Z',
+        valueMidUsd: '3.450000', unrealizedMidUsd: '0.810000', unrealizedBidUsd: '0.660000',
+      },
+      {
+        marketId: '0xposHEL', tokenId: 'tok-hel-18', strategies: ['buy-table'],
+        city: 'helsinki', cityName: 'Helsinki', eventSlug: 'ev-hel', targetDate: '2026-07-05',
+        label: '18°C bucket', bucketIdx: 2, firstBuyAt: '2026-07-05T01:00:00Z',
+        shares: '15.0000', avgPrice: '0.330000', costUsd: '4.950000',
+        curBid: null, curAsk: null, curMid: null, markAt: null, resolvesAt: null,
+        valueMidUsd: null, unrealizedMidUsd: null, unrealizedBidUsd: null,
+      },
+    ],
+    totals: {
+      nPositions: 2, nMarked: 1, costUsd: '7.590000', valueMidUsd: '3.450000', valueBidUsd: '3.300000',
+      unrealizedMidUsd: '0.810000', unrealizedBidUsd: '0.660000', oldestMarkAt: '2026-07-05T08:55:00Z',
+    },
+  },
   // 0096: the BUY-TABLE lane positions — one filled-and-WON (resolved, out of openOrders) + one still OPEN.
   buyTable: {
     rows: [
@@ -175,7 +202,21 @@ describe('/trading page renders', () => {
     expect(html).toContain('net cashflow');
     expect(html).toContain('no per-fill rows in this payload');
 
-    // open positions from the checks payload + the open-order ledger
+    // 0112: the held-position ledger — identity (city + temperature bucket), entry vs current price, and
+    // the unrealized win/loss; the unmarked Helsinki row renders the honest "no mark" cell.
+    expect(html).toContain('Open positions');
+    expect(html).toContain('Ankara');
+    expect(html).toContain('32°C bucket'); // the temperature bought
+    expect(html).toContain('0.440'); // buy px (fmtProb of the venue-truth average)
+    expect(html).toContain('0.575'); // cur px (mid mark)
+    expect(html).toContain('+$0.81'); // unrealized win/loss at the mid
+    expect(html).toContain('+$0.66'); // …and the conservative @bid figure
+    expect(html).toContain('1 of 2 with a live mark'); // nMarked vs nPositions surfaced honestly
+    expect(html).toContain('18°C bucket'); // the unmarked position still renders…
+    expect(html).toContain('no mark'); // …with the fail-soft mark cell
+    expect(html).not.toContain('0112 not applied'); // the payload HAS openPositions — no staged-dark note
+
+    // the cap-enforcement exposure map + the open-order ledger
     expect(html).toContain('Open LIVE exposure');
     expect(html).toContain('0xmarketAAA');
     expect(html).toContain('$12.00'); // per-market exposure
@@ -325,6 +366,9 @@ describe('/trading page renders', () => {
     expect(html).toContain('No open LIVE orders.');
     expect(html).toContain('No open LIVE positions.');
     expect(html).toContain('No config changes recorded.');
+    // 0112: a payload WITHOUT openPositions (pre-0112 dash_trading) degrades to the explicit staged-dark
+    // note while the cap-enforcement exposure map still renders — never a false empty state.
+    expect(html).toContain('0112 not applied');
     // 0096: a payload WITHOUT buyTable (pre-0096 dash_trading) degrades to the explicit staged-dark note —
     // the section header still renders, never a false empty state.
     expect(html).toContain('Buy-table positions');
