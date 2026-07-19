@@ -46,7 +46,9 @@
 import type { JobCtx, JobStats } from '../_shared/runJob.ts';
 import {
   ExecutionError,
+  metarMaxToNative,
   parseBotConfig,
+  parseBucketLabel,
   type RawBucket,
   type RawCaptureRow,
   type RawResolution,
@@ -76,6 +78,16 @@ export interface BuyTableTickDeps {
 
 /** The lane's ledger strategy tag (live_orders.strategy) — how /trading + the shadow harness tell lanes apart. */
 export const BUY_TABLE_STRATEGY = 'buy-table';
+
+/**
+ * HARD MINIMUM ASK (operator directive 2026-07-19, deliberately NON-CONFIGURABLE — no config key, no
+ * /trading input, changing it means changing this code): never buy below 1¢. A sub-cent ask on our
+ * predicted bucket is the market pricing it as dead (the 07-19 helsinki 5000 sh @ 0.001 buy); the 0111
+ * dead-bucket floor gate catches the observation-provable deaths — this constant is the unconditional
+ * backstop beneath it. Distinct from the removed 0109 per-city min INPUT: that was operator-tunable
+ * surface; this is a fixed model rule.
+ */
+export const HARD_MIN_ASK = 0.01;
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 // Config — the buy_table.* key/value rows (migration 0095 seeds the defaults; coalesce here mirrors them).
@@ -252,8 +264,14 @@ export function selectBuyTableCandidates(args: {
   stakeUsd: number;
   minOrderSizeShares: number;
   now: Date;
+  /** 0111: the observed intraday running max (°C with tenths) keyed `${city}|${targetDate}` — the
+   *  dead-bucket floor gate's input (buy_table_intraday_floor). Absent key = no observation = gate off
+   *  for that market (fail-open by construction: the running max is monotone, so missing/stale data can
+   *  only MISS a death, never falsely kill a live bucket). */
+  floors?: Record<string, number>;
 }): { candidates: BuyTableCandidate[]; skips: BuyTableSkip[] } {
   const { captures, resolutions, existingIntentKeys, cfg, stakeUsd, minOrderSizeShares, now } = args;
+  const floors = args.floors ?? {};
   const candidates: BuyTableCandidate[] = [];
   const skips: BuyTableSkip[] = [];
 
@@ -306,9 +324,42 @@ export function selectBuyTableCandidates(args: {
       continue;
     }
 
+    // 0111: the DEAD-BUCKET FLOOR gate (operator directive 2026-07-19 — the helsinki 19°C @ 0.001 buy with
+    // 20°C already observed was dead on arrival). The daily high is a monotone running max: once the
+    // OBSERVED max (intraday_max, METAR) rounds — via the official-source wuRound replica — ABOVE the
+    // predicted bucket's top, that bucket cannot win, whatever the ask. Top-tail buckets (high null) are
+    // never floor-dead; a missing floor row or unparseable label fails OPEN (the remaining gates apply).
+    // Deliberate trade-off: METAR can diverge a few tenths from the resolution source, so a boundary read
+    // may rarely skip a technically-alive sliver bet — skipping a $5 boundary bet is cheap; buying a
+    // provably dead bucket is a guaranteed loss.
+    const floorTenths = floors[`${String(r.city ?? '').trim().toLowerCase()}|${r.targetDate}`];
+    if (floorTenths != null && pick.label != null) {
+      try {
+        const def = parseBucketLabel(String(pick.label));
+        if (def.high != null) {
+          const observedNative = metarMaxToNative(Number(floorTenths), def.unit);
+          if (observedNative > def.high) {
+            skips.push({
+              ref,
+              reason: `dead_bucket (observed running max ${floorTenths}°C → ${observedNative}°${def.unit} native > bucket top ${def.high}°${def.unit} — cannot win)`,
+            });
+            continue;
+          }
+        }
+      } catch {
+        // unparseable label — fail open; the price/size gates still apply
+      }
+    }
+
     const ask = fin(pick.execAsk) ? pick.execAsk : fin(pick.bestAsk) ? pick.bestAsk : null;
     if (!fin(ask) || !(ask > 0 && ask <= 1)) {
       skips.push({ ref, reason: 'no_ask — the predicted bucket has no usable executable ask' });
+      continue;
+    }
+    // the HARD $0.01 floor (non-configurable — see HARD_MIN_ASK): a sub-cent ask = the market calling the
+    // bucket dead; never buy it however far under the cap it sits.
+    if (ask < HARD_MIN_ASK - 1e-9) {
+      skips.push({ ref, reason: `below_min_price (ask ${ask.toFixed(4)} < the hard $0.01 floor — non-configurable)` });
       continue;
     }
     // 0109: MAX-ONLY price gate — a per-city cap override REPLACES the global cap when the operator set one;
@@ -587,6 +638,34 @@ export async function buyTableTick(ctx: JobCtx, deps: BuyTableTickDeps): Promise
     }
   }
 
+  // 6b · the 0111 dead-bucket floor read — the observed intraday running max per (city, target date),
+  //      keyed for selectBuyTableCandidates. FAIL-SOFT + fail-open: a missing RPC (pre-0111), a read
+  //      error, or an absent row simply leaves the gate off for that market (monotonicity makes that
+  //      safe — see the gate comment); the tick is never degraded by this read.
+  const floors: Record<string, number> = {};
+  if (!degraded && captures.length > 0) {
+    try {
+      const cities = [...new Set(captures.map((r) => String(r.city ?? '').trim().toLowerCase()).filter((s) => s !== ''))];
+      const dates = [...new Set(captures.map((r) => r.targetDate).filter((d): d is string => d != null))];
+      if (cities.length > 0 && dates.length > 0) {
+        const rows = await db.rpc<{ buy_table_intraday_floor: { floors?: unknown } | null }>(
+          'buy_table_intraday_floor',
+          { p_cities: cities, p_dates: dates },
+        );
+        const list = rows[0]?.buy_table_intraday_floor?.floors;
+        for (const f of Array.isArray(list) ? list : []) {
+          const row = f as { city?: unknown; targetDate?: unknown; maxTenthsC?: unknown };
+          const max = Number(row.maxTenthsC);
+          if (typeof row.city === 'string' && typeof row.targetDate === 'string' && Number.isFinite(max)) {
+            floors[`${row.city.trim().toLowerCase()}|${row.targetDate}`] = max;
+          }
+        }
+      }
+    } catch (e) {
+      log('buy-table.floor_read_unavailable', { error: redactText(errMsg(e)), note: 'dead-bucket gate off this tick (fail-open)' });
+    }
+  }
+
   // 7 · candidates (pure) — the BUY-TABLE gates over the latest capture per market, behind the 0102
   //     entry gate (rule 1: bounded retry only after PROVABLY-dead attempts; rule 2: a real fill +
   //     stop_after_first_success halts ALL new entries — the operator's one-verified-buy semantics).
@@ -601,6 +680,7 @@ export async function buyTableTick(ctx: JobCtx, deps: BuyTableTickDeps): Promise
         stakeUsd,
         minOrderSizeShares: botCfg.minOrderSizeShares,
         now,
+        floors,
       });
   if (gate.laneHalted && candidates.length > 0) {
     skips = skips.concat(

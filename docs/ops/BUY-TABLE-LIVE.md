@@ -16,7 +16,8 @@ seed the maker-exit daemon reads) as a **TAKER FAK**, only when:
 
 | Gate | Value | Source |
 |---|---|---|
-| Executable ask | ≤ **$0.15** (global), or ≤ the city's max when overridden | `config buy_table.price_cap`, per-city `buy_table.city_price_caps` (0109 — **max-only**: there is no minimum-bid input; the lane buys whenever the ask is at or below the effective cap. Set from `/trading` → Buy-table price caps) |
+| Executable ask | ≤ **$0.15** (global), or ≤ the city's max when overridden; **and ≥ the hard $0.01 floor** | `config buy_table.price_cap`, per-city `buy_table.city_price_caps` (0109 — **max-only**: no minimum-bid *input*; set from `/trading` → Buy-table price caps). The **$0.01 minimum is a code constant** (`HARD_MIN_ASK`, operator 2026-07-19, deliberately NON-configurable — a sub-cent ask is the market calling the bucket dead) |
+| Dead-bucket floor | the predicted bucket must still be **winnable given the day's observed running max** | 0111 `buy_table_intraday_floor` (`intraday_max` ⋈ `city_stations`): skip when `wuRound(observed max → native) > bucket top` (`dead_bucket`). Fail-open by monotonicity — missing/stale METAR can only miss a death, never falsely kill a live bucket. Born from the 07-19 helsinki 19°C @ 0.001 dead-on-arrival buy |
 | Lead to close | **2–12 h** | `config buy_table.lead_min_h / lead_max_h` (the C25 calibrated sweet-spot is ≤12h; the final 2h is excluded — the record's worst regime: near close the cheap filter keeps only near-certain losers) |
 | Stake per buy | `trade_config.stake_per_buy_usd` (currently **$5**) | `/trading` console |
 | Cities | `trade_config.city_allowlist` | `/trading` console (0093-validated slugs) |
