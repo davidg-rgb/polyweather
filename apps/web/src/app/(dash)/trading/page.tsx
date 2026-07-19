@@ -23,6 +23,8 @@ import type {
   CityLiveTwin,
   CityLiveView,
   LiveOrder,
+  OpenPositionRow,
+  OpenPositionsSection,
   TradeAuditRow,
   TradeConfig,
   TradePreflight,
@@ -361,7 +363,147 @@ function KillSection({ checks, today }: { checks: TradePreflightChecks; today: T
   );
 }
 
-/** Open LIVE positions from the preflight checks payload: total exposure + per-market cost-basis. */
+// ─── OPEN POSITIONS (0112) — held shares marked to the latest captured book ──────────────────────────────
+
+/** Mark age → color: fresh (≤20m) muted, aging amber, stale (>60m) red — the capture cadence is ~15m. */
+const markAgeColor = (markAt: string | null, nowMs: number): string => {
+  if (!markAt) return RED;
+  const ageMin = (nowMs - Date.parse(markAt)) / 60_000;
+  return ageMin <= 20 ? MUTED : ageMin <= 60 ? AMBER : RED;
+};
+
+/** One held-position row: identity → basis → current mark → unrealized verdict. */
+function OpenPositionRowTr({ r, nowMs }: { r: OpenPositionRow; nowMs: number }): ReactElement {
+  const shares = num(r.shares) ?? 0;
+  const cost = num(r.costUsd) ?? 0;
+  const unrealMid = num(r.unrealizedMidUsd);
+  const unrealBid = num(r.unrealizedBidUsd);
+  const pct = unrealMid != null && cost > 0 ? unrealMid / cost : null;
+  const bid = num(r.curBid);
+  const ask = num(r.curAsk);
+  return (
+    <tr>
+      <td className="small">
+        {r.cityName ?? r.city ?? <span className="mono">{short(r.marketId, 14)}</span>}
+        {r.city && r.cityName ? <span className="muted small"> {r.city}</span> : null}
+      </td>
+      <td className="small">{r.label ?? '—'}</td>
+      <td className="mono small">{r.targetDate ?? '—'}</td>
+      <td className="num">{shares}</td>
+      <td className="num" title="venue-truth average BUY fill price (ex-fee)">{fmtProb(r.avgPrice)}</td>
+      <td className="num" title={`bid ${bid != null ? fmtProb(bid) : '—'} · ask ${ask != null ? fmtProb(ask) : '—'}`}>
+        {r.curMid == null ? <span className="muted">no mark</span> : fmtProb(r.curMid)}
+        {bid != null || ask != null ? (
+          <div className="muted small">{bid != null ? fmtProb(bid) : '—'} / {ask != null ? fmtProb(ask) : '—'}</div>
+        ) : null}
+      </td>
+      <td className="num">{fmtUsd(r.costUsd)}</td>
+      <td className="num">{r.valueMidUsd == null ? '—' : fmtUsd(r.valueMidUsd)}</td>
+      <td className="num" style={{ color: unrealMid == null ? undefined : unrealMid >= 0 ? GREEN : RED }}>
+        {unrealMid == null ? '—' : signedUsd(unrealMid)}
+        {pct != null ? <span className="muted small"> {pct >= 0 ? '+' : '−'}{fmtPct(Math.abs(pct), 0)}</span> : null}
+        {unrealBid != null ? (
+          <div className="muted small" title="what selling into the current best bid would realize vs cost">
+            {signedUsd(unrealBid)} @bid
+          </div>
+        ) : null}
+      </td>
+      <td className="num small" style={{ color: markAgeColor(r.markAt, nowMs) }}>
+        {r.markAt ? fmtAgo(r.markAt) : 'no mark'}
+      </td>
+    </tr>
+  );
+}
+
+/**
+ * The 0112 held-position ledger — what was bought (temperature bucket), the entry price, the CURRENT
+ * bid/mid from the newest opening_captures tick, and the unrealized win/loss per position + in total.
+ * Positions are held to close (no exits by design) — the mark is informational, not an exit plan.
+ */
+function OpenPositionsPanel({ section }: { section: OpenPositionsSection }): ReactElement {
+  const t = section.totals;
+  const rows = section.rows;
+  const nowMs = Date.now();
+  const cost = num(t?.costUsd) ?? 0;
+  const unrealMid = num(t?.unrealizedMidUsd);
+  const unrealBid = num(t?.unrealizedBidUsd);
+  const pctMid = unrealMid != null && cost > 0 ? unrealMid / cost : null;
+  const nPos = num(t?.nPositions) ?? rows.length;
+  const nMarked = num(t?.nMarked) ?? 0;
+  return (
+    <div className="panel">
+      <div className="cap" style={{ marginBottom: '0.25rem' }}>
+        Open positions — {nPos} held · marked to the latest captured book
+      </div>
+      <p className="muted small" style={{ marginTop: 0 }}>
+        One row per held (market, token) across every live lane: net shares, the venue-truth average entry
+        price, and the <strong>current</strong> price (mid, with bid/ask beneath) from the newest{' '}
+        <span className="mono">opening_captures</span> tick. Win/loss is <strong>unrealized</strong> at the
+        mid mark (the <span className="mono">@bid</span> figure is what selling into the book right now would
+        realize) — positions are held to close, so resolution settles each at $1 or $0 regardless.
+      </p>
+      {rows.length === 0 ? (
+        <p className="muted">No open positions.</p>
+      ) : (
+        <>
+          <div className="strip">
+            <div className="tile">
+              <div className="cap">Positions</div>
+              <div className="big sky" style={{ fontSize: '1.5rem' }}>{nPos}</div>
+              <div className="sub">{nMarked} of {nPos} with a live mark</div>
+            </div>
+            <div className="tile">
+              <div className="cap">Cost deployed</div>
+              <div className="big" style={{ fontSize: '1.5rem' }}>{fmtUsd(t?.costUsd ?? 0)}</div>
+              <div className="sub">all-in fills + fees, sells netted</div>
+            </div>
+            <div className="tile">
+              <div className="cap">Market value</div>
+              <div className="big" style={{ fontSize: '1.5rem' }}>{fmtUsd(t?.valueMidUsd ?? 0)}</div>
+              <div className="sub">at mid · {fmtUsd(t?.valueBidUsd ?? 0)} at bid</div>
+            </div>
+            <div className="tile rec">
+              <div className="tile-head">
+                <span className="cap">Unrealized win/loss</span>
+                <span className="chip soft">{pctMid != null ? `${pctMid >= 0 ? '+' : '−'}${fmtPct(Math.abs(pctMid), 0)}` : '—'}</span>
+              </div>
+              <div className="big" style={{ fontSize: '1.5rem', color: (unrealMid ?? 0) >= 0 ? GREEN : RED }}>
+                {unrealMid == null ? '—' : signedUsd(unrealMid)}
+              </div>
+              <div className="sub">at mid · {unrealBid == null ? '—' : signedUsd(unrealBid)} @bid (marked rows only)</div>
+            </div>
+          </div>
+          <div className="tbl-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>city</th>
+                  <th>bought</th>
+                  <th>date</th>
+                  <th className="num">shares</th>
+                  <th className="num">buy px</th>
+                  <th className="num">cur px</th>
+                  <th className="num">cost</th>
+                  <th className="num">value</th>
+                  <th className="num">win/loss</th>
+                  <th className="num">mark</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r) => (
+                  <OpenPositionRowTr key={`${r.marketId}:${r.tokenId ?? ''}`} r={r} nowMs={nowMs} />
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+/** The cap-enforcement view: total exposure + per-market cost-basis from the preflight checks payload
+ * (also counts unfilled resting commitments, so it can legitimately exceed the held-position cost above). */
 function ExposureSection({ checks, openExposureUsd }: { checks: TradePreflightChecks; openExposureUsd: unknown }): ReactElement {
   const perMarket = Object.entries(checks.perMarketExposureUsd ?? {}).sort((a, b) => (num(b[1]) ?? 0) - (num(a[1]) ?? 0));
   const total = num(openExposureUsd) ?? num(checks.openExposureUsd) ?? 0;
@@ -814,6 +956,21 @@ export default async function TradingPage(): Promise<ReactElement> {
       )}
 
       <h2>Open positions &amp; exposure</h2>
+      {/* 0112: the held-position ledger marked to the latest captured book (what was bought, entry vs
+          current price, unrealized win/loss). Degrades to its own staged-dark note while openPositions is
+          absent; the per-market cap-enforcement table below renders in BOTH states. */}
+      {view.openPositions ? (
+        <OpenPositionsPanel section={view.openPositions} />
+      ) : (
+        <p className="muted small">
+          <strong style={{ color: AMBER }}>0112 not applied</strong> — the{' '}
+          <span className="mono">dash_trading()</span> payload carries no{' '}
+          <span className="mono">openPositions</span> key yet. The marked position ledger (entry vs current
+          price + unrealized win/loss) lights up the moment the operator applies migration{' '}
+          <span className="mono">0112_trading_open_positions.sql</span> (read-only — nothing else changes on
+          apply). Until then the cap-enforcement exposure map below is the only positions view.
+        </p>
+      )}
       {preflight ? (
         <ExposureSection checks={preflight.checks} openExposureUsd={view.openExposureUsd} />
       ) : (

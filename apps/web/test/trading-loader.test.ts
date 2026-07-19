@@ -61,6 +61,24 @@ const PAYLOAD = {
   openExposureUsd: '20.00',
   today: { buyUsd: '20.00', sellUsd: '2.00', feeUsd: '0.00', netUsd: '-18.00', lossUsd: '18.00', lossWindowStart: '2026-07-05T00:00:00Z', nFills: 3 },
   dryRun: { openOrders: 4, total: 37 },
+  // 0112: the held-position ledger marked to the latest captured book (net shares + entry vs current + unrealized).
+  openPositions: {
+    rows: [
+      {
+        marketId: '0xAAA', tokenId: 'tok-a', strategies: ['buy-table'],
+        city: 'ankara', cityName: 'Ankara', eventSlug: 'ev-ankara', targetDate: '2026-07-05',
+        label: '32°C bucket', bucketIdx: 3, firstBuyAt: '2026-07-05T02:10:00Z',
+        shares: '6.0000', avgPrice: '0.440000', costUsd: '2.640000',
+        curBid: '0.55', curAsk: '0.60', curMid: '0.575',
+        markAt: '2026-07-05T08:55:00Z', resolvesAt: '2026-07-05T12:00:00Z',
+        valueMidUsd: '3.450000', unrealizedMidUsd: '0.810000', unrealizedBidUsd: '0.660000',
+      },
+    ],
+    totals: {
+      nPositions: 1, nMarked: 1, costUsd: '2.640000', valueMidUsd: '3.450000', valueBidUsd: '3.300000',
+      unrealizedMidUsd: '0.810000', unrealizedBidUsd: '0.660000', oldestMarkAt: '2026-07-05T08:55:00Z',
+    },
+  },
   // 0096: the BUY-TABLE lane position ledger (ANY-status rows + outcome + totals).
   buyTable: {
     rows: [
@@ -96,6 +114,13 @@ describe('getTrading — dash_trading passthrough + null-tolerant defaults', () 
     expect(v.dryRun).toEqual({ openOrders: 4, total: 37 });
     expect(v.recentAudit).toHaveLength(1);
     expect(v.generatedAt).toBe('2026-07-05T09:05:00Z');
+    // 0112: the openPositions section passes through — the marked ledger intact.
+    expect(v.openPositions).not.toBeNull();
+    expect(v.openPositions!.rows).toHaveLength(1);
+    expect(v.openPositions!.rows[0]!.label).toBe('32°C bucket');
+    expect(v.openPositions!.rows[0]!.avgPrice).toBe('0.440000');
+    expect(v.openPositions!.rows[0]!.curMid).toBe('0.575');
+    expect(v.openPositions!.totals!.unrealizedMidUsd).toBe('0.810000');
     // 0096: the buyTable section passes through — rows + totals intact.
     expect(v.buyTable).not.toBeNull();
     expect(v.buyTable!.rows).toHaveLength(1);
@@ -146,6 +171,22 @@ describe('getTrading — dash_trading passthrough + null-tolerant defaults', () 
     expect(load.view.buyTable!.priceConfig).toBeNull(); // the panel shows its "0097 not applied" note
   });
 
+  it('0112: a pre-0112 payload (no openPositions key) → openPositions null (staged-dark, never a throw)', async () => {
+    const { openPositions: _omitted, ...pre0112 } = PAYLOAD;
+    const load = await getTrading(stubDb(pre0112));
+    expect(load.kind).toBe('ok');
+    if (load.kind !== 'ok') throw new Error('expected ok');
+    expect(load.view.openPositions).toBeNull(); // the page falls back to the legacy exposure map + note
+    expect(load.view.buyTable).not.toBeNull(); // the rest of the console is untouched
+  });
+
+  it('0112: a lean openPositions envelope gets null-tolerant inner defaults (rows [] / totals null)', async () => {
+    const load = await getTrading(stubDb({ ...PAYLOAD, openPositions: {} }));
+    expect(load.kind).toBe('ok');
+    if (load.kind !== 'ok') throw new Error('expected ok');
+    expect(load.view.openPositions).toEqual({ rows: [], totals: null });
+  });
+
   it('0096: a pre-0096 payload (no buyTable key) → buyTable null (the staged-dark degradation, never a throw)', async () => {
     const { buyTable: _omitted, ...pre0096 } = PAYLOAD;
     const load = await getTrading(stubDb(pre0096));
@@ -186,6 +227,7 @@ describe('getTrading — dash_trading passthrough + null-tolerant defaults', () 
     expect(v.today).toBeNull();
     expect(v.dryRun).toBeNull();
     expect(v.buyTable).toBeNull(); // 0096: absent key degrades to null
+    expect(v.openPositions).toBeNull(); // 0112: absent key degrades to null
     expect(v.config!.mode).toBe('off');
   });
 });

@@ -509,6 +509,11 @@ describe('migrations 0001–0010', () => {
       // fail-open by monotonicity). service_role-only. The companion HARD $0.01 min ask is a code
       // constant, deliberately not a migration/config. No table/cron change (count stays 35).
       '0111_buy_table_dead_bucket_floor.sql',
+      // dash_trading() gains openPositions: the held-position ledger (net shares, ANY strategy, sells
+      // netted, unresolved markets only) marked to the latest opening_captures bucket book — entry vs
+      // current price + unrealized P&L for the /trading "Open positions & exposure" section. Read-only
+      // re-statement of the one function; no table/cron change (count stays 35).
+      '0112_trading_open_positions.sql',
     ]);
   });
 });

@@ -2284,6 +2284,61 @@ export interface BuyTableLiveCycle {
   lastAt: string | null;
 }
 
+/**
+ * One HELD live position (dash_trading.openPositions.rows, 0112) — a (marketId, tokenId) with net shares
+ * held (sells netted, ANY strategy) on a not-yet-resolved market, joined best-effort to its market identity
+ * and marked to the LATEST opening_captures bucket book (curBid/curAsk/curMid). Mark fields are null when no
+ * capture exists for the event (fail-soft — the page shows an honest dash, never a fabricated price).
+ */
+export interface OpenPositionRow {
+  marketId: string;
+  tokenId: string | null;
+  /** every live_orders.strategy that contributed matched shares (in practice a single lane). */
+  strategies: string[] | null;
+  city: string | null;
+  cityName: string | null;
+  eventSlug: string | null;
+  targetDate: string | null;
+  /** the temperature bucket bought ("33°C bucket") — null when the market join misses. */
+  label: string | null;
+  bucketIdx: number | null;
+  firstBuyAt: string | null;
+  /** jsonb-string-safe numerics (file convention) — the page coerces with num(). */
+  shares: unknown;
+  /** the venue-truth average BUY fill price (ex-fee). */
+  avgPrice: unknown;
+  /** all-in cost of the held shares (fill cash + fees, sells released pro-rata). */
+  costUsd: unknown;
+  curBid: unknown;
+  curAsk: unknown;
+  curMid: unknown;
+  markAt: string | null;
+  resolvesAt: string | null;
+  valueMidUsd: unknown;
+  unrealizedMidUsd: unknown;
+  /** conservative: what selling into the current best bid would realize vs cost. */
+  unrealizedBidUsd: unknown;
+}
+
+/** dash_trading.openPositions.totals (0112) — value/unrealized sums cover MARKED rows only (nMarked ≤ nPositions). */
+export interface OpenPositionsTotals {
+  nPositions: unknown;
+  nMarked: unknown;
+  costUsd: unknown;
+  valueMidUsd: unknown;
+  valueBidUsd: unknown;
+  unrealizedMidUsd: unknown;
+  unrealizedBidUsd: unknown;
+  oldestMarkAt: string | null;
+}
+
+/** dash_trading.openPositions (0112) — { rows, totals }; null on a pre-0112 payload (the section falls back
+ *  to the legacy per-market exposure map + a "0112 not applied" note). */
+export interface OpenPositionsSection {
+  rows: OpenPositionRow[];
+  totals: OpenPositionsTotals | null;
+}
+
 /** dash_trading.buyTable (0096) — { rows, totals }; null on a pre-0096 payload (the section notes it).
  *  0097/0109 add priceConfig — null on a pre-0097 payload (the price-caps panel notes it).
  *  liveCycles rides the SEPARATE buy_table_live_cycles() RPC (0099 — the 0098 inline read took the whole
@@ -2303,6 +2358,9 @@ export interface TradingView {
   openExposureUsd: unknown;
   today: TradeToday | null;
   dryRun: { openOrders: unknown; total: unknown } | null;
+  /** 0112: the held-position ledger marked to the live book — null while 0112 is unapplied (staged-dark
+   *  degradation: the page falls back to the legacy per-market exposure map + a "0112 not applied" note). */
+  openPositions: OpenPositionsSection | null;
   /** 0096: the BUY-TABLE lane position ledger — null while 0096 is unapplied (staged-dark degradation,
    *  the 0085 CityLive precedent: the page renders a "0096 not applied" note, never a false empty state). */
   buyTable: BuyTableSection | null;
@@ -2378,6 +2436,11 @@ export async function getTrading(db: WebDb): Promise<TradingLoad> {
       openExposureUsd: v.openExposureUsd ?? 0,
       today: v.today ?? null,
       dryRun: v.dryRun ?? null,
+      // 0112: absent on a pre-0112 payload → null (the section falls back to the legacy exposure map with
+      // its "0112 not applied" note); present → null-tolerant inner defaults, the buyTable idiom.
+      openPositions: v.openPositions
+        ? { rows: v.openPositions.rows ?? [], totals: v.openPositions.totals ?? null }
+        : null,
       // 0096: absent on a pre-0096 payload → null (the page renders its "0096 not applied" note); present →
       // null-tolerant inner defaults so a lean envelope still renders. priceConfig (0097) degrades the same
       // way; liveCycles is the separate fail-soft RPC merged in above (null = absent OR failed).
