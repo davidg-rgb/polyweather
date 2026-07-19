@@ -631,7 +631,10 @@ export function BuyTablePriceCapsPanel({
       <div className="cap" style={{ marginBottom: '0.25rem' }}>Buy-table price caps</div>
       <p className="muted small" style={{ marginTop: 0 }}>
         The BUY-TABLE lane buys whenever the predicted bucket&apos;s executable ask is <strong>at or below the
-        city&apos;s max</strong> — there is no minimum. No override = the global cap{' '}
+        city&apos;s max</strong>. Two fixed model rules sit beneath every cap (in code, not inputs): a hard{' '}
+        <strong>$0.01 minimum ask</strong> (a sub-cent ask = the market calling the bucket dead) and the{' '}
+        <strong>dead-bucket floor</strong> (never buy a bucket the day&apos;s observed running max has already
+        made unwinnable). No override = the global cap{' '}
         <span className="mono">{globalCur || '0.15'}</span>. Cap guardrails are the database&apos;s
         (slug must exist, 0 &lt; max ≤ 0.99) and any rejection is shown <strong>verbatim</strong>. Date columns
         show each <strong>live cycle&apos;s logged lo / hi</strong> — the lowest and highest the lane&apos;s gate

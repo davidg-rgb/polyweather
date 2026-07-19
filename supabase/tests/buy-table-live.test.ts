@@ -859,6 +859,58 @@ describe('0099/0100 buy_table_live_cycles() — per live cycle, the trigger-fed 
 });
 
 // ══════════════════════════════════════════════════════════════════════════════════════════════════════════
+describe('0111 buy_table_intraday_floor — the dead-bucket gate read (city+date → observed running max)', () => {
+  beforeAll(async () => {
+    const region = (await rows<{ region: string }>(db, `select region from public.clusters limit 1`))[0]!.region;
+    const cityId = (
+      await rows<{ city_id: string }>(db, `select city_id from public.upsert_city($1, $2, 'US', 'C', 'UTC', $3)`, [
+        'floorville', 'floorville', region,
+      ])
+    )[0]!.city_id;
+    await db.exec(`insert into stations (icao, country_code, tz) values ('EFXX', 'FI', 'Europe/Helsinki')
+                   on conflict (icao) do nothing`);
+    await rows(
+      db,
+      `insert into city_stations (city_id, icao, wu_country_code, valid_from) values ($1, 'EFXX', 'FI', now() - interval '30 days')`,
+      [cityId],
+    );
+    await db.exec(`insert into intraday_max (icao, date_local, max_tenths_c, max_native, n_obs, last_obs_at)
+                   values ('EFXX', '2026-07-19', 20.0, 20, 7, now())
+                   on conflict (icao, date_local) do update set max_tenths_c = excluded.max_tenths_c`);
+  });
+
+  it('returns the OBJECT envelope with the observed max for matching (city, date) pairs only', async () => {
+    const [r] = await asOperator(() =>
+      rows<{ v: { floors: Array<{ city: string; targetDate: string; maxTenthsC: string | number }> } }>(
+        db,
+        `select public.buy_table_intraday_floor(array['floorville','nosuchcity'], array['2026-07-19','2026-07-20']::date[]) as v`,
+      ),
+    );
+    expect(r!.v.floors).toHaveLength(1);
+    expect(r!.v.floors[0]!.city).toBe('floorville');
+    expect(r!.v.floors[0]!.targetDate).toBe('2026-07-19');
+    expect(Number(r!.v.floors[0]!.maxTenthsC)).toBeCloseTo(20.0, 6);
+    // no matching date → empty list, never null (the 0081 OBJECT-envelope rule)
+    const [empty] = await asOperator(() =>
+      rows<{ v: { floors: unknown[] } }>(
+        db,
+        `select public.buy_table_intraday_floor(array['floorville'], array['2026-01-01']::date[]) as v`,
+      ),
+    );
+    expect(empty!.v.floors).toEqual([]);
+  });
+
+  it('is service_role-only (the convergence_capture_inputs grant idiom)', async () => {
+    const [g] = await rows<{ authd: boolean; anon: boolean; svc: boolean }>(
+      db,
+      `select has_function_privilege('authenticated', 'public.buy_table_intraday_floor(text[],date[])', 'EXECUTE') as authd,
+              has_function_privilege('anon',          'public.buy_table_intraday_floor(text[],date[])', 'EXECUTE') as anon,
+              has_function_privilege('service_role',  'public.buy_table_intraday_floor(text[],date[])', 'EXECUTE') as svc`,
+    );
+    expect(g).toEqual({ authd: false, anon: false, svc: true });
+  });
+});
+
 describe('0095/0110 Slack allowlist — the lane push kinds survive the prod pause gate', () => {
   it('appends BUY_TABLE_* + the executor ORDER_* kinds without disturbing the 0092 routing', async () => {
     const [r] = await rows<{ value: string }>(db, `select value from config where key = 'alerts_slack_allow_kinds'`);

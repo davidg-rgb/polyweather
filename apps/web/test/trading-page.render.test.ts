@@ -219,7 +219,8 @@ describe('/trading page renders', () => {
     // allowlist ∪ overridden (karachi shows its override, singapore shows 'default'), save/clear on the §8.2 route.
     expect(html).toContain('Buy-table price caps');
     expect(html).toContain('save global max');
-    expect(html).toContain('there is no minimum'); // the max-only contract, stated in the panel copy
+    expect(html).toContain('$0.01 minimum ask'); // the hard non-configurable floor, stated in the panel copy
+    expect(html).toContain('dead-bucket floor'); // …and the 0111 running-max rule
     expect(html).toContain('0.3'); // karachi's stored max override
     expect(html).toContain('default'); // singapore — allowlisted, no override
     expect(html).toContain('clear'); // the per-row override clear button

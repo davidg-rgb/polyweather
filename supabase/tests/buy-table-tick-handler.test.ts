@@ -79,6 +79,8 @@ interface MockDbState {
   entries?: BuyTableEntryRow[] | 'throw' | 'missing';
   preflightOk?: boolean | 'throw';
   configRows?: { key: string; value: string }[];
+  /** 0111: buy_table_intraday_floor rows ({floors:[…]} envelope) — the dead-bucket gate's observed maxes. */
+  floors?: Array<{ city: string; targetDate: string; maxTenthsC: number }> | 'throw';
   cityAllowlist?: string[] | null;
   /** F4: snake_case live_orders jsonb rows served by bot_order_list_dangling ({rows:[…]} envelope). */
   dangling?: Array<Record<string, unknown>> | 'throw';
@@ -135,6 +137,9 @@ function makeMockDb(state: MockDbState): DbPort & { calls: Array<{ fn: string; a
           return [
             { convergence_capture_inputs: { captures: state.captures ?? [], resolutions: state.resolutions ?? [] } },
           ] as unknown as T[];
+        case 'buy_table_intraday_floor':
+          if (state.floors === 'throw') throw new Error('rpc buy_table_intraday_floor failed: function does not exist');
+          return [{ buy_table_intraday_floor: { floors: state.floors ?? [] } }] as unknown as T[];
         case 'trade_live_preflight':
           if (state.preflightOk === 'throw') throw new Error('rpc trade_live_preflight failed: boom');
           return [{ trade_live_preflight: { ok: state.preflightOk === true, reasons: [] } }] as unknown as T[];
@@ -342,6 +347,105 @@ describe('buy-table-tick — per-city price CAPS (0109, max-only) override the g
   });
 });
 
+describe('buy-table-tick — the HARD $0.01 minimum ask (non-configurable)', () => {
+  it('skips a sub-cent ask however far under the cap; 1¢ exactly is allowed', async () => {
+    const h = harness(
+      {
+        mode: 'off',
+        captures: [
+          capture({ eventId: 'ev-dead', ask: 0.005, hoursToClose: 6 }),
+          capture({ eventId: 'ev-cent', ask: 0.01, hoursToClose: 7 }),
+        ],
+      },
+      'dry-run',
+    );
+    const stats = await buyTableTick(h.ctx, h.deps);
+    expect(stats.candidates).toBe(1);
+    expect(reservesOf(h.db).map((r) => r.args['p_market_id'])).toEqual(['c-ev-cent-1']);
+    expect(h.logs.some((l) => l.msg === 'buy-table.skip' && /below_min_price .*hard \$0\.01 floor/.test(String(l.extra?.reason)))).toBe(true);
+  });
+
+  it('the floor is a CONSTANT — no buy_table.* config key can change it', async () => {
+    const h = harness(
+      {
+        mode: 'off',
+        // an operator/hand-edit attempt at a lower floor must have NO effect (the key does not exist)
+        configRows: [{ key: 'buy_table.min_price', value: '0' }],
+        captures: [capture({ eventId: 'ev-dead', ask: 0.005, hoursToClose: 6 })],
+      },
+      'dry-run',
+    );
+    const stats = await buyTableTick(h.ctx, h.deps);
+    expect(stats.candidates).toBe(0);
+  });
+});
+
+describe('buy-table-tick — the DEAD-BUCKET floor gate (0111): never buy a bucket the running max has killed', () => {
+  // fixture: predicted bucket = idx 1, label '30°C' → dead iff wuRound(observed) > 30, i.e. observed ≥ 30.5.
+  const floorsFor = (maxTenthsC: number) => [{ city: 'testville', targetDate: '2026-07-11', maxTenthsC }];
+
+  it('°C: skips the predicted bucket when the observed running max has passed its top (the helsinki case)', async () => {
+    const h = harness(
+      { mode: 'off', captures: [capture({ eventId: 'ev-1', ask: 0.001, hoursToClose: 6 })], floors: floorsFor(31.0) },
+      'dry-run',
+    );
+    const stats = await buyTableTick(h.ctx, h.deps);
+    expect(stats.candidates).toBe(0);
+    expect(stats.dryRun).toBe(0);
+    expect(h.logs.some((l) => l.msg === 'buy-table.skip' && /dead_bucket .*cannot win/.test(String(l.extra?.reason)))).toBe(true);
+  });
+
+  it('°C boundary: 30.5 observed rounds to 31 (wuRound half-up) → dead; 30.4 → 30 → still alive', async () => {
+    const dead = harness(
+      { mode: 'off', captures: [capture({ eventId: 'ev-1', ask: 0.12, hoursToClose: 6 })], floors: floorsFor(30.5) },
+      'dry-run',
+    );
+    expect((await buyTableTick(dead.ctx, dead.deps)).candidates).toBe(0);
+    const alive = harness(
+      { mode: 'off', captures: [capture({ eventId: 'ev-1', ask: 0.12, hoursToClose: 6 })], floors: floorsFor(30.4) },
+      'dry-run',
+    );
+    const stats = await buyTableTick(alive.ctx, alive.deps);
+    expect(stats.candidates).toBe(1);
+    expect(stats.dryRun).toBe(1);
+  });
+
+  it('°F: the native conversion decides — 32.0°C → 90°F kills an 88-89°F bucket; 31.5°C → 89°F does not', async () => {
+    const fCap = () => {
+      const cap = capture({ eventId: 'ev-f', ask: 0.12, hoursToClose: 6 });
+      cap.buckets = cap.buckets!.map((b, i) => ({ ...b, label: ['86-87°F', '88-89°F', '90-91°F'][i]! }));
+      return cap;
+    };
+    const dead = harness({ mode: 'off', captures: [fCap()], floors: floorsFor(32.0) }, 'dry-run');
+    expect((await buyTableTick(dead.ctx, dead.deps)).candidates).toBe(0);
+    const alive = harness({ mode: 'off', captures: [fCap()], floors: floorsFor(31.5) }, 'dry-run');
+    expect((await buyTableTick(alive.ctx, alive.deps)).candidates).toBe(1);
+  });
+
+  it('a TOP-TAIL bucket ("or higher") is never floor-dead', async () => {
+    const cap = capture({ eventId: 'ev-t', ask: 0.12, hoursToClose: 6 });
+    cap.buckets = cap.buckets!.map((b, i) => (i === 1 ? { ...b, label: '30°C or higher' } : b));
+    const h = harness({ mode: 'off', captures: [cap], floors: floorsFor(45.0) }, 'dry-run');
+    const stats = await buyTableTick(h.ctx, h.deps);
+    expect(stats.candidates).toBe(1);
+  });
+
+  it('FAIL-OPEN: a missing floor row buys as before; a failing RPC (pre-0111) logs + buys as before', async () => {
+    const noRow = harness(
+      { mode: 'off', captures: [capture({ eventId: 'ev-1', ask: 0.12, hoursToClose: 6 })], floors: [] },
+      'dry-run',
+    );
+    expect((await buyTableTick(noRow.ctx, noRow.deps)).candidates).toBe(1);
+    const rpcGone = harness(
+      { mode: 'off', captures: [capture({ eventId: 'ev-1', ask: 0.12, hoursToClose: 6 })], floors: 'throw' },
+      'dry-run',
+    );
+    const stats = await buyTableTick(rpcGone.ctx, rpcGone.deps);
+    expect(stats.candidates).toBe(1);
+    expect(rpcGone.logs.some((l) => l.msg === 'buy-table.floor_read_unavailable')).toBe(true);
+  });
+});
+
 describe('buy-table-tick — the lead window (C25 sweet-spot, [lead_min_h, lead_max_h])', () => {
   it('skips 13h-out and 1.5h-out; enters 6h-out', async () => {
     const h = harness(
@@ -504,16 +608,16 @@ describe('buy-table-tick — the 0102 entry rules (verification semantics)', () 
     expect(fill!.dedupeKey).toMatch(/^buy-table-fill:/); // per-order key — every distinct buy pushes once
   });
 
-  it('0110: a SUB-CENT fill price renders exactly — never "@ 0.00" (the 07-19 helsinki 0.001 case)', async () => {
+  it('0110: a SUB-CENT fill price renders exactly — never "@ 0.00" (a 2¢ ask can still FILL below 1¢)', async () => {
     const h = harness(
-      { mode: 'live', preflightOk: true, captures: [capture({ eventId: 'ev-1', ask: 0.001, hoursToClose: 6 })] },
+      { mode: 'live', preflightOk: true, captures: [capture({ eventId: 'ev-1', ask: 0.02, hoursToClose: 6 })] },
       'live',
-      { getOrder: async () => ({ status: 'matched', original_size: 5000, size_matched: 5000, price: 0.001 }) },
+      { getOrder: async () => ({ status: 'matched', original_size: 250, size_matched: 250, price: 0.001 }) },
     );
     await buyTableTick(h.ctx, h.deps);
     const fill = h.alerts.find((a) => a.kind === 'BUY_TABLE_FILLED');
     expect(fill).toBeDefined();
-    expect(fill!.body).toContain('5000 sh @ 0.001 = $5.00');
+    expect(fill!.body).toContain('250 sh @ 0.001 = $0.25');
     expect(fill!.body).not.toContain('@ 0.00 ');
   });
 

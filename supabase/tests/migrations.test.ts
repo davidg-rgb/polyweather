@@ -502,6 +502,13 @@ describe('migrations 0001–0010', () => {
       // append to alerts_slack_allow_kinds (the 0095 idiom); on prod's C16-emptied list this makes the
       // allowlist exactly {BUY_TABLE_FILLED} — buys push, everything else stays dark. No object change.
       '0110_buy_table_fill_alert.sql',
+      // 0111 = the DEAD-BUCKET FLOOR read (operator directive 2026-07-19, after the helsinki 19°C @ 0.001
+      // dead-on-arrival buy): buy_table_intraday_floor(p_cities, p_dates) → {floors:[{city, targetDate,
+      // maxTenthsC, lastObsAt}]} from intraday_max ⋈ city_stations — the tick skips any predicted bucket
+      // whose top the observed running max has already cleared (dead_bucket; wuRound native replica;
+      // fail-open by monotonicity). service_role-only. The companion HARD $0.01 min ask is a code
+      // constant, deliberately not a migration/config. No table/cron change (count stays 35).
+      '0111_buy_table_dead_bucket_floor.sql',
     ]);
   });
 });

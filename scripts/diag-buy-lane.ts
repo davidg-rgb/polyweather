@@ -193,6 +193,26 @@ export async function buildReport(sql: ReturnType<typeof postgres>, citiesOverri
   };
   const entries: BuyTableEntryRow[] = entRow.env?.rows ?? [];
 
+  // 0111: the dead-bucket floor read — the SAME RPC + keying the tick uses (fail-open on absence/error).
+  const floors: Record<string, number> = {};
+  try {
+    const cities = [...new Set(captures.map((r) => String(r.city ?? '').trim().toLowerCase()).filter((s) => s !== ''))];
+    const dates = [...new Set(captures.map((r) => r.targetDate).filter((d): d is string => d != null))];
+    if (cities.length > 0 && dates.length > 0) {
+      const fRow = (await sql`select public.buy_table_intraday_floor(${cities}::text[], ${dates}::date[]) as env`)[0] as {
+        env: { floors?: Array<{ city?: string; targetDate?: string; maxTenthsC?: unknown }> } | null;
+      };
+      for (const f of fRow.env?.floors ?? []) {
+        const max = Number(f.maxTenthsC);
+        if (typeof f.city === 'string' && typeof f.targetDate === 'string' && Number.isFinite(max)) {
+          floors[`${f.city.trim().toLowerCase()}|${f.targetDate}`] = max;
+        }
+      }
+    }
+  } catch {
+    /* pre-0111 or transient — the gate is off, exactly like the tick */
+  }
+
   // the funnel — the tick's OWN pure gate + selector, byte-for-byte (0102 entry rules included)
   const gate = deriveEntryGate(entries, buyTableCfg);
   const { candidates, skips } = selectBuyTableCandidates({
@@ -203,6 +223,7 @@ export async function buildReport(sql: ReturnType<typeof postgres>, citiesOverri
     stakeUsd,
     minOrderSizeShares: botCfg.minOrderSizeShares,
     now,
+    floors,
   });
 
   // per-market close-time view (for the window-open estimate + human read)
