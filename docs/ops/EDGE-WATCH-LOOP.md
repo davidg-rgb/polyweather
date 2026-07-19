@@ -21,6 +21,18 @@
 
 _Claude keeps this block current every material cycle. Whole status in 20 seconds._
 
+- **▶▶ 2026-07-19 ~08:15Z (operator-directed) — TWO FIXED PRICE RULES SHIPPED after the helsinki
+  dead-on-arrival buy: the 0111 DEAD-BUCKET FLOOR gate + a HARD non-configurable $0.01 min ask.**
+  Operator confirmed the helsinki mechanism ("at purchase time the temperature had already reached 20°C —
+  a direct loss") and ordered a dead-buy rule set + "global min price at 1c — non changeable". Shipped:
+  ① migration `0111` `buy_table_intraday_floor` (observed intraday running max per city+date from
+  `intraday_max` ⋈ `city_stations`) + the tick's `dead_bucket` gate — skip any predicted bucket whose top
+  `wuRound(observed max → native)` has cleared (top tails never dead; FAIL-OPEN by monotonicity); live
+  check: helsinki 07-19 floor reads 20.0°C → yesterday's buy would have been skipped. ② `HARD_MIN_ASK
+  = $0.01` — a CODE CONSTANT by operator order (no config key, no /trading input; distinct from the
+  removed 0109 per-city min INPUT — this is fixed model law, tested to be config-immune).
+  diag-buy-lane reads the same floor RPC (zero drift). Suite 3,305 green; 0111 applied + fn redeployed
+  mid-window (~08:10Z); PR #34. Panel copy + BUY-TABLE-LIVE.md state both rules.
 - **▶▶ 2026-07-19 ~01:00Z — FIRST CONTINUOUS-MODE WINDOW: 2 fills at the OPENING TICK (00:03Z), Slack
   delivery PROVEN end-to-end; 1 wellington zero-fill reconciled venue-verified.** Fills: **kuala-lumpur 32°C
   17 sh @ 0.29 = $4.93** · **helsinki 19°C 5000 sh @ 0.001 = $5.00** — both pushed to Slack `sent=true`
