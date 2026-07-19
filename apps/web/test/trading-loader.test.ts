@@ -16,7 +16,7 @@ import type { WebDb } from '../src/lib/api/deps.ts';
 // routes per function: `cycles` is the cycles RPC's payload (default: throws not-applied, the pre-0099 state).
 const stubDb = (
   payload: unknown,
-  opts: { throwsMessage?: string; cycles?: unknown; cyclesThrows?: string } = {},
+  opts: { throwsMessage?: string; cycles?: unknown; cyclesThrows?: string; funds?: unknown } = {},
 ): WebDb => ({
   rpc: (async (fn: string) => {
     if (fn === 'buy_table_live_cycles') {
@@ -25,11 +25,20 @@ const stubDb = (
       }
       return [{ [fn]: opts.cycles }];
     }
+    if (fn === 'account_funds') {
+      // 0113: like cycles, the funds RPC defaults to the pre-0113 not-applied state.
+      if (opts.funds === undefined) {
+        throw new Error('PGRST202: could not find the function public.account_funds');
+      }
+      return [{ [fn]: opts.funds }];
+    }
     if (opts.throwsMessage != null) throw new Error(opts.throwsMessage);
     return [{ [fn]: payload }];
   }) as WebDb['rpc'],
   getConfigRows: async () => [],
 });
+
+const FUNDS = { cashUsd: '18.25', positionsValueUsd: '4.10', nPositions: 4, capturedAt: '2026-07-05T08:55:00Z', note: null };
 
 const CYCLES = {
   cycles: [
@@ -100,6 +109,15 @@ const PAYLOAD = {
 };
 
 describe('getTrading — dash_trading passthrough + null-tolerant defaults', () => {
+  it('0113: accountFunds passes through when the RPC exists; degrades to null when absent OR failed', async () => {
+    const ok = await getTrading(stubDb(PAYLOAD, { cycles: CYCLES, funds: FUNDS }));
+    if (ok.kind !== 'ok') throw new Error('expected ok');
+    expect(ok.view.accountFunds).toEqual(FUNDS);
+    const absent = await getTrading(stubDb(PAYLOAD, { cycles: CYCLES })); // funds RPC throws PGRST202
+    if (absent.kind !== 'ok') throw new Error('expected ok');
+    expect(absent.view.accountFunds).toBeNull(); // the strip renders its unavailable note — console intact
+  });
+
   it('passes the full activation-console payload through as { kind: ok }', async () => {
     const load = await getTrading(stubDb(PAYLOAD, { cycles: CYCLES }));
     expect(load.kind).toBe('ok');

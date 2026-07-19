@@ -2353,6 +2353,16 @@ export interface BuyTableSection {
   liveCycles: BuyTableLiveCycle[] | null;
 }
 
+/** account_funds() (0113) — the venue account snapshot behind the /trading overview strip. All fields
+ *  null-tolerant: cashUsd null = the credentialed read was unavailable at the last fire (note says why). */
+export interface AccountFunds {
+  cashUsd: unknown;
+  positionsValueUsd: unknown;
+  nPositions: unknown;
+  capturedAt: string | null;
+  note: string | null;
+}
+
 export interface TradingView {
   config: TradeConfig | null;
   preflight: TradePreflight | null;
@@ -2360,6 +2370,9 @@ export interface TradingView {
   openExposureUsd: unknown;
   today: TradeToday | null;
   dryRun: { openOrders: unknown; total: unknown } | null;
+  /** 0113: the venue account snapshot (cash + venue position marks) — null while account_funds() is
+   *  absent OR failed (strictly fail-soft, the liveCycles idiom; the overview strip notes it). */
+  accountFunds: AccountFunds | null;
   /** 0112: the held-position ledger marked to the live book — null while 0112 is unapplied (staged-dark
    *  degradation: the page falls back to the legacy per-market exposure map + a "0112 not applied" note). */
   openPositions: OpenPositionsSection | null;
@@ -2414,9 +2427,11 @@ export async function getTrading(db: WebDb): Promise<TradingLoad> {
   // inline read took the WHOLE console down when the cycles scan hit the authenticated role's 8s statement
   // timeout. Here ANY cycles failure (not-applied, timeout, transient) degrades to null: the panel drops the
   // lo/hi columns and renders its unavailable note; the console itself never depends on this read.
-  const [vRes, cyclesRes] = await Promise.allSettled([
+  const [vRes, cyclesRes, fundsRes] = await Promise.allSettled([
     one<TradingView>(db, 'dash_trading', {}),
     one<{ cycles?: BuyTableLiveCycle[] }>(db, 'buy_table_live_cycles', {}),
+    // 0113: the account snapshot rides its own fail-soft RPC (the cycles idiom) — any failure → null.
+    one<AccountFunds>(db, 'account_funds', {}),
   ]);
   if (vRes.status === 'rejected') {
     const e: unknown = vRes.reason;
@@ -2429,6 +2444,7 @@ export async function getTrading(db: WebDb): Promise<TradingLoad> {
   if (!v) return { kind: 'error', message: 'dash_trading() returned an empty payload' };
   const liveCycles =
     cyclesRes.status === 'fulfilled' && Array.isArray(cyclesRes.value?.cycles) ? cyclesRes.value.cycles : null;
+  const accountFunds = fundsRes.status === 'fulfilled' && fundsRes.value ? fundsRes.value : null;
   return {
     kind: 'ok',
     view: {
@@ -2438,6 +2454,7 @@ export async function getTrading(db: WebDb): Promise<TradingLoad> {
       openExposureUsd: v.openExposureUsd ?? 0,
       today: v.today ?? null,
       dryRun: v.dryRun ?? null,
+      accountFunds,
       // 0112: absent on a pre-0112 payload → null (the section falls back to the legacy exposure map with
       // its "0112 not applied" note); present → null-tolerant inner defaults, the buyTable idiom.
       openPositions: v.openPositions

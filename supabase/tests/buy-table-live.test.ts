@@ -928,6 +928,63 @@ describe('0095/0110 Slack allowlist — the lane push kinds survive the prod pau
 });
 
 // ══════════════════════════════════════════════════════════════════════════════════════════════════════════
+describe('0113 account_funds() — the venue account snapshot read (fail-soft, OBJECT envelope)', () => {
+  afterEach(async () => {
+    await db.exec(`delete from public.account_snapshot`);
+  });
+
+  it('no snapshot row → all-null OBJECT with the honest note (0081 tripwire: never a bare null/array)', async () => {
+    const [r] = await asOperator(() =>
+      rows<{ t: string; v: { cashUsd: unknown; note: string } }>(
+        db,
+        `select jsonb_typeof(public.account_funds()) as t, public.account_funds() as v`,
+      ),
+    );
+    expect(r!.t).toBe('object');
+    expect(r!.v.cashUsd).toBeNull();
+    expect(r!.v.note).toContain('no snapshot yet');
+  });
+
+  it('serves the single snapshot row verbatim (nulls preserved — a null cash is honest, not zero)', async () => {
+    await db.exec(
+      `insert into public.account_snapshot (id, cash_usd, positions_value_usd, n_positions, note)
+       values (1, 18.25, 4.10, 4, null)`,
+    );
+    const [r] = await asOperator(() =>
+      rows<{ v: { cashUsd: string | number; positionsValueUsd: string | number; nPositions: number; capturedAt: string; note: null } }>(
+        db,
+        `select public.account_funds() as v`,
+      ),
+    );
+    expect(Number(r!.v.cashUsd)).toBeCloseTo(18.25, 6);
+    expect(Number(r!.v.positionsValueUsd)).toBeCloseTo(4.1, 6);
+    expect(Number(r!.v.nPositions)).toBe(4);
+    expect(r!.v.capturedAt).toBeTruthy();
+    expect(r!.v.note).toBeNull();
+  });
+
+  it('is operator-guarded with the dash grants; the cron rides 9,39 (off every contended lane)', async () => {
+    await expect(
+      asRole(db, 'authenticated', { email: 'intruder@example.com' }, () =>
+        rows(db, `select public.account_funds()`),
+      ),
+    ).rejects.toThrow(/ERR_FORBIDDEN/);
+    const [g] = await rows<{ authd: boolean; anon: boolean; svc: boolean }>(
+      db,
+      `select has_function_privilege('authenticated', 'public.account_funds()', 'EXECUTE') as authd,
+              has_function_privilege('anon',          'public.account_funds()', 'EXECUTE') as anon,
+              has_function_privilege('service_role',  'public.account_funds()', 'EXECUTE') as svc`,
+    );
+    expect(g).toEqual({ authd: true, anon: false, svc: true });
+    const [c] = await rows<{ schedule: string }>(
+      db,
+      `select schedule from cron.job where jobname = 'account-snapshot'`,
+    );
+    expect(c!.schedule).toBe('9,39 * * * *');
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════════════
 describe('0112 dash_trading().openPositions — held positions marked to the latest captured book', () => {
   interface OpenPosRow {
     marketId: string;
