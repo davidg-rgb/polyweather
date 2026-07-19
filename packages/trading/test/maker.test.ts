@@ -551,6 +551,24 @@ describe('MakerExecutor.placeTaker — FAK exit leg', () => {
     expect(r).toMatchObject({ status: 'placed', orderType: 'FAK', postOnly: false, sizeMatched: 74, avgPrice: 0.31 });
   });
 
+  it('fill-truth: a negRisk better-than-limit fill records the TRADES average, not the limit (07-19 wellington)', async () => {
+    // getOrder's `price` is the LIMIT (0.34); the venue trade record carries the true execution average.
+    const client = mockClient({
+      getOrder: vi.fn(async () => ({ status: 'matched', original_size: '15', size_matched: '32.179165', price: '0.34' })),
+      getTrades: vi.fn(async () => [
+        { price: '0.1584876', side: 'BUY', size: '32.179165', asset_id: 'tok-yes', status: 'CONFIRMED', trader_side: 'TAKER', taker_order_id: '0xORDER', maker_orders: [] },
+      ]),
+    });
+    const { ledger, calls } = mockLedger();
+    const exec = new MakerExecutor(deps('live', client, ledger));
+    const r = await exec.placeTaker({ marketId: '0xcond', tokenId: 'tok-yes', side: 'BUY', purpose: 'entry', tradeDate: '2026-07-19', worstPrice: 0.34, size: 15 });
+    expect(r).toMatchObject({ status: 'placed', sizeMatched: 32.179165 });
+    expect(r.avgPrice).toBeCloseTo(0.158488, 6);
+    const fill = calls.find((c) => c.fn === 'recordFill');
+    expect(fill?.args[1]).toBe(32.179165);
+    expect(fill?.args[2] as number).toBeCloseTo(0.158488, 6); // NOT 0.34 — the $10.94 phantom-notional class
+  });
+
   it('dry-run taker: reserves + synthetic recordPlaced, never posts', async () => {
     const client = mockClient();
     const { ledger, rows } = mockLedger();

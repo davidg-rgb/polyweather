@@ -582,7 +582,7 @@ export class MakerExecutor {
     }
 
     // maker path: priced-to-rest, never crosses → $0 venue fee by construction (feeRateBps 0).
-    return this.postAndRecord(client, order, clientOrderId, { ...base, clientOrderId, limitPrice: priced.price }, orderType, req.size, 0, `${req.marketId} ${req.side} ${req.purpose}`);
+    return this.postAndRecord(client, order, clientOrderId, { ...base, clientOrderId, limitPrice: priced.price }, orderType, req.size, 0, `${req.marketId} ${req.side} ${req.purpose}`, req.tokenId);
   }
 
   /**
@@ -627,7 +627,7 @@ export class MakerExecutor {
     }
     // 0084 #17: a FAK exit pays the venue's taker fee — book it with the fill so the N1 daily-loss kill
     // sees it (the caller supplies the rate; omitted ⇒ 0, the pre-0084 behavior).
-    return this.postAndRecord(client, order, clientOrderId, { ...base, clientOrderId, limitPrice: price }, 'FAK', req.size, req.feeRateBps ?? 0, `${req.marketId} ${req.side} ${req.purpose}`);
+    return this.postAndRecord(client, order, clientOrderId, { ...base, clientOrderId, limitPrice: price }, 'FAK', req.size, req.feeRateBps ?? 0, `${req.marketId} ${req.side} ${req.purpose}`, req.tokenId);
   }
 
   /**
@@ -658,6 +658,8 @@ export class MakerExecutor {
     requestedSize: number,
     feeRateBps: number,
     label: string,
+    /** the order's token — the fill-truth trades read (avg execution price) is scoped to it. */
+    tokenId?: string,
   ): Promise<OrderPlacementResult> {
     let orderId: string | undefined;
     let postAttempted = false;
@@ -707,14 +709,31 @@ export class MakerExecutor {
 
       const poll = parseOrderFillPoll(await client.getOrder(orderId), orderId, requestedSize);
       let avgPrice: number | null = null; // 0110: surfaced to the caller so a fill notification can say the price paid
+      // FILL-PRICE TRUTH (the 2026-07-19 wellington lesson): getOrder's `price` is the order's LIMIT, not
+      // the execution average — a negRisk-adapter fill can execute FAR better than limit (32.18 sh @ 0.1585
+      // avg on a 15-sh 0.34-limit FAK; the poll recorded 0.34 → a $10.94 phantom notional on a $5.10 spend).
+      // When the poll shows a fill, prefer the venue's TRADE RECORDS for the size-weighted average — our
+      // taker fills carry this order's id. Fail-soft: any trades-read problem falls back to the poll price.
+      const tradeTruthAvg = async (): Promise<number | null> => {
+        if (!tokenId) return null;
+        try {
+          const trades = parseTrades(await client.getTrades({ asset_id: tokenId }))
+            .filter((t) => t.traderSide === 'TAKER' && t.takerOrderId === orderId && t.size > 0);
+          const totSize = trades.reduce((s, t) => s + t.size, 0);
+          if (totSize <= 0) return null;
+          return round6(trades.reduce((s, t) => s + t.size * t.price, 0) / totSize);
+        } catch {
+          return null;
+        }
+      };
       if (poll.filled) {
         // p_size_matched is CUMULATIVE (T3 schema appends only positive deltas to live_fills).
         const matched = poll.sizeMatched || requestedSize;
-        const avg = poll.avgPrice ?? result.limitPrice ?? 0;
+        const avg = (await tradeTruthAvg()) ?? poll.avgPrice ?? result.limitPrice ?? 0;
         avgPrice = avg;
         await this.ledger.recordFill(clientOrderId, matched, avg, 'filled', feeFor(matched, avg));
       } else if (poll.partial) {
-        const avg = poll.avgPrice ?? result.limitPrice ?? 0;
+        const avg = (await tradeTruthAvg()) ?? poll.avgPrice ?? result.limitPrice ?? 0;
         avgPrice = avg;
         await this.ledger.recordFill(clientOrderId, poll.sizeMatched, avg, 'partial', feeFor(poll.sizeMatched, avg));
       }
