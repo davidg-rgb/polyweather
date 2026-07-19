@@ -2287,8 +2287,10 @@ export interface BuyTableLiveCycle {
 /**
  * One HELD live position (dash_trading.openPositions.rows, 0112) — a (marketId, tokenId) with net shares
  * held (sells netted, ANY strategy) on a not-yet-resolved market, joined best-effort to its market identity
- * and marked to the LATEST opening_captures bucket book (curBid/curAsk/curMid). Mark fields are null when no
- * capture exists for the event (fail-soft — the page shows an honest dash, never a fabricated price).
+ * and marked to the LATEST opening_captures bucket book. curBid/curAsk are RAW (null = that side of the book
+ * is empty); curMid falls back to the visible side's midpoint on a one-sided book, and unrealizedBidUsd
+ * treats an empty bid side as $0 sellable (the executable truth). Mark fields are null only when NO capture
+ * element exists for the event (fail-soft — the page shows an honest dash, never a fabricated price).
  */
 export interface OpenPositionRow {
   marketId: string;

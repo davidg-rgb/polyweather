@@ -1152,6 +1152,34 @@ describe('0112 dash_trading().openPositions — held positions marked to the lat
     expect(v2.rows).toEqual([]);
   });
 
+  it('a ONE-SIDED book marks honestly: missing bid → bid-mark $0 (executable truth), mid → visible-side midpoint', async () => {
+    const { eventId, buckets } = await seedMarket({ slugStem: 'op-oneside', winnerIdx: null });
+    // A: a dead bucket — 5000 sh @ 0.001 ($5), the book has NO bid and a $0.001 ask (the 07-19 live shape).
+    await seedOrder({ marketId: buckets[0]!.conditionId, tokenId: buckets[0]!.tokenYes, matched: 5000, avgPrice: 0.001, createdAt: '2026-07-19T02:00:00Z' });
+    // B: a bid-only book — 10 sh @ 0.30 ($3), bid 0.4 and no ask.
+    await seedOrder({ marketId: buckets[1]!.conditionId, tokenId: buckets[1]!.tokenYes, matched: 10, avgPrice: 0.3, createdAt: '2026-07-19T03:00:00Z' });
+    await seedCapture(eventId, 'op-oneside', [
+      { idx: 0, tokenYes: buckets[0]!.tokenYes, bestAsk: 0.001 }, // no bestBid, no mid
+      { idx: 1, tokenYes: buckets[1]!.tokenYes, bestBid: 0.4 },   // no bestAsk, no mid
+    ]);
+
+    const v = await openPositions();
+    expect(v.rows).toHaveLength(2);
+    const [bidOnly, dead] = v.rows as [OpenPosRow, OpenPosRow]; // newest first buy first
+    // the dead bucket: curBid null (that side IS empty) but the verdict is not hidden —
+    expect(dead.curBid).toBeNull();
+    expect(Number(dead.curAsk)).toBeCloseTo(0.001, 9);
+    expect(Number(dead.curMid)).toBeCloseTo(0.0005, 9);                     // (0 + ask)/2
+    expect(Number(dead.unrealizedMidUsd)).toBeCloseTo(5000 * 0.0005 - 5, 6); // −2.50
+    expect(Number(dead.unrealizedBidUsd)).toBeCloseTo(-5, 6);               // nothing to sell into → −cost
+    // the bid-only bucket: mid falls back to the bid itself
+    expect(Number(bidOnly.curMid)).toBeCloseTo(0.4, 9);
+    expect(Number(bidOnly.unrealizedBidUsd)).toBeCloseTo(10 * 0.4 - 3, 6);  // +1.00
+    // BOTH count as marked — null marks are reserved for "no capture element at all"
+    expect(Number(v.totals.nMarked)).toBe(2);
+    expect(Number(v.totals.unrealizedBidUsd)).toBeCloseTo(-5 + 1, 6);
+  });
+
   it('excludes resolved markets (they are the buyTable won/lost rows), dry-run rows, and zero-matched rows', async () => {
     const resolved = await seedMarket({ slugStem: 'op-res', winnerIdx: 0 });
     await seedOrder({ marketId: resolved.buckets[0]!.conditionId, tokenId: resolved.buckets[0]!.tokenYes, matched: 70, avgPrice: 0.12 });
