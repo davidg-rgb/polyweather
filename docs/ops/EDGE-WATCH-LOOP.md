@@ -21,6 +21,18 @@
 
 _Claude keeps this block current every material cycle. Whole status in 20 seconds._
 
+- **▶▶ 2026-07-19 ~10:15Z — the "wellington bought $10" operator report → an ACCOUNTING bug, not an
+  overspend: FILL-PRICE TRUTH fix shipped + the ledger row corrected to venue reality.** The 00:53Z
+  wellington retry (15-sh FAK, limit 0.34) was filled by the negRisk adapter at a BETTER price:
+  venue trade = **32.179165 sh @ 0.1585 avg = $5.10** (exactly the intended notional; wallet debit
+  confirms — balance $89.48). Our fill poll recorded the LIMIT as the price (getOrder's `price` field
+  is the limit, not the execution average) → a phantom $10.94 notional in the ledger + Slack.
+  Fixed: `postAndRecord` now reads the venue TRADE RECORDS (taker legs by order id) for the
+  size-weighted average — fallback poll price → limit (fail-soft); helsinki/KL were exact-at-limit so
+  unaffected. Prod ledger row corrected ($10.94 → $5.10, fee 0.547 → 0.255, avg 0.34 → 0.1585;
+  venue-verified via public data-api + balance arithmetic). Suite 3,306 green; fn redeployed.
+  NOTE: wellington 14°C sits at cur ~0.02 (likely loss ~$5.10 at 12:00Z) — bought pre-floor-gate;
+  under 0111 it would need the running max to allow 14°C (13.0°C at last read — technically alive).
 - **▶▶ 2026-07-19 ~08:15Z (operator-directed) — TWO FIXED PRICE RULES SHIPPED after the helsinki
   dead-on-arrival buy: the 0111 DEAD-BUCKET FLOOR gate + a HARD non-configurable $0.01 min ask.**
   Operator confirmed the helsinki mechanism ("at purchase time the temperature had already reached 20°C —
