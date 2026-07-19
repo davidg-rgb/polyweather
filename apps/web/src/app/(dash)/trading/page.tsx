@@ -440,7 +440,8 @@ function OpenPositionsPanel({ section }: { section: OpenPositionsSection }): Rea
         price, and the <strong>current</strong> price (mid, with bid/ask beneath) from the newest{' '}
         <span className="mono">opening_captures</span> tick. Win/loss is <strong>unrealized</strong> at the
         mid mark (the <span className="mono">@bid</span> figure is what selling into the book right now would
-        realize) — positions are held to close, so resolution settles each at $1 or $0 regardless.
+        realize — a book with <strong>no bid</strong> marks that at $0, and its mid falls back to the visible
+        side&apos;s midpoint) — positions are held to close, so resolution settles each at $1 or $0 regardless.
       </p>
       {rows.length === 0 ? (
         <p className="muted">No open positions.</p>

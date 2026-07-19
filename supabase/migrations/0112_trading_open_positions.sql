@@ -26,11 +26,16 @@
 --                ex-fee), costUsd (BUY fill cash + fees, released pro-rata by sells at lifetime-average —
 --                the 0084 §1(b) netting), firstBuyAt.
 --              · mark — the LATEST opening_captures tick for the event with a buckets payload, its element
---                matched by tokenYes (preferred) or bucket idx: curBid / curAsk / curMid, markAt (staleness
---                is the reader's signal — captures stop at resolution), resolvesAt.
---              · verdict — valueMidUsd (shares × mid), unrealizedMidUsd (value − cost) and the conservative
---                unrealizedBidUsd (what selling into the current bid would realize vs cost). All null when
---                no mark exists (fail-soft — never a fabricated price).
+--                matched by tokenYes (preferred) or bucket idx: curBid / curAsk (RAW, null = that side of
+--                the book is empty), curMid, markAt (staleness is the reader's signal — captures stop at
+--                resolution), resolvesAt. ONE-SIDED BOOKS (the first live night's dead buckets: no bid,
+--                ask $0.001): curMid falls back to the midpoint of the visible side ((bid|0 + ask|bid)/2)
+--                and the bid-mark treats the missing bid as $0 — the executable truth (nothing to sell
+--                into). Hiding these as "unmarked" understated a near-total loss as null.
+--              · verdict — valueMidUsd (shares × mid-mark), unrealizedMidUsd (value − cost) and the
+--                conservative unrealizedBidUsd (selling into the current bid, $0 when the bid side is
+--                empty, vs cost). All null only when NO capture element exists (fail-soft — a price is
+--                never fabricated without a tick).
 --     totals — { nPositions, nMarked, costUsd, valueMidUsd, valueBidUsd, unrealizedMidUsd,
 --                unrealizedBidUsd, oldestMarkAt } over the enumerated rows (value/unrealized sums cover
 --                MARKED rows only; nMarked vs nPositions surfaces the gap honestly).
@@ -133,14 +138,15 @@ begin
         -- rows — marking them at the last pre-resolution tick would be a fabricated live price.
         where j.winner_idx is null
       ),
-      marked as (
+      raw as (
         -- ONE latest-tick lookup per position (oc_event_captured_idx), then the bucket element by tokenYes
         -- (preferred — capture elements carry it since 0066) or bucket idx. Text-compare idx: never a cast
         -- that could throw inside the console RPC.
         select i.*, oc.captured_at as mark_at, oc.resolves_at,
-               (pb.b ->> 'bestBid')::numeric as cur_bid,
-               (pb.b ->> 'bestAsk')::numeric as cur_ask,
-               (pb.b ->> 'mid')::numeric     as cur_mid
+               (pb.b is not null)            as has_el,
+               (pb.b ->> 'bestBid')::numeric as raw_bid,
+               (pb.b ->> 'bestAsk')::numeric as raw_ask,
+               (pb.b ->> 'mid')::numeric     as raw_mid
         from ident i
         left join lateral (
           select oc.captured_at, oc.resolves_at, oc.buckets
@@ -157,6 +163,23 @@ begin
           order by ((b.value ->> 'tokenYes') = i.token_id) desc
           limit 1
         ) pb on true
+      ),
+      marked as (
+        -- the display/verdict marks. ONE-SIDED book semantics (dead buckets): a live element with an empty
+        -- bid side marks sellable value at $0 (executable truth), and the mid-mark falls back to the
+        -- midpoint of the visible side — null marks are reserved for "no capture element at all".
+        select r.*,
+               r.raw_bid as cur_bid,
+               r.raw_ask as cur_ask,
+               case
+                 when not r.has_el then null
+                 when r.raw_mid is not null then r.raw_mid
+                 when r.raw_bid is not null or r.raw_ask is not null
+                   then (coalesce(r.raw_bid, 0) + coalesce(r.raw_ask, r.raw_bid, 0)) / 2
+                 else null
+               end as cur_mid,
+               case when r.has_el then coalesce(r.raw_bid, 0) end as eff_bid
+        from raw r
       )
       select jsonb_build_object(
         'rows', coalesce(jsonb_agg(jsonb_build_object(
@@ -180,16 +203,16 @@ begin
           'resolvesAt',       m.resolves_at,
           'valueMidUsd',      case when m.cur_mid is null then null else round(m.shares * m.cur_mid, 6) end,
           'unrealizedMidUsd', case when m.cur_mid is null then null else round(m.shares * m.cur_mid - m.cost_usd, 6) end,
-          'unrealizedBidUsd', case when m.cur_bid is null then null else round(m.shares * m.cur_bid - m.cost_usd, 6) end
+          'unrealizedBidUsd', case when m.eff_bid is null then null else round(m.shares * m.eff_bid - m.cost_usd, 6) end
         ) order by m.first_buy_at desc nulls last), '[]'::jsonb),
         'totals', jsonb_build_object(
           'nPositions',       count(*),
           'nMarked',          count(*) filter (where m.cur_mid is not null),
           'costUsd',          coalesce(round(sum(m.cost_usd), 6), 0),
           'valueMidUsd',      coalesce(round(sum(m.shares * m.cur_mid), 6), 0),
-          'valueBidUsd',      coalesce(round(sum(m.shares * m.cur_bid), 6), 0),
+          'valueBidUsd',      coalesce(round(sum(m.shares * m.eff_bid), 6), 0),
           'unrealizedMidUsd', coalesce(round(sum(m.shares * m.cur_mid - m.cost_usd) filter (where m.cur_mid is not null), 6), 0),
-          'unrealizedBidUsd', coalesce(round(sum(m.shares * m.cur_bid - m.cost_usd) filter (where m.cur_bid is not null), 6), 0),
+          'unrealizedBidUsd', coalesce(round(sum(m.shares * m.eff_bid - m.cost_usd) filter (where m.eff_bid is not null), 6), 0),
           'oldestMarkAt',     min(m.mark_at)
         )
       )
