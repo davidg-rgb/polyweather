@@ -504,6 +504,19 @@ describe('buy-table-tick — the 0102 entry rules (verification semantics)', () 
     expect(fill!.dedupeKey).toMatch(/^buy-table-fill:/); // per-order key — every distinct buy pushes once
   });
 
+  it('0110: a SUB-CENT fill price renders exactly — never "@ 0.00" (the 07-19 helsinki 0.001 case)', async () => {
+    const h = harness(
+      { mode: 'live', preflightOk: true, captures: [capture({ eventId: 'ev-1', ask: 0.001, hoursToClose: 6 })] },
+      'live',
+      { getOrder: async () => ({ status: 'matched', original_size: 5000, size_matched: 5000, price: 0.001 }) },
+    );
+    await buyTableTick(h.ctx, h.deps);
+    const fill = h.alerts.find((a) => a.kind === 'BUY_TABLE_FILLED');
+    expect(fill).toBeDefined();
+    expect(fill!.body).toContain('5000 sh @ 0.001 = $5.00');
+    expect(fill!.body).not.toContain('@ 0.00 ');
+  });
+
   it('0110: dry-run records the intent but pushes NO fill alert (no fill exists off-venue)', async () => {
     const h = harness(
       { mode: 'off', captures: [capture({ eventId: 'ev-1', ask: 0.12, hoursToClose: 6 })] },

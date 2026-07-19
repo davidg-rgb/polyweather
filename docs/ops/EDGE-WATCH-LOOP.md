@@ -21,6 +21,20 @@
 
 _Claude keeps this block current every material cycle. Whole status in 20 seconds._
 
+- **▶▶ 2026-07-19 ~01:00Z — FIRST CONTINUOUS-MODE WINDOW: 2 fills at the OPENING TICK (00:03Z), Slack
+  delivery PROVEN end-to-end; 1 wellington zero-fill reconciled venue-verified.** Fills: **kuala-lumpur 32°C
+  17 sh @ 0.29 = $4.93** · **helsinki 19°C 5000 sh @ 0.001 = $5.00** — both pushed to Slack `sent=true`
+  (the webhook's first delivery since 07-12). The helsinki buy is the cheap-longshot fingerprint on full
+  display: our house argmax says 19°C, the market says ~0.05% (marked −50% within the hour) — $5 bounded,
+  resolves 12:00Z; watch whether the house seed (`ensemble_raw`) is stale/miscentered for helsinki before
+  reading it as bad luck. Wellington: 00:23Z FAK @ 0.34 got venue order 0x2d2a…7db1 but the fill poll threw →
+  row held 'placed'/0 (fail-safe; the failure alerts were C16-suppressed unrecorded, as configured). Venue
+  truth established via PUBLIC reads (data-api: NO wellington position; pUSD $94.73 = exact no-fill
+  arithmetic) → row adjudicated `canceled` ~00:45Z (the F1 outcome the failed poll blocked; C18 reconcile
+  precedent + the standing continuous-buying order) — wellington retryable (attempt 2/3) while the window
+  runs to 10:00Z. Also fixed+redeployed: sub-cent fill prices rendered "@ 0.00" in the Slack body
+  (toFixed(2)) — now exact ("@ 0.001"). Positions now: ankara 07-19 6 sh @ 0.44 (cur 0.65, +48%!) ·
+  KL 17 sh @ 0.29 · helsinki 5000 sh @ 0.001 · old 07-05 karachi dust (1.9 sh, worthless). Balance $94.73.
 - **▶▶ 2026-07-18 ~18:25Z (operator-directed) — SLACK RE-OPENED FOR BUY FILLS ONLY (C16 narrowed by exactly
   one kind, not lifted).** Operator: "Open up slack to push info on buy orders, what was bought and at what
   price." No fill-success alert kind existed (0095's kinds are all failure classes) → built `BUY_TABLE_FILLED`
