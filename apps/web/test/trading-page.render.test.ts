@@ -79,6 +79,8 @@ const FIXTURE = {
   openExposureUsd: '20.00',
   today: { buyUsd: '20.00', sellUsd: '2.00', feeUsd: '0.00', netUsd: '-18.00', lossUsd: '18.00', lossWindowStart: '2026-07-05T00:00:00Z', nFills: 3 },
   dryRun: { openOrders: 4, total: 37 },
+  // 0113: the venue account snapshot behind the Account overview strip (cash + venue marks).
+  accountFunds: { cashUsd: '18.25', positionsValueUsd: '4.10', nPositions: 4, capturedAt: '2026-07-05T08:55:00Z', note: null },
   // 0112: the held-position ledger — one MARKED winner-so-far (Ankara, up at the mid) + one unmarked
   // position (Helsinki — no capture → the honest "no mark" cell, excluded from the value sums).
   openPositions: {
@@ -202,6 +204,18 @@ describe('/trading page renders', () => {
     expect(html).toContain('72%'); // 18 / min(30,25)=25 = 0.72
     expect(html).toContain('net cashflow');
     expect(html).toContain('no per-fill rows in this payload');
+
+    // 2026-07-19 overview rework: quick-nav anchors + the Account overview strip (0113 venue snapshot fused
+    // with our ledger figures) lead the console.
+    expect(html).toContain('href="#positions"');
+    expect(html).toContain('href="#controls"');
+    expect(html).toContain('Account overview');
+    expect(html).toContain('Total account value');
+    expect(html).toContain('$22.35'); // venue cash 18.25 + venue marks 4.10
+    expect(html).toContain('$18.25'); // Venue cash tile
+    expect(html).toContain('4 holdings'); // data-api position count
+    expect(html).not.toContain('account snapshot unavailable'); // funds present — no staged-dark note
+    expect(html).toContain('Diagnostics &amp; audit'); // the collapsed tail summary
 
     // 0112: the held-position ledger — identity (city + temperature bucket), entry vs current price, and
     // the unrealized win/loss; the unmarked Helsinki row renders the honest "no mark" cell.
@@ -375,6 +389,8 @@ describe('/trading page renders', () => {
     // 0112: a payload WITHOUT openPositions (pre-0112 dash_trading) degrades to the explicit staged-dark
     // note while the cap-enforcement exposure map still renders — never a false empty state.
     expect(html).toContain('0112 not applied');
+    // 0113: no accountFunds on the lean payload → the strip renders its honest unavailable note.
+    expect(html).toContain('account snapshot unavailable');
     // 0096: a payload WITHOUT buyTable (pre-0096 dash_trading) degrades to the explicit staged-dark note —
     // the section header still renders, never a false empty state.
     expect(html).toContain('Buy-table positions');

@@ -18,6 +18,7 @@
  */
 import type { ReactElement } from 'react';
 import type {
+  AccountFunds,
   BuyTablePositionRow,
   BuyTableSection,
   CityLiveTwin,
@@ -517,6 +518,83 @@ function OpenPositionsPanel({ section }: { section: OpenPositionsSection }): Rea
   );
 }
 
+// ─── ACCOUNT OVERVIEW (0113) — the money-at-a-glance strip the console leads with ────────────────────────
+
+/**
+ * The account strip: venue cash + venue position marks (account_funds/0113, strictly fail-soft) fused with
+ * OUR ledger's cost/unrealized/today figures (0112 + dash_trading — always available). The two mark sources
+ * legitimately differ (venue marks vs our capture-stream mid) — both are shown, neither is hidden.
+ */
+function AccountOverview({ funds, view }: { funds: AccountFunds | null; view: TradingView }): ReactElement {
+  const cash = num(funds?.cashUsd);
+  const posVal = num(funds?.positionsValueUsd);
+  const nPos = num(funds?.nPositions);
+  const total = cash != null || posVal != null ? (cash ?? 0) + (posVal ?? 0) : null;
+  const t = view.openPositions?.totals;
+  const cost = num(t?.costUsd);
+  const unrealMid = num(t?.unrealizedMidUsd);
+  const unrealBid = num(t?.unrealizedBidUsd);
+  const todayNet = num(view.today?.netUsd);
+  return (
+    <>
+      <div className="strip">
+        <div className="tile rec">
+          <div className="tile-head">
+            <span className="cap">Total account value</span>
+            <span className="chip soft">{funds?.capturedAt ? fmtAgo(funds.capturedAt) : 'no snapshot'}</span>
+          </div>
+          <div className="big" style={{ color: total != null ? SKY : MUTED }}>
+            {total != null ? fmtUsd(total) : '—'}
+          </div>
+          <div className="sub">venue cash + venue position marks (account-snapshot, */30min)</div>
+        </div>
+        <div className="tile">
+          <div className="cap">Venue cash</div>
+          <div className="big" style={{ fontSize: '1.5rem' }}>{cash != null ? fmtUsd(cash) : '—'}</div>
+          <div className="sub">CLOB collateral balance</div>
+        </div>
+        <div className="tile">
+          <div className="cap">Positions · venue mark</div>
+          <div className="big" style={{ fontSize: '1.5rem' }}>{posVal != null ? fmtUsd(posVal) : '—'}</div>
+          <div className="sub">{nPos != null ? `${nPos} holding${nPos === 1 ? '' : 's'} per the venue data-api` : 'data-api positions'}</div>
+        </div>
+        <div className="tile">
+          <div className="cap">Cost deployed</div>
+          <div className="big" style={{ fontSize: '1.5rem' }}>{cost != null ? fmtUsd(cost) : fmtUsd(view.openExposureUsd)}</div>
+          <div className="sub">our ledger (fills + fees, sells netted)</div>
+        </div>
+        <div className="tile">
+          <div className="cap">Unrealized (our mark)</div>
+          <div className="big" style={{ fontSize: '1.5rem', color: (unrealMid ?? 0) >= 0 ? GREEN : RED }}>
+            {unrealMid == null ? '—' : signedUsd(unrealMid)}
+          </div>
+          <div className="sub">at mid · {unrealBid == null ? '—' : signedUsd(unrealBid)} @bid</div>
+        </div>
+        <div className="tile">
+          <div className="cap">Today · net cashflow</div>
+          <div className="big" style={{ fontSize: '1.5rem', color: (todayNet ?? 0) >= 0 ? GREEN : RED }}>
+            {todayNet == null ? '—' : signedUsd(todayNet)}
+          </div>
+          <div className="sub">sell − buy − fees (LIVE fills)</div>
+        </div>
+      </div>
+      {funds == null ? (
+        <p className="muted small">
+          <strong style={{ color: AMBER }}>account snapshot unavailable</strong> — the{' '}
+          <span className="mono">account_funds()</span> RPC (migration{' '}
+          <span className="mono">0113_account_snapshot.sql</span> + the{' '}
+          <span className="mono">account-snapshot</span> edge fn) is not applied/deployed or failed this read.
+          The venue tiles show — until the first snapshot lands; every other figure is our own ledger.
+        </p>
+      ) : funds.note ? (
+        <p className="muted small" title="why a venue field is null, verbatim from the snapshot fn">
+          snapshot note: <span className="mono">{funds.note}</span>
+        </p>
+      ) : null}
+    </>
+  );
+}
+
 /** The cap-enforcement view: total exposure + per-market cost-basis from the preflight checks payload
  * (also counts unfilled resting commitments, so it can legitimately exceed the held-position cost above). */
 function ExposureSection({ checks, openExposureUsd }: { checks: TradePreflightChecks; openExposureUsd: unknown }): ReactElement {
@@ -949,28 +1027,20 @@ export default async function TradingPage(): Promise<ReactElement> {
 
       <VerdictBanner config={config} preflight={preflight} />
 
-      <h2>Risk caps</h2>
-      {config ? <CapsStrip config={config} /> : <p className="muted">No config row.</p>}
+      {/* the console's quick-nav (2026-07-19 overview rework): the page is long — one row of anchors
+          beats scrolling. Native anchors, no client JS. */}
+      <p className="small" style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', margin: '0.6rem 0' }}>
+        <a className="pill" href="#account" style={{ textDecoration: 'none' }}>Account</a>
+        <a className="pill" href="#positions" style={{ textDecoration: 'none' }}>Positions &amp; orders</a>
+        <a className="pill" href="#controls" style={{ textDecoration: 'none' }}>Buy controls</a>
+        <a className="pill" href="#risk" style={{ textDecoration: 'none' }}>Risk &amp; gate</a>
+        <a className="pill" href="#analytics" style={{ textDecoration: 'none' }}>Diagnostics</a>
+      </p>
 
-      <h2>Interlock gate</h2>
-      {preflight ? <GateTiles checks={preflight.checks} /> : <p className="muted">No preflight payload.</p>}
-      {/* The override set/renew/clear control (2026-07-12): the gate branch's operator escape hatch was
-          display-only — an expiring override could not be renewed remotely. Rendered even without a
-          preflight payload (state degrades to "none") so a failed dash read never hides the control. */}
-      <GateOverridePanel
-        active={preflight?.checks.override ?? false}
-        reason={preflight?.checks.overrideReason ?? null}
-        expiresAt={preflight?.checks.overrideExpiresAt ?? null}
-      />
+      <h2 id="account">Account overview</h2>
+      <AccountOverview funds={view.accountFunds} view={view} />
 
-      <h2>Daily-loss kill</h2>
-      {preflight ? (
-        <KillSection checks={preflight.checks} today={view.today} />
-      ) : (
-        <p className="muted">No preflight payload.</p>
-      )}
-
-      <h2>Open positions &amp; exposure</h2>
+      <h2 id="positions">Open positions &amp; exposure</h2>
       {/* 0112: the held-position ledger marked to the latest captured book (what was bought, entry vs
           current price, unrealized win/loss). Degrades to its own staged-dark note while openPositions is
           absent; the per-market cap-enforcement table below renders in BOTH states. */}
@@ -997,7 +1067,7 @@ export default async function TradingPage(): Promise<ReactElement> {
         <p className="muted small" style={{ marginTop: 0 }}>
           Open live orders only (status intent/placed/partial). Terminal/filled orders and ALL dry-run rows are not
           enumerated in <span className="mono">dash_trading()</span> — fills appear only as today&apos;s aggregate
-          counts above.
+          counts (the Account overview strip + the Daily-loss section under Risk).
         </p>
         <OrdersTable orders={view.openOrders} />
       </div>
@@ -1027,20 +1097,9 @@ export default async function TradingPage(): Promise<ReactElement> {
         )}
       </div>
 
-      <h2>Dry-run shadow rail</h2>
-      <DryRunTiles dryRun={view.dryRun} />
-
-      <h2>Config change log</h2>
-      <div className="panel">
-        <p className="muted small" style={{ marginTop: 0 }}>
-          Append-only whole-config audit trail (last 20 changes). <span className="mono">by (role)</span> is the
-          effective DB role at write time (service_role for a direct write; the definer owner for an operator RPC),
-          not a person.
-        </p>
-        <AuditTable rows={view.recentAudit} />
-      </div>
-
-      <h2>Trade config control</h2>
+      {/* the "add to my running buys" cluster — stake/window/allowlist + the purchase-price caps, directly
+          under the positions they steer (2026-07-19 overview rework; components unchanged, only regrouped). */}
+      <h2 id="controls">Trade config control</h2>
       {config ? (
         <TradeConfigEditor config={config} cityOptions={cityOptions} />
       ) : (
@@ -1057,6 +1116,47 @@ export default async function TradingPage(): Promise<ReactElement> {
         cityOptions={cityOptions}
         liveCycles={view.buyTable?.liveCycles ?? null}
       />
+
+      <h2 id="risk">Risk caps</h2>
+      {config ? <CapsStrip config={config} /> : <p className="muted">No config row.</p>}
+
+      <h2>Interlock gate</h2>
+      {preflight ? <GateTiles checks={preflight.checks} /> : <p className="muted">No preflight payload.</p>}
+      {/* The override set/renew/clear control (2026-07-12): the gate branch's operator escape hatch was
+          display-only — an expiring override could not be renewed remotely. Rendered even without a
+          preflight payload (state degrades to "none") so a failed dash read never hides the control. */}
+      <GateOverridePanel
+        active={preflight?.checks.override ?? false}
+        reason={preflight?.checks.overrideReason ?? null}
+        expiresAt={preflight?.checks.overrideExpiresAt ?? null}
+      />
+
+      <h2>Daily-loss kill</h2>
+      {preflight ? (
+        <KillSection checks={preflight.checks} today={view.today} />
+      ) : (
+        <p className="muted">No preflight payload.</p>
+      )}
+
+      {/* the diagnostics tail, collapsed by default (2026-07-19 overview rework): everything renders (native
+          details — no client JS, static markup keeps every string testable), it just stops dominating the page. */}
+      <details id="analytics">
+        <summary className="cap" style={{ cursor: 'pointer', margin: '1rem 0 0.5rem' }}>
+          Diagnostics &amp; audit — dry-run shadow rail · config change log
+        </summary>
+        <h2>Dry-run shadow rail</h2>
+        <DryRunTiles dryRun={view.dryRun} />
+
+        <h2>Config change log</h2>
+        <div className="panel">
+          <p className="muted small" style={{ marginTop: 0 }}>
+            Append-only whole-config audit trail (last 20 changes). <span className="mono">by (role)</span> is the
+            effective DB role at write time (service_role for a direct write; the definer owner for an operator RPC),
+            not a person.
+          </p>
+          <AuditTable rows={view.recentAudit} />
+        </div>
+      </details>
 
       <h2>Winners board — front the winners</h2>
       {cityLive.kind === 'ok' ? (

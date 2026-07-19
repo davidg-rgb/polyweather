@@ -514,6 +514,10 @@ describe('migrations 0001–0010', () => {
       // current price + unrealized P&L for the /trading "Open positions & exposure" section. Read-only
       // re-statement of the one function; no table/cron change (count stays 35).
       '0112_trading_open_positions.sql',
+      // the /trading account overview: single-row account_snapshot (venue cash + data-api position marks,
+      // upserted by the account-snapshot edge fn on 9,39 * * * *) + the fail-soft account_funds() RPC the
+      // loader merges via allSettled (the 0099 decoupling law). Cron 35 → 36.
+      '0113_account_snapshot.sql',
     ]);
   });
 });
@@ -1013,6 +1017,7 @@ describe('0034: internal-RPC lockdown — anon/authenticated revoked except the 
     'buy_table_price_cap_set',  // 0097: operator-guarded global buy_table.price_cap write (self-guards)
     'buy_table_live_cycles',  // 0099/0100: /trading live-cycle lo/hi columns operator read (fail-soft, self-guards)
     'dash_city_predictions',  // 0106: /cities prediction table operator read (open markets + per-city success rates; self-guards)
+    'account_funds',  // 0113: /trading account-overview venue snapshot read (fail-soft, self-guards via operator_guard)
     'go_live_gate_inputs',
     'operator_halt', 'operator_resume', 'operator_update_config', 'operator_verify_station',
     'operator_set_champion', 'operator_skip_bet', 'operator_manual_bet',
@@ -1162,8 +1167,11 @@ describe('pg_cron registrations (§7.22, W11)', () => {
       'buy-table-tick':           '3,13,23,33,43,53 * * * *',
       // 0095: the lane deadman (pure-SQL cron like the 0066/0089 deadmen — excluded from W11 below).
       'buy-table-deadman':        '*/15 * * * *',
+      // 0113: the /trading account-overview snapshot (venue cash + data-api marks) — 9,39 avoids every
+      // contended/occupied minute lane (C15).
+      'account-snapshot':         '9,39 * * * *',
     };
-    expect(jobs.length).toBe(35);
+    expect(jobs.length).toBe(36);
     for (const j of jobs) {
       expect(j.schedule, `schedule for ${j.jobname}`).toBe(expected[j.jobname]);
     }
