@@ -61,29 +61,36 @@ SLUG2ICAO = {
 
 
 def parse_temp(label):
-    """(kind, value) from a bucket label; kind in exact|below|above (city-buy-table.py mirror)."""
-    m = re.search(r"(-?\d+)", str(label))
+    """(kind, lo, hi) from a bucket label; kind in exact|below|above (city-buy-table.py mirror). °F labels
+    are 2-degree BANDS ("86-87°F") — the pre-2026-07-19 first-integer parse matched only the LOW edge, so
+    a °F prediction landing on the band's upper degree missed its bucket (PERSISTENCE-BLEND.md rails)."""
+    s = str(label)
+    ll = s.lower()
+    mr = re.search(r"(-?\d+)\s*-\s*(-?\d+)", s)
+    m = re.search(r"(-?\d+)", s)
     if not m:
         return None
-    v = int(m.group(1))
-    ll = str(label).lower()
     if any(w in ll for w in ("below", "lower", "under", "colder")):
-        return ("below", v)
+        return ("below", int(m.group(1)), int(m.group(1)))
     if any(w in ll for w in ("higher", "above", "over", "hotter")):
-        return ("above", v)
-    return ("exact", v)
+        return ("above", int(m.group(1)), int(m.group(1)))
+    if mr:
+        lo, hi = int(mr.group(1)), int(mr.group(2))
+        return ("exact", min(lo, hi), max(lo, hi))
+    v = int(m.group(1))
+    return ("exact", v, v)
 
 
 def choose(buckets, pred_int):
-    """Pick the bucket idx whose native-degree range contains pred_int; buckets: (idx,kind,val)."""
-    for idx, k, v in buckets:
-        if k == "exact" and v == pred_int:
+    """Pick the bucket idx whose native-degree range CONTAINS pred_int; buckets: (idx,kind,lo,hi)."""
+    for idx, k, lo, hi in buckets:
+        if k == "exact" and lo <= pred_int <= hi:
             return idx
-    for idx, k, v in buckets:
-        if k == "below" and pred_int <= v:
+    for idx, k, lo, _hi in buckets:
+        if k == "below" and pred_int <= lo:
             return idx
-    for idx, k, v in buckets:
-        if k == "above" and pred_int >= v:
+    for idx, k, lo, _hi in buckets:
+        if k == "above" and pred_int >= lo:
             return idx
     return None
 
@@ -106,10 +113,12 @@ def load_causal(path, lead):
 
 
 def selftest():
-    assert parse_temp("15C") == ("exact", 15)
-    assert parse_temp("7C or below") == ("below", 7)
-    bks = [(0, "below", 7), (1, "exact", 15), (2, "above", 17)]
-    assert choose(bks, 15) == 1 and choose(bks, 3) == 0 and choose(bks, 20) == 2
+    assert parse_temp("15C") == ("exact", 15, 15)
+    assert parse_temp("7C or below") == ("below", 7, 7)
+    assert parse_temp("86-87F") == ("exact", 86, 87)  # the °F 2-degree band
+    bks = [(0, "below", 7, 7), (1, "exact", 14, 15), (2, "above", 17, 17)]
+    assert choose(bks, 15) == 1 and choose(bks, 14) == 1  # both band edges contained
+    assert choose(bks, 3) == 0 and choose(bks, 20) == 2
     assert band_of(0.12) == "10-15c" and band_of(0.05) == "5-10c" and band_of(0.60) is None
     cost_model.selftest()
     # all-in cost at a knot: exec 0.138 + fee 0.05*0.138*0.862
@@ -183,13 +192,13 @@ def main():
                 j = min(max(j, 0), len(ts) - 1)
                 if j > 0 and abs(ts[j - 1] - targ) < abs(ts[j] - targ):
                     j -= 1
-                meta.append((int(idx), pt[0], pt[1]))
+                meta.append((int(idx), pt[0], pt[1], pt[2]))
                 mids[int(idx)] = float(ps[j])
                 outcomes[int(idx)] = str(bg.resolved_outcome.iloc[0])
             if not any(v == "win" for v in outcomes.values()):
                 continue  # unresolved / grading-ambiguous event
             pred_idx = choose(meta, int(cnat))
-            for idx, _k, _v in meta:
+            for idx, _k, _lo, _hi in meta:
                 mid = mids[idx]
                 band = band_of(mid)
                 if band is None:

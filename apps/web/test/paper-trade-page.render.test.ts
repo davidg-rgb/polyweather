@@ -57,8 +57,9 @@ describe('/paper-trade page renders — buy table + live forward ledger + 45-Cit
     // the honest no-edge verdict with the calibrated-book pooled figures
     expect(html).toContain('Per-city buy table');
     expect(html).toContain('Verdict: no demonstrable edge');
-    expect(html).toContain('-9.2pp'); // pooled ROI (ASCII hyphen via fmtDelta) — pinned by the asset tests too
-    expect(html).toContain('$51'); // pooled net magnitude (signedUsd prefixes a U+2212 minus)
+    // 2026-07-19 °F band-parse fix: ~27 recovered °F picks → 82 bets, +2.4pp/+$20 — still a wash (CI ±50pp)
+    expect(html).toContain('+2.4pp'); // pooled ROI (fmtDelta) — pinned by the asset tests too
+    expect(html).toContain('$20'); // pooled net magnitude
     expect(html).toContain('calibrated book');
     expect(html).toContain('signal #12');
     expect(html).toContain('already falsified');

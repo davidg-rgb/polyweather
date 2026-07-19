@@ -3,9 +3,9 @@
  * backtest of "$10 on our predicted high, bought cheap (ask ≤ 0.15), held to close", rendered by /paper-trade.
  * Mirrors city-scan-results.test.ts's discipline: guard the frozen record's structural invariants + golden
  * values so a bad regenerate/hand-edit can't silently ship a number the source (scripts/research/city-buy-table.py
- * + MARKET-PNL.md) doesn't support — including that the VERDICT it renders is genuinely a net loss, the pooled
- * totals reconcile with the per-city rows, the rows are sorted best→worst, and the sweet-spot lead really is the
- * max-lower-bound entry.
+ * + MARKET-PNL.md) doesn't support — including that the VERDICT it renders genuinely demonstrates NO edge
+ * (an underpowered wash: every day-clustered lower bound deep below zero), the pooled totals reconcile with
+ * the per-city rows, the rows are sorted best→worst, and the sweet-spot lead really is the max-lower-bound entry.
  */
 import { describe, expect, it } from 'vitest';
 import { CITY_BUY_TABLE } from '../src/sim/city-buy-table-results.ts';
@@ -18,7 +18,7 @@ describe('city-buy-table-results record', () => {
       expect(B.params.stake).toBe(10);
       expect(B.params.cheapMax).toBe(0.15);
       expect(B.params.book).toBe('calibrated'); // the CANONICAL CALIBRATED_BOOK cost basis (cost_model.py)
-      expect(B.params.sweetLeadH).toBe(12);
+      expect(B.params.sweetLeadH).toBe(48);
       expect(B.params.forecastLead).toBe(1);
       expect(B.params.leadsH).toEqual([48, 24, 12, 6]);
       expect(B.params.leadsH).toContain(B.params.sweetLeadH);
@@ -36,12 +36,15 @@ describe('city-buy-table-results record', () => {
       }
     });
 
-    it('every well-populated lead (bets ≥ 10) has a negative point estimate; tiny-n rows are noise, not signal', () => {
+    it('every well-populated lead (bets ≥ 10) is an underpowered WASH: lower bound tens of points below zero', () => {
+      // 2026-07-19 °F-band parser fix: ~27 previously mis-mapped °F picks joined the population and the
+      // 48h point estimate drifted (just) positive — the invariant that matters is unchanged: no lead's
+      // day-clustered lower bound comes anywhere NEAR zero, so nothing here demonstrates an edge.
       const populated = B.leadCurve.filter((l) => l.bets >= 10);
       expect(populated.length).toBeGreaterThanOrEqual(3); // the record must carry real leads, not only flukes
       for (const l of populated) {
-        expect(l.roiPct, `roi @${l.leadH}h`).toBeLessThan(0);
-        expect(l.netUsd, `net @${l.leadH}h`).toBeLessThan(0);
+        expect(l.ciPct[0], `day-CI lower bound @${l.leadH}h`).toBeLessThan(-20);
+        expect(Math.abs(l.roiPct), `wash-sized point estimate @${l.leadH}h`).toBeLessThan(25);
       }
     });
 
@@ -147,26 +150,28 @@ describe('city-buy-table-results record', () => {
     });
   });
 
-  describe('the verdict it renders is a net loss (efficiency signature)', () => {
-    it('pooled ROI is negative and the point estimate leans well below zero', () => {
-      expect(B.pooled.roiPct).toBeLessThan(0);
-      expect(B.pooled.netUsd).toBeLessThan(0);
+  describe('the verdict it renders demonstrates NO edge (efficiency signature)', () => {
+    it('the pooled sweet-spot read is a wash whose day-clustered lower bound sits deep below zero', () => {
+      const sweet = B.leadCurve.find((l) => l.leadH === B.params.sweetLeadH)!;
+      expect(sweet.ciPct[0]).toBeLessThan(-20); // nothing NEAR a demonstrated edge
+      expect(Math.abs(B.pooled.roiPct)).toBeLessThan(25); // wash-sized point estimate, not a real return
     });
 
     it('win rate does not clear the breakeven the entry price demands', () => {
       const breakevenPct = B.pooled.avgAsk * 100;
-      expect(B.pooled.winPct).toBeLessThan(breakevenPct + 1); // ~at/under breakeven → net loss after the spread
+      expect(B.pooled.winPct).toBeLessThan(breakevenPct + 1); // ~at/under breakeven → a wash after the spread
     });
 
-    it('golden headline figures (2026-07-09 record, calibrated book + taker fee)', () => {
-      // The legacy mid+1c record read −28.2%/−$977 on 347 bets — but the calibrated book shows most of that
-      // population was never fillable at $10 (cheap-zone walked depth $4–$24). The honest executable record
-      // is a small, underpowered, negative-leaning wash: signal #12 stays dead either way.
-      expect(B.pooled.roiPct).toBe(-9.2);
-      expect(B.pooled.netUsd).toBe(-51);
-      expect(B.pooled.bets).toBe(55);
-      expect(B.pooled.nCitiesPositive).toBe(6);
-      expect(B.universe.nCities).toBe(33);
+    it('golden headline figures (2026-07-19 record: calibrated book + taker fee + the °F band-parse fix)', () => {
+      // The legacy mid+1c record read −28.2%/−$977 on 347 bets; the calibrated book (2026-07-09) collapsed
+      // that to a 55-bet negative-leaning wash (−9.2%). The 2026-07-19 °F 2-degree-band parser fix restored
+      // ~27 mis-mapped °F picks → 82 bets and a +2.4% point estimate with day-CI [−52.3, +60.5] — STILL an
+      // underpowered wash, still no demonstrated edge: signal #12 stays dead in every version of the record.
+      expect(B.pooled.roiPct).toBe(2.4);
+      expect(B.pooled.netUsd).toBe(20);
+      expect(B.pooled.bets).toBe(82);
+      expect(B.pooled.nCitiesPositive).toBe(10);
+      expect(B.universe.nCities).toBe(36);
       expect(B.universe.nCitiesTotal).toBeGreaterThanOrEqual(B.universe.nCities);
     });
   });

@@ -56,29 +56,37 @@ SLUG2ICAO = {
 
 
 def parse_temp(label):
-    """(kind, value) from a bucket label; kind in exact|below|above. Robust to the ° encoding."""
-    m = re.search(r"(-?\d+)", str(label))
+    """(kind, lo, hi) from a bucket label; kind in exact|below|above. °F labels are 2-degree BANDS
+    ("86-87°F") — the pre-2026-07-19 first-integer parse matched only the LOW edge, so a °F prediction
+    landing on the band's upper degree missed its bucket (PERSISTENCE-BLEND.md rails; core parseBucketLabel
+    always handled ranges — this brings the research mirror in line)."""
+    s = str(label)
+    ll = s.lower()
+    mr = re.search(r"(-?\d+)\s*-\s*(-?\d+)", s)
+    m = re.search(r"(-?\d+)", s)
     if not m:
         return None
-    v = int(m.group(1))
-    ll = str(label).lower()
     if any(w in ll for w in ("below", "lower", "under", "colder")):
-        return ("below", v)
+        return ("below", int(m.group(1)), int(m.group(1)))
     if any(w in ll for w in ("higher", "above", "over", "hotter")):
-        return ("above", v)
-    return ("exact", v)
+        return ("above", int(m.group(1)), int(m.group(1)))
+    if mr:
+        lo, hi = int(mr.group(1)), int(mr.group(2))
+        return ("exact", min(lo, hi), max(lo, hi))
+    v = int(m.group(1))
+    return ("exact", v, v)
 
 
 def choose(buckets, pred_int):
-    """Pick the bucket whose native-degree range contains pred_int. buckets: list of (idx,kind,val,resolved)."""
-    for idx, k, v, r in buckets:
-        if k == "exact" and v == pred_int:
+    """Pick the bucket whose native-degree range CONTAINS pred_int. buckets: (idx,kind,lo,hi,resolved)."""
+    for idx, k, lo, hi, r in buckets:
+        if k == "exact" and lo <= pred_int <= hi:
             return (idx, r)
-    for idx, k, v, r in buckets:
-        if k == "below" and pred_int <= v:
+    for idx, k, lo, _hi, r in buckets:
+        if k == "below" and pred_int <= lo:
             return (idx, r)
-    for idx, k, v, r in buckets:
-        if k == "above" and pred_int >= v:
+    for idx, k, lo, _hi, r in buckets:
+        if k == "above" and pred_int >= lo:
             return (idx, r)
     return None
 
@@ -89,11 +97,13 @@ def bet_pnl(price_buy, won, stake):
 
 
 def selftest():
-    assert parse_temp("15�C") == ("exact", 15)
-    assert parse_temp("7�C or below") == ("below", 7)
-    assert parse_temp("17�C or higher") == ("above", 17)
-    bks = [(0, "below", 7, "lose"), (1, "exact", 15, "win"), (2, "above", 17, "lose")]
+    assert parse_temp("15�C") == ("exact", 15, 15)
+    assert parse_temp("7�C or below") == ("below", 7, 7)
+    assert parse_temp("17�C or higher") == ("above", 17, 17)
+    assert parse_temp("86-87�F") == ("exact", 86, 87)  # the °F 2-degree band
+    bks = [(0, "below", 7, 7, "lose"), (1, "exact", 14, 15, "win"), (2, "above", 17, 17, "lose")]
     assert choose(bks, 15) == (1, "win")          # exact
+    assert choose(bks, 14) == (1, "win")          # BOTH band edges contained (the pre-fix miss)
     assert choose(bks, 3) == (0, "lose")          # falls in the low tail
     assert choose(bks, 20) == (2, "lose")         # falls in the high tail
     assert abs(bet_pnl(0.25, True, 10) - 30.0) < 1e-9   # $10 at 0.25 wins -> +$30
@@ -159,8 +169,8 @@ def main():
                     continue
                 s = bg.sort_values("t")
                 paths[int(idx)] = (s.t.values.astype(np.int64), s.p.values.astype(float))
-                meta.append((int(idx), pt[0], pt[1], bg.resolved_outcome.iloc[0]))
-            if not any(m[3] == "win" for m in meta):
+                meta.append((int(idx), pt[0], pt[1], pt[2], bg.resolved_outcome.iloc[0]))
+            if not any(m[4] == "win" for m in meta):
                 continue
 
             def price_at(idx, targ):
@@ -189,7 +199,7 @@ def main():
                 rec[f"arch_p{off}"] = price_at(apick[0], targ) if apick else np.nan
                 fav = max(meta, key=lambda m: price_at(m[0], targ))
                 rec[f"fav_p{off}"] = price_at(fav[0], targ)
-                rec[f"fav_won{off}"] = (fav[3] == "win")
+                rec[f"fav_won{off}"] = (fav[4] == "win")
             rows.append(rec)
 
     b = pd.DataFrame(rows)

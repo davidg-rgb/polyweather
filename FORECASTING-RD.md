@@ -400,3 +400,46 @@ is **−0.027 °C**. This is the project's prime lesson in miniature, and it rep
 ceiling; the accuracy lever is NOT model *selection* but **more/longer data + spread-conditional weighting +
 ADDING decorrelated models + local predictors for the coastal/monsoon busts** (MODEL-TRIM.md §8). This makes
 it **5 rejected point-skill levers** (Probe #1, Probe #2, WO-L3-b, WO-3, MODEL-TRIM).
+
+---
+
+# PERSISTENCE-BLEND — rolling-average Tmax blended into the causal forecast (the 6th point-skill lever). VERDICT: REJECTED (KILL). 2026-07-19.
+
+> Operator ask: does extrapolating the model with a 3/5/7-day rolling average of previous observed maxes
+> increase documented accuracy? **No — it decreases it at every real weight, every window, every lead.**
+
+Scored exactly like the documented accuracy (bucket containment vs the market winner) on the local archives:
+`causal-forecast.csv` (walk-forward emit, leads 0/1/2) x `market-history-flat-enriched.parquet` winners
+(2,000-2,700 paired rows / 45 cities / 79-83 days per cell). Leakage-shifted windows (ending D-lead-1),
+paired deltas, city- AND day-clustered CIs, 60/40 chronological OOS. In ALL 9 (K, lead) cells the train
+data selects w*=0; the only in-sample positives (w=0.1, lead 1: +0.1-0.5pp) have CIs straddling zero.
+Real weights damage with CIs excluding zero: w=0.2 -2.4pp [-4.1,-0.5]; w=0.5 -6.7pp [-9.1,-3.9]; pure
+persistence -15.5pp (16-21% vs the blend's 30-36% - the model beats persistence ~2x). Mechanism: the
+blend's bias correction already assimilates recent residuals, and WO-L3-b proved those residuals carry no
+exploitable structure - a rolling average is a crude replay of that dead lever. Bonus fix shipped with the
+test: the °F 2-degree-band label parse (low-edge-only matching understated °F accuracy; range containment
++ expected-actual roll input debiased both sides). Full record: `PERSISTENCE-BLEND.md` +
+`scripts/research/persistence-blend.py` + `out/persistence-blend.json`. **6 rejected point-skill levers.**
+
+---
+
+# SWING-BIAS — swing-conditional hot/cold correction on regime-transition days (the 7th point-skill lever). VERDICT: REJECTED (KILL). 2026-07-19.
+
+> Operator ask: accommodate heatwave/cold-front disruption — detect big swings in average temperature and
+> apply hot/cold biases on those daily clusters. **No corrector converts to accuracy; the diagnostic found
+> the first real residual structure in seven levers — too small to harvest at 1-degree buckets.**
+
+Three knowable conditioners (obs-swing = 2d-vs-7d mean; pred-swing B = mu - 5d mean; day-over-day accel)
+x 3 leads on the persistence-blend panel (~2,000 rows / 45 cities / 79-83 days per lead, C-equivalent
+pooling, leakage-shifted windows). Diagnostic first: OBSERVED swings carry NO stable error signature (NWP
+handles fronts); but the model's OWN big departures do — slope of signed error on B = +0.154/+0.114/+0.095
+(leads 0/1/2), every city-CI excluding zero: the model OVERSHOOTS its regime-change calls (~0.6C relative
+at |B|>=2, cold-front calls worst at -0.8..-1.0C). Correctors all fail OOS: raw fits absorbed a
+truth-convention alpha (-0.44C, artifact — WO-L3-b obs-truth mean ~0 stands) and damaged hit up to -4.5pp;
+decontaminated centered slope-only correctors improve NOTHING (0/9 cells with CI excluding zero; lead-0
+cells actively hurt; the lone +0.9pp cell straddles zero = expected noise at 27 reads). Mechanism of the
+null: beta ~0.1-0.15 -> a 2C swing warrants a 0.2-0.3C shade, far below the 1-degree bucket — the exact
+sub-bucket structure the WO-L3-b 0.6% R2 ceiling predicted would be unharvestable. Carry-forward: mild
+shrinkage of mu toward the recent 5-day mean on big-departure days (~12% of the departure) is a real
+CONTINUOUS-metric refinement (MAE/CRPS analytics only, not picks). Full record: `SWING-BIAS.md` +
+`scripts/research/swing-bias.py` + `out/swing-bias.json`. **7 rejected point-skill levers.**

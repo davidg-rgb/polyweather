@@ -1,5 +1,14 @@
 # BUY-TABLE — per-city "$10 on our predicted high, bought cheap, held to close"
 
+> **↳ CORRECTION 2026-07-19 — the °F 2-degree-band parse fix (PERSISTENCE-BLEND.md rails).** The research
+> parser matched only the LOW edge of °F band labels ("86-87°F"), so °F predictions landing on the band's
+> upper degree were mapped to the WRONG bucket. Regenerated record (same flags, fixed parser):
+> **82 bets / 37 days / 36 cities, sweet-spot 48h, pooled +2.4% / +$20, day-CI [−52.3%, +60.5%]** — the ~27
+> recovered °F picks drift the point estimate just positive, and the verdict is UNCHANGED: an underpowered
+> wash, no lead's day-clustered lower bound anywhere near zero, signal #12 stays dead. The committed asset
+> + /paper-trade + the tests carry the corrected record; the 2026-07-09 numbers below are the pre-fix
+> record, kept for the audit trail.
+
 > **Verdict (2026-07-09): KILL / no demonstrable edge — at both cost bases.** Staking $10 on our predicted
 > daily-high bucket, entered ONLY while still cheap (ask ≤ 15¢), held to resolution:
 >
