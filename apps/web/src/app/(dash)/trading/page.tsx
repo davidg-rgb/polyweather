@@ -34,6 +34,7 @@ import type {
 } from '../../../lib/loaders.ts';
 import { getCityLive, getTrading } from '../../../lib/loaders.ts';
 import { fmtAgo, fmtDate, fmtDateTime, fmtPct, fmtProb, fmtStockholm, fmtUsd, num } from '../../../lib/format.ts';
+import { polymarketEventUrl } from '../../../lib/market-link.ts';
 import { serverDb } from '../../../lib/supabase.ts';
 import { BuyTablePriceCapsPanel, CityArmsTable, GateOverridePanel, TradeConfigEditor } from '../../../components/trading-controls.tsx';
 
@@ -372,7 +373,9 @@ const markAgeColor = (markAt: string | null, nowMs: number): string => {
   return ageMin <= 20 ? MUTED : ageMin <= 60 ? AMBER : RED;
 };
 
-/** One held-position row: identity → basis → current mark → unrealized verdict. */
+/** One held-position row: identity → basis → current mark → unrealized verdict. The city cell links to
+ * the live Polymarket book (the /cities idiom — market_events.slug preferred, city+date reconstruction
+ * fallback, market-link.ts); a joinless row keeps the mono market-id fallback, unlinked. */
 function OpenPositionRowTr({ r, nowMs }: { r: OpenPositionRow; nowMs: number }): ReactElement {
   const shares = num(r.shares) ?? 0;
   const cost = num(r.costUsd) ?? 0;
@@ -381,11 +384,22 @@ function OpenPositionRowTr({ r, nowMs }: { r: OpenPositionRow; nowMs: number }):
   const pct = unrealMid != null && cost > 0 ? unrealMid / cost : null;
   const bid = num(r.curBid);
   const ask = num(r.curAsk);
+  const marketUrl = r.city && r.targetDate ? polymarketEventUrl(r.eventSlug, r.city, r.targetDate) : null;
   return (
     <tr>
       <td className="small">
-        {r.cityName ?? r.city ?? <span className="mono">{short(r.marketId, 14)}</span>}
-        {r.city && r.cityName ? <span className="muted small"> {r.city}</span> : null}
+        {marketUrl ? (
+          <a
+            href={marketUrl}
+            target="_blank"
+            rel="noreferrer"
+            title={`open the live ${r.cityName ?? r.city} ${r.targetDate} market on Polymarket`}
+          >
+            <strong>{r.cityName ?? r.city}</strong> ↗
+          </a>
+        ) : (
+          r.cityName ?? r.city ?? <span className="mono">{short(r.marketId, 14)}</span>
+        )}
       </td>
       <td className="small">{r.label ?? '—'}</td>
       <td className="mono small">{r.targetDate ?? '—'}</td>

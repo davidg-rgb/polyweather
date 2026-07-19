@@ -93,8 +93,9 @@ const FIXTURE = {
         valueMidUsd: '3.450000', unrealizedMidUsd: '0.810000', unrealizedBidUsd: '0.660000',
       },
       {
+        // eventSlug null → the city link must come from the market-link.ts city+date reconstruction
         marketId: '0xposHEL', tokenId: 'tok-hel-18', strategies: ['buy-table'],
-        city: 'helsinki', cityName: 'Helsinki', eventSlug: 'ev-hel', targetDate: '2026-07-05',
+        city: 'helsinki', cityName: 'Helsinki', eventSlug: null, targetDate: '2026-07-05',
         label: '18°C bucket', bucketIdx: 2, firstBuyAt: '2026-07-05T01:00:00Z',
         shares: '15.0000', avgPrice: '0.330000', costUsd: '4.950000',
         curBid: null, curAsk: null, curMid: null, markAt: null, resolvesAt: null,
@@ -215,6 +216,11 @@ describe('/trading page renders', () => {
     expect(html).toContain('18°C bucket'); // the unmarked position still renders…
     expect(html).toContain('no mark'); // …with the fail-soft mark cell
     expect(html).not.toContain('0112 not applied'); // the payload HAS openPositions — no staged-dark note
+    // the city cells link to the live Polymarket book (the /cities idiom): slug-preferred for Ankara,
+    // the city+date reconstruction for Helsinki (its fixture row carries no eventSlug).
+    expect(html).toContain('href="https://polymarket.com/event/ev-ankara"');
+    expect(html).toContain('href="https://polymarket.com/event/highest-temperature-in-helsinki-on-july-5-2026"');
+    expect(html).toContain('open the live Ankara 2026-07-05 market on Polymarket');
 
     // the cap-enforcement exposure map + the open-order ledger
     expect(html).toContain('Open LIVE exposure');
