@@ -1,5 +1,11 @@
 # MARKET-PNL — "$10/day on our predicted bucket" net P&L
 
+> **↳ CORRECTION 2026-07-19 — the °F 2-degree-band parse fix (PERSISTENCE-BLEND.md rails; °F band labels
+> matched only at their LOW edge).** Re-run with the fixed parser: causal @24h **−0.7% mid (−$135) /
+> −5.3% at a 1¢ ask**, day-CI **[−8.6%, +7.3%]**, 1,937 bets / 48 days / 45 cities (win 34.4%). Slightly
+> less negative than the numbers below (°F picks now map to their true buckets) — the verdict is
+> UNCHANGED: break-even-to-loss at the mid, a clear loss at the ask, CI includes zero. Nothing reopens.
+
 > **Verdict (2026-07-09): break-even to a NET LOSS. You would not have profited.** Staking $10/day on our
 > predicted daily-high bucket across all 45 cities, held to resolution, bet ~24h out on the **causal**
 > forecast, nets **−1.4% ROI at the mid (−$253) / −5.9% at a 1¢ ask (−$1,032)** over 1,751 bets on 48

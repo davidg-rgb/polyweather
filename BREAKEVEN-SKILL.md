@@ -1,5 +1,12 @@
 # BREAKEVEN-SKILL — the skill target trading would require, vs the skill we have
 
+> **↳ CORRECTION 2026-07-19 — the °F 2-degree-band parse fix (PERSISTENCE-BLEND.md rails).** Re-run with
+> the fixed parser (°F band labels previously matched only at their LOW edge): buying OUR bucket at all-in
+> cost nets **−1.9% per $1, day-clustered CI [−3.8, +0.1]** (n=10,834 zone rows / 1,899 ours / 45 cities /
+> 81 days). The interval's upper edge now GRAZES zero instead of excluding it — the honest reading weakens
+> from "entirely negative" to "negative-to-zero"; the verdict is UNCHANGED (no positive EV demonstrated,
+> the required-lift arithmetic stands, the route stays closed). Numbers below are the pre-fix record.
+
 > **Verdict (2026-07-09): the forecast-for-trading route is CLOSED by arithmetic.** To break even as a
 > taker in the buyable zone (mid 5–40¢), a signal must add **+3.7 to +5.1pp of win-probability beyond
 > price** (the longshot tax + calibrated spread + taker fee, band-dependent). Our causal forecast DOES

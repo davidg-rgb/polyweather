@@ -67,29 +67,37 @@ def display_name(slug):
 
 
 def parse_temp(label):
-    """(kind, value) from a bucket label; kind in exact|below|above. Robust to the degree encoding."""
-    m = re.search(r"(-?\d+)", str(label))
+    """(kind, lo, hi) from a bucket label; kind in exact|below|above. °F labels are 2-degree BANDS
+    ("86-87°F") — the pre-2026-07-19 first-integer parse matched only the LOW edge, so a °F prediction
+    landing on the band's upper degree missed its bucket (PERSISTENCE-BLEND.md rails; core parseBucketLabel
+    always handled ranges — this brings the research mirror in line)."""
+    s = str(label)
+    ll = s.lower()
+    mr = re.search(r"(-?\d+)\s*-\s*(-?\d+)", s)
+    m = re.search(r"(-?\d+)", s)
     if not m:
         return None
-    v = int(m.group(1))
-    ll = str(label).lower()
     if any(w in ll for w in ("below", "lower", "under", "colder")):
-        return ("below", v)
+        return ("below", int(m.group(1)), int(m.group(1)))
     if any(w in ll for w in ("higher", "above", "over", "hotter")):
-        return ("above", v)
-    return ("exact", v)
+        return ("above", int(m.group(1)), int(m.group(1)))
+    if mr:
+        lo, hi = int(mr.group(1)), int(mr.group(2))
+        return ("exact", min(lo, hi), max(lo, hi))
+    v = int(m.group(1))
+    return ("exact", v, v)
 
 
 def choose(buckets, pred_int):
-    """Pick the bucket whose native-degree range contains pred_int. buckets: list of (idx,kind,val,resolved)."""
-    for idx, k, v, r in buckets:
-        if k == "exact" and v == pred_int:
+    """Pick the bucket whose native-degree range CONTAINS pred_int. buckets: (idx,kind,lo,hi,resolved)."""
+    for idx, k, lo, hi, r in buckets:
+        if k == "exact" and lo <= pred_int <= hi:
             return (idx, r)
-    for idx, k, v, r in buckets:
-        if k == "below" and pred_int <= v:
+    for idx, k, lo, _hi, r in buckets:
+        if k == "below" and pred_int <= lo:
             return (idx, r)
-    for idx, k, v, r in buckets:
-        if k == "above" and pred_int >= v:
+    for idx, k, lo, _hi, r in buckets:
+        if k == "above" and pred_int >= lo:
             return (idx, r)
     return None
 
@@ -124,11 +132,13 @@ def bet_net(ask, won, stake):
 
 
 def selftest():
-    assert parse_temp("15C") == ("exact", 15)
-    assert parse_temp("7C or below") == ("below", 7)
-    assert parse_temp("17C or higher") == ("above", 17)
-    bks = [(0, "below", 7, "lose"), (1, "exact", 15, "win"), (2, "above", 17, "lose")]
+    assert parse_temp("15C") == ("exact", 15, 15)
+    assert parse_temp("7C or below") == ("below", 7, 7)
+    assert parse_temp("17C or higher") == ("above", 17, 17)
+    assert parse_temp("86-87F") == ("exact", 86, 87)  # the °F 2-degree band
+    bks = [(0, "below", 7, 7, "lose"), (1, "exact", 14, 15, "win"), (2, "above", 17, 17, "lose")]
     assert choose(bks, 15) == (1, "win")
+    assert choose(bks, 14) == (1, "win")  # BOTH band edges contained (the pre-fix miss)
     assert choose(bks, 3) == (0, "lose")
     assert choose(bks, 20) == (2, "lose")
     assert abs(ask_of(0.12, 0.01, 0.03) - 0.13) < 1e-9
@@ -203,11 +213,11 @@ def emit_ts(result, path, asof):
  * MARKET-PNL.md). The cheap-entry filter buys the predicted bucket only while it is still a not-yet-converged
  * LONGSHOT. On the {p['book']} book (exec ask + taker fee; a bet exists only where walked depth covers the
  * stake) the fillable-and-cheap population nearly VANISHES — the sub-9c longshots that drove the legacy
- * mid+1c −28% were never fillable at this stake — and what remains is an UNDERPOWERED WASH leaning negative:
+ * mid+1c −28% were never fillable at this stake — and what remains is an UNDERPOWERED WASH:
  * pooled ROI {pl['roi_pct']}% at the sweet-spot {p['sweet_lead_h']}h lead (win {pl['win_pct']}%, day-clustered
  * CI [{pl['day_ci_pct'][0]}%, {pl['day_ci_pct'][1]}%]) on {pl['bets']} bets / {u['n_days']} days /
- * {u['n_cities']} cities. NO lead demonstrates an edge (no day-clustered lower bound clears 0; every
- * well-populated lead's point estimate is negative; tiny-n rows are longshot noise). The
+ * {u['n_cities']} cities. NO lead demonstrates an edge (no day-clustered lower bound clears 0 — every
+ * lead's CI straddles it by tens of points; tiny-n rows are longshot noise). The
  * {pl['n_cities_positive']} net-positive cities are small-sample noise, not a per-city edge.
  *
  * SOURCE OF TRUTH: scripts/research/city-buy-table.py (reproduce below). Do NOT hand-edit a number — re-run:
@@ -375,8 +385,8 @@ def main():
                     continue
                 s = bg.sort_values("t")
                 paths[int(idx)] = (s.t.values.astype(np.int64), s.p.values.astype(float))
-                meta.append((int(idx), pt[0], pt[1], bg.resolved_outcome.iloc[0]))
-            if not any(m[3] == "win" for m in meta):
+                meta.append((int(idx), pt[0], pt[1], pt[2], bg.resolved_outcome.iloc[0]))
+            if not any(m[4] == "win" for m in meta):
                 continue
             pick = choose(meta, int(cnat))
             if pick is None or pick[0] not in paths:

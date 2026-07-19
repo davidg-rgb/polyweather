@@ -10,8 +10,9 @@
  * cheap-entry filter buys the predicted bucket only while it is still a not-yet-converged LONGSHOT. Scored on
  * the CANONICAL calibrated book (CALIBRATED_BOOK exec ask + taker fee; a bet exists only where walked depth
  * covers the stake) the fillable population nearly vanishes — the legacy mid+1¢ read (−28% on 347 bets) was
- * mostly bets that could never fill at $10 — and what remains is an UNDERPOWERED WASH leaning negative: no
- * lead's day-clustered lower bound comes near zero. This page renders that truth per city from the committed
+ * mostly bets that could never fill at $10 — and what remains is an UNDERPOWERED WASH: no lead's
+ * day-clustered lower bound comes near zero (2026-07-19 °F band-parse fix: ~27 recovered °F picks drift the
+ * pooled point estimate just positive — the CI stays ±50pp wide; the no-edge verdict is unchanged). This page renders that truth per city from the committed
  * archive-backtest asset (core/sim/city-buy-table-results.ts) — a FROZEN record (see the as-of chip), NOT a
  * live feed — plus the LIVE forward ledger (dash_city_sim), which is still accruing and remains the
  * backtest-vs-realized cross-check instrument (loop rule 4). The 45-City Scan below is the pre-registered
@@ -114,8 +115,8 @@ function LeadCurveChart({ width = 560, height = 220 }: { width?: number; height?
         const neg = r.roiPct < 0;
         const barTop = Math.min(zeroY, yAt(r.roiPct));
         const barH = Math.max(Math.abs(zeroY - yAt(r.roiPct)), 1.5);
-        // a positive bar here is always a tiny-n fluke (the invariant tests pin every bets≥10 lead negative)
-        // — render it muted, not green, so noise never reads as signal.
+        // a positive bar here is a wash-sized point estimate under a ±50pp day-CI (the invariant tests pin
+        // every bets≥10 lead's lower bound below −20) — render it muted, not green, so noise never reads as signal.
         const fill = isSweet ? AMBER : neg ? RED : 'var(--ams-secondary-dim)';
         return (
           <g key={r.leadH}>
@@ -215,7 +216,7 @@ function BuyTableSection(): ReactElement {
 
       {/* the honest verdict, leading with the number */}
       <div className="info-banner" style={{ borderLeftColor: RED }}>
-        <strong style={{ color: RED }}>Verdict: no demonstrable edge — an underpowered wash leaning negative.</strong>{' '}
+        <strong style={{ color: RED }}>Verdict: no demonstrable edge — an underpowered wash.</strong>{' '}
         Pooled ROI {pp(pooled.roiPct)} ({signedUsd(pooled.netUsd, 0)} on {pooled.bets} fillable bets ·{' '}
         {B.universe.nDays} days · {B.universe.nCities} cities, day-clustered CI [{pp(pooled.dayCiPct[0])},{' '}
         {pp(pooled.dayCiPct[1])}]). This is the strategy you described — $10 on our predicted whole-° bucket, entered
@@ -224,8 +225,10 @@ function BuyTableSection(): ReactElement {
         calibrated book</strong> (real opening_captures spread-by-price + taker fee), where a bet exists only if the
         walked depth can fill the $10. That cost model nearly erases the strategy: the legacy mid+1¢ scoring read
         −28.2% on 347 bets, but most of those “bets” were never fillable — the cheap zone carries $4–$24 of depth.
-        What survives shows no edge: every well-populated lead is negative, no day-clustered lower bound comes near
-        zero, and pooled win rate {pooled.winPct}% sits at the ~{breakeven.toFixed(0)}% you need just to break even.
+        What survives shows no edge: every lead&apos;s day-clustered CI straddles zero by tens of points (the pooled
+        point estimate drifted just positive after the 2026-07-19 °F band-parse fix recovered ~27 mis-mapped picks —
+        still noise), and pooled win rate {pooled.winPct}% sits at the ~{breakeven.toFixed(0)}% you need just to break
+        even.
         It is <strong>signal #12 (opening-convergence), already falsified</strong> (FINDINGS.md / MARKET-PNL.md /
         BUY-TABLE.md). The {pooled.nCitiesPositive} net-positive cities are small-sample longshot noise, not a
         per-city edge. <strong>Nothing here reopens the trading rail.</strong>
@@ -276,7 +279,7 @@ function BuyTableSection(): ReactElement {
         <p className="muted small" style={{ marginTop: '0.5rem' }}>
           The sweet-spot you asked for is the best of a bad set:{' '}
           <strong style={{ color: AMBER }}>{B.params.sweetLeadH}h</strong> — <strong>no lead demonstrates an
-          edge</strong> (every well-populated lead&apos;s point estimate is negative and every day-clustered lower
+          edge</strong> (every well-populated lead is a wash-sized point estimate whose day-clustered lower
           bound sits deep below zero). On the calibrated book the efficiency signature shows up as a{' '}
           <em>population collapse</em> near close: by 6h only {B.leadCurve.find((l) => l.leadH === 6)?.bets ?? 0} bets
           in the whole window were both cheap AND fillable at $10 — the eventual winner has already converged above{' '}
