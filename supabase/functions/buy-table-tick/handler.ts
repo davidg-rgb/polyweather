@@ -680,12 +680,15 @@ export async function buyTableTick(ctx: JobCtx, deps: BuyTableTickDeps): Promise
         if (mode === 'live' && (result.sizeMatched ?? 0) > 0) {
           const shares = result.sizeMatched ?? 0;
           const px = result.avgPrice ?? result.limitPrice ?? c.ask;
+          // sub-cent fills exist (the 2026-07-19 helsinki 5000 sh @ 0.001 rendered "@ 0.00" under a flat
+          // toFixed(2)) — show the exact price when it is below a cent.
+          const pxStr = px >= 0.01 ? px.toFixed(2) : String(px);
           await deps.notify({
             kind: 'BUY_TABLE_FILLED',
             severity: 'INFO',
             title: `Buy filled: ${c.city} ${c.label ?? c.marketId} · ${c.tradeDate}`,
             body:
-              `${shares} sh @ ${px.toFixed(2)} = $${(shares * px).toFixed(2)} (fees excl)` +
+              `${shares} sh @ ${pxStr} = $${(shares * px).toFixed(2)} (fees excl)` +
               ` · ${c.hoursToClose.toFixed(1)}h to close · hold to resolution`,
             dedupeKey: `buy-table-fill:${result.clientOrderId ?? `${c.marketId}:${c.tradeDate}`}`,
           });
