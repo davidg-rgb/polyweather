@@ -11,8 +11,11 @@ import { orderIntentKey, type MakerClobClientish, type TradeAlert } from '../../
 import type { DbPort } from '../functions/_shared/db.ts';
 import type { JobCtx } from '../functions/_shared/runJob.ts';
 import {
+  applyRequotes,
   buyTableTick,
   parseBuyTableConfig,
+  pickHouseBucket,
+  requoteTargets,
   selectBuyTableCandidates,
   resolvedAgainstEntries,
   type BuyTableEntryRow,
@@ -84,6 +87,8 @@ interface MockDbState {
   cityAllowlist?: string[] | null;
   /** F4: snake_case live_orders jsonb rows served by bot_order_list_dangling ({rows:[…]} envelope). */
   dangling?: Array<Record<string, unknown>> | 'throw';
+  /** 0114: 'missing' simulates a pre-0114 DB — buy_table_tick_inputs absent → the convergence fallback. */
+  slim?: 'missing';
 }
 
 function makeMockDb(state: MockDbState): DbPort & { calls: Array<{ fn: string; args: Record<string, unknown> }> } {
@@ -132,6 +137,16 @@ function makeMockDb(state: MockDbState): DbPort & { calls: Array<{ fn: string; a
         case 'bot_order_list_dangling':
           if (state.dangling === 'throw') throw new Error('rpc bot_order_list_dangling failed: boom');
           return [{ bot_order_list_dangling: { rows: state.dangling ?? [] } }] as unknown as T[];
+        case 'buy_table_tick_inputs':
+          if (state.slim === 'missing') {
+            throw new Error(
+              'rpc buy_table_tick_inputs failed: function public.buy_table_tick_inputs(p_cities => text[]) does not exist',
+            );
+          }
+          if (state.captures === 'throw') throw new Error('rpc buy_table_tick_inputs failed: timeout');
+          return [
+            { buy_table_tick_inputs: { captures: state.captures ?? [], resolutions: state.resolutions ?? [] } },
+          ] as unknown as T[];
         case 'convergence_capture_inputs':
           if (state.captures === 'throw') throw new Error('rpc convergence_capture_inputs failed: timeout');
           return [
@@ -200,6 +215,7 @@ function harness(
   state: MockDbState,
   tradeMode: string | undefined,
   clientOverride?: Partial<ReturnType<typeof makeMockClient>>,
+  fetchJson?: BuyTableTickDeps['fetchJson'],
 ) {
   const db = makeMockDb(state);
   const client = Object.assign(makeMockClient(), clientOverride);
@@ -218,10 +234,19 @@ function harness(
       alerts.push(a);
       return true;
     },
+    // 0114 default: an EMPTY book — the re-quote finds no ask and keeps every capture value, so the
+    // pre-0114 tests pin exactly the same behavior they always did. Requote tests override this.
+    fetchJson: fetchJson ?? (async () => ({ bids: [], asks: [] })),
     liveClient: async () => client,
   };
   return { db, client, alerts, logs, ctx, deps };
 }
+
+/** A raw CLOB /book payload quoting one ask level (raw books list best-LAST; normalizeBook reverses). */
+const rawBook = (ask: number, size = 500) => ({
+  bids: [{ price: String(Math.max(0.01, ask - 0.02)), size: '500' }],
+  asks: [{ price: String(ask), size: String(size) }],
+});
 
 const reservesOf = (db: { calls: Array<{ fn: string; args: Record<string, unknown> }> }) =>
   db.calls.filter((c) => c.fn === 'bot_order_reserve_intent');
@@ -831,8 +856,166 @@ describe('buy-table-tick — degraded reads place NOTHING (never "no candidates"
     const h = harness({ mode: 'off', entries: 'missing' }, 'dry-run');
     const stats = await buyTableTick(h.ctx, h.deps);
     expect(stats.stagedDark).toBe(true);
-    // the lane went inert BEFORE discovery — nothing else was read
+    // the lane went inert BEFORE discovery — nothing else was read (neither the slim read nor the fallback)
+    expect(
+      h.db.calls.some((c) => c.fn === 'convergence_capture_inputs' || c.fn === 'buy_table_tick_inputs'),
+    ).toBe(false);
+  });
+});
+
+describe('buy-table-tick — the 0114 LIVE RE-QUOTE (gate/size/price on the venue book, not the capture)', () => {
+  it('catches a live DIP: capture ask above the cap, live book below → entered at the live ask', async () => {
+    const urls: string[] = [];
+    const h = harness(
+      { mode: 'off', captures: [capture({ eventId: 'ev-dip', ask: 0.2, hoursToClose: 6 })] }, // 0.20 > cap 0.15
+      'dry-run',
+      undefined,
+      async (url) => {
+        urls.push(String(url));
+        return rawBook(0.12); // …but the venue quotes 0.12 NOW
+      },
+    );
+    const stats = await buyTableTick(h.ctx, h.deps);
+    expect(urls).toEqual(['https://clob.polymarket.com/book?token_id=y-ev-dip-1']);
+    expect(stats.requoted).toBe(1);
+    expect(stats.candidates).toBe(1);
+    expect(reservesOf(h.db).length).toBe(1);
+    const intent = h.logs.find((l) => l.msg === 'buy-table.intent');
+    expect(intent?.extra?.limitPrice).toBe(0.12); // the FAK worst-price is the LIVE ask
+    expect(intent?.extra?.size).toBe(Math.floor(5 / 0.12)); // …and so is the share sizing
+  });
+
+  it('blocks a live RISE: capture ask cheap, live book above the cap → price_cap skip (no stale-cheap spam)', async () => {
+    const h = harness(
+      { mode: 'off', captures: [capture({ eventId: 'ev-rise', ask: 0.1, hoursToClose: 6 })] },
+      'dry-run',
+      undefined,
+      async () => rawBook(0.5),
+    );
+    const stats = await buyTableTick(h.ctx, h.deps);
+    expect(stats.requoted).toBe(1);
+    expect(stats.candidates).toBe(0);
+    expect(reservesOf(h.db).length).toBe(0);
+    expect(h.logs.some((l) => l.msg === 'buy-table.skip' && /price_cap/.test(String(l.extra?.reason)))).toBe(true);
+  });
+
+  it('FAIL-SOFT: a failed book fetch keeps the capture ask (logged, never degraded)', async () => {
+    const h = harness(
+      { mode: 'off', captures: [capture({ eventId: 'ev-soft', ask: 0.1, hoursToClose: 6 })] },
+      'dry-run',
+      undefined,
+      async () => {
+        throw new Error('CLOB 503');
+      },
+    );
+    const stats = await buyTableTick(h.ctx, h.deps);
+    expect(stats.requoteFailed).toBe(1);
+    expect(stats.requoted).toBe(0);
+    expect(stats.degraded).toBe(false);
+    expect(stats.candidates).toBe(1); // the capture ask 0.10 ≤ cap still enters — pre-0114 behavior exactly
+    expect(h.logs.some((l) => l.msg === 'buy-table.requote_failed')).toBe(true);
+  });
+
+  it('an EMPTY/askless book keeps the capture ask (the harness default)', async () => {
+    const h = harness({ mode: 'off', captures: [capture({ eventId: 'ev-empty', ask: 0.1, hoursToClose: 6 })] }, 'dry-run');
+    const stats = await buyTableTick(h.ctx, h.deps);
+    expect(stats.requoted).toBe(0);
+    expect(stats.candidates).toBe(1);
+  });
+
+  it('fetches ONLY in-window unresolved picks — out-of-window and resolved markets cost no book read', async () => {
+    let fetches = 0;
+    const h = harness(
+      {
+        mode: 'off',
+        captures: [
+          capture({ eventId: 'ev-in', ask: 0.1, hoursToClose: 6 }),
+          capture({ eventId: 'ev-late', ask: 0.1, hoursToClose: 13 }), // outside [2,12]
+          capture({ eventId: 'ev-done', ask: 0.1, hoursToClose: 6 }),
+        ],
+        resolutions: [{ id: 'ev-done', winnerIdx: 1, gradingMismatch: false }],
+      },
+      'dry-run',
+      undefined,
+      async () => {
+        fetches++;
+        return rawBook(0.1);
+      },
+    );
+    const stats = await buyTableTick(h.ctx, h.deps);
+    expect(fetches).toBe(1);
+    expect(stats.requoted).toBe(1);
+  });
+
+  it('0114 staged fallback: a pre-0114 DB (slim RPC absent) falls back to convergence_capture_inputs', async () => {
+    const h = harness(
+      { mode: 'off', slim: 'missing', captures: [capture({ eventId: 'ev-fb', ask: 0.1, hoursToClose: 6 })] },
+      'dry-run',
+    );
+    const stats = await buyTableTick(h.ctx, h.deps);
+    expect(stats.slimRead).toBe(false);
+    expect(stats.degraded).toBe(false);
+    expect(stats.candidates).toBe(1);
+    const discoveryCalls = h.db.calls.filter(
+      (c) => c.fn === 'buy_table_tick_inputs' || c.fn === 'convergence_capture_inputs',
+    );
+    expect(discoveryCalls.map((c) => c.fn)).toEqual(['buy_table_tick_inputs', 'convergence_capture_inputs']);
+    expect(h.logs.some((l) => l.msg === 'buy-table.slim_inputs_absent')).toBe(true);
+  });
+
+  it('the slim read is the ONE discovery statement on the happy path (allowlist passed through)', async () => {
+    const h = harness({ mode: 'off', captures: [capture({ eventId: 'ev-slim', ask: 0.1, hoursToClose: 6 })] }, 'dry-run');
+    const stats = await buyTableTick(h.ctx, h.deps);
+    expect(stats.slimRead).toBe(true);
+    const calls = h.db.calls.filter((c) => c.fn === 'buy_table_tick_inputs');
+    expect(calls.length).toBe(1);
+    expect(calls[0]!.args['p_cities']).toEqual(['testville']);
     expect(h.db.calls.some((c) => c.fn === 'convergence_capture_inputs')).toBe(false);
+  });
+});
+
+describe('0114 pure halves — pickHouseBucket / requoteTargets / applyRequotes', () => {
+  const tickCfg = parseBuyTableConfig([]);
+
+  it('pickHouseBucket: argmax houseProb, identity (conditionId+tokenYes+finite houseProb) required', () => {
+    const rows = capture({ eventId: 'ev-p', ask: 0.2, hoursToClose: 6 });
+    expect(pickHouseBucket(rows.buckets)?.tokenYes).toBe('y-ev-p-1'); // idx 1 carries houseProb 0.6
+    expect(pickHouseBucket([])).toBeNull();
+    expect(pickHouseBucket(null)).toBeNull();
+    // an identity-less bucket can never be the pick, whatever its houseProb
+    const stripped = rows.buckets!.map((b) => (b.idx === 1 ? { ...b, tokenYes: null } : b));
+    expect(pickHouseBucket(stripped as never)?.tokenYes).not.toBe('y-ev-p-1');
+  });
+
+  it('requoteTargets: latest-per-event, unresolved, in-window, pickable', () => {
+    const older = { ...capture({ eventId: 'ev-t', ask: 0.2, hoursToClose: 6 }), capturedAt: '2026-07-11T08:00:00Z' };
+    const targets = requoteTargets({
+      captures: [
+        older,
+        capture({ eventId: 'ev-t', ask: 0.2, hoursToClose: 6 }), // the NOW row wins the latest-map
+        capture({ eventId: 'ev-out', ask: 0.2, hoursToClose: 20 }),
+        capture({ eventId: 'ev-res', ask: 0.2, hoursToClose: 6 }),
+      ],
+      resolutions: [{ id: 'ev-res', winnerIdx: 0, gradingMismatch: false }],
+      cfg: tickCfg,
+      now: NOW,
+    });
+    expect(targets).toEqual([{ eventId: 'ev-t', tokenYes: 'y-ev-t-1' }]);
+  });
+
+  it('applyRequotes: patches ONLY the picked bucket of a quoted event; everything else passes through', () => {
+    const row = capture({ eventId: 'ev-a', ask: 0.2, hoursToClose: 6 });
+    const other = capture({ eventId: 'ev-b', ask: 0.3, hoursToClose: 6 });
+    const [patched, untouched] = applyRequotes(
+      [row, other],
+      new Map([['ev-a', { bestAsk: 0.11, execAsk: 0.12 }]]),
+    );
+    const buckets = patched!.buckets!;
+    expect(buckets.find((b) => b.idx === 1)?.execAsk).toBe(0.12);
+    expect(buckets.find((b) => b.idx === 1)?.bestAsk).toBe(0.11);
+    expect(buckets.find((b) => b.idx === 0)?.execAsk).toBe(0.05); // non-pick bucket untouched
+    expect(untouched).toBe(other); // non-quoted event: same reference, zero copies
+    expect(row.buckets!.find((b) => b.idx === 1)?.execAsk).toBe(0.2); // the input row was not mutated
   });
 });
 

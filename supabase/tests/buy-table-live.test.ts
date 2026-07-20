@@ -208,7 +208,9 @@ describe('0095/0108 crons — the laned edge tick with the §8.1 body periodKey 
     );
     expect(j).toBeTruthy();
     // 0108: the C15 compute-shed minute lane codified (was 0095's */10 — quarter minutes are contended).
-    expect(j!.schedule).toBe('3,13,23,33,43,53 * * * *');
+    // 0114: window-split — the 10-min lane keeps only the OFF-window hours (candidates exist only ~00-10Z;
+    // the fast lane below covers the window).
+    expect(j!.schedule).toBe('3,13,23,33,43,53 10-23 * * *');
     expect(j!.command).toContain(`vault.decrypted_secrets where name = 'project_url'`);
     expect(j!.command).toContain(`vault.decrypted_secrets where name = 'cron_secret'`);
     expect(j!.command).toContain('/functions/v1/buy-table-tick');
@@ -219,6 +221,24 @@ describe('0095/0108 crons — the laned edge tick with the §8.1 body periodKey 
     expect(j!.command).toContain(`body := jsonb_build_object('periodKey', 'buy-table-tick:' || to_char(now()`);
     // 4cb1e77: 10s (the generic 4500 was shorter than a cold Edge boot — the launch-day fix).
     expect(j!.command).toContain('timeout_milliseconds := 10000');
+  });
+
+  it('0114: buy-table-tick-fast covers the candidate window at ~2-min with the SAME command (region pin included)', async () => {
+    const [slow] = await rows<{ command: string }>(
+      db,
+      `select command from cron.job where jobname = 'buy-table-tick'`,
+    );
+    const [fast] = await rows<{ schedule: string; command: string }>(
+      db,
+      `select schedule, command from cron.job where jobname = 'buy-table-tick-fast'`,
+    );
+    expect(fast).toBeTruthy();
+    // even minutes − {0,30} (the C15 permanently-bad quarters) − {12,42} (poll-markets stays sole-tenant),
+    // scoped to hours 0-9 — the only hours candidates can exist (12:00Z closes, [2,12]h lead window).
+    expect(fast!.schedule).toBe('2,4,6,8,10,14,16,18,20,22,24,26,28,32,34,36,38,40,44,46,48,50,52,54,56,58 0-9 * * *');
+    // the COMMAND is byte-identical to the slow lane's (same fn, same vault reads, same eu-west-1 region
+    // pin, same minute-stamped body periodKey) — only the schedule differs.
+    expect(fast!.command).toBe(slow!.command);
   });
 
   it('buy-table-deadman is registered */15 invoking buy_table_deadman_check()', async () => {
@@ -1273,5 +1293,139 @@ describe('0112 dash_trading().openPositions — held positions marked to the lat
     expect(Number(v.totals.costUsd)).toBeCloseTo(9.8 + 5, 6);
     expect(Number(v.totals.unrealizedMidUsd)).toBe(0);
     expect(v.totals.oldestMarkAt).toBeNull();
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════════════
+describe("0114 buy_table_tick_inputs — the tick's slim discovery read (latest capture per event)", () => {
+  async function seedEvent(slug: string, winnerIdx: number | null = null): Promise<string> {
+    const region = (await rows<{ region: string }>(db, `select region from public.clusters limit 1`))[0]!.region;
+    const cityId = (
+      await rows<{ city_id: string }>(
+        db,
+        `select city_id from public.upsert_city($1, $2, 'US', 'C', 'UTC', $3)`,
+        [slug, slug, region],
+      )
+    )[0]!.city_id;
+    return (
+      await rows<{ id: string }>(
+        db,
+        `insert into public.market_events
+           (poly_event_id, slug, city_id, target_date, unit, ladder_ok, winning_bucket_idx)
+         values ('pe-' || $1, 'ev-' || $1, $2, current_date + 1, 'C', true, $3)
+         returning id`,
+        [slug, cityId, winnerIdx],
+      )
+    )[0]!.id;
+  }
+
+  const bucket = (slug: string, idx: number, execAsk: number) => ({
+    idx,
+    label: `${29 + idx}°C`,
+    bestAsk: execAsk,
+    execAsk,
+    execBid: null,
+    bestBid: null,
+    depthUsd: 100,
+    houseProb: idx === 1 ? 0.6 : 0.2,
+    conditionId: `c-${slug}-${idx}`,
+    tokenYes: `y-${slug}-${idx}`,
+    tokenNo: `n-${slug}-${idx}`,
+  });
+
+  /** One capture tick; hoursSinceListing defaults INSIDE the fresh gate (< 1). */
+  const seedTick = (
+    evId: string,
+    slug: string,
+    execAsk: number,
+    opts?: { atSql?: string; hoursSinceListing?: number },
+  ) =>
+    rows(
+      db,
+      `insert into public.opening_captures
+         (captured_at, event_id, city, target_date, tz_name, resolves_at, hours_since_listing,
+          is_flat_open, house_seeded, buckets, neg_risk)
+       values (${opts?.atSql ?? 'now()'}, $1, $2, current_date + 1, 'UTC', now() + interval '6 hours', $3,
+               false, true, $4::jsonb, true)`,
+      [
+        evId,
+        slug,
+        opts?.hoursSinceListing ?? 0.5,
+        JSON.stringify([bucket(slug, 0, 0.05), bucket(slug, 1, execAsk), bucket(slug, 2, 0.05)]),
+      ],
+    );
+
+  type SlimEnv = {
+    captures: Array<{ eventId: string; city: string; buckets: Array<Record<string, unknown>> }>;
+    resolutions: Array<{ id: string; winnerIdx: number | null; gradingMismatch: boolean }>;
+  };
+  const slim = async (cities: string[]): Promise<SlimEnv> =>
+    (
+      await rows<{ v: SlimEnv }>(db, `select public.buy_table_tick_inputs($1::text[]) as v`, [cities])
+    )[0]!.v;
+
+  afterEach(async () => {
+    await db.exec(`delete from public.buy_table_cycle_ranges`);
+    await db.exec(`delete from public.opening_captures`);
+    await db.exec(`delete from public.market_events`);
+  });
+
+  it('returns an OBJECT envelope with captures/resolutions ARRAYS on an empty stream (0081 tripwire)', async () => {
+    const [shape] = await rows<{ outer: string; caps: string; res: string }>(
+      db,
+      `select jsonb_typeof(public.buy_table_tick_inputs(array['nowhere']))                as outer,
+              jsonb_typeof(public.buy_table_tick_inputs(array['nowhere'])->'captures')    as caps,
+              jsonb_typeof(public.buy_table_tick_inputs(array['nowhere'])->'resolutions') as res`,
+    );
+    expect(shape).toEqual({ outer: 'object', caps: 'array', res: 'array' });
+  });
+
+  it('returns ONLY the latest capture per event, buckets ordered by idx with the 0083 identity keys', async () => {
+    const ev = await seedEvent('slim-a');
+    await seedTick(ev, 'slim-a', 0.10, { atSql: `now() - interval '2 hours'`, hoursSinceListing: 0.5 });
+    await seedTick(ev, 'slim-a', 0.20, { atSql: `now() - interval '1 hour'`, hoursSinceListing: 1.5 });
+    await seedTick(ev, 'slim-a', 0.30, { atSql: 'now()', hoursSinceListing: 2.5 });
+    const v = await slim(['slim-a']);
+    expect(v.captures).toHaveLength(1); // the 2-day grid is GONE — one row per event
+    const caps = v.captures[0]!;
+    expect(caps.eventId).toBe(ev);
+    expect(caps.buckets.map((b) => b['idx'])).toEqual([0, 1, 2]);
+    const pick = caps.buckets[1]!;
+    expect(pick['execAsk']).toBe(0.3); // the LATEST tick's ask, not the first
+    expect(pick['conditionId']).toBe('c-slim-a-1');
+    expect(pick['tokenYes']).toBe('y-slim-a-1');
+    expect(pick['tokenNo']).toBe('n-slim-a-1');
+  });
+
+  it('has NO fresh-listing gate: an event whose young rows aged out of the lookback is STILL visible', async () => {
+    // The convergence read's fresh CTE (min(hours_since_listing) < 1 within p_days) blinded the lane to any
+    // market listed ≳2.4 days before its close for the ENTIRE [2,12]h buy window (measured live 2026-07-20:
+    // the 07-20 events' first-hour rows sat outside the 2-day lookback while the market was 6h from close).
+    // The slim read deliberately drops it — the tick's own gates bound what it can act on.
+    const ev = await seedEvent('slim-old', 2);
+    await seedTick(ev, 'slim-old', 0.1, { hoursSinceListing: 50 }); // captured LONG after listing → still in
+    const v = await slim(['slim-old']);
+    expect(v.captures).toHaveLength(1);
+    expect(v.resolutions).toEqual([{ id: ev, winnerIdx: 2, gradingMismatch: false }]);
+  });
+
+  it('scopes by p_cities and carries resolutions (winnerIdx) for the loss sweep', async () => {
+    const evA = await seedEvent('slim-b', 2);
+    const evB = await seedEvent('slim-c');
+    await seedTick(evA, 'slim-b', 0.1);
+    await seedTick(evB, 'slim-c', 0.1);
+    const v = await slim(['slim-b']);
+    expect(v.captures.map((c) => c.city)).toEqual(['slim-b']);
+    expect(v.resolutions).toEqual([{ id: evA, winnerIdx: 2, gradingMismatch: false }]);
+  });
+
+  it('is service_role-only (the tick is the sole caller — no operator/anon surface)', async () => {
+    const [g] = await rows<{ anon_can: boolean; authd_can: boolean; svc_can: boolean }>(
+      db,
+      `select has_function_privilege('anon', 'public.buy_table_tick_inputs(text[], integer)', 'EXECUTE') as anon_can,
+              has_function_privilege('authenticated', 'public.buy_table_tick_inputs(text[], integer)', 'EXECUTE') as authd_can,
+              has_function_privilege('service_role', 'public.buy_table_tick_inputs(text[], integer)', 'EXECUTE') as svc_can`,
+    );
+    expect(g).toEqual({ anon_can: false, authd_can: false, svc_can: true });
   });
 });

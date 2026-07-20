@@ -62,8 +62,9 @@ describe('trading boundary invariants (§15)', () => {
   });
 
   it('the clob client is imported nowhere outside packages/trading', () => {
-    // Non-executing mentions are allowed: execute-bet/index.ts + buy-table-tick/index.ts carry
-    // LITERAL eszip npm-snapshot hints (the deploy bundler can't see live.ts's
+    // Non-executing mentions are allowed: execute-bet/index.ts + buy-table-tick/index.ts +
+    // account-snapshot/index.ts (F-032, 2026-07-19 — its credentialed cash read boots the same lazy
+    // client) carry LITERAL eszip npm-snapshot hints (the deploy bundler can't see live.ts's
     // non-literal specifiers — hosted incident 2026-06-11), and the ambient
     // npm-specifiers.d.ts declares those literals for tsc. None constructs
     // a client; the runtime boundary stays inside packages/trading.
@@ -77,6 +78,7 @@ describe('trading boundary invariants (§15)', () => {
           p.startsWith('packages/trading/') ||
           p === 'supabase/functions/execute-bet/index.ts' ||
           p === 'supabase/functions/buy-table-tick/index.ts' ||
+          p === 'supabase/functions/account-snapshot/index.ts' ||
           p === 'supabase/functions/clob-sdk-probe/index.ts' ||
           p === 'supabase/functions/_shared/npm-specifiers.d.ts',
       ),

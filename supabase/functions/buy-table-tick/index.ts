@@ -1,7 +1,9 @@
-/** Edge Function entry — buy-table-tick (the CLOUD BUY-TABLE live lane, migration 0095).
- * Schedule: every 10 min. The 0095 cron stamps a per-tick periodKey into the request BODY at fire time
- * (the §8.1 idiom — runJob's body override claims it); this entry derives the same 10-min slot key as the
- * fallback for manual/keyless invocations. */
+/** Edge Function entry — buy-table-tick (the CLOUD BUY-TABLE live lane, migration 0095; fast lane 0114).
+ * Schedule: ~every 2 min 00-10Z ('buy-table-tick-fast') + every 10 min otherwise ('buy-table-tick'). Both
+ * crons stamp a MINUTE-precision periodKey into the request BODY at fire time (the §8.1 idiom — runJob's
+ * body override claims it); this entry derives the same minute key as the fallback for manual/keyless
+ * invocations, so every fire claims its own slot at any cadence ≥ 1/min. */
+import { fetchJson } from '../../../packages/io/src/index.ts';
 import { getEnv } from '../_shared/auth.ts';
 import { getServiceDb } from '../_shared/db.ts';
 import { notifySlack } from '../_shared/slack.ts';
@@ -27,10 +29,8 @@ const deno = (globalThis as {
 
 deno?.serve(async (req: Request) => {
   const now = new Date();
-  const slot = Math.floor(now.getUTCMinutes() / 10) * 10; // 10-min slot fallback (the cron body key wins)
-  const hh = String(now.getUTCHours()).padStart(2, '0');
-  const mm = String(slot).padStart(2, '0');
-  const periodKey = `buy-table-tick:${now.toISOString().slice(0, 10)}T${hh}:${mm}`;
+  // minute-precision fallback — matches the cron body stamp's format (the cron body key wins when present)
+  const periodKey = `buy-table-tick:${now.toISOString().slice(0, 16)}`;
   const db = await getServiceDb();
   return runJob(
     'buy-table-tick',
@@ -41,6 +41,7 @@ deno?.serve(async (req: Request) => {
         now,
         getEnvVar: getEnv,
         notify: (a) => notifySlack(db, a),
+        fetchJson: (url, init, opts) => fetchJson(url, init, opts),
       }),
     { db },
   );

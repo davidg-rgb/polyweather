@@ -518,6 +518,11 @@ describe('migrations 0001–0010', () => {
       // upserted by the account-snapshot edge fn on 9,39 * * * *) + the fail-soft account_funds() RPC the
       // loader merges via allSettled (the 0099 decoupling law). Cron 35 → 36.
       '0113_account_snapshot.sql',
+      // the buy-table FAST LANE: slim buy_table_tick_inputs (latest capture per event — the tick's own
+      // discovery read, replacing the measured-8.2s convergence grid read) + the cron window split
+      // (10-min lane hours 10-23; ~2-min 'buy-table-tick-fast' lane hours 0-9 — the only hours candidates
+      // can exist with every allowlist market closing 12:00Z and a [2,12]h lead window). Cron 36 → 37.
+      '0114_buy_table_fast_lane.sql',
     ]);
   });
 });
@@ -1164,14 +1169,21 @@ describe('pg_cron registrations (§7.22, W11)', () => {
       // 0095: the BUY-TABLE cloud live lane tick (http_post edge-fn job; W11-checked — its command
       // additionally stamps a per-tick periodKey into the request BODY at fire time, the §8.1 idiom).
       // 0108: re-laned to the C15 compute-shed minutes + pinned to eu-west-1 (the C44 geoblock fix).
-      'buy-table-tick':           '3,13,23,33,43,53 * * * *',
+      // 0114: window-split — the 10-min lane keeps only the off-window hours (candidates exist only
+      // ~00-10Z: every allowlist market closes 12:00Z, lead window [2,12]h); the fast lane below covers
+      // the window at ~2-min.
+      'buy-table-tick':           '3,13,23,33,43,53 10-23 * * *',
+      // 0114: the fast lane — even minutes minus {0,30} (C15 permanently-bad quarters) minus {12,42}
+      // (poll-markets stays sole-tenant), hours 0-9. Posts the SAME buy-table-tick fn (W11 fnName map).
+      'buy-table-tick-fast':
+        '2,4,6,8,10,14,16,18,20,22,24,26,28,32,34,36,38,40,44,46,48,50,52,54,56,58 0-9 * * *',
       // 0095: the lane deadman (pure-SQL cron like the 0066/0089 deadmen — excluded from W11 below).
       'buy-table-deadman':        '*/15 * * * *',
       // 0113: the /trading account-overview snapshot (venue cash + data-api marks) — 9,39 avoids every
       // contended/occupied minute lane (C15).
       'account-snapshot':         '9,39 * * * *',
     };
-    expect(jobs.length).toBe(36);
+    expect(jobs.length).toBe(37);
     for (const j of jobs) {
       expect(j.schedule, `schedule for ${j.jobname}`).toBe(expected[j.jobname]);
     }
@@ -1188,11 +1200,13 @@ describe('pg_cron registrations (§7.22, W11)', () => {
     );
     // 4cb1e77: buy-table-tick posts with a 10s timeout (a cold Edge boot exceeded the generic 4.5s and the
     // launch tick 504'd); every other edge-fn cron keeps the standard 4500.
-    const timeoutMs: Record<string, string> = { 'buy-table-tick': '10000' };
+    const timeoutMs: Record<string, string> = { 'buy-table-tick': '10000', 'buy-table-tick-fast': '10000' };
+    // 0114: the fast lane is a SECOND cron on the SAME edge fn — its URL names the fn, not the jobname.
+    const fnName: Record<string, string> = { 'buy-table-tick-fast': 'buy-table-tick' };
     for (const j of jobs) {
       expect(j.command).toContain(`vault.decrypted_secrets where name = 'cron_secret'`);
       expect(j.command).toContain(`vault.decrypted_secrets where name = 'project_url'`);
-      expect(j.command).toContain(`/functions/v1/${j.jobname}`);
+      expect(j.command).toContain(`/functions/v1/${fnName[j.jobname] ?? j.jobname}`);
       expect(j.command, `timeout for ${j.jobname}`).toContain(
         `timeout_milliseconds := ${timeoutMs[j.jobname] ?? '4500'}`,
       );

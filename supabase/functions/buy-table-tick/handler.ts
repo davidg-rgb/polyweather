@@ -23,6 +23,15 @@
  * class) is adjudicated against venue evidence (adopt/free/hold) BEFORE the entry gate reads the
  * ledger, so a freed market becomes retryable this same tick instead of blocking forever.
  *
+ * 0114 FAST LANE: the tick now runs ~every 2 min inside 00:00-10:00Z (the ONLY hours candidates can exist —
+ * every allowlist market closes 12:00Z and the lead window is [2,12]h) and every 10 min otherwise. Two
+ * changes make that cadence cheap and worthwhile: (a) discovery reads the SLIM buy_table_tick_inputs RPC
+ * (latest capture per event — milliseconds) instead of the 2-day convergence grid read (measured mean 8.2s),
+ * falling back to the old read where 0114 isn't applied; (b) the LIVE RE-QUOTE — before gating, the tick
+ * fetches the venue's CLOB /book for each in-window pick (keyless, ≤1 per market) so the price gate, sizing,
+ * and the FAK worst-price see the book NOW, not a minutes-old capture (a dip between captures is otherwise
+ * invisible). Cadence does NOT raise exposure: the entry gate still allows one position per market ever.
+ *
  * TRADE MODE LADDER (the double gate, preserved): the Edge secret TRADE_MODE resolved by the T1
  * `resolveTradeMode` — absent/typo ⇒ dry-run (records the intent in the ledger, NEVER posts), 'off' ⇒
  * inert. A REAL post needs TRADE_MODE=live AND trade_config.mode='live' AND
@@ -46,13 +55,17 @@
 import type { JobCtx, JobStats } from '../_shared/runJob.ts';
 import {
   ExecutionError,
+  executableAsk,
   metarMaxToNative,
+  normalizeBook,
   parseBotConfig,
   parseBucketLabel,
   type RawBucket,
   type RawCaptureRow,
+  type RawClobBook,
   type RawResolution,
 } from '../../../packages/core/src/index.ts';
+import type { FetchJsonLike } from '../_shared/polymarket-wallet.ts';
 import {
   MakerExecutor,
   createClobClient,
@@ -72,6 +85,8 @@ export interface BuyTableTickDeps {
   getEnvVar: (name: string) => string | undefined;
   /** notifySlack(db, …) in production — claim_alert-gated (0095 allowlists the lane's push kinds). */
   notify: (alert: TradeAlert) => Promise<boolean>;
+  /** io fetchJson in production — the 0114 LIVE RE-QUOTE's keyless CLOB /book reads (no key, no client). */
+  fetchJson: FetchJsonLike;
   /** Mock clob-client factory in tests; createClobClient in production (the §15 seam). */
   liveClient?: () => Promise<MakerClobClientish>;
 }
@@ -88,6 +103,13 @@ export const BUY_TABLE_STRATEGY = 'buy-table';
  * surface; this is a fixed model rule.
  */
 export const HARD_MIN_ASK = 0.01;
+
+/** 0114 LIVE RE-QUOTE — keyless CLOB /book endpoint + headers (the opening-capture idiom; read-only). */
+const CLOB = 'https://clob.polymarket.com';
+const CLOB_HEADERS: Record<string, string> = {
+  'User-Agent': 'weather-edge/0.1 (buy-table-tick)',
+  Accept: 'application/json',
+};
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 // Config — the buy_table.* key/value rows (migration 0095 seeds the defaults; coalesce here mirrors them).
@@ -245,6 +267,17 @@ export interface BuyTableSkip {
 const fin = (v: number | null | undefined): v is number => v != null && Number.isFinite(v);
 const tms = (iso: string | null | undefined): number => (iso ? Date.parse(iso) : NaN);
 
+/** OUR predicted bucket = argmax houseProb with full venue identity — the ONE pick rule, shared by
+ *  candidate selection and the 0114 live re-quote so the two can never drift apart. */
+export function pickHouseBucket(buckets: RawBucket[] | null | undefined): RawBucket | null {
+  let pick: RawBucket | null = null;
+  for (const b of Array.isArray(buckets) ? buckets : []) {
+    if (!b?.conditionId || !b?.tokenYes || !fin(b.houseProb)) continue;
+    if (pick == null || (b.houseProb as number) > (pick.houseProb as number)) pick = b;
+  }
+  return pick;
+}
+
 /** One entry row from buy_table_entries(p_mode) — the lane's ANY-status ledger read (0095). */
 export interface BuyTableEntryRow {
   marketId: string;
@@ -313,12 +346,7 @@ export function selectBuyTableCandidates(args: {
     }
 
     // OUR predicted bucket = argmax houseProb (the same house seed the daemon reads), identity required.
-    const buckets = Array.isArray(r.buckets) ? r.buckets : [];
-    let pick: RawBucket | null = null;
-    for (const b of buckets) {
-      if (!b?.conditionId || !b?.tokenYes || !fin(b.houseProb)) continue;
-      if (pick == null || (b.houseProb as number) > (pick.houseProb as number)) pick = b;
-    }
+    const pick = pickHouseBucket(r.buckets);
     if (pick == null) {
       skips.push({ ref, reason: 'no_house_prob — unseeded capture (no forecast center to buy)' });
       continue;
@@ -407,6 +435,80 @@ export function selectBuyTableCandidates(args: {
   }
 
   return { candidates, skips };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────
+// 0114 LIVE RE-QUOTE (pure halves) — the capture stream is minutes old; at a ~2-min cadence the gate,
+// the FAK worst-price, and the share sizing must see the venue's book NOW, or a dip between captures
+// is invisible (a stale-HIGH ask hides a live dip below the cap; a stale-LOW ask just zero-fills).
+// requoteTargets picks WHICH books to fetch (≤ one per in-window unresolved market); applyRequotes
+// patches ONLY the picked bucket's execAsk/bestAsk so every downstream gate reads the live number.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────
+
+export interface RequoteTarget {
+  eventId: string;
+  tokenYes: string;
+}
+
+/** The live quote for one event's PICKED bucket: top-of-book ask + the executable (avg) ask for our
+ *  stake-sized order — the same two fields the capture's walkBucketDepth writes. */
+export interface LiveQuote {
+  bestAsk: number;
+  execAsk: number;
+}
+
+/** Which events are worth a live /book fetch this tick: latest capture per event, unresolved, inside the
+ *  lead window, with a pickable house bucket. Mirrors the cheap pre-gates of selectBuyTableCandidates so
+ *  the fetch count is bounded by the allowlist's in-window markets (normally ≤ 4). */
+export function requoteTargets(args: {
+  captures: RawCaptureRow[];
+  resolutions: RawResolution[];
+  cfg: BuyTableCfg;
+  now: Date;
+}): RequoteTarget[] {
+  const { captures, resolutions, cfg, now } = args;
+  const resolvedBy = new Map<string, number | null>(
+    (Array.isArray(resolutions) ? resolutions : []).map((r) => [String(r.id), r.winnerIdx ?? null]),
+  );
+  const latest = new Map<string, RawCaptureRow>();
+  for (const r of Array.isArray(captures) ? captures : []) {
+    if (r?.eventId == null) continue;
+    const prev = latest.get(r.eventId);
+    if (!prev || tms(r.capturedAt) > tms(prev.capturedAt)) latest.set(r.eventId, r);
+  }
+  const out: RequoteTarget[] = [];
+  for (const [eventId, r] of latest) {
+    if (resolvedBy.get(eventId) != null) continue;
+    const resolvesAtMs = tms(r.resolvesAt);
+    if (!Number.isFinite(resolvesAtMs)) continue;
+    const hoursToClose = (resolvesAtMs - now.getTime()) / 3_600_000;
+    if (!(hoursToClose >= cfg.leadMinH && hoursToClose <= cfg.leadMaxH)) continue;
+    if (!r.targetDate) continue;
+    const pick = pickHouseBucket(r.buckets);
+    if (pick?.tokenYes) out.push({ eventId, tokenYes: String(pick.tokenYes) });
+  }
+  return out;
+}
+
+/** Patch the PICKED bucket's execAsk/bestAsk with the live quote on every row of a quoted event (selection
+ *  reduces to the latest row, so patching all rows is equivalent and keeps this a trivial map). Non-quoted
+ *  events and non-pick buckets pass through untouched — a failed fetch means the capture ask still rules. */
+export function applyRequotes(captures: RawCaptureRow[], quotes: Map<string, LiveQuote>): RawCaptureRow[] {
+  if (quotes.size === 0) return captures;
+  return captures.map((r) => {
+    const q = r?.eventId != null ? quotes.get(r.eventId) : undefined;
+    if (!q) return r;
+    const pick = pickHouseBucket(r.buckets);
+    if (pick?.tokenYes == null) return r;
+    return {
+      ...r,
+      buckets: (Array.isArray(r.buckets) ? r.buckets : []).map((b) =>
+        b?.tokenYes != null && String(b.tokenYes) === String(pick.tokenYes)
+          ? { ...b, execAsk: q.execAsk, bestAsk: q.bestAsk }
+          : b,
+      ),
+    };
+  });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
@@ -578,28 +680,53 @@ export async function buyTableTick(ctx: JobCtx, deps: BuyTableTickDeps): Promise
   }
   if (stagedDark) return { mode, stagedDark: true, degraded: false };
 
-  // 5 · discovery — the same capture RPC the daemon reads. Failed/shapeless ⇒ DEGRADED, never 'no candidates'.
+  // 5 · discovery — the 0114 SLIM read first (buy_table_tick_inputs: latest capture per event only — the
+  //     ~2-min cadence must never drive the full 2-day grid read the panels use), falling back to
+  //     convergence_capture_inputs where 0114 isn't applied yet (the 42883 staged idiom, same envelope
+  //     shape). Failed/shapeless (either read) ⇒ DEGRADED, never 'no candidates'.
   let captures: RawCaptureRow[] = [];
   let resolutions: RawResolution[] = [];
   let discoveryDegraded = false;
+  let slimRead = true;
+  let env: CaptureInputs | null | undefined;
   try {
-    const rows = await db.rpc<{ convergence_capture_inputs: CaptureInputs | null }>('convergence_capture_inputs', {
-      p_days: 2,
+    const rows = await db.rpc<{ buy_table_tick_inputs: CaptureInputs | null }>('buy_table_tick_inputs', {
       p_cities: allowlist,
+      p_days: 2,
     });
-    const env = rows[0]?.convergence_capture_inputs;
+    env = rows[0]?.buy_table_tick_inputs;
+  } catch (e) {
+    const m = errMsg(e);
+    if (isMissingObjectError(m)) {
+      slimRead = false;
+      log('buy-table.slim_inputs_absent', {
+        note: 'buy_table_tick_inputs() absent — migration 0114 not applied; falling back to convergence_capture_inputs',
+      });
+      try {
+        const rows = await db.rpc<{ convergence_capture_inputs: CaptureInputs | null }>('convergence_capture_inputs', {
+          p_days: 2,
+          p_cities: allowlist,
+        });
+        env = rows[0]?.convergence_capture_inputs;
+      } catch (e2) {
+        discoveryDegraded = true;
+        log('buy-table.discovery_failed', { error: redactText(errMsg(e2)) });
+      }
+    } else {
+      discoveryDegraded = true;
+      log('buy-table.discovery_failed', { error: redactText(m) });
+    }
+  }
+  if (!discoveryDegraded) {
     if (env == null || !Array.isArray(env.captures)) {
       discoveryDegraded = true;
       log('buy-table.discovery_shapeless', {
-        note: 'convergence_capture_inputs returned no {captures:[…]} envelope — treated as a failed read (tick degraded)',
+        note: 'the discovery read returned no {captures:[…]} envelope — treated as a failed read (tick degraded)',
       });
     } else {
       captures = env.captures;
       resolutions = Array.isArray(env.resolutions) ? (env.resolutions as RawResolution[]) : [];
     }
-  } catch (e) {
-    discoveryDegraded = true;
-    log('buy-table.discovery_failed', { error: redactText(errMsg(e)) });
   }
 
   const degraded = discoveryDegraded || entriesDegraded;
@@ -663,6 +790,49 @@ export async function buyTableTick(ctx: JobCtx, deps: BuyTableTickDeps): Promise
       }
     } catch (e) {
       log('buy-table.floor_read_unavailable', { error: redactText(errMsg(e)), note: 'dead-bucket gate off this tick (fail-open)' });
+    }
+  }
+
+  // 6c · the 0114 LIVE RE-QUOTE — fetch the venue's CLOB book NOW for each in-window market's picked
+  //      bucket (keyless read, ≤ one fetch per allowlisted in-window market) and patch its executable ask
+  //      before the gates run: the price gate, share sizing, and the FAK worst-price then act on the live
+  //      book instead of a minutes-old capture. FAIL-SOFT per event: a failed/empty book keeps the capture
+  //      ask (exactly the pre-0114 behavior); the tick is never degraded by this step. Runs in dry-run too
+  //      (measurement parity — the dry ledger should record what a live tick would have done).
+  let requoted = 0;
+  let requoteFailed = 0;
+  if (!degraded && captures.length > 0) {
+    const targets = requoteTargets({ captures, resolutions, cfg, now });
+    if (targets.length > 0) {
+      const quotes = new Map<string, LiveQuote>();
+      await Promise.all(
+        targets.map(async (t) => {
+          try {
+            const book = normalizeBook(
+              (await deps.fetchJson(
+                `${CLOB}/book?token_id=${t.tokenYes}`,
+                { headers: CLOB_HEADERS } as RequestInit,
+                { timeoutMs: 5000, retries: 1 },
+              )) as RawClobBook,
+            );
+            const top = book.asks[0]?.price;
+            if (!fin(top) || !(top > 0 && top <= 1)) return; // empty/askless book — capture ask rules
+            const estShares = Math.max(1, Math.floor(stakeUsd / top));
+            const { avgPrice, fillableShares } = executableAsk(book, estShares);
+            if (!(fillableShares > 0) || !fin(avgPrice)) return;
+            quotes.set(t.eventId, { bestAsk: top, execAsk: avgPrice });
+          } catch (e) {
+            requoteFailed++;
+            log('buy-table.requote_failed', {
+              eventRef: t.eventId,
+              error: redactText(errMsg(e)),
+              note: 'capture ask kept for this market (fail-soft)',
+            });
+          }
+        }),
+      );
+      requoted = quotes.size;
+      if (quotes.size > 0) captures = applyRequotes(captures, quotes);
     }
   }
 
@@ -850,6 +1020,9 @@ export async function buyTableTick(ctx: JobCtx, deps: BuyTableTickDeps): Promise
     degraded,
     discoveryDegraded,
     entriesDegraded,
+    slimRead,
+    requoted,
+    requoteFailed,
     captures: captures.length,
     entriesSeen: entries.length,
     candidates: candidates.length,
