@@ -17,7 +17,7 @@ import type { PGlite } from '@electric-sql/pglite';
 import { freshDb } from '../../supabase/tests/harness.ts';
 import { toPgliteParam } from '../lib/pglite-param.ts';
 import type { ScriptDb } from '../lib/script-db.ts';
-import { dumpTable, fetchBatchAdaptive, MIN_BATCH_ROWS, readManifest, verifyDump } from './dump-opening-captures.ts';
+import { dumpTable, fetchBatchAdaptive, MIN_BATCH_ROWS, readManifest, verifyCoverage, verifyDump } from './dump-opening-captures.ts';
 
 let db: PGlite;
 let sdb: ScriptDb;
@@ -169,5 +169,64 @@ describe('dump-opening-captures — keyset coverage / bid-ask fidelity / resume 
     const again = await dumpTable(sdb, { outDir, batchRows: 3 });
     expect(again.rowsWritten).toBe(before.rowsWritten);
     expect(again.shards.length).toBe(before.shards.length);
+  });
+});
+
+describe('dump-opening-captures — incremental append + coverage verify (retention loop)', () => {
+  it('appends ONLY new rows to a completed archive; a plain re-run stays a no-op', async () => {
+    const incDir = mkdtempSync(join(tmpdir(), 'oc-dump-inc-'));
+    try {
+      const full = await dumpTable(sdb, { outDir: incDir, batchRows: 100 });
+      expect(full.done).toBe(true);
+      const base = full.rowsWritten; // whole-table snapshot
+
+      // new captures land (higher ids) AFTER the archive was marked done.
+      const ev = await seedEvent('dump-inc');
+      await seedCaptures(ev, 'dump-inc', 4);
+
+      // without --incremental a done manifest is a no-op (the append is opt-in).
+      expect((await dumpTable(sdb, { outDir: incDir, batchRows: 100 })).rowsWritten).toBe(base);
+
+      // --incremental appends exactly the 4 new rows — no --force, no re-dump, no double-count.
+      const inc = await dumpTable(sdb, { outDir: incDir, batchRows: 100, incremental: true });
+      expect(inc.done).toBe(true);
+      expect(inc.rowsWritten).toBe(base + 4);
+      expect(inc.distinctEvents).toBe(full.distinctEvents + 1);
+
+      const lines = shardLines(incDir);
+      expect(lines.length).toBe(base + 4);
+      expect(new Set(lines.map((r) => String(r['id']))).size).toBe(base + 4);
+
+      const cov = await verifyCoverage(sdb, incDir);
+      expect(cov.covered).toBe(true);
+      expect(cov.liveRows).toBe(base + 4);
+      expect(cov.archivedRows).toBe(base + 4); // equal before any prune
+    } finally {
+      rmSync(incDir, { recursive: true, force: true });
+    }
+  });
+
+  it('coverage holds when the archive is a SUPERSET of live (post-prune); a row beyond lastId is the gate case', async () => {
+    const supDir = mkdtempSync(join(tmpdir(), 'oc-dump-sup-'));
+    try {
+      const ev = await seedEvent('dump-sup');
+      await seedCaptures(ev, 'dump-sup', 5);
+      const full = await dumpTable(sdb, { outDir: supDir, batchRows: 100 });
+      const lastId = full.lastId!;
+
+      // simulate a prune: delete this event's rows from LIVE. The archive keeps them → superset.
+      await sdb.query(`delete from opening_captures where event_id = $1`, [ev]);
+      const cov = await verifyCoverage(sdb, supDir);
+      expect(cov.covered).toBe(true); // liveInPrefix (fewer) ≤ archivedRows (superset)
+      expect(cov.archivedRows).toBeGreaterThan(cov.liveInPrefix);
+
+      // a NEW capture (id > lastId) is beyond the archived prefix — the per-event gate in the prune catches this.
+      await seedCaptures(ev, 'dump-sup', 1);
+      const cov2 = await verifyCoverage(sdb, supDir);
+      expect(BigInt(cov2.maxLiveId) > BigInt(lastId)).toBe(true);
+      expect(cov2.liveInPrefix).toBe(cov.liveInPrefix); // the new row is OUTSIDE the prefix, so prefix coverage is unchanged
+    } finally {
+      rmSync(supDir, { recursive: true, force: true });
+    }
   });
 });
