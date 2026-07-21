@@ -18,7 +18,7 @@ import { freshDb, rows } from '../../supabase/tests/harness.ts';
 import { toPgliteParam } from '../lib/pglite-param.ts';
 import type { ScriptDb } from '../lib/script-db.ts';
 import { indexArchive } from '../research/tune-convergence.ts';
-import { executePrune, findCandidates, preflightArchive } from './prune-opening-captures.ts';
+import { coverageBeyondArchive, executePrune, findCandidates, preflightArchive, type PruneCandidate } from './prune-opening-captures.ts';
 
 let db: PGlite;
 let sdb: ScriptDb;
@@ -89,11 +89,22 @@ describe('prune-opening-captures — candidates / pre-flight / batched delete', 
     expect(c.polyEventId).toBe(oldEv.polyId);
     expect(Number(c.nRows)).toBe(7);
     expect(Number(c.bytesEst)).toBeGreaterThan(0); // pg_column_size over the stored buckets payload
+    expect(Number(c.maxId)).toBeGreaterThan(0); // max row id — the coverage gate compares this to the archive lastId
+  });
+
+  it('coverageBeyondArchive flags candidates whose rows exceed the archive lastId (the append-only delete gate)', () => {
+    const mk = (maxId: string): PruneCandidate =>
+      ({ eventId: 'e' + maxId, polyEventId: 'p', city: 'c', targetDate: '', resolvedAt: '', nRows: 1, maxId, bytesEst: 1 });
+    const cands = [mk('100'), mk('250'), mk('300')];
+    expect(coverageBeyondArchive(cands, '250').map((c) => c.maxId)).toEqual(['300']); // only 300 > 250
+    expect(coverageBeyondArchive(cands, '99')).toHaveLength(3); // archive behind all → all beyond
+    expect(coverageBeyondArchive(cands, '999')).toHaveLength(0); // archive ahead of all → all covered
+    expect(coverageBeyondArchive(cands, null)).toHaveLength(3); // no archive ⇒ nothing covered
   });
 
   it('preflightArchive FAILS while the archive lacks the candidate, PASSES once the file exists', () => {
     const cands = [
-      { eventId: oldEv.id, polyEventId: oldEv.polyId, city: 'prune-old', targetDate: '', resolvedAt: '', nRows: 7, bytesEst: 1 },
+      { eventId: oldEv.id, polyEventId: oldEv.polyId, city: 'prune-old', targetDate: '', resolvedAt: '', nRows: 7, maxId: '1', bytesEst: 1 },
     ];
     // empty archive → missing (no archive file, no delete)
     const before = preflightArchive(cands, indexArchive(archiveDir));

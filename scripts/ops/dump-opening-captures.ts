@@ -21,8 +21,18 @@
  * READ-ONLY / non-destructive — this never deletes. The prune (prune-opening-captures.ts --execute) is the
  * separate, archive-gated destructive step that runs AFTER this dump is verified.
  *
+ * INCREMENTAL (the retention loop's cheap daily path — no --force re-dump): `--incremental` continues from the
+ * manifest's lastId even when the dump is `done`, appending ONLY the new rows (id > lastId) as fresh shards.
+ * The archive is APPEND-ONLY: it is never overwritten and, after a prune, is a SUPERSET of the live table (it
+ * keeps the pruned rows — that is the point). So the exact-match --verify no longer applies; --incremental
+ * self-checks with `verifyCoverage` (every live row in the archived id-prefix is archived — holds by the
+ * monotonic append-only ids) and stamps the manifest verified. The prune's per-event gate (candidate maxId ≤
+ * lastId) is what actually authorises a delete.
+ *
  * Run: pnpm tsx scripts/ops/dump-opening-captures.ts                 # dump (resumes if a manifest exists)
- *      pnpm tsx scripts/ops/dump-opening-captures.ts --verify        # cross-check manifest vs the live table
+ *      pnpm tsx scripts/ops/dump-opening-captures.ts --incremental   # append new rows to a done archive + coverage-verify (retention loop)
+ *      pnpm tsx scripts/ops/dump-opening-captures.ts --verify        # exact cross-check (full-snapshot archives only)
+ *      pnpm tsx scripts/ops/dump-opening-captures.ts --verify-coverage # live ⊆ archive check (append-only archives)
  *      pnpm tsx scripts/ops/dump-opening-captures.ts --batch 2000    # override the initial batch size
  *      pnpm tsx scripts/ops/dump-opening-captures.ts --max-batches 3 # trial run (first N batches, then stop)
  */
@@ -82,6 +92,8 @@ export interface DumpOpts {
   maxBatches?: number;
   /** re-dump from scratch even if a completed manifest exists. */
   force?: boolean;
+  /** append new rows (id > lastId) to a COMPLETED archive instead of stopping — the retention loop's cheap path. */
+  incremental?: boolean;
   log?: (msg: string) => void;
 }
 
@@ -234,22 +246,27 @@ export async function dumpTable(db: ScriptDb, opts: DumpOpts = {}): Promise<Dump
 
   const existing = opts.force ? null : readManifest(outDir);
   const manifest = existing ?? freshManifest(new Date());
-  if (existing?.done) {
-    log(`already complete: ${manifest.rowsWritten} rows in ${manifest.shards.length} shards (use --force to re-dump).`);
+  if (existing?.done && !opts.incremental) {
+    log(`already complete: ${manifest.rowsWritten} rows in ${manifest.shards.length} shards (use --force to re-dump, --incremental to append new rows).`);
     return manifest;
   }
 
-  // rebuild the distinct-event set from shards already on disk so a resumed run keeps an accurate count.
+  // rebuild the distinct-event set so the resumed/appended run keeps an accurate count — prefer the
+  // _events.json sidecar (instant; written at each completion), else scan the shards on disk.
   const events = new Set<string>();
   if (existing) {
-    for (const s of existing.shards) {
-      const lines = gunzipShard(outDir, s.file).toString('utf8').split('\n').filter(Boolean);
-      for (const ln of lines) {
-        const ev = (JSON.parse(ln) as { event_id?: string | null }).event_id;
-        if (ev) events.add(ev);
+    if (existsSync(eventsPath(outDir))) {
+      for (const ev of JSON.parse(readFileSync(eventsPath(outDir), 'utf8')) as string[]) events.add(ev);
+    } else {
+      for (const s of existing.shards) {
+        for (const ln of gunzipShard(outDir, s.file).toString('utf8').split('\n').filter(Boolean)) {
+          const ev = (JSON.parse(ln) as { event_id?: string | null }).event_id;
+          if (ev) events.add(ev);
+        }
       }
     }
-    log(`resuming from id > ${manifest.lastId} · ${manifest.rowsWritten} rows / ${manifest.shards.length} shards on disk.`);
+    manifest.done = false; // re-open for append/resume; the loop re-sets done when new rows are exhausted
+    log(`${opts.incremental ? 'incremental append' : 'resuming'} from id > ${manifest.lastId} · ${manifest.rowsWritten} rows / ${events.size} events on disk.`);
   }
 
   let batch = startBatch;
@@ -346,10 +363,60 @@ export async function verifyDump(db: ScriptDb, outDir: string, batchRows = BATCH
   };
 }
 
+export interface CoverageResult {
+  liveRows: number;
+  /** live rows with id ≤ the archive's lastId — the id-prefix the archive is responsible for. */
+  liveInPrefix: number;
+  /** total rows archived (a SUPERSET of live once prunes have run — includes deleted rows). */
+  archivedRows: number;
+  maxLiveId: string;
+  lastId: string | null;
+  /** every live row in the archived id-prefix is archived. Holds by monotonic append-only ids; sanity-checked. */
+  covered: boolean;
+}
+
+/**
+ * Coverage check for an APPEND-ONLY (incremental) archive. After a prune the archive is a SUPERSET of the live
+ * table, so verifyDump's exact match no longer holds. opening_captures ids are monotonic and rows append-only,
+ * so every live row with id ≤ manifest.lastId was read (and archived) when its id-range was dumped. This
+ * sanity-checks the invariant — the count of live rows in the archived prefix must not exceed the rows archived
+ * (a superset). The per-EVENT coverage that authorises a delete (candidate maxId ≤ lastId) lives in the prune.
+ */
+export async function verifyCoverage(db: ScriptDb, outDir: string): Promise<CoverageResult> {
+  const manifest = readManifest(outDir);
+  if (!manifest) throw new Error(`no manifest at ${outDir} — run the dump first`);
+  const lastId = manifest.lastId ?? '0';
+  const [row] = await db.query<{ max_id: string; live: string; in_prefix: string }>(
+    `select coalesce(max(id),0)::text                              as max_id,
+            count(*)::text                                         as live,
+            count(*) filter (where id <= $1::bigint)::text         as in_prefix
+       from public.opening_captures`,
+    [lastId],
+  );
+  const liveInPrefix = Number(row?.in_prefix ?? 0);
+  return {
+    liveRows: Number(row?.live ?? 0),
+    liveInPrefix,
+    archivedRows: manifest.rowsWritten,
+    maxLiveId: row?.max_id ?? '0',
+    lastId: manifest.lastId,
+    covered: liveInPrefix <= manifest.rowsWritten,
+  };
+}
+
+/** Stamp the manifest verified (shared by the exact-verify and coverage-verify paths). */
+export function stampVerified(outDir: string, now = new Date()): void {
+  const m = readManifest(outDir);
+  if (!m) throw new Error(`no manifest at ${outDir}`);
+  writeManifest(outDir, { ...m, verified: true, verifiedAt: now.toISOString() });
+}
+
 async function main(): Promise<void> {
   const { values } = parseArgs({
     options: {
       verify: { type: 'boolean', default: false },
+      'verify-coverage': { type: 'boolean', default: false },
+      incremental: { type: 'boolean', default: false },
       force: { type: 'boolean', default: false },
       batch: { type: 'string' },
       'max-batches': { type: 'string' },
@@ -359,15 +426,29 @@ async function main(): Promise<void> {
   loadEnv();
   const outDir = values.dir ?? OUT_ROOT;
   const db = makeScriptDb();
+  const reportCoverage = (c: Awaited<ReturnType<typeof verifyCoverage>>): boolean => {
+    console.log('coverage (append-only archive) vs live table:');
+    console.log(`  live rows       : ${c.liveRows}  (max id ${c.maxLiveId})`);
+    console.log(`  live in prefix  : ${c.liveInPrefix}  (id ≤ archive lastId ${c.lastId})`);
+    console.log(`  archived rows   : ${c.archivedRows}  (superset — includes pruned rows)`);
+    console.log(`  → ${c.covered ? '✅ covered (every archived-prefix live row is in the archive)' : '❌ NOT covered'}`);
+    return c.covered;
+  };
   try {
+    if (values['verify-coverage']) {
+      if (reportCoverage(await verifyCoverage(db, outDir))) {
+        stampVerified(outDir);
+        console.log('  → stamped manifest.verified = true (prune dump pre-flight unlocked).');
+      } else process.exitCode = 1;
+      return;
+    }
     if (values.verify) {
       const v = await verifyDump(db, outDir);
       console.log('verify opening_captures dump vs live table:');
       console.log(`  rows   : manifest ${v.manifestRows}  live ${v.dbRows}  ${v.rowsMatch ? '✅ match' : '❌ MISMATCH'}`);
       console.log(`  events : manifest ${v.manifestEvents}  live ${v.dbEvents}  ${v.eventsMatch ? '✅ match' : '❌ MISMATCH'}`);
       if (v.rowsMatch && v.eventsMatch) {
-        const m = readManifest(outDir)!;
-        writeManifest(outDir, { ...m, verified: true, verifiedAt: new Date().toISOString() });
+        stampVerified(outDir);
         console.log('  → stamped manifest.verified = true (prune dump pre-flight is now unlocked).');
       } else {
         process.exitCode = 1;
@@ -377,10 +458,18 @@ async function main(): Promise<void> {
     await dumpTable(db, {
       outDir,
       force: values.force,
+      incremental: values.incremental,
       batchRows: values.batch ? Number(values.batch) : undefined,
       maxBatches: values['max-batches'] ? Number(values['max-batches']) : undefined,
       log: console.log,
     });
+    if (values.incremental) {
+      // append-only archives self-verify via coverage (not exact match) and stamp the manifest.
+      if (reportCoverage(await verifyCoverage(db, outDir))) {
+        stampVerified(outDir);
+        console.log('  → incremental append complete + coverage-verified; manifest.verified = true.');
+      } else process.exitCode = 1;
+    }
   } finally {
     await db.end();
   }

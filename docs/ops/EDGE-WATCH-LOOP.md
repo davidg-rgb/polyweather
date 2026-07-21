@@ -21,6 +21,16 @@
 
 _Claude keeps this block current every material cycle. Whole status in 20 seconds._
 
+- **▶▶ 2026-07-21 ~23:15Z (operator: "Build it") — the DURABLE fix for opening_captures retention is BUILT: an
+  incremental-append dump + per-event coverage gate → the recurring 863 MB chore is now two cheap commands, no
+  `--force`, no rename foot-gun, no forced VACUUM FULL.** `dump-opening-captures.ts --incremental` continues from
+  the manifest `lastId` even on a `done` archive, appending ONLY new rows; `verifyCoverage` replaces exact-match
+  (the append-only archive is a SUPERSET of live after a prune → checks live ⊆ archive on the id-prefix); the
+  prune gained `coverageBeyondArchive` (per-event `maxId ≤ lastId`) as the real delete gate — monotonic
+  append-only ids ⇒ maxId ≤ lastId means every one of that event's rows is archived. **Proven live:** appended
+  330 rows in one shard (from `id > 614347`), coverage-verified ✅, prune dry-run clean. Loop's ongoing path is
+  now `--incremental` → `prune --preflight dump --resolved-age-days 2 --execute` (VACUUM only when bloated;
+  steady prune keeps it flat). +16 ops tests, typecheck clean. Runbook: `STORAGE-TIERING.md`.
 - **▶▶ 2026-07-21 ~20:55Z (operator: "Run it — make sure no data is lost") — the BIG chunk is RECLAIMED:
   `opening_captures` 1300 MB → 277 MB (~1,023 MB), DB 2652 → 1634 MB. Zero data lost, zero job failures.**
   No-data-loss method: preserved the C96 archive (renamed `opening-captures-archive-c96-20260707` — the only copy
@@ -30,9 +40,9 @@ _Claude keeps this block current every material cycle. Whole status in 20 second
   (246,297 rows / 644 events, ~817 MB) → **`VACUUM FULL`** (survived the MCP client timeout, ran ~2 min
   server-side, nothing blocked). Capture + buy-tick ran clean throughout (the transient "1 fail" was an in-flight
   `running` capture row, not a failure). **Session total: DB ~2.9 GB → 1634 MB (~1.27 GB reclaimed).**
-  **RECURRING until Move 2:** opening_captures regrows ~95 MB/day → another dump→prune→VACUUM in ~1–2 weeks; the
-  durable fix (incremental-append dump, no `--force` re-dump; needs a live⊆archive verify) is designed, not
-  built — flagged for a calm cycle. Floor now ~1.6 GB; lower still needs the dashboard summary-table
+  **RECURRING:** opening_captures regrows ~95 MB/day → re-run retention every ~1–2 weeks — now the two cheap
+  incremental commands (see the 23:15Z entry above; the `--force`/rename/VACUUM-FULL chore is retired). Floor now
+  ~1.6 GB; lower still needs the dashboard summary-table
   re-architecture (forecast_snapshots + bucket_probabilities).
 - **▶▶ 2026-07-21 ~15:30Z (operator-directed) — STORAGE TIERING shipped: a table-driven archive→prune tool + an
   edge-retention cron tightening → ~305 MB reclaimed now with the full history kept LOCAL; the big 863 MB

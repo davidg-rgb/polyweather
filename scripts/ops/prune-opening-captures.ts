@@ -50,6 +50,8 @@ export interface PruneCandidate {
   targetDate: string;
   resolvedAt: string;
   nRows: number;
+  /** max opening_captures.id among this event's rows — the coverage gate: safe to delete iff ≤ archive lastId. */
+  maxId: string;
   /** Σ pg_column_size(buckets) — the stored (compressed) TOAST payload, measured without detoasting. */
   bytesEst: number;
 }
@@ -63,6 +65,7 @@ export async function findCandidates(db: ScriptDb, resolvedAgeDays = RESOLVED_AG
             me.target_date::text                                  as "targetDate",
             me.resolved_at::text                                  as "resolvedAt",
             count(*)::int                                         as "nRows",
+            max(oc.id)::text                                      as "maxId",
             coalesce(sum(pg_column_size(oc.buckets)), 0)::float8  as "bytesEst"
        from public.opening_captures oc
        join public.market_events me on me.id = oc.event_id
@@ -93,6 +96,17 @@ export function preflightArchive(
     return !k || !archiveIdx.has(k);
   });
   return { ok: missing.length === 0, missing };
+}
+
+/**
+ * COVERAGE GATE for an append-only (incremental) archive: candidates whose captures extend BEYOND the archived
+ * id-prefix (max row id > the archive's lastId) are NOT fully archived, so they must not be deleted. Monotonic
+ * append-only ids mean every row with id ≤ lastId was dumped, so maxId ≤ lastId ⟺ all of the event's rows are
+ * archived. A null lastId (no archive) leaves everything beyond.
+ */
+export function coverageBeyondArchive(candidates: PruneCandidate[], lastId: string | null): PruneCandidate[] {
+  const cutoff = BigInt(lastId ?? '0');
+  return candidates.filter((c) => BigInt(c.maxId) > cutoff);
 }
 
 /**
@@ -178,6 +192,22 @@ async function main(): Promise<void> {
       );
     }
     console.log(`TOTAL: ${candidates.length} events · ${totRows} capture rows · ~${mb(totBytes)} stored buckets payload`);
+
+    // COVERAGE GATE (dump mode): an APPEND-ONLY archive is a superset of live, so exact-match verify no longer
+    // applies. A candidate is safe to delete only if ALL its rows are archived — i.e. its max row id ≤ the
+    // archive's lastId (monotonic append-only ids ⇒ every row with id ≤ lastId was dumped). Refuse any candidate
+    // whose captures extend past the archive; the fix is one incremental append, not a delete.
+    if (mode === 'dump') {
+      const m = readManifest(dumpDir);
+      const beyond = coverageBeyondArchive(candidates, m?.lastId ?? '0');
+      if (beyond.length > 0) {
+        console.log(`\n⛔ COVERAGE FAIL — ${beyond.length} candidate(s) have capture rows BEYOND the archive (id > lastId ${m?.lastId}); not fully archived:`);
+        for (const c of beyond) console.log(`  BEYOND ${c.targetDate} ${c.city} maxId ${c.maxId} > lastId ${m?.lastId}`);
+        console.log('Run `dump-opening-captures.ts --incremental` to append the new rows first, then re-run.');
+        if (values.execute) process.exitCode = 1;
+        return;
+      }
+    }
 
     const pre = preflightArchive(candidates, idx, keyOf);
     if (!pre.ok) {

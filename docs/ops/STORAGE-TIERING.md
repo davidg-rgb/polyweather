@@ -39,11 +39,25 @@ Only **completed** UTC days are archived (never today — no race with a live wr
 older than the table's hot window that are verified shards. Config is `RETENTION` in the script — adding a table
 is one entry `{ table, tsColumn, hotWindowDays, note }`. Cadence: run from the loop every ~week (append-only, cheap).
 
-**`opening_captures` raw book (the 863 MB, off-peak — its VACUUM FULL locks the hot capture table):**
+**`opening_captures` raw book — INCREMENTAL retention (the loop's ongoing path, cheap, no `--force`):**
 ```bash
-pnpm tsx scripts/ops/dump-opening-captures.ts --force         # refresh the local raw-book archive (resumable)
-pnpm tsx scripts/ops/dump-opening-captures.ts --verify        # stamp manifest.verified (prune pre-flight)
-pnpm tsx scripts/ops/prune-opening-captures.ts --preflight dump --resolved-age-days 1 --execute
+pnpm tsx scripts/ops/dump-opening-captures.ts --incremental                                    # append ONLY new rows (id>lastId) + coverage-verify + stamp
+pnpm tsx scripts/ops/prune-opening-captures.ts --preflight dump --resolved-age-days 2 --execute # delete resolved>2d, gated on maxId ≤ archive lastId
+# VACUUM only when the file has bloated (after the one-time reset the steady prune keeps it flat → autovacuum suffices):
+#   VACUUM (ANALYZE) public.opening_captures;   -- reuse space, no lock
+#   VACUUM (FULL, ANALYZE) ...                   -- shrink the file (brief exclusive lock — OFF-PEAK only)
+```
+The archive is **append-only**: `--incremental` never overwrites, so after a prune it is a SUPERSET of live
+(it keeps the pruned rows). The prune's delete gate is **per-event `maxId ≤ archive lastId`** (monotonic
+append-only ids ⇒ all of an event's rows are archived) — refuses anything not yet appended and tells you to run
+`--incremental` first. A one-time full reset (the 07-21 path below) sets the baseline; from then on the loop runs
+just the two commands above.
+
+**One-time full reset (only for a fresh baseline / recovery — heavy):**
+```bash
+mv scripts/research/out/opening-captures-archive scripts/research/out/opening-captures-archive-<date>  # PRESERVE the old archive (a --force snapshot won't contain already-pruned events)
+pnpm tsx scripts/ops/dump-opening-captures.ts --force && pnpm tsx scripts/ops/dump-opening-captures.ts --verify
+pnpm tsx scripts/ops/prune-opening-captures.ts --preflight dump --resolved-age-days 2 --execute
 # then, OFF-PEAK:  VACUUM (FULL, ANALYZE) public.opening_captures;
 ```
 
@@ -65,12 +79,22 @@ realise the reclaim; the file now tracks the 7d working set.
     dir** (rename) — a fresh dump matches the current (post-prune) live table, so it does NOT contain
     previously-pruned events; overwriting the old dir would lose their raw book.
 
-## Durable follow-up (not built)
+## Incremental-append dump — BUILT (2026-07-21)
 
-**Incremental-append dump** for opening_captures so retention is a cheap daily delta instead of a ~1.3 GB
-`--force` re-dump. Requires changing the verify from "manifest == live" (full-snapshot) to **"every live row is
-covered by some shard" (live ⊆ archive)**, because after a prune the append-only archive is a *superset* of the
-live table. Until then, the rename-then-`--force` playbook above is the safe manual path.
+The durable fix shipped: `dump-opening-captures.ts --incremental` continues from the manifest's `lastId` even on
+a `done` archive, appending only new rows; `verifyCoverage` replaces the exact-match verify (the append-only
+archive is a superset after a prune, so it checks **live ⊆ archive** on the id-prefix); and the prune gained a
+per-event **coverage gate** (`coverageBeyondArchive`: `maxId ≤ lastId`) that is the real delete authorisation.
+Result: the loop's ongoing retention is the two cheap commands above — no `--force`, no rename dance, no forced
+`VACUUM FULL` (steady prune keeps the table flat → autovacuum handles it). Proven live 07-21: appended 330 rows
+in one shard, coverage-verified, prune gate clean. Tests in `dump-opening-captures.test.ts` +
+`prune-opening-captures.test.ts`.
+
+## Still not built — the ~1.6 GB floor
+
+`forecast_snapshots` + `bucket_probabilities` scored slice are read live over full history by /station,
+/amsterdam, /data. Moving them local needs materialised per-station/day summary tables for those pages. Separate
+scoped work.
 
 ## The floor, and how to go lower
 
