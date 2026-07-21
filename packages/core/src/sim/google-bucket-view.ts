@@ -174,6 +174,9 @@ export interface GoogleView {
   nNoGoogleEvents: number;
   /** °F markets that HAD a Google forecast but were skipped by the °C-only filter (0 when excludeFahrenheit is off). */
   nExcludedFahrenheit: number;
+  /** bucketable Google markets a 0115 SAFEGUARD (dead-pick or favorite-veto) declined — i.e. the market had
+   *  written our cheap Google bucket off. Surfaced so the operator can see the guards working (vs plain variance). */
+  nSafeguardBlocked: number;
   /** the cities whose fresh markets lacked a Google forecast this window (rendered "no Google data"). */
   citiesNoGoogle: string[];
   entries: GoogleEntry[];
@@ -212,8 +215,10 @@ function exitKindOf(reason: string): GoogleExitKind {
 // re-replays only open/new events — the fix for the hourly full-window replay outgrowing the Edge wall.
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 
-/** Bump when replayGoogleBracket / bucketing / variant semantics change — invalidates every cached unit. */
-export const GOOGLE_REPLAY_ENGINE_VERSION = 'g1';
+/** Bump when replayGoogleBracket / bucketing / variant semantics change — invalidates every cached unit.
+ *  g2 (2026-07-21): the dead-pick + favorite-veto entry safeguards + askMax 0.12→0.15 change which historical
+ *  events would have entered, so every g1 cached unit (frozen under the old entry logic) is now stale. */
+export const GOOGLE_REPLAY_ENGINE_VERSION = 'g2';
 
 /** The cache-validity key: engine version + every cfg field a per-event replay depends on. */
 export function googleReplayCacheKey(cfg: GoogleBracketCfg): string {
@@ -226,6 +231,8 @@ export function googleReplayCacheKey(cfg: GoogleBracketCfg): string {
     cfg.excludeFahrenheit ? 1 : 0,
     cfg.maxEntryAgeH,
     cfg.perPositionUsd,
+    cfg.deadPickMinBid,
+    cfg.favoriteVetoProb,
     `tp:${GOOGLE_TP_VARIANTS.join(',')}`,
   ].join('|');
 }
@@ -251,6 +258,10 @@ export interface GoogleEventReplay {
   panelRow: OpeningMarketResult | null;
   /** per-TP-variant folds in GOOGLE_TP_VARIANTS order — null unless kind='traded'. */
   variants: GoogleVariantFold[] | null;
+  /** why a bucketable Google market did NOT enter (the canonical replay's non-executed reason: 'dead_pick' |
+   *  'favorite_veto' | 'cheap_after_cutoff' | 'cheap_but_too_old' | 'never_enterable' | …), else null when it
+   *  entered or the kind isn't 'traded'. Surfaces the safeguard vetoes in coverage. */
+  blockReason: string | null;
 }
 
 /** Replay ONE gm-excluded fresh event into its fold unit (pure; junk → a classified non-trade, never a throw). */
@@ -260,7 +271,7 @@ export function replayGoogleEvent(
   cfg: GoogleBracketCfg,
   resolvesAt: string | null,
 ): GoogleEventReplay {
-  const base = { eventId: e.eventId, city: e.city, targetDate: e.targetDate, entry: null, panelRow: null, variants: null };
+  const base = { eventId: e.eventId, city: e.city, targetDate: e.targetDate, entry: null, panelRow: null, variants: null, blockReason: null };
   if (!g || g.tmaxC == null) return { ...base, kind: 'no_google' };
   if (cfg.excludeFahrenheit && g.unit === 'F') return { ...base, kind: 'excluded_f' };
   const ladder = e.ticks.find((t) => Array.isArray(t.buckets) && t.buckets.length > 0)?.buckets ?? [];
@@ -311,7 +322,10 @@ export function replayGoogleEvent(
       };
     }
   }
-  return { ...base, kind: 'traded', entry, panelRow, variants };
+  // the non-executed reason (dead_pick / favorite_veto / cheap_* / never_enterable) when this bucketable
+  // Google market did NOT enter — null once it entered. Read off the canonical replay.
+  const blockReason = t.executed ? null : t.exitReason;
+  return { ...base, kind: 'traded', entry, panelRow, variants, blockReason };
 }
 
 /**
@@ -387,6 +401,7 @@ export function assembleGoogleView(unitsIn: GoogleEventReplay[], cfg: GoogleBrac
   let nGoogleEvents = 0;
   let nNoGoogleEvents = 0;
   let nExcludedFahrenheit = 0;
+  let nSafeguardBlocked = 0;
 
   // per-TP-variant accumulators (same order as GOOGLE_TP_VARIANTS). The ENTRY is fixed across variants, so the
   // executed set — and thus nTrades — is identical; only the exit mix + P&L differ. realized-vs-open split is
@@ -415,6 +430,7 @@ export function assembleGoogleView(unitsIn: GoogleEventReplay[], cfg: GoogleBrac
     }
     if (u.kind === 'unbucketable') continue; // Google present but its forecast couldn't be bucketed (junk ladder)
     nGoogleEvents++;
+    if (u.blockReason === 'dead_pick' || u.blockReason === 'favorite_veto') nSafeguardBlocked++;
 
     const folds = Array.isArray(u.variants) ? u.variants : [];
     for (let vi = 0; vi < GOOGLE_TP_VARIANTS.length; vi++) {
@@ -537,6 +553,7 @@ export function assembleGoogleView(unitsIn: GoogleEventReplay[], cfg: GoogleBrac
     nGoogleEvents,
     nNoGoogleEvents,
     nExcludedFahrenheit,
+    nSafeguardBlocked,
     citiesNoGoogle: [...citiesNoGoogle].sort(),
     entries,
     perDay,
