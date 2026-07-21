@@ -52,6 +52,9 @@ describe('0095 config defaults (+ the 0102 entry-rule defaults)', () => {
       // 0102: defaults reproduce the original one-attempt-EVER behavior exactly
       'buy_table.max_entry_attempts': '1',
       'buy_table.stop_after_first_success': 'false',
+      // 0115: the dead-bucket guards (dead-pick min bid + favorite veto prob)
+      'buy_table.dead_pick_min_bid': '0.02',
+      'buy_table.favorite_veto_prob': '0.85',
     });
   });
 

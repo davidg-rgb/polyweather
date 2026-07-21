@@ -31,8 +31,10 @@ async function main(): Promise<number> {
       select city_allowlist, stake_per_buy_usd from trade_config`;
     const allowlist = tc!.city_allowlist;
     const stakeUsd = Number(tc!.stake_per_buy_usd);
+    // mirror the TICK's own discovery read (buy_table_tick_inputs — latest capture per event, NO fresh gate);
+    // convergence_capture_inputs would hide any market listed ≳2.4d before close (the 0114 blindness).
     const [env] = await sql<{ v: { captures: RawCaptureRow[]; resolutions: { id: string; winnerIdx: number | null; gradingMismatch: boolean }[] } }[]>`
-      select public.convergence_capture_inputs(${2}, ${allowlist}::text[]) as v`;
+      select public.buy_table_tick_inputs(${allowlist}::text[], ${2}) as v`;
     const captures = env!.v.captures ?? [];
     const resolutions = env!.v.resolutions ?? [];
     console.log(`captures=${captures.length} resolutions=${resolutions.length} allowlist=${allowlist.join(',')} stake=$${stakeUsd}`);
@@ -44,6 +46,7 @@ async function main(): Promise<number> {
     const resolvedBy = new Map(resolutions.map((r) => [String(r.id), r.winnerIdx ?? null]));
     const latest = new Map<string, RawCaptureRow>();
     for (const r of captures) {
+      if (r.eventId == null) continue;
       const prev = latest.get(r.eventId);
       if (!prev || Date.parse(r.capturedAt) > Date.parse(prev.capturedAt)) latest.set(r.eventId, r);
     }
@@ -75,8 +78,23 @@ async function main(): Promise<number> {
         }
         const estShares = Math.max(1, Math.floor(stakeUsd / top));
         const { avgPrice, fillableShares } = executableAsk(book, estShares);
+        const pickBid = book.bids[0]?.price ?? null;
+        // 0115: the favorite-veto scan — max best bid across the OTHER buckets.
+        let favBid: number | null = null;
+        for (const tok of t.otherTokensYes) {
+          try {
+            const ob = normalizeBook(
+              (await fetchJson(`https://clob.polymarket.com/book?token_id=${tok}`, undefined, { timeoutMs: 5000, retries: 1 })) as RawClobBook,
+            );
+            const b = ob.bids[0]?.price ?? null;
+            if (b != null && (favBid == null || b > favBid)) favBid = b;
+          } catch { /* skip */ }
+        }
         console.log(
-          `  ${row?.city ?? t.eventId}: top=${top} execAsk(${estShares}sh)=${avgPrice.toFixed(4)} fillable=${fillableShares}`,
+          `  ${row?.city ?? t.eventId}: pickBid=${pickBid ?? 'NONE'} top=${top} execAsk(${estShares}sh)=${avgPrice.toFixed(4)} ` +
+            `fillable=${fillableShares}  maxOtherBucketBid=${favBid ?? 'n/a'}` +
+            `${pickBid == null || pickBid < cfg.deadPickMinBid ? '  ⟵ DEAD_PICK' : ''}` +
+            `${favBid != null && favBid >= cfg.favoriteVetoProb ? '  ⟵ FAVORITE_VETO' : ''}`,
         );
       } catch (e) {
         console.log(`  ${row?.city ?? t.eventId}: FETCH FAILED — ${e instanceof Error ? e.message : String(e)}`);

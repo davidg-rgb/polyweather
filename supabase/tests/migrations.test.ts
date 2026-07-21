@@ -523,6 +523,10 @@ describe('migrations 0001–0010', () => {
       // (10-min lane hours 10-23; ~2-min 'buy-table-tick-fast' lane hours 0-9 — the only hours candidates
       // can exist with every allowlist market closing 12:00Z and a [2,12]h lead window). Cron 36 → 37.
       '0114_buy_table_fast_lane.sql',
+      // the buy-table DEAD-BUCKET guards: config defaults for the dead-pick min-bid (0.02) + favorite-veto
+      // prob (0.85). Stops the lane buying buckets the market has written off (the 07-21 KL 33°C @ 0.01 dust
+      // buy). Config only — the edge fn carries the same fallback defaults.
+      '0115_buy_table_dead_bucket_guards.sql',
     ]);
   });
 });

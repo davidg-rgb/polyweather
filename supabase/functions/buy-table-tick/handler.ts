@@ -32,6 +32,14 @@
  * and the FAK worst-price see the book NOW, not a minutes-old capture (a dip between captures is otherwise
  * invisible). Cadence does NOT raise exposure: the entry gate still allows one position per market ever.
  *
+ * 0115 DEAD-BUCKET GUARDS (operator directive 2026-07-21, the KL 33°C @ 0.01 buy): the re-quote also reads the
+ * pick's live BID and every OTHER bucket's live bid, feeding two gates that stop the lane buying buckets the
+ * market has written off (where executableAsk was just sweeping dust asks): (a) DEAD-PICK — the pick must have
+ * real bid support (best bid ≥ buy_table.dead_pick_min_bid, default 0.02; a no-bid/dust-bid book = written off);
+ * (b) FAVORITE VETO — if any OTHER bucket's best bid ≥ buy_table.favorite_veto_prob (default 0.85) the market is
+ * near-certain of a different outcome, so cancel. bestBid is the liveness measure (real buyers; dust asks can't
+ * move it). Both FAIL-OPEN on a fetch miss, but the dead-pick guard runs on the pick's own bid as the backstop.
+ *
  * TRADE MODE LADDER (the double gate, preserved): the Edge secret TRADE_MODE resolved by the T1
  * `resolveTradeMode` — absent/typo ⇒ dry-run (records the intent in the ledger, NEVER posts), 'off' ⇒
  * inert. A REAL post needs TRADE_MODE=live AND trade_config.mode='live' AND
@@ -139,6 +147,17 @@ export interface BuyTableCfg {
    *  NEW entries entirely — including later candidates inside the same tick. The operator's verification
    *  semantics: one successful buy, then quiet. Default false = the original behavior. */
   stopAfterFirstSuccess: boolean;
+  /** 0115 DEAD-PICK guard (operator directive 2026-07-21 — the KL 33°C @ 0.01 buy): the LIVE book must show
+   *  real BID support for our predicted bucket, else the market has written it off and the re-quote is just
+   *  walking into dust asks (the 07-21 case: pick had ZERO bids, only 15,970 sh of $0.001 dust asks, and
+   *  executableAsk swept them for a $5/500-share "buy"). A pick whose live best bid is null or < this is
+   *  skipped. Default 0.02 (must have a real ≥2¢ bid). Set to 0 to DISABLE (null bids then allowed). */
+  deadPickMinBid: number;
+  /** 0115 FAVORITE VETO (operator's explicit rule 2026-07-21): if the LIVE book shows ANY OTHER bucket
+   *  north of this market-implied probability (measured as its best BID — real buyers, dust-ask-proof), the
+   *  market is near-certain of a DIFFERENT outcome, so our pick is a written-off longshot → cancel the buy.
+   *  Default 0.85. Set to a value > 1 (e.g. 2) to DISABLE. */
+  favoriteVetoProb: number;
 }
 
 const num = (v: string | undefined, dflt: number): number => {
@@ -186,6 +205,8 @@ export function parseBuyTableConfig(rows: { key: string; value: string }[]): Buy
     cityCaps: parseCityCaps(map.get('buy_table.city_price_caps')),
     maxEntryAttempts: Number.isInteger(attemptsRaw) && attemptsRaw >= 1 ? attemptsRaw : 1,
     stopAfterFirstSuccess: stopRaw === 'true' || stopRaw === '1',
+    deadPickMinBid: num(map.get('buy_table.dead_pick_min_bid'), 0.02),
+    favoriteVetoProb: num(map.get('buy_table.favorite_veto_prob'), 0.85),
   };
 }
 
@@ -244,6 +265,8 @@ export function deriveEntryGate(entries: BuyTableEntryRow[], cfg: BuyTableCfg): 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 
 export interface BuyTableCandidate {
+  /** opening_captures event_id — the key the 0115 favorite veto joins its live per-ladder favorite bid on. */
+  eventId: string;
   marketId: string;
   tokenId: string;
   /** station-local YYYY-MM-DD — the intent-key trade date. */
@@ -379,6 +402,23 @@ export function selectBuyTableCandidates(args: {
       }
     }
 
+    // 0115 DEAD-PICK guard (operator directive 2026-07-21): the LIVE book (patched by the re-quote) must show
+    // real BID support for OUR bucket. A pick with no bid — or only dust bids — is one the market has written
+    // off; the re-quote's executableAsk then just sweeps the dust asks and reports a sub-cap ~1¢ "buy" (the
+    // 07-21 KL 33°C case: zero bids, 15,970 sh of $0.001 dust asks, 500 sh filled @ 0.01). bestBid is the
+    // liveness signal (real buyers; dust asks don't move it). Skipped BEFORE the ask gate so a dead bucket
+    // never becomes a candidate whatever its dust ask. Disabled when deadPickMinBid ≤ 0.
+    if (cfg.deadPickMinBid > 0) {
+      const pickBid = fin(pick.bestBid) ? pick.bestBid : null;
+      if (pickBid == null || pickBid < cfg.deadPickMinBid - 1e-9) {
+        skips.push({
+          ref,
+          reason: `dead_pick (live best bid ${pickBid == null ? 'none' : pickBid.toFixed(3)} < ${cfg.deadPickMinBid} — the book has written this bucket off; no real buyers)`,
+        });
+        continue;
+      }
+    }
+
     const ask = fin(pick.execAsk) ? pick.execAsk : fin(pick.bestAsk) ? pick.bestAsk : null;
     if (!fin(ask) || !(ask > 0 && ask <= 1)) {
       skips.push({ ref, reason: 'no_ask — the predicted bucket has no usable executable ask' });
@@ -421,6 +461,7 @@ export function selectBuyTableCandidates(args: {
     }
 
     candidates.push({
+      eventId,
       marketId,
       tokenId: String(pick.tokenYes),
       tradeDate: String(r.targetDate),
@@ -441,20 +482,28 @@ export function selectBuyTableCandidates(args: {
 // 0114 LIVE RE-QUOTE (pure halves) — the capture stream is minutes old; at a ~2-min cadence the gate,
 // the FAK worst-price, and the share sizing must see the venue's book NOW, or a dip between captures
 // is invisible (a stale-HIGH ask hides a live dip below the cap; a stale-LOW ask just zero-fills).
-// requoteTargets picks WHICH books to fetch (≤ one per in-window unresolved market); applyRequotes
-// patches ONLY the picked bucket's execAsk/bestAsk so every downstream gate reads the live number.
+// requoteTargets picks WHICH books to fetch (≤ one ladder per in-window unresolved market); applyRequotes
+// patches the picked bucket's execAsk/bestAsk/bestBid so every downstream gate reads the live number.
+// 0115: the target also carries the OTHER bucket tokens so the tick can read their live best BIDs — the
+// favorite-veto input (capture bids are too stale at the 2-min cadence; the 07-21 KL capture showed the
+// pick bid at 0.83 three minutes after the market had already pulled every bid off it).
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 
 export interface RequoteTarget {
   eventId: string;
+  /** the picked (argmax-houseProb) bucket's YES token — re-quoted for ask + bid. */
   tokenYes: string;
+  /** every OTHER bucket's YES token — fetched for its best bid (the 0115 favorite-veto scan). */
+  otherTokensYes: string[];
 }
 
-/** The live quote for one event's PICKED bucket: top-of-book ask + the executable (avg) ask for our
- *  stake-sized order — the same two fields the capture's walkBucketDepth writes. */
+/** The live quote for one event's PICKED bucket. `bestBid` is ALWAYS meaningful (the 0115 dead-pick
+ *  liveness signal — null when the book has no bids, i.e. a written-off bucket). `bestAsk`/`execAsk` are
+ *  present only when the book carried a usable ask (an askless dumped book records just the bid). */
 export interface LiveQuote {
-  bestAsk: number;
-  execAsk: number;
+  bestBid: number | null;
+  bestAsk?: number;
+  execAsk?: number;
 }
 
 /** Which events are worth a live /book fetch this tick: latest capture per event, unresolved, inside the
@@ -485,14 +534,20 @@ export function requoteTargets(args: {
     if (!(hoursToClose >= cfg.leadMinH && hoursToClose <= cfg.leadMaxH)) continue;
     if (!r.targetDate) continue;
     const pick = pickHouseBucket(r.buckets);
-    if (pick?.tokenYes) out.push({ eventId, tokenYes: String(pick.tokenYes) });
+    if (!pick?.tokenYes) continue;
+    const pickTok = String(pick.tokenYes);
+    const otherTokensYes = (Array.isArray(r.buckets) ? r.buckets : [])
+      .map((b) => (b?.tokenYes != null ? String(b.tokenYes) : null))
+      .filter((t): t is string => t != null && t !== pickTok);
+    out.push({ eventId, tokenYes: pickTok, otherTokensYes });
   }
   return out;
 }
 
-/** Patch the PICKED bucket's execAsk/bestAsk with the live quote on every row of a quoted event (selection
- *  reduces to the latest row, so patching all rows is equivalent and keeps this a trivial map). Non-quoted
- *  events and non-pick buckets pass through untouched — a failed fetch means the capture ask still rules. */
+/** Patch the PICKED bucket's execAsk/bestAsk/bestBid with the live quote on every row of a quoted event
+ *  (selection reduces to the latest row, so patching all rows is equivalent and keeps this a trivial map).
+ *  Non-quoted events and non-pick buckets pass through untouched — a failed fetch means the capture ask
+ *  still rules (and, per the dead-pick guard, the capture bestBid). */
 export function applyRequotes(captures: RawCaptureRow[], quotes: Map<string, LiveQuote>): RawCaptureRow[] {
   if (quotes.size === 0) return captures;
   return captures.map((r) => {
@@ -504,11 +559,41 @@ export function applyRequotes(captures: RawCaptureRow[], quotes: Map<string, Liv
       ...r,
       buckets: (Array.isArray(r.buckets) ? r.buckets : []).map((b) =>
         b?.tokenYes != null && String(b.tokenYes) === String(pick.tokenYes)
-          ? { ...b, execAsk: q.execAsk, bestAsk: q.bestAsk }
+          ? {
+              ...b,
+              bestBid: q.bestBid,
+              ...(q.execAsk != null ? { execAsk: q.execAsk } : {}),
+              ...(q.bestAsk != null ? { bestAsk: q.bestAsk } : {}),
+            }
           : b,
       ),
     };
   });
+}
+
+/**
+ * 0115 FAVORITE VETO (operator's explicit rule 2026-07-21) — pure post-selection filter. Drops any candidate
+ * whose ladder has ANOTHER bucket the LIVE book prices north of `threshold` (market-implied prob measured by
+ * that bucket's best BID: real buyers, dust-ask-proof). A near-certain favorite elsewhere means our pick is a
+ * written-off longshot the efficiency findings say loses — so cancel. `favoriteBids` maps eventId → the max
+ * best bid across the event's NON-pick buckets (null/absent = unknown → fail-OPEN: the dead-pick guard on the
+ * pick's own bid still fires, so a favorite-fetch outage can't sneak a dead bucket through). Disabled when
+ * threshold is not in (0, 1].
+ */
+export function applyFavoriteVeto(
+  candidates: BuyTableCandidate[],
+  favoriteBids: Map<string, number | null>,
+  threshold: number,
+): { kept: BuyTableCandidate[]; vetoed: Array<{ candidate: BuyTableCandidate; favoriteBid: number }> } {
+  if (!(threshold > 0 && threshold <= 1)) return { kept: candidates, vetoed: [] };
+  const kept: BuyTableCandidate[] = [];
+  const vetoed: Array<{ candidate: BuyTableCandidate; favoriteBid: number }> = [];
+  for (const c of candidates) {
+    const fav = favoriteBids.get(c.eventId);
+    if (fav != null && Number.isFinite(fav) && fav >= threshold - 1e-9) vetoed.push({ candidate: c, favoriteBid: fav });
+    else kept.push(c);
+  }
+  return { kept, vetoed };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
@@ -793,20 +878,41 @@ export async function buyTableTick(ctx: JobCtx, deps: BuyTableTickDeps): Promise
     }
   }
 
-  // 6c · the 0114 LIVE RE-QUOTE — fetch the venue's CLOB book NOW for each in-window market's picked
-  //      bucket (keyless read, ≤ one fetch per allowlisted in-window market) and patch its executable ask
-  //      before the gates run: the price gate, share sizing, and the FAK worst-price then act on the live
-  //      book instead of a minutes-old capture. FAIL-SOFT per event: a failed/empty book keeps the capture
-  //      ask (exactly the pre-0114 behavior); the tick is never degraded by this step. Runs in dry-run too
-  //      (measurement parity — the dry ledger should record what a live tick would have done).
+  // 6c · the 0114 LIVE RE-QUOTE + the 0115 LADDER SCAN — fetch the venue's CLOB books NOW for each in-window
+  //      market (keyless; the pick's book for ask/bid + every OTHER bucket's book for its best bid). The
+  //      pick's live ask patches the price gate / sizing / FAK worst-price; its live BID feeds the dead-pick
+  //      guard (a written-off bucket has none); the max non-pick bid feeds the favorite veto. All FAIL-SOFT
+  //      per event: a failed/empty pick book keeps the capture values (pre-0114 behavior); a failed favorite
+  //      scan leaves that event's favorite bid unknown → the veto fails OPEN (the dead-pick guard still runs
+  //      on the pick's own bid). Never degrades the tick. Runs in dry-run too (measurement parity).
+  const favoriteBids = new Map<string, number | null>();
   let requoted = 0;
   let requoteFailed = 0;
   if (!degraded && captures.length > 0) {
     const targets = requoteTargets({ captures, resolutions, cfg, now });
     if (targets.length > 0) {
       const quotes = new Map<string, LiveQuote>();
+      // top-of-book best bid for one token (null on any failure/empty book — the fail-soft/fail-open signal).
+      const bestBidOf = async (token: string): Promise<number | null> => {
+        try {
+          const book = normalizeBook(
+            (await deps.fetchJson(
+              `${CLOB}/book?token_id=${token}`,
+              { headers: CLOB_HEADERS } as RequestInit,
+              { timeoutMs: 5000, retries: 1 },
+            )) as RawClobBook,
+          );
+          const bid = book.bids[0]?.price;
+          return fin(bid) && bid > 0 && bid <= 1 ? bid : null;
+        } catch {
+          return null;
+        }
+      };
+      // concurrent per-target; each callback only Map.set()s (atomic between awaits) — captures is patched
+      // ONCE after the barrier, never reassigned inside the callbacks (no shared-variable race).
       await Promise.all(
         targets.map(async (t) => {
+          // the PICK book — ask (walk for execAsk) + top-of-book ask + top-of-book bid (dead-pick signal).
           try {
             const book = normalizeBook(
               (await deps.fetchJson(
@@ -816,11 +922,18 @@ export async function buyTableTick(ctx: JobCtx, deps: BuyTableTickDeps): Promise
               )) as RawClobBook,
             );
             const top = book.asks[0]?.price;
-            if (!fin(top) || !(top > 0 && top <= 1)) return; // empty/askless book — capture ask rules
-            const estShares = Math.max(1, Math.floor(stakeUsd / top));
-            const { avgPrice, fillableShares } = executableAsk(book, estShares);
-            if (!(fillableShares > 0) || !fin(avgPrice)) return;
-            quotes.set(t.eventId, { bestAsk: top, execAsk: avgPrice });
+            const bid = book.bids[0]?.price;
+            const bestBid = fin(bid) && bid > 0 && bid <= 1 ? bid : null;
+            if (!fin(top) || !(top > 0 && top <= 1)) {
+              // askless book (e.g. a dumped bucket) — no ask to patch, but record the live bid so the
+              // dead-pick guard sees the (typically absent) bid support.
+              quotes.set(t.eventId, { bestBid });
+            } else {
+              const estShares = Math.max(1, Math.floor(stakeUsd / top));
+              const { avgPrice, fillableShares } = executableAsk(book, estShares);
+              if (fillableShares > 0 && fin(avgPrice)) quotes.set(t.eventId, { bestBid, bestAsk: top, execAsk: avgPrice });
+              else quotes.set(t.eventId, { bestBid });
+            }
           } catch (e) {
             requoteFailed++;
             log('buy-table.requote_failed', {
@@ -829,9 +942,15 @@ export async function buyTableTick(ctx: JobCtx, deps: BuyTableTickDeps): Promise
               note: 'capture ask kept for this market (fail-soft)',
             });
           }
+          // the OTHER buckets' bids — the favorite-veto scan (max market-implied prob elsewhere).
+          if (t.otherTokensYes.length > 0) {
+            const bids = await Promise.all(t.otherTokensYes.map(bestBidOf));
+            const real = bids.filter((b): b is number => b != null);
+            favoriteBids.set(t.eventId, real.length > 0 ? Math.max(...real) : null);
+          }
         }),
       );
-      requoted = quotes.size;
+      requoted = [...quotes.values()].filter((q) => q.execAsk != null).length;
       if (quotes.size > 0) captures = applyRequotes(captures, quotes);
     }
   }
@@ -852,6 +971,22 @@ export async function buyTableTick(ctx: JobCtx, deps: BuyTableTickDeps): Promise
         now,
         floors,
       });
+  // 7b · the 0115 FAVORITE VETO — drop any surviving candidate whose ladder has ANOTHER bucket the LIVE
+  //      book prices ≥ favorite_veto_prob (best bid): the market is near-certain of a different outcome, so
+  //      our pick is a written-off longshot (the 07-21 KL case: market ~89% on 34°C, our pick 33°C dumped).
+  let favoriteVetoed = 0;
+  {
+    const { kept, vetoed } = applyFavoriteVeto(candidates, favoriteBids, cfg.favoriteVetoProb);
+    favoriteVetoed = vetoed.length;
+    for (const v of vetoed) {
+      skips.push({
+        ref: `${v.candidate.city}/${v.candidate.tradeDate}`,
+        reason: `favorite_veto (another bucket at market bid ${v.favoriteBid.toFixed(3)} ≥ ${cfg.favoriteVetoProb} — the market is near-certain of a different outcome; our pick is a written-off longshot)`,
+      });
+    }
+    candidates = kept;
+  }
+
   if (gate.laneHalted && candidates.length > 0) {
     skips = skips.concat(
       candidates.map((c) => ({
@@ -1023,6 +1158,9 @@ export async function buyTableTick(ctx: JobCtx, deps: BuyTableTickDeps): Promise
     slimRead,
     requoted,
     requoteFailed,
+    favoriteVetoed,
+    deadPickMinBid: cfg.deadPickMinBid,
+    favoriteVetoProb: cfg.favoriteVetoProb,
     captures: captures.length,
     entriesSeen: entries.length,
     candidates: candidates.length,
