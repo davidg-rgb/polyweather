@@ -21,6 +21,28 @@
 
 _Claude keeps this block current every material cycle. Whole status in 20 seconds._
 
+- **▶▶ 2026-07-21 ~12:10Z (loop wake) — PR #42 MERGED to main (0114 fast lane + 0115 dead-bucket guards +
+  g2 Google port); ALL-GREEN health verified; the Google g2 re-replay CONVERGED → KILL (signal #12 stays
+  dead).** Main was behind deployed prod (the fns/migrations went live 07-20/07-21 but the PR sat unmerged) —
+  squash-merged `47dc6a6`, CI green, loop branch reconciled (zero content diff vs main). **Buy lane health:**
+  buy-table-tick clean (12:03Z ok, mode live, 344/0 runs/24h; the 0115 guards are LIVE in the tick stats —
+  `deadPickMinBid 0.02`, `favoriteVetoProb 0.85`, `slimRead true`); interlock ok:true (override id=2 → 07-31);
+  config mode live / cap 0.30 / 4-city / `laneHalted` false. No candidates now = `lead_window` (12:03Z is
+  outside the 00:00–10:00Z window — expected; the guards first get exercised in the 07-22 window). **All 19
+  cron jobs 0-fail/24h.** **Google panel:** the g1→g2 cold re-replay finished — `askMax 0.15`,
+  `nSafeguardBlocked 5`, 53 scored markets → gate **KILL** (winFrac 45.28% < 50% bar). The guards + wider band
+  did NOT resurrect the signal; the positive meanNetReturn CI [+10.8%, +112%] is the documented cheap-longshot
+  payoff-variance artifact the winFrac sub-gate exists to catch (nonprice-fingerprint-kill). #12 stays dead.
+  **The 07-21 KL dead-bucket buy** (500 sh 33°C @ $0.01, 06:04Z — the 0115 motivator) predates the ~07:10Z
+  guard deploy; hold-to-close −$5, books on the next post-poll tick. **Storage (approaching, not at bar):**
+  opening_captures **1298 MB** (832 at C19 07-16; ~93 MB/day → 2 GB bar ~07-29). ~863 MB is aggressive-prunable
+  (671 events resolved 1–25d) but the on-disk dump is stale (07-05) so the reclaim is NOT one-command-ready —
+  the stock 25-day path is a no-op (07-07 cleared through 07-05). Playbook when it threatens (off-peak):
+  `dump-opening-captures.ts --force` → `--verify` → `prune-opening-captures.ts --preflight dump
+  --resolved-age-days 1 --execute` → `VACUUM ANALYZE`. Deferred deliberately (a re-dump now would be redone at
+  prune time). **Yours:** nothing needs you today; the ONE upcoming click is the gate-override renewal (expires
+  07-31 00:00Z — surfaced from ~07-28). price_cap is now 0.30 (you lowered it from the C18b 0.40 — that watch
+  item is CLOSED); active_until 09-15.
 - **▶▶ 2026-07-19 ~10:15Z — the "wellington bought $10" operator report → an ACCOUNTING bug, not an
   overspend: FILL-PRICE TRUTH fix shipped + the ledger row corrected to venue reality.** The 00:53Z
   wellington retry (15-sh FAK, limit 0.34) was filled by the negRisk adapter at a BETTER price:
@@ -309,9 +331,10 @@ _Claude keeps this block current every material cycle. Whole status in 20 second
 4. **Forward instruments.** City race: 10:00/13:50/20:45Z lanes placed + grading current. Google panel
    accruing toward n≥40. Efficiency-monitor S1/S2 verdict drift. `/paper-trade`, `/monitor` RPCs healthy.
 5. **Tripwires.** ⑤ (trade_config.mode) every cycle; ①–④ sweep every ~2–3 days.
-6. **Watch items.** price_cap 0.40 → re-surface daily until the operator lowers it · active_until
-   **07-31 (operator-extended 07-16 18:49Z, was 07-20)** → surface before expiry · city_sim_config
-   runway 09-30 → surface ~09-25.
+6. **Watch items.** ~~price_cap 0.40~~ **CLOSED** (operator lowered to 0.30 at the 07-18 continuous-buying
+   config) · **gate override expires 07-31 00:00Z** → surface the renewal from ~07-28 (the one live click) ·
+   active_until **09-15** (operator-extended) → surface before expiry · city_sim_config runway 09-30 →
+   surface ~09-25 · storage: opening_captures → 2 GB bar ~07-29 (run the §Storage prune playbook off-peak).
 7. **Calm-day build queue (all-green cycles only, in order).** ① ~~F4 cloud reconcile sweep~~ **DONE
    C20** (deployed + tick-verified + merged, PR #24). ② ~~google-paper-panel incremental replay~~
    **DONE C34** (0103 applied + fn deployed ~10:15Z 07-17; first incremental tick verification = the
