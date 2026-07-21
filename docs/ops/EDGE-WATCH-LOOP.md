@@ -21,6 +21,18 @@
 
 _Claude keeps this block current every material cycle. Whole status in 20 seconds._
 
+- **▶▶ 2026-07-22 ~00:10Z (operator: "Run the multi-agent code review protocol") — 15-agent adversarial review of
+  today's storage builds → 1 HIGH data-loss finding + 5 LOW, ALL fixed + re-verified.** Workflow: 6 dimension
+  reviewers → adversarially refute each finding (9 raw → 6 confirmed). **HIGH (real):** the incremental gate
+  trusted id-monotonicity (`maxId ≤ lastId`) and `verifyCoverage` was a count-only rubber-stamp once prunes
+  inflate `rowsWritten` — an out-of-order commit could leave a live low-id row in no shard, and the prune would
+  then delete it (breaks "no archive, no delete"). **Fix:** replaced with a **row-level count gate**
+  (`underArchivedCandidates`: refuse any event whose archived-row-count < live-row-count; a per-event
+  `_event_counts.json` sidecar) — verifies actual archival, no monotonicity assumption. **LOWs fixed:**
+  archive-retention drift now SELF-HEALS (re-archive on drift-up, `covered = archive ⊇ live`) instead of
+  permanently wedging the prune; `--incremental` clears a stale `verified` before appending; the retention test
+  now actually pins 30d→7d (a 10-day row); dry-run count relabeled. Live-revalidated (sidecar written,
+  count-gate dry-run clean). +9 ops tests, suite green, typecheck clean.
 - **▶▶ 2026-07-21 ~23:15Z (operator: "Build it") — the DURABLE fix for opening_captures retention is BUILT: an
   incremental-append dump + per-event coverage gate → the recurring 863 MB chore is now two cheap commands, no
   `--force`, no rename foot-gun, no forced VACUUM FULL.** `dump-opening-captures.ts --incremental` continues from

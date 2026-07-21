@@ -126,23 +126,30 @@ describe('archive-retention', () => {
     expect(planPrune(m, REWARDS, NOW).prunable).toEqual([]);
   });
 
-  it('GATES the prune — a day whose live rows drift from the shard is blocked (no archive, no delete)', async () => {
+  it('SELF-HEALS a drifted day — a late row triggers re-archive, restoring coverage (no permanent wedge)', async () => {
     await seedReward('2026-07-01', 'a');
     const dir = archiveDir('market_rewards', outBase);
-    await archiveAndVerify(sdb, REWARDS, dir, NOW); // shard = 1 row for 07-01
+    let m = await archiveAndVerify(sdb, REWARDS, dir, NOW);
+    expect(m.days['2026-07-01']!.rows).toBe(1);
+    expect(m.days['2026-07-01']!.verified).toBe(true);
 
-    // a late row lands in the already-archived cold day → shard(1) ≠ live(2) → verify flips false.
+    // a late row lands in the already-archived cold day → the next pass RE-ARCHIVES it (drift-up), instead of
+    // leaving it permanently unverified (which would wedge every day's prune via executePrune's all-or-nothing gate).
     await seedReward('2026-07-01', 'late');
-    const m = await archiveAndVerify(sdb, REWARDS, dir, NOW);
-    expect(m.days['2026-07-01']!.verified).toBe(false);
+    m = await archiveAndVerify(sdb, REWARDS, dir, NOW);
+    expect(m.days['2026-07-01']!.rows).toBe(2); // re-archived to include the late row
+    expect(m.days['2026-07-01']!.verified).toBe(true); // covered again
 
     const plan = planPrune(m, REWARDS, NOW);
-    expect(plan.prunable).toEqual([]);
-    expect(plan.blocked.map((b) => b.day)).toEqual(['2026-07-01']);
-    await expect(executePrune(sdb, REWARDS, dir, m, plan)).rejects.toThrow(/no archive, no delete/);
+    expect(plan.blocked).toEqual([]);
+    expect(plan.prunable.map((d) => d.day)).toContain('2026-07-01'); // no longer wedged
+  });
 
-    // nothing was deleted.
-    expect(await liveDayCount(sdb, REWARDS, '2026-07-01')).toBe(2);
+  it('executePrune REFUSES structurally if the plan carries ANY blocked (uncovered) day — no archive, no delete', async () => {
+    const dir = archiveDir('market_rewards', outBase);
+    const manifest = { table: 'market_rewards', tsColumn: 'captured_at', updatedAt: NOW.toISOString(), days: {} };
+    const plan = { cutoffDay: '2026-07-07', prunable: [], blocked: [{ day: '2026-07-01', reason: 'archive uncovered (shard < live)' }] };
+    await expect(executePrune(sdb, REWARDS, dir, manifest, plan)).rejects.toThrow(/no archive, no delete/);
   });
 
   it('works on a table with no single-column PK (model_stats_history, pruned via ctid)', async () => {

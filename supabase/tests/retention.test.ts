@@ -113,6 +113,7 @@ describe('ops_downsample() retention rules', () => {
     await db.exec(`
       insert into edge_evaluations (event_id, bucket_idx, captured_hour, edge, pass) values
         ('${eventId}', 0, date_trunc('hour', now() - interval '40 days'), 0.05, false),
+        ('${eventId}', 1, date_trunc('hour', now() - interval '10 days'), 0.04, false),
         ('${eventId}', 0, date_trunc('hour', now() - interval '3 days'), 0.06, true);
 
       insert into intraday_max (icao, date_local, max_tenths_c, n_obs) values
@@ -167,8 +168,9 @@ describe('ops_downsample() retention rules', () => {
     );
     expect(probs.map((p) => p.inputs_hash)).toEqual(['h1', 'h3', 'n1', 'n3', 'open1']);
 
-    // §7.21 edge_evaluations 7d (0116): the 40d row goes, the 3d row survives.
-    expect(counts['edge_evaluations']).toBe(1);
+    // §7.21 edge_evaluations 7d (0116): the 40d AND the 10d rows go, only the 3d survives. The 10d row is what
+    // PINS 7d vs the old 30d — under 30d it would have survived (deleted 1 / survive 2), so this discriminates the change.
+    expect(counts['edge_evaluations']).toBe(2);
     const ee = await rows<{ n: number }>(db, `select count(*)::int as n from edge_evaluations`);
     expect(ee[0]!.n).toBe(1);
 

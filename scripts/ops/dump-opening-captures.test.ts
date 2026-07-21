@@ -17,7 +17,7 @@ import type { PGlite } from '@electric-sql/pglite';
 import { freshDb } from '../../supabase/tests/harness.ts';
 import { toPgliteParam } from '../lib/pglite-param.ts';
 import type { ScriptDb } from '../lib/script-db.ts';
-import { dumpTable, fetchBatchAdaptive, MIN_BATCH_ROWS, readManifest, verifyCoverage, verifyDump } from './dump-opening-captures.ts';
+import { dumpTable, fetchBatchAdaptive, MIN_BATCH_ROWS, readArchivedEventCounts, readManifest, stampVerified, verifyCoverage, verifyDump } from './dump-opening-captures.ts';
 
 let db: PGlite;
 let sdb: ScriptDb;
@@ -227,6 +227,49 @@ describe('dump-opening-captures — incremental append + coverage verify (retent
       expect(cov2.liveInPrefix).toBe(cov.liveInPrefix); // the new row is OUTSIDE the prefix, so prefix coverage is unchanged
     } finally {
       rmSync(supDir, { recursive: true, force: true });
+    }
+  });
+
+  it('readArchivedEventCounts reports per-event archived row counts (the row-level prune gate), sidecar == shard scan', async () => {
+    const cntDir = mkdtempSync(join(tmpdir(), 'oc-dump-cnt-'));
+    try {
+      const ev = await seedEvent('dump-cnt');
+      await seedCaptures(ev, 'dump-cnt', 6);
+      await dumpTable(sdb, { outDir: cntDir, batchRows: 100 });
+
+      const counts = readArchivedEventCounts(cntDir);
+      expect(counts.get(ev)).toBe(6); // exactly this event's archived rows
+
+      // the _event_counts.json sidecar (written at completion) must equal a from-scratch shard recount.
+      const viaSidecar = readArchivedEventCounts(cntDir);
+      rmSync(join(cntDir, '_event_counts.json'));
+      const viaScan = readArchivedEventCounts(cntDir); // falls back to scanning shards
+      expect([...viaScan.entries()].sort()).toEqual([...viaSidecar.entries()].sort());
+
+      // an incremental append updates the count (no re-dump, no double-count).
+      await seedCaptures(ev, 'dump-cnt', 2);
+      await dumpTable(sdb, { outDir: cntDir, batchRows: 100, incremental: true });
+      expect(readArchivedEventCounts(cntDir).get(ev)).toBe(8);
+    } finally {
+      rmSync(cntDir, { recursive: true, force: true });
+    }
+  });
+
+  it('an incremental re-open CLEARS a stale verified stamp (a killed append must not advertise verified=true)', async () => {
+    const vDir = mkdtempSync(join(tmpdir(), 'oc-dump-ver-'));
+    try {
+      await dumpTable(sdb, { outDir: vDir, batchRows: 100 });
+      stampVerified(vDir); // pretend a prior coverage-verify stamped it
+      expect(readManifest(vDir)!.verified).toBe(true);
+
+      const ev = await seedEvent('dump-ver');
+      await seedCaptures(ev, 'dump-ver', 3);
+      await dumpTable(sdb, { outDir: vDir, batchRows: 100, incremental: true }); // re-opens + appends the tail
+      // dumpTable itself must NOT leave verified=true — the appended tail is unverified until main() re-checks.
+      expect(readManifest(vDir)!.verified).toBe(false);
+      expect(readManifest(vDir)!.verifiedAt).toBeUndefined();
+    } finally {
+      rmSync(vDir, { recursive: true, force: true });
     }
   });
 });

@@ -82,9 +82,14 @@ realise the reclaim; the file now tracks the 7d working set.
 ## Incremental-append dump — BUILT (2026-07-21)
 
 The durable fix shipped: `dump-opening-captures.ts --incremental` continues from the manifest's `lastId` even on
-a `done` archive, appending only new rows; `verifyCoverage` replaces the exact-match verify (the append-only
-archive is a superset after a prune, so it checks **live ⊆ archive** on the id-prefix); and the prune gained a
-per-event **coverage gate** (`coverageBeyondArchive`: `maxId ≤ lastId`) that is the real delete authorisation.
+a `done` archive, appending only new rows and maintaining a per-event archived-row-count sidecar
+(`_event_counts.json`). The prune's delete authorisation is a **row-level coverage gate**
+(`underArchivedCandidates`: refuse any event whose **archived row count < live row count**). This counts actual
+archival rather than trusting id-monotonicity, so it catches an un-archived row whatever its cause — a
+not-yet-appended tail OR a keyset-dump hole from an out-of-order commit (a multi-agent review caught that the
+earlier `maxId ≤ lastId` gate + count-only `verifyCoverage` could be fooled by such a hole; the count gate closes
+it). `--incremental` also clears any stale `verified` stamp before appending, so a killed run never advertises an
+un-verified tail.
 Result: the loop's ongoing retention is the two cheap commands above — no `--force`, no rename dance, no forced
 `VACUUM FULL` (steady prune keeps the table flat → autovacuum handles it). Proven live 07-21: appended 330 rows
 in one shard, coverage-verified, prune gate clean. Tests in `dump-opening-captures.test.ts` +
