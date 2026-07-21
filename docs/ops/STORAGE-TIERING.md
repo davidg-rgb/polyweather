@@ -56,9 +56,21 @@ realise the reclaim; the file now tracks the 7d working set.
   archived local), edge_evaluations **186 MB → 34 MB** (624k rows pruned to 7d + VACUUM FULL), model_stats_history
   **37 MB → 24 MB** (63k rows archived+pruned). ~305 MB reclaimed; full history preserved locally
   (`market_rewards-archive` 27 MB gz, `model_stats_history-archive` 3.5 MB gz).
-- **Pending (off-peak):** `opening_captures` ~863 MB via its dump→prune playbook above — the single biggest
-  remaining win. DB floor after that ≈ **~1.7 GB** (forecast_snapshots + bucket_probabilities scored slice + the
-  hot windows).
+- **2026-07-21 (same day, opening_captures):** **1300 MB → 277 MB (~1,023 MB)**, DB **2652 → 1634 MB**. Preserved
+  the prior archive (renamed `opening-captures-archive-c96-20260707`), fresh full dump (311,406 rows / 835 events,
+  546 MB local) → `--verify` PASS → archive-gated prune resolved>2d (246,297 rows / 644 events) → `VACUUM FULL`.
+  Zero data lost, zero job failures. **Session total: DB ~2.9 GB → 1634 MB (~1.27 GB).**
+  - _Recurring:_ opening_captures regrows ~95 MB/day → re-run the dump→prune→VACUUM playbook every ~1–2 weeks
+    until the incremental-append dump (below) is built. **Each `--force` run must first preserve the prior archive
+    dir** (rename) — a fresh dump matches the current (post-prune) live table, so it does NOT contain
+    previously-pruned events; overwriting the old dir would lose their raw book.
+
+## Durable follow-up (not built)
+
+**Incremental-append dump** for opening_captures so retention is a cheap daily delta instead of a ~1.3 GB
+`--force` re-dump. Requires changing the verify from "manifest == live" (full-snapshot) to **"every live row is
+covered by some shard" (live ⊆ archive)**, because after a prune the append-only archive is a *superset* of the
+live table. Until then, the rename-then-`--force` playbook above is the safe manual path.
 
 ## The floor, and how to go lower
 
