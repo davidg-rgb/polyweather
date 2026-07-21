@@ -18,7 +18,7 @@ import { freshDb, rows } from '../../supabase/tests/harness.ts';
 import { toPgliteParam } from '../lib/pglite-param.ts';
 import type { ScriptDb } from '../lib/script-db.ts';
 import { indexArchive } from '../research/tune-convergence.ts';
-import { coverageBeyondArchive, executePrune, findCandidates, preflightArchive, type PruneCandidate } from './prune-opening-captures.ts';
+import { executePrune, findCandidates, preflightArchive, underArchivedCandidates, type PruneCandidate } from './prune-opening-captures.ts';
 
 let db: PGlite;
 let sdb: ScriptDb;
@@ -87,19 +87,21 @@ describe('prune-opening-captures — candidates / pre-flight / batched delete', 
     expect(cands.map((c) => c.eventId)).toEqual([oldEv.id]);
     const c = cands[0]!;
     expect(c.polyEventId).toBe(oldEv.polyId);
-    expect(Number(c.nRows)).toBe(7);
+    expect(Number(c.nRows)).toBe(7); // live rows — the coverage gate compares this to the archive's per-event count
     expect(Number(c.bytesEst)).toBeGreaterThan(0); // pg_column_size over the stored buckets payload
-    expect(Number(c.maxId)).toBeGreaterThan(0); // max row id — the coverage gate compares this to the archive lastId
   });
 
-  it('coverageBeyondArchive flags candidates whose rows exceed the archive lastId (the append-only delete gate)', () => {
-    const mk = (maxId: string): PruneCandidate =>
-      ({ eventId: 'e' + maxId, polyEventId: 'p', city: 'c', targetDate: '', resolvedAt: '', nRows: 1, maxId, bytesEst: 1 });
-    const cands = [mk('100'), mk('250'), mk('300')];
-    expect(coverageBeyondArchive(cands, '250').map((c) => c.maxId)).toEqual(['300']); // only 300 > 250
-    expect(coverageBeyondArchive(cands, '99')).toHaveLength(3); // archive behind all → all beyond
-    expect(coverageBeyondArchive(cands, '999')).toHaveLength(0); // archive ahead of all → all covered
-    expect(coverageBeyondArchive(cands, null)).toHaveLength(3); // no archive ⇒ nothing covered
+  it('underArchivedCandidates flags events whose archived row count is below live (the append-only delete gate)', () => {
+    const mk = (eventId: string, nRows: number): PruneCandidate =>
+      ({ eventId, polyEventId: 'p', city: 'c', targetDate: '', resolvedAt: '', nRows, bytesEst: 1 });
+    const cands = [mk('e1', 5), mk('e2', 3), mk('e3', 2)];
+    // e2 has only 2 archived rows for its 3 live rows → under-archived (a keyset hole or un-appended tail).
+    const counts = new Map([['e1', 5], ['e2', 2], ['e3', 4]]);
+    expect(underArchivedCandidates(cands, counts).map((c) => c.eventId)).toEqual(['e2']);
+    // fully covered (archived ≥ live for all) → none blocked
+    expect(underArchivedCandidates(cands, new Map([['e1', 5], ['e2', 3], ['e3', 2]]))).toHaveLength(0);
+    // empty counts (no archive / event absent) → every candidate is under-archived
+    expect(underArchivedCandidates(cands, new Map())).toHaveLength(3);
   });
 
   it('preflightArchive FAILS while the archive lacks the candidate, PASSES once the file exists', () => {

@@ -109,6 +109,7 @@ const isStatementTimeout = (e: unknown): boolean =>
 
 const manifestPath = (outDir: string): string => join(outDir, '_manifest.json');
 const eventsPath = (outDir: string): string => join(outDir, '_events.json');
+const eventCountsPath = (outDir: string): string => join(outDir, '_event_counts.json');
 
 export function readManifest(outDir: string): DumpManifest | null {
   const p = manifestPath(outDir);
@@ -135,6 +136,33 @@ export function readDumpedEventIds(outDir: string): Set<string> {
     }
   }
   return events;
+}
+
+/**
+ * Per-event ARCHIVED ROW COUNT — the prune's row-level coverage gate ("this event is fully archived iff its
+ * archived rows ≥ its live rows"). This is the sound authorisation for a delete: it verifies actual archival by
+ * counting, so it holds even if the append-only id-monotonicity assumption is violated by an out-of-order
+ * commit that leaves a live low-id row in no shard (that hole shows up here as archived < live). Prefers the
+ * `_event_counts.json` sidecar (written at completion); falls back to counting the shards — the fallback is
+ * always exact, so correctness never depends on the sidecar being present.
+ */
+export function readArchivedEventCounts(outDir: string): Map<string, number> {
+  const counts = new Map<string, number>();
+  if (existsSync(eventCountsPath(outDir))) {
+    for (const [ev, n] of Object.entries(JSON.parse(readFileSync(eventCountsPath(outDir), 'utf8')) as Record<string, number>)) {
+      counts.set(ev, n);
+    }
+    return counts;
+  }
+  const manifest = readManifest(outDir);
+  for (const s of manifest?.shards ?? []) {
+    for (const ln of gunzipShard(outDir, s.file).toString('utf8').split('\n')) {
+      if (!ln) continue;
+      const ev = (JSON.parse(ln) as { event_id?: string | null }).event_id;
+      if (ev) counts.set(ev, (counts.get(ev) ?? 0) + 1);
+    }
+  }
+  return counts;
 }
 
 /** Atomic manifest write (temp + rename) so a crash mid-write never corrupts the cursor. */
@@ -251,21 +279,29 @@ export async function dumpTable(db: ScriptDb, opts: DumpOpts = {}): Promise<Dump
     return manifest;
   }
 
-  // rebuild the distinct-event set so the resumed/appended run keeps an accurate count — prefer the
-  // _events.json sidecar (instant; written at each completion), else scan the shards on disk.
+  // rebuild the distinct-event set AND the per-event archived-row counts so the resumed/appended run stays
+  // accurate — prefer the _event_counts.json sidecar (instant; carries both keys and counts), else scan shards.
   const events = new Set<string>();
+  const eventCounts = new Map<string, number>();
   if (existing) {
-    if (existsSync(eventsPath(outDir))) {
-      for (const ev of JSON.parse(readFileSync(eventsPath(outDir), 'utf8')) as string[]) events.add(ev);
+    if (existsSync(eventCountsPath(outDir))) {
+      for (const [ev, n] of Object.entries(JSON.parse(readFileSync(eventCountsPath(outDir), 'utf8')) as Record<string, number>)) {
+        events.add(ev);
+        eventCounts.set(ev, n);
+      }
     } else {
       for (const s of existing.shards) {
         for (const ln of gunzipShard(outDir, s.file).toString('utf8').split('\n').filter(Boolean)) {
           const ev = (JSON.parse(ln) as { event_id?: string | null }).event_id;
-          if (ev) events.add(ev);
+          if (ev) { events.add(ev); eventCounts.set(ev, (eventCounts.get(ev) ?? 0) + 1); }
         }
       }
     }
     manifest.done = false; // re-open for append/resume; the loop re-sets done when new rows are exhausted
+    // clear any prior verified stamp: the freshly-appended tail is NOT coverage-verified until main() re-checks,
+    // so a run killed between here and stampVerified must not leave the archive advertising verified=true.
+    manifest.verified = false;
+    delete manifest.verifiedAt;
     log(`${opts.incremental ? 'incremental append' : 'resuming'} from id > ${manifest.lastId} · ${manifest.rowsWritten} rows / ${events.size} events on disk.`);
   }
 
@@ -283,7 +319,7 @@ export async function dumpTable(db: ScriptDb, opts: DumpOpts = {}): Promise<Dump
 
     const seq = manifest.shards.length + 1;
     const shard = writeShard(outDir, seq, rows);
-    for (const r of rows) if (r.event_id) events.add(r.event_id);
+    for (const r of rows) if (r.event_id) { events.add(r.event_id); eventCounts.set(r.event_id, (eventCounts.get(r.event_id) ?? 0) + 1); }
 
     manifest.shards.push(shard);
     manifest.rowsWritten += rows.length;
@@ -300,8 +336,10 @@ export async function dumpTable(db: ScriptDb, opts: DumpOpts = {}): Promise<Dump
   manifest.done = true;
   manifest.updatedAt = new Date().toISOString();
   writeManifest(outDir, manifest);
-  // sidecar of the distinct event_ids — the prune's dump pre-flight index (instant to load, no shard scan).
+  // sidecars: the distinct event_ids (the prune's membership index) + the per-event archived-row counts (the
+  // prune's row-level coverage gate). Both are instant to load, no shard scan.
   writeFileSync(eventsPath(outDir), JSON.stringify([...events].sort(), null, 0));
+  writeFileSync(eventCountsPath(outDir), JSON.stringify(Object.fromEntries(eventCounts), null, 0));
   log(`DONE: ${manifest.rowsWritten} rows · ${manifest.distinctEvents} distinct events · ${manifest.shards.length} shards.`);
   return manifest;
 }

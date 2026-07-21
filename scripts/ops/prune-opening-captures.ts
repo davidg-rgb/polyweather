@@ -32,7 +32,7 @@ import { parseArgs } from 'node:util';
 import { loadEnv } from '../lib/load-env.ts';
 import { makeScriptDb, type ScriptDb } from '../lib/script-db.ts';
 import { indexArchive } from '../research/tune-convergence.ts';
-import { OUT_ROOT as DUMP_ROOT, readDumpedEventIds, readManifest } from './dump-opening-captures.ts';
+import { OUT_ROOT as DUMP_ROOT, readArchivedEventCounts, readDumpedEventIds, readManifest } from './dump-opening-captures.ts';
 
 const ARCHIVE_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', 'research', 'out', 'market-history');
 
@@ -49,9 +49,8 @@ export interface PruneCandidate {
   city: string;
   targetDate: string;
   resolvedAt: string;
+  /** live capture rows for this event — compared against the archive's per-event count (the coverage gate). */
   nRows: number;
-  /** max opening_captures.id among this event's rows — the coverage gate: safe to delete iff ≤ archive lastId. */
-  maxId: string;
   /** Σ pg_column_size(buckets) — the stored (compressed) TOAST payload, measured without detoasting. */
   bytesEst: number;
 }
@@ -65,7 +64,6 @@ export async function findCandidates(db: ScriptDb, resolvedAgeDays = RESOLVED_AG
             me.target_date::text                                  as "targetDate",
             me.resolved_at::text                                  as "resolvedAt",
             count(*)::int                                         as "nRows",
-            max(oc.id)::text                                      as "maxId",
             coalesce(sum(pg_column_size(oc.buckets)), 0)::float8  as "bytesEst"
        from public.opening_captures oc
        join public.market_events me on me.id = oc.event_id
@@ -99,14 +97,18 @@ export function preflightArchive(
 }
 
 /**
- * COVERAGE GATE for an append-only (incremental) archive: candidates whose captures extend BEYOND the archived
- * id-prefix (max row id > the archive's lastId) are NOT fully archived, so they must not be deleted. Monotonic
- * append-only ids mean every row with id ≤ lastId was dumped, so maxId ≤ lastId ⟺ all of the event's rows are
- * archived. A null lastId (no archive) leaves everything beyond.
+ * ROW-LEVEL COVERAGE GATE for an append-only (incremental) archive — the sound authorisation for a delete.
+ * A candidate event is safe to prune ONLY if the archive holds at least as many rows for it as are live
+ * (`archivedCount ≥ nRows`). This VERIFIES archival by counting rather than trusting id-monotonicity, so it
+ * catches an un-archived row whatever its cause — a not-yet-appended tail, OR a keyset-dump hole from an
+ * out-of-order commit that left a live low-id row in no shard (that hole surfaces here as archived < live).
+ * Returns the candidates that are under-archived (unsafe): any with archivedCount < nRows.
  */
-export function coverageBeyondArchive(candidates: PruneCandidate[], lastId: string | null): PruneCandidate[] {
-  const cutoff = BigInt(lastId ?? '0');
-  return candidates.filter((c) => BigInt(c.maxId) > cutoff);
+export function underArchivedCandidates(
+  candidates: PruneCandidate[],
+  archivedCounts: Map<string, number>,
+): PruneCandidate[] {
+  return candidates.filter((c) => (archivedCounts.get(c.eventId) ?? 0) < c.nRows);
 }
 
 /**
@@ -193,17 +195,17 @@ async function main(): Promise<void> {
     }
     console.log(`TOTAL: ${candidates.length} events · ${totRows} capture rows · ~${mb(totBytes)} stored buckets payload`);
 
-    // COVERAGE GATE (dump mode): an APPEND-ONLY archive is a superset of live, so exact-match verify no longer
-    // applies. A candidate is safe to delete only if ALL its rows are archived — i.e. its max row id ≤ the
-    // archive's lastId (monotonic append-only ids ⇒ every row with id ≤ lastId was dumped). Refuse any candidate
-    // whose captures extend past the archive; the fix is one incremental append, not a delete.
+    // ROW-LEVEL COVERAGE GATE (dump mode): an APPEND-ONLY archive is a superset of live, so exact-match verify no
+    // longer applies. Authorise a delete only when the archive holds ≥ as many rows for the event as are live —
+    // this counts actual archival, so it refuses a not-yet-appended tail AND a keyset-dump hole (a live low-id
+    // row left in no shard by an out-of-order commit surfaces as archived < live). The fix is one --incremental.
     if (mode === 'dump') {
-      const m = readManifest(dumpDir);
-      const beyond = coverageBeyondArchive(candidates, m?.lastId ?? '0');
-      if (beyond.length > 0) {
-        console.log(`\n⛔ COVERAGE FAIL — ${beyond.length} candidate(s) have capture rows BEYOND the archive (id > lastId ${m?.lastId}); not fully archived:`);
-        for (const c of beyond) console.log(`  BEYOND ${c.targetDate} ${c.city} maxId ${c.maxId} > lastId ${m?.lastId}`);
-        console.log('Run `dump-opening-captures.ts --incremental` to append the new rows first, then re-run.');
+      const archivedCounts = readArchivedEventCounts(dumpDir);
+      const under = underArchivedCandidates(candidates, archivedCounts);
+      if (under.length > 0) {
+        console.log(`\n⛔ COVERAGE FAIL — ${under.length} candidate(s) have FEWER archived rows than live rows (not fully archived):`);
+        for (const c of under) console.log(`  UNDER ${c.targetDate} ${c.city}: archived ${archivedCounts.get(c.eventId) ?? 0} < live ${c.nRows}`);
+        console.log('Run `dump-opening-captures.ts --incremental` to append the missing rows first, then re-run.');
         if (values.execute) process.exitCode = 1;
         return;
       }

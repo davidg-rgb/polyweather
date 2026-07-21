@@ -183,22 +183,30 @@ export async function archiveAndVerify(
     readArchiveManifest(dir) ?? { table: cfg.table, tsColumn: cfg.tsColumn, updatedAt: now.toISOString(), days: {} };
 
   const completed = await liveCompletedDays(db, cfg, now);
-  for (const { day } of completed) {
-    if (manifest.days[day]?.pruned) continue; // already archived AND pruned — immutable, skip
-    if (!manifest.days[day]) {
+  const liveByDay = new Map(completed.map((c) => [c.day, c.rows]));
+
+  // (re)archive: a day absent from the manifest, OR a non-pruned archived day whose LIVE count has GROWN (a late
+  // row landed in that past day) so its shard is now missing rows — re-snapshot it. This SELF-HEALS drift instead
+  // of leaving the day permanently unverified (which would wedge the whole table's prune). A day whose live count
+  // shrank is left as-is: the archive is then a superset of live, which still covers every live row.
+  for (const { day, rows } of completed) {
+    const d = manifest.days[day];
+    if (d?.pruned) continue; // pruned days are immutable
+    if (!d || rows > d.rows) {
       const shard = await archiveDay(db, cfg, day, dir);
       manifest.days[day] = shard;
-      log(`  archived ${day}: ${shard.rows} rows · ${(shard.bytesGz / 1024).toFixed(0)} KB gz`);
+      log(`  ${d ? 're-archived (drift)' : 'archived'} ${day}: ${shard.rows} rows · ${(shard.bytesGz / 1024).toFixed(0)} KB gz`);
     }
   }
 
-  // verify each non-pruned archived day: shard rows must equal the live rows still in that day.
+  // verify each non-pruned archived day: COVERED iff the archive holds ≥ its live rows (archive ⊇ live ⇒ every
+  // live row is archived ⇒ safe to prune). After the re-archive above this holds for every drift-up day.
   for (const day of Object.keys(manifest.days).sort()) {
     const d = manifest.days[day]!;
     if (d.pruned) continue;
-    const live = await liveDayCount(db, cfg, day);
-    d.verified = live === d.rows;
-    if (!d.verified) log(`  ⚠ verify MISMATCH ${day}: shard ${d.rows} vs live ${live} — will NOT prune this day`);
+    const live = liveByDay.get(day) ?? (await liveDayCount(db, cfg, day));
+    d.verified = d.rows >= live;
+    if (!d.verified) log(`  ⚠ verify UNCOVERED ${day}: shard ${d.rows} < live ${live} — will NOT prune this day`);
   }
 
   manifest.updatedAt = now.toISOString();
@@ -290,10 +298,15 @@ async function runTable(
     // dry-run: report what WOULD archive + prune without writing anything.
     const completed = await liveCompletedDays(db, cfg, opts.now);
     const existing = readArchiveManifest(dir);
-    const toArchive = completed.filter((c) => !existing?.days[c.day] || !existing.days[c.day]!.pruned);
+    // mirror archiveAndVerify's (re)archive predicate exactly: a day is (re)archived iff it is absent, or a
+    // non-pruned day whose live count grew (drift-up). Already-archived unpruned days are NOT counted.
+    const toArchive = completed.filter((c) => {
+      const d = existing?.days[c.day];
+      return !d || (!d.pruned && c.rows > d.rows);
+    });
     const cutoffDay = utcDay(new Date(opts.now.getTime() - cfg.hotWindowDays * 86_400_000));
     const coldRows = completed.filter((c) => c.day < cutoffDay).reduce((s, c) => s + c.rows, 0);
-    console.log(`  DRY-RUN: ${completed.length} completed day(s) on the server (${toArchive.length} not yet archived);`);
+    console.log(`  DRY-RUN: ${completed.length} completed day(s) on the server (${toArchive.length} to (re)archive);`);
     console.log(`           ~${coldRows} rows older than ${cutoffDay} would be archived+pruned. Re-run with --execute.`);
     return;
   }
