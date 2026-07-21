@@ -21,6 +21,22 @@
 
 _Claude keeps this block current every material cycle. Whole status in 20 seconds._
 
+- **▶▶ 2026-07-21 ~15:30Z (operator-directed) — STORAGE TIERING shipped: a table-driven archive→prune tool + an
+  edge-retention cron tightening → ~305 MB reclaimed now with the full history kept LOCAL; the big 863 MB
+  opening_captures reclaim is now a one-command off-peak op.** Operator's call: "utilise only what operations
+  need on Supabase, keep the bulk local for training/testing." Mapped every large table's live-vs-research
+  readers first, then: ① NEW `scripts/ops/archive-retention.ts` — config-driven LOCAL archive (gzipped NDJSON
+  day-shards under `scripts/research/out/<table>-archive/`) → verify → archive-gated prune (dry-run default;
+  a Supabase cron can't verify a local archive, so keep-local tables must be pruned by a local script), +4
+  tests; ran live → **market_rewards 140 MB → 32 kB** (dead signal, 336k rows now local) + **model_stats_history
+  37 → 24 MB** (63k rows local). ② migration **0116** — ops_downsample `edge_evaluations` 30d→7d (no research
+  reader; live /events wants only latest ~44/event) → one-time delete + VACUUM FULL **186 → 34 MB**. **DB ~2.9 GB
+  → 2652 MB.** Full policy + runbook: **`STORAGE-TIERING.md`**. **Still pending (off-peak — its VACUUM FULL locks
+  the hot capture table): `opening_captures` ~863 MB** via its existing `dump --force → verify → prune → VACUUM`
+  playbook (now the storage-readiness gap flagged this morning is closed: the tool's ready, the dump just needs
+  the refresh). DB floor after that ≈ **1.7 GB**; going lower needs materialised dashboard summaries so
+  forecast_snapshots + bucket_probabilities scored history can also go local (flagged, not built). Suite green,
+  typecheck clean.
 - **▶▶ 2026-07-21 ~12:10Z (loop wake) — PR #42 MERGED to main (0114 fast lane + 0115 dead-bucket guards +
   g2 Google port); ALL-GREEN health verified; the Google g2 re-replay CONVERGED → KILL (signal #12 stays
   dead).** Main was behind deployed prod (the fns/migrations went live 07-20/07-21 but the PR sat unmerged) —

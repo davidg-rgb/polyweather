@@ -527,6 +527,10 @@ describe('migrations 0001–0010', () => {
       // prob (0.85). Stops the lane buying buckets the market has written off (the 07-21 KL 33°C @ 0.01 dust
       // buy). Config only — the edge fn carries the same fallback defaults.
       '0115_buy_table_dead_bucket_guards.sql',
+      // 0116: storage tiering, pg_cron side — ops_downsample edge_evaluations retention 30d→7d (no research
+      // reader, live /events wants latest ~44/event ≈ <2d). market_rewards + model_stats_history stay OUT of
+      // the cron (archive-gated by the local scripts/ops/archive-retention.ts). See STORAGE-TIERING.md.
+      '0116_retention_edge_evals_7d.sql',
     ]);
   });
 });
