@@ -65,6 +65,10 @@ const PINNED_CFG: GoogleBracketCfg = {
   minHoursToResolution: 20,
   excludeFahrenheit: false,
   maxEntryAgeH: 0, // age gate DISABLED for this analysis — reproduce the original band-[0.15] °F headline at any age
+  // the 2026-07-21 dead-pick / favorite-veto safeguards are DISABLED here: this script reproduces a HISTORICAL
+  // °F anomaly under the original entry logic, so the new guards must not alter its population.
+  deadPickMinBid: 0,
+  favoriteVetoProb: 2,
 };
 
 const pct = (num: number, den: number): string =>

@@ -248,6 +248,64 @@ describe('replayGoogleBracket — max-entry-age gate (≤24h since listing)', ()
   });
 });
 
+// ── 2b · the 0115 dead-pick + favorite-veto safeguards (operator 2026-07-21) ─────────────────────────────
+
+describe('replayGoogleBracket — dead-pick + favorite-veto safeguards', () => {
+  /** a cheap in-window young entry tick for idx2 (execAsk 0.12), with per-bucket bid overrides. */
+  const guardTick = (over: { pickBid?: number | null; otherBid?: number | null }, capturedAt = T0): ReplayTick => ({
+    capturedAt,
+    hoursSinceListing: 0.2,
+    tz: TZ,
+    targetDate: DATE,
+    buckets: [
+      mkB(0),
+      mkB(1),
+      mkB(2, { execAsk: 0.12, execBid: 0.1, bestBid: over.pickBid === undefined ? 0.09 : over.pickBid }),
+      mkB(3, { bestBid: over.otherBid === undefined ? 0.09 : over.otherBid }),
+      mkB(4),
+    ],
+  });
+  /** an exit-only later tick: idx2's ask is OUT of band (0.5, so it can never be a fallback entry) but its
+   *  execBid reaches tpAbs — so a permitted tick-0 entry cleanly takes profit (executed:true). */
+  const tpTick = tk(T1, 0.3, { execAsk: 0.5, execBid: 0.35 });
+
+  it('DEAD-PICK: a Google bucket with NO live bid is skipped (dead_pick) despite an in-band ask', () => {
+    const r = replayGoogleBracket(ev({ ticks: [guardTick({ pickBid: null })] }), 2, cfg);
+    expect(r.executed).toBe(false);
+    expect(r.exitReason).toBe('dead_pick');
+  });
+
+  it('DEAD-PICK: a dust bid below deadPickMinBid (0.02) is skipped; a ≥2¢ bid enters', () => {
+    expect(replayGoogleBracket(ev({ ticks: [guardTick({ pickBid: 0.01 })] }), 2, cfg).exitReason).toBe('dead_pick');
+    expect(replayGoogleBracket(ev({ ticks: [guardTick({ pickBid: 0.03 }), tpTick] }), 2, cfg).executed).toBe(true);
+  });
+
+  it('FAVORITE VETO: another bucket bid ≥ 0.85 cancels the entry (favorite_veto)', () => {
+    const r = replayGoogleBracket(ev({ ticks: [guardTick({ otherBid: 0.9 })] }), 2, cfg);
+    expect(r.executed).toBe(false);
+    expect(r.exitReason).toBe('favorite_veto');
+  });
+
+  it('no veto when the biggest other bucket sits below 0.85 (a live cheap pick enters)', () => {
+    const r = replayGoogleBracket(ev({ ticks: [guardTick({ otherBid: 0.6 }), tpTick] }), 2, cfg);
+    expect(r.executed).toBe(true);
+    expect(r.exitReason.startsWith('take_profit')).toBe(true);
+  });
+
+  it('dead-pick takes precedence in the reason, but BOTH guards fire on a dead + dominated market', () => {
+    // no bid on our pick AND a 0.95 favorite elsewhere → the market has written our bucket off twice over.
+    const r = replayGoogleBracket(ev({ ticks: [guardTick({ pickBid: null, otherBid: 0.95 })] }), 2, cfg);
+    expect(r.executed).toBe(false);
+    expect(r.exitReason).toBe('dead_pick'); // dead-pick is checked first; favorite_veto would also have blocked
+  });
+
+  it('both guards DISABLE via config (deadPickMinBid 0, favoriteVetoProb 2) — pre-0115 entry restored', () => {
+    const off: GoogleBracketCfg = { ...cfg, deadPickMinBid: 0, favoriteVetoProb: 2 };
+    const r = replayGoogleBracket(ev({ ticks: [guardTick({ pickBid: null, otherBid: 0.95 }), tpTick] }), 2, off);
+    expect(r.executed).toBe(true); // both guards off → the cheap in-band pick enters
+  });
+});
+
 // ── 3 · the two absolute exits + hold-to-resolution ─────────────────────────────────────────────────────
 
 describe('replayGoogleBracket — absolute bracket exits', () => {
@@ -352,32 +410,33 @@ describe('replayGoogleBracket — totality + googleCfg', () => {
     expect(replayGoogleBracket(junk, 2, cfg).executed).toBe(false);
   });
 
-  it('googleCfg pins the run cities and keeps the frozen thresholds (entry band 0.10–0.12, TP 0.30, no SL, 20h window, °C-only)', () => {
+  it('googleCfg pins the run cities and keeps the frozen thresholds (entry band 0.10–0.15, TP 0.30, no SL, 20h window, °C-only, 0115 guards)', () => {
     const c = googleCfg(['amsterdam', 'paris']);
     expect(c.cities).toEqual(['amsterdam', 'paris']);
     expect(c.askMin).toBe(0.1);
-    expect(c.askMax).toBe(0.12); // tightened from 0.15 (operator-set 2026-07-07): buy only 10–12¢
+    expect(c.askMax).toBe(0.15); // RAISED from 0.12 (operator-set 2026-07-21): the 0115 guards now filter the written-off cheap buckets
     expect(c.tpAbs).toBe(0.3);
     expect(c.slAbs).toBe(0); // the no-SL sentinel — the stop-loss is disabled in the frozen "Test 2"
     expect(c.minHoursToResolution).toBe(20); // purchase window closes 20h before resolution
     expect(c.excludeFahrenheit).toBe(true); // °C-only: US °F markets excluded (operator-set 2026-07-07)
     expect(c.maxEntryAgeH).toBe(24); // buy window closes 24h after listing (operator-set 2026-07-08)
+    expect(c.deadPickMinBid).toBe(0.02); // 0115 dead-pick guard (ported from the live buy-table lane)
+    expect(c.favoriteVetoProb).toBe(0.85); // 0115 favorite veto (the operator's explicit rule)
     expect(googleCfg([]).cities).toEqual(GOOGLE_DEFAULTS.cities); // empty → the default scope
   });
 
-  it('the production default band [0.10, 0.12] rejects a 0.14 ask the old 0.15 ceiling would have taken', () => {
-    // the tightened band: a 0.14 ask is now ABOVE the 0.12 ceiling → never enters (the 12–15¢ slice the sweep
-    // found was disproportionately losers). googleCfg carries the real production default (askMax 0.12).
+  it('the raised default band [0.10, 0.15] now TAKES a 0.14 ask the old 0.12 ceiling rejected', () => {
+    // operator-set 2026-07-21: the ceiling went 0.12→0.15 (paired with the guards). A 0.14 ask is in-band again.
     const prodCfg = googleCfg(['amsterdam']);
-    const above = replayGoogleBracket(ev({ ticks: [tk(T0, 0.2, { execAsk: 0.14, execBid: 0.1 })] }), 2, prodCfg);
-    expect(above.executed).toBe(false);
-    expect(above.exitReason).toBe('never_enterable');
-    // but a 0.11 ask (inside [0.10, 0.12]) still enters and can take profit.
     const inBand = replayGoogleBracket(
-      ev({ ticks: [tk(T0, 0.2, { execAsk: 0.11, execBid: 0.08 }), tk(T1, 0.3, { execBid: 0.35 })] }),
+      ev({ ticks: [tk(T0, 0.2, { execAsk: 0.14, execBid: 0.1 }), tk(T1, 0.3, { execBid: 0.35 })] }),
       2, prodCfg,
     );
     expect(inBand.executed).toBe(true);
     expect(inBand.exitReason.startsWith('take_profit')).toBe(true);
+    // …but a 0.16 ask stays above the new 0.15 ceiling → never enters.
+    const above = replayGoogleBracket(ev({ ticks: [tk(T0, 0.2, { execAsk: 0.16, execBid: 0.1 })] }), 2, prodCfg);
+    expect(above.executed).toBe(false);
+    expect(above.exitReason).toBe('never_enterable');
   });
 });

@@ -95,6 +95,17 @@ export interface GoogleBracketCfg {
    *  RESOLUTION end and goes inactive when resolvesAt is null — this gate still bites there). NB: the ≤24h edge is
    *  TINY-n (5 realized entries, no CI) — this runs it FORWARD as the gate of record, it is not yet proven. */
   maxEntryAgeH: number;
+  /** DEAD-PICK guard (0115 safeguard ported from the live buy-table lane, operator 2026-07-21): our Google
+   *  bucket must have real BID support at the entry tick (best bid ≥ this), else the market has written it off
+   *  and buying it cheap is buying a loser (the KL 33°C @ 1¢ case). Reads the entry tick's own book — no fetch.
+   *  0 (or ≤0) DISABLES. (The askMin floor already excludes sub-cent dust; this catches the thin/no-bid case
+   *  inside the entry band.) */
+  deadPickMinBid: number;
+  /** FAVORITE VETO (the operator's explicit rule): skip the entry when ANY OTHER bucket's best bid ≥ this at
+   *  the entry tick — the market is near-certain of a different outcome, so Google's cheap pick is a written-off
+   *  longshot (the adverse-selection cohort the maxEntryAgeH gate approximates; this is the direct measure).
+   *  bestBid is the liveness signal (real buyers; dust asks can't move it). > 1 (e.g. 2) DISABLES. */
+  favoriteVetoProb: number;
 }
 
 /**
@@ -117,6 +128,14 @@ export interface GoogleBracketCfg {
  * net-positive for ≤24h (adverse selection: a still-cheap late bucket has been priced away from Google's pick).
  * TINY-n (5 realized ≤24h entries, no CI) — run FORWARD as the gate of record, NOT yet a proven edge.
  *
+ * askMax 0.15 (operator-set 2026-07-21, RAISED from 0.12): re-open the cheap-entry ceiling — the 12–15¢ slice
+ * was tightened out on 2026-07-07 for being disproportionately losers, but those losers were largely buckets
+ * the market had WRITTEN OFF, which the new dead-pick + favorite-veto guards now filter directly. Widening the
+ * band back accommodates the entries the guards remove (a paired change: guards drop the written-off cheap
+ * buckets, the band re-admits the cheap-but-LIVE ones). Measured forward — the §9R-E gate adjudicates.
+ *
+ * deadPickMinBid 0.02 / favoriteVetoProb 0.85 (operator-set 2026-07-21): the 0115 live-lane safeguards, ported.
+ *
  * slAbs 0: the no-SL sentinel (≤ 0 disables the stop-loss; the position holds to resolution as its floor). The
  * panel sweeps five TP-only exit variants {0.30..0.50}; 0.30 is the canonical/headline variant — the sweep
  * confirmed 0.28–0.30 is the peak (lower TP sells winners too cheap; a taker SL self-triggers on the spread).
@@ -125,7 +144,7 @@ export const GOOGLE_DEFAULTS: GoogleBracketCfg = {
   cities: [],
   perPositionUsd: 20,
   askMin: 0.1,
-  askMax: 0.12,
+  askMax: 0.15,
   tpAbs: 0.3,
   slAbs: 0,
   paperSlippage: 0.01,
@@ -133,6 +152,8 @@ export const GOOGLE_DEFAULTS: GoogleBracketCfg = {
   minHoursToResolution: 20,
   excludeFahrenheit: true,
   maxEntryAgeH: 24,
+  deadPickMinBid: 0.02,
+  favoriteVetoProb: 0.85,
 };
 
 /** GOOGLE_DEFAULTS with the run's capture-universe cities pinned in (falls back to the empty default scope). */
@@ -247,14 +268,21 @@ export function replayGoogleBracket(
   const cutoffMs = gateActive ? resolveMs - cfg.minHoursToResolution * 3_600_000 : Number.POSITIVE_INFINITY;
   // MAX-ENTRY-AGE gate (operator-set): reject a first-cheap tick older than maxEntryAgeH hours since listing.
   const ageGateActive = fin(cfg.maxEntryAgeH) && cfg.maxEntryAgeH > 0;
+  // 0115 SAFEGUARDS (operator 2026-07-21): dead-pick needs a real bid on our bucket; favorite-veto skips when
+  // another bucket is a near-lock. Both read the entry tick's own book (already in the replay data — no fetch).
+  const deadPickActive = fin(cfg.deadPickMinBid) && cfg.deadPickMinBid > 0;
+  const favoriteVetoActive = fin(cfg.favoriteVetoProb) && cfg.favoriteVetoProb > 0 && cfg.favoriteVetoProb <= 1;
 
   // ── (1) entry: first tick whose predicted bucket has a live ask in the band [askMin, askMax], is in the
-  //        purchase window (≥ minHoursToResolution before resolution) AND is young enough (≤ maxEntryAgeH) ──────
+  //        purchase window (≥ minHoursToResolution before resolution), is young enough (≤ maxEntryAgeH), and
+  //        passes the dead-pick + favorite-veto safeguards ─────────────────────────────────────────────────────
   let entryIdx = -1;
   let entryBucket: OpeningBucket | undefined;
   let entryAsk = NaN;
   let cheapAfterCutoff = false; // a band-priced ask existed, but only past the window → excluded by the min-hours rule
   let cheapButTooOld = false; // a band-priced ask existed in-window, but only after the market was > maxEntryAgeH old
+  let deadPickBlocked = false; // a cheap in-window young tick existed, but our bucket had no real bid support
+  let favoriteBlocked = false; // …but another bucket was a ≥ favoriteVetoProb near-lock (market wrote our pick off)
   for (let i = 0; i < ticks.length; i++) {
     const b = bucketOf(ticks[i]!, bIdx);
     const ask = b?.execAsk ?? null;
@@ -273,6 +301,26 @@ export function replayGoogleBracket(
           continue;
         }
       }
+      // DEAD-PICK: our Google bucket must have real bid support (else the book has written it off).
+      if (deadPickActive) {
+        const pickBid = fin(b.bestBid) ? b.bestBid : null;
+        if (pickBid == null || pickBid < cfg.deadPickMinBid) {
+          deadPickBlocked = true;
+          continue;
+        }
+      }
+      // FAVORITE VETO: skip if any OTHER bucket at this tick is a ≥ favoriteVetoProb near-lock.
+      if (favoriteVetoActive) {
+        let maxOtherBid = Number.NEGATIVE_INFINITY;
+        for (const ob of Array.isArray(ticks[i]!.buckets) ? ticks[i]!.buckets : []) {
+          if (!ob || ob.idx === bIdx) continue;
+          if (fin(ob.bestBid) && ob.bestBid > maxOtherBid) maxOtherBid = ob.bestBid;
+        }
+        if (Number.isFinite(maxOtherBid) && maxOtherBid >= cfg.favoriteVetoProb) {
+          favoriteBlocked = true;
+          continue;
+        }
+      }
       entryIdx = i;
       entryBucket = b;
       entryAsk = ask;
@@ -280,7 +328,19 @@ export function replayGoogleBracket(
     }
   }
   if (entryIdx < 0 || !entryBucket) {
-    return NOT_EXECUTED(cheapAfterCutoff ? 'cheap_after_cutoff' : cheapButTooOld ? 'cheap_but_too_old' : 'never_enterable');
+    // Precedence: the SAFEGUARD skips first (a genuinely cheap/in-window/young tick that we protectively
+    // declined — the operator wants these visible), then the window/age reasons, then never-cheap.
+    return NOT_EXECUTED(
+      favoriteBlocked
+        ? 'favorite_veto'
+        : deadPickBlocked
+          ? 'dead_pick'
+          : cheapAfterCutoff
+            ? 'cheap_after_cutoff'
+            : cheapButTooOld
+              ? 'cheap_but_too_old'
+              : 'never_enterable',
+    );
   }
 
   // ── (2) taker fill at the cheap ask (reuse paperFill's taker branch) ───────────────────────────────────

@@ -306,6 +306,46 @@ describe('buildGoogleView — °C-only mode excludes US °F markets', () => {
   });
 });
 
+// ── 0115 safeguards surfaced in coverage ─────────────────────────────────────────────────────────────────
+describe('buildGoogleView — 0115 safeguards (nSafeguardBlocked)', () => {
+  // idx2 (Google's 16.4°C pick) is cheap + live (execAsk 0.14, bid 0.09), but idx3 is a 0.90 near-lock: the
+  // market has written our pick off → the favorite veto declines the entry and it surfaces in coverage.
+  const vetoLadder = (): RawBucket[] => [
+    bucket(0, '14°C or below'),
+    bucket(1, '15°C'),
+    bucket(2, '16°C', { execAsk: 0.14, execBid: 0.1 }),
+    bucket(3, '17°C', { bestBid: 0.9 }),
+    bucket(4, '18°C or higher'),
+  ];
+  const vetoRow = (capturedAt: string, age: number): RawCaptureRow => ({
+    ...row('VETO', capturedAt, age),
+    buckets: vetoLadder(),
+  });
+
+  it('a market with a ≥0.85 favorite is nSafeguardBlocked, not entered', () => {
+    const v = buildGoogleView(
+      [vetoRow('2026-07-01T08:00:00.000Z', 0.2), vetoRow('2026-07-01T08:00:30.000Z', 0.3)],
+      [],
+      [gp('VETO')],
+      cfg,
+    );
+    expect(v.nGoogleEvents).toBe(1); // it's a bucketable Google market…
+    expect(v.nSafeguardBlocked).toBe(1); // …that the veto declined
+    expect(v.entries).toHaveLength(0);
+  });
+
+  it('with the veto DISABLED (prob 2) the same market enters — proving the guard is what blocked it', () => {
+    const v = buildGoogleView(
+      [vetoRow('2026-07-01T08:00:00.000Z', 0.2), vetoRow('2026-07-01T08:00:30.000Z', 0.3)],
+      [],
+      [gp('VETO')],
+      { ...cfg, favoriteVetoProb: 2 },
+    );
+    expect(v.nSafeguardBlocked).toBe(0);
+    expect(v.entries).toHaveLength(1);
+  });
+});
+
 // ── 0103 incremental replay: the decomposition + the jsonb-cache round-trip ──────────────────────────────
 describe('incremental replay (0103) — buildGoogleReplayUnits + assembleGoogleView', () => {
   const tpEvent: RawCaptureRow[] = [
@@ -361,6 +401,9 @@ describe('incremental replay (0103) — buildGoogleReplayUnits + assembleGoogleV
     expect(googleReplayCacheKey({ ...cfg, excludeFahrenheit: true })).not.toBe(k);
     expect(googleReplayCacheKey({ ...cfg, maxEntryAgeH: cfg.maxEntryAgeH + 1 })).not.toBe(k);
     expect(googleReplayCacheKey({ ...cfg, perPositionUsd: cfg.perPositionUsd + 1 })).not.toBe(k);
+    // 0115: the two safeguard thresholds change the entry population → they MUST be in the key.
+    expect(googleReplayCacheKey({ ...cfg, deadPickMinBid: 0.05 })).not.toBe(k);
+    expect(googleReplayCacheKey({ ...cfg, favoriteVetoProb: 0.9 })).not.toBe(k);
     // the cities scope selects WHICH events exist, not how any one event replays — not part of the key.
     expect(googleReplayCacheKey({ ...cfg, cities: ['elsewhere'] })).toBe(k);
   });
