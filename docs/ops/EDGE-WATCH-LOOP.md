@@ -21,6 +21,26 @@
 
 _Claude keeps this block current every material cycle. Whole status in 20 seconds._
 
+- **▶▶ 2026-07-22 ~18:00Z (loop wake — Cycle rota) — ALL-GREEN sweep; the continuous live lane is quietly
+  confirming the KILL with real money (≈−$30 over 5 days); the ONE upcoming click is the 07-31 override
+  renewal.** ① **Buy lane healthy:** mode live, interlock **ok:true** (override id=2 active → expires
+  **2026-07-31 00:00Z**), 4-city allowlist, `stopAfterFirstSuccess` false (continuous), `laneHalted` false;
+  tick 17:43Z clean, **344 ok / 0 fail / 24h**. **3 fills at the 07-22 00:02Z window** — the FIRST full
+  window under the 0115 dead-bucket guards: @0.32/15sh · @0.26/19sh · @0.40/12sh, all within their per-city
+  caps ($14.61 staked), resolved 12:00Z, ≥1 booked loss. Quiet now (all 8 markets outside the [2,12]h lead
+  window; next ~**07-23 00:00Z**). ② **Jobs:** all 19 crons **0-fail/24h**, 0 error rows/48h, deadmen quiet,
+  efficiency-monitor Action fired (snapshot 08:46Z). ③ **Storage:** DB **1744 MB** · opening_captures
+  **362 MB** — far under the 3.5 GB / 2 GB bars (~110 MB/day regrowth off the 07-21 reclaim floor of 1634 MB);
+  no action, retention re-runs ~weekly. ④ **Forward instruments:** efficiency-monitor **S1 KILL** (n=5,487 /
+  45c / 34d, mean −0.51% CI [−1.17%, +0.14%], zsMC 2.0% — tightening) · **S2 INSUFFICIENT** (15 troughs).
+  **Google panel: INSUFFICIENT (15 scored / 8 cities / 4 dates)** — dropped **53→15** after the 07-21 captures
+  prune (it replays opening_captures; the 2-day retention knocked its scorable window back to 07-19..07-22).
+  **NOT a regression** — it re-accrues dates between the ~weekly prunes (a sawtooth around the 7-date bar), and
+  #12 is dead so its verdict isn't load-bearing. ⑤ **mode = live** (unchanged; the authorized live test, not a
+  reopen). **YOURS — one click:** the 07-31 override renewal (I re-surface it from ~07-28). **DECISION FOR
+  YOU:** the lane is now down ≈**$30 real** since the 07-18 first fill (start $107.80 → cash $77.68 + $0.02
+  dust, 10 dust positions), staking ~$51 over 5 days — plumbing AND the KILL are both proven live now; keep it
+  running to 07-31 or wind it down early is your call (I never touch caps/allowlist/mode).
 - **▶▶ 2026-07-22 ~00:10Z (operator: "Run the multi-agent code review protocol") — 15-agent adversarial review of
   today's storage builds → 1 HIGH data-loss finding + 5 LOW, ALL fixed + re-verified.** Workflow: 6 dimension
   reviewers → adversarially refute each finding (9 raw → 6 confirmed). **HIGH (real):** the incremental gate
@@ -378,7 +398,10 @@ _Claude keeps this block current every material cycle. Whole status in 20 second
    run the C96 archive→prune→VACUUM-FULL playbook off-peak, archive verified before any delete, board
    log first. Baseline C19: DB 2,376 MB · captures 832 MB (~85 MB/day).
 4. **Forward instruments.** City race: 10:00/13:50/20:45Z lanes placed + grading current. Google panel
-   accruing toward n≥40. Efficiency-monitor S1/S2 verdict drift. `/paper-trade`, `/monitor` RPCs healthy.
+   toward n≥40 — **but note (07-22): it replays opening_captures, so the 2-day retention prune caps its
+   scorable window; INSUFFICIENT between the ~weekly prunes is EXPECTED (sawtooth around the 7-date bar),
+   NOT breakage — #12 is dead so its verdict is non-load-bearing.** Efficiency-monitor S1/S2 verdict drift.
+   `/paper-trade`, `/monitor` RPCs healthy.
 5. **Tripwires.** ⑤ (trade_config.mode) every cycle; ①–④ sweep every ~2–3 days.
 6. **Watch items.** ~~price_cap 0.40~~ **CLOSED** (operator lowered to 0.30 at the 07-18 continuous-buying
    config) · **gate override expires 07-31 00:00Z** → surface the renewal from ~07-28 (the one live click) ·
