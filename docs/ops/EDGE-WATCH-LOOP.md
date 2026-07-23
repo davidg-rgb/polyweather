@@ -21,6 +21,24 @@
 
 _Claude keeps this block current every material cycle. Whole status in 20 seconds._
 
+- **▶▶ 2026-07-23 ~12:00Z (operator: "we buy bad positions … some of our limits are holding our win rate
+  back" → "let it run a couple more days, improve what can be improved") — DIAGNOSED + verified; NO edge fix
+  exists, so improvement = the anti-junk guards (confirmed live) + a durable record.** Powered the operator's
+  hypothesis on the **624-bet / 4-city / 41-day** `city_paper_bets` corpus (live lane is n=13): the traded
+  edge is a **day-clustered null, mean −0.66%, 95% CI [−5.3%, +4.0%]**, net −$96 at a 63% win rate. Mechanism:
+  the lane enters at ~00:02Z = **12h before close** (far edge of [2,12]h) = pre-floor, max-uncertainty →
+  market prices our bucket cheap → we buy a low-prob bucket → it "realises faulty soon after." **Win rate
+  rises ≈1:1 with price** (≥0.60 favorites win 80% but are the biggest loser, −$237) and ≈1:1 with entry hour
+  (38%→85% as the floor forms, ask tracks it) → **win rate is a purchasable vanity metric; no cap/lead setting
+  adds profit** — signal #12, killed six ways (full write-up: `BUY-TABLE-LIVE.md` §2026-07-23). **What IS
+  improvable — verified live 2026-07-23:** the guards that stop pathological buys are firing —
+  `deadPickMinBid 0.02` + `favoriteVetoProb 0.85` (0115), 0111 dead-bucket floor, hard $0.01 min ask; post-guard
+  fills sit 0.26–0.44, no lottery tickets since. Did NOT build per-bet live grading (buy-table markets aren't in
+  `market_events`; winner source is the 2-day-pruned capture RPC — machinery not worth it for a dead signal /
+  n=13; the wallet aggregate + the paper corpus already answer it). **Operator-only levers surfaced, not
+  actioned** (they change the scoreboard, not the P&L): narrow the lead window / add a min-ask floor. **Decision:
+  run continues (operator), config unchanged; reassess ~07-25.** Lane state unchanged: mode live, override →
+  07-31, 4-city, cap 0.30, continuous; 3 fills 07-22 + 2 fills/1 pending 07-23 within caps.
 - **▶▶ 2026-07-22 ~18:00Z (loop wake — Cycle rota) — ALL-GREEN sweep; the continuous live lane is quietly
   confirming the KILL with real money (≈−$30 over 5 days); the ONE upcoming click is the 07-31 override
   renewal.** ① **Buy lane healthy:** mode live, interlock **ok:true** (override id=2 active → expires

@@ -9,6 +9,62 @@
 > practical unlock for this lane is the **expiring (≤14d) `trade_gate_override`** — the forward paper gate of
 > record is a settled KILL and will not PASS on its own.
 
+## ▶ 2026-07-23 — "the limits are holding back our win rate" — DIAGNOSED (win rate is a purchasable vanity metric; no limit setting adds profit)
+
+Operator observation: *"we buy bad positions that realise as faulty soon after we enter … based on
+statistics we should hit more correct than we are — some of our limits are holding our win rate back."*
+Half right, and which half matters. Powered on the **`city_paper_bets` corpus: 624 graded bets / 4 cities
+/ 41 weather-days** (the live lane is n=13 — the paper corpus is the statistically-powered mirror of the
+same strategy).
+
+**The verdict: the edge is a day-clustered null — mean −0.66%, 95% CI [−5.3%, +4.0%]** (unit = weather-day).
+Net **−$96 on $6,240 staked at a 63% win rate.** A 63% hit rate that loses money is the whole story: the
+win rate and the price move together because the market is efficient.
+
+**What one buy window is:** the lane fires at ~00:02Z = **12h before the 12:00Z close** = the far edge of
+the [2,12]h lead window. 12h out the day's high hasn't formed (forecast is 1.5–2.4°C above the running-max
+floor), so the market prices our bucket cheap (0.26–0.44), so we buy it — a low-probability bucket at the
+moment of maximum uncertainty. That is *why* they "realise as faulty soon after." The price cap compounds it
+by biasing entry toward the cheapest (earliest, pre-floor) moment.
+
+**Limit #1 — price cap. Win rate rises with price ≈1:1; edge ≈ 0 at every band:**
+
+| entry ask | n | win rate | avg ask | edge (win−ask) | net $ |
+|---|---|---|---|---|---|
+| <0.10 | 10 | 10% | 0.035 | +6.5% | +6 |
+| 0.20–0.30 | 33 | 36% | 0.236 | +12.7%¹ | +166 |
+| **0.30–0.45** (current caps) | 95 | 37% | 0.376 | −0.7% | −34 |
+| 0.45–0.60 | 114 | 53% | 0.517 | +0.9% | −12 |
+| **≥0.60 (favorites)** | 351 | **80%** | 0.847 | −4.3% | **−237** |
+
+¹ the 0.20–0.30 +12.7% is the known **mid-vs-real-book artifact** (`nonprice-fingerprint-kill`: flipped
++3.4%→−9.8% on the real bid/ask at $2 depth), n=33. The route to a high win rate is buying favorites at
+0.85 — the single biggest money-loser. **Higher win rate = worse P&L.**
+
+**Limit #2 — entry timing (the real information lever, still fully priced):** win rate climbs **38%→85%**
+from arm-hour 10→15 as the running-max floor forms (°C-still-to-rise collapses 2.4→0.2), but avg ask tracks
+it in lockstep (0.43→0.82) so edge stays ≈ 0. Confirms WO-5 (`FINDINGS.md`): the market is efficient w.r.t.
+the running-max floor — no latency window.
+
+**Reconciliation of "we should hit more":** the per-city accuracy the caps were set from (ankara 92% etc.)
+is the *unconditional/best-hour* number. Traded, ankara wins **56%, +2.0% ROI** (noise); every city edge is
+−2.8%…−0.3%. The 92% is real but only available *late*, when the price is already ~0.85 → no edge. The
+paper `ask` above is top-of-book; the real executable edge is worse (spread + fee + depth walk).
+
+**So: nothing improves the *outcome* (money). Two things trivially improve the *win rate* and cost money:**
+enter later (narrow the lead window toward the floor) and/or lift the caps → 80%+ hit rate, larger loss.
+**The limits are not holding back profit — they hold back the loss** (the current caps keep the lane out of
+the −$237 favorite-buying zone). This is signal #12, killed six ways.
+
+**What IS improvable, and was verified/actioned 2026-07-23:** the anti-bad-position guards are the real
+lever, and they are **live and firing** — `deadPickMinBid 0.02` (0115), `favoriteVetoProb 0.85` (0115),
+the `0111` dead-bucket intraday floor, and the hard `$0.01` min ask. These stop the pathological longshot
+buys (the pre-guard helsinki 19°C @ 0.001 / KL 33°C @ 0.01). Post-guard fills sit at 0.26–0.44 — no
+pathological buys since. **Operator-only levers, surfaced not actioned** (they change the scoreboard, not the
+P&L): narrow the lead window to enter nearer the floor; add a min-ask floor to skip cheap longshots (note:
+the <0.10 band is ≈ breakeven in the corpus, so this cuts variance/optics, not loss). Recommendation: leave
+the config as-is — it's about as un-lossy as the strategy gets; let it run as the cheap live KILL-confirmation.
+
 ## The model (what the tick does, every 10 minutes)
 
 Buy **our predicted daily-high bucket** (argmax `houseProb` from the opening-capture stream — the same house
