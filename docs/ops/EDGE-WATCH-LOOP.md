@@ -21,6 +21,19 @@
 
 _Claude keeps this block current every material cycle. Whole status in 20 seconds._
 
+- **▶▶ 2026-07-24 (operator: "the play is to bet what the MARKET will guess … catch it cheap early and sell
+  into likelihood … prep another analytics run for next session — switching model, clean context") — HANDOFF
+  PREPPED, not run.** Verified (last session) the Google "win rate" is a CONVERGENCE rate, not forecast
+  accuracy (engine `google-bucket-replay.ts:394-426`: 93% of wins = `take_profit` sells before resolution;
+  hold-to-resolution hit ~5%). New run tests the operator's exact framing: **select the buy bucket from the
+  MARKET's bids (not our forecast) + sell into convergence.** Only code change = the `selectEntries` seam
+  (`opening-convergence.ts:432`, argmax(houseProb) → market-signal). Engine/data/gate all exist
+  (`opening-bracket-replay.ts` + `openingVerdict` + the 835-event `opening-captures-archive` + `market_events`
+  resolution). Turnkey doc: **`docs/ops/CONVERGENCE-CAPTURE-HANDOFF.md`** (self-contained for a fresh model;
+  cites the KILLs so it doesn't redo dead work; honest prior = likely KILL — signal #12's home turf, taker
+  spread eats it / maker won't fill). Memory + index updated so next session's startup surfaces it. Read-only,
+  boundary intact. **Live lane + Google panel keep running unchanged; override renewal (07-31) still the one
+  operator click.**
 - **▶▶ 2026-07-23 ~12:00Z (operator: "we buy bad positions … some of our limits are holding our win rate
   back" → "let it run a couple more days, improve what can be improved") — DIAGNOSED + verified; NO edge fix
   exists, so improvement = the anti-junk guards (confirmed live) + a durable record.** Powered the operator's
