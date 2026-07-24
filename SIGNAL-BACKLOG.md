@@ -952,6 +952,37 @@ entire forward window) strengthen the case but cannot substitute for it. **Do NO
 alone** — the live gate is definitionally the higher bar, and a backtest tune was exactly what produced the
 synthetic-book false-positive this KILL corrects.
 
+## 13-R. Signal #12's remaining variants — ALL CLOSED 2026-07-24 (market-signal selection · NO/fade · hold-to-resolution)
+
+An operator-requested re-test came at the 12th signal from a **new angle** — *"bet what the MARKET will guess the max
+temperature will be, catch the guess cheap early and sell it as it enters higher likelihood"*, plus the cross-check
+*"a potential negative buying pattern, betting 'no' … or possibly hold to finish."* Three arms, all scored on the
+**real captured book** (1,179 events / 45 cities / 27 dates, resolution coverage 100%) through the same frozen §9R-E
+estimators. All three are now **tested and closed**:
+
+| Arm | Verdict | Key number |
+|---|---|---|
+| Market-signal **SELECTION** into the bracket exit | **KILL, 14 of 14 cells** | every clustered CI wholly negative; winFrac **8.7–32.7%** vs the 0.50 bar |
+| Betting **NO** on the selected bucket (the fade) | **powered NULL** — straddles 0 on every powered cell | 45c M0-pure **−0.83¢/share**, city-clustered CI **[−3.77¢, +1.82¢]**, n=754/45c/23d |
+| **HOLD** to resolution (skip the convergence sell) | **KILL** — CI excludes 0 | **−4.30¢ to −5.57¢/share** across all four 45-city panels |
+
+**No arm earns a forward paper test; no scoped exception is pending.** A null does not earn capital — it earns being
+written down. The mechanism is the durable result and it is the *same* one §13 records from the other side: the
+favorite-longshot bias on the cheap bucket is **real at +2–3¢/share**, and the **2.2–2.3¢ half-spread a taker crosses
+cancels it almost exactly**, with the **0.55–0.58¢** fee eating the residual. Depth binds harder than price — the
+NO side fills against the thinner YES **bid**-side depth (median $49.5), so a $50 floor removes **55.6%** of the panel
+and at $150 every cell in all 14 runs falls under the sufficiency floor (the 10th signal's capacity wall). Also
+falsified, in the direction opposite the ask: **market selection is WORSE than our forecast at picking winners** —
+pure-cell winFrac M1 13.8% / M2 15.9% / M4 12.6% / M3 8.7% vs M0 24.5%; on the unfiltered ladder the forecast picks
+the winner 31.3% vs M1 21.8% / M2 25.5% / M4 20.9%. Full record: **`docs/ops/CONVERGENCE-CAPTURE-RESULTS.md`**.
+
+**The single structural door that remains is UNCHANGED.** Every convergence result now says the same thing —
+**maker, not taker**. The bias exists but sits inside the spread, so capturing it requires **resting** orders that
+actually fill; and the forward maker-exit gate already measured the real-book fill rate at **6.5%** (vs the
+backtest's 49% synthetic), which is precisely why that arm died (§13). Nothing in this run changes that mechanism.
+**Re-open only per §13's rule** — a measured, understood mechanism change to the maker-fill rate, never a backtest
+re-tune.
+
 ## What NOT to do
 
 Don't build items 5–10 before items 1–4 resolve — 1–4 are all read-only analysis over data that

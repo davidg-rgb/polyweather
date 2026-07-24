@@ -21,6 +21,27 @@
 
 _Claude keeps this block current every material cycle. Whole status in 20 seconds._
 
+- **▶▶ 2026-07-24 (later) — the CONVERGENCE-CAPTURE run is COMPLETE (the entry below prepped it; this ran it).
+  All three arms closed, all KILL-or-NULL. Signal #12 stays dead; nothing needs you from this run.** ① **Market-signal
+  SELECTION** (buy the bucket the market's own bids point to, sell into convergence — your exact framing):
+  **KILL, 14 of 14 cells** (frozen 10-city gate + an exploratory 45-city panel, headline TP 0.25) — every clustered CI
+  wholly negative, winFrac **8.7–32.7%** against a 0.50 bar. ② **Betting NO** on that bucket: a **powered NULL** —
+  straddles zero on every powered cell (45c M0-pure **−0.83¢/share**, CI **[−3.77¢, +1.82¢]**, seeded bootstrap
+  agrees). ③ **HOLD to resolution**: **KILL**, −4.30¢ to −5.57¢/share, CI excludes zero. **One-line mechanism:** the
+  favorite-longshot bias on the cheap bucket is **real at +2–3¢/share** and the **2.2–2.3¢ half-spread a taker crosses
+  cancels it almost exactly**, with the 0.55–0.58¢ fee eating the residual — *maker edge, not taker edge*, the same
+  wall as CONVERGENCE-TUNING, now measured from the inverse side. Your premise came back falsified the other way:
+  **market selection is WORSE than our forecast at picking winners** (pure winFrac M1 13.8% / M2 15.9% / M4 12.6% vs
+  M0 24.5%; unfiltered ladder 31.3% ours vs 21.8/25.5/20.9%). Panel: two archives merged → **1,179 events / 45 cities
+  / 27 dates**, 100% resolution coverage. **Two methodology catches worth more than the numbers:** a `selectRule`
+  returning `null` silently meant *"fall back to forecast argmax"*, so M1–M4 were partly becoming **M0** — without the
+  `requireRuleTarget` fix the run would have reported "market selection ≈ neutral", a pure artifact; and an
+  underpowered constant-outcome cell read as a screaming **+16¢ PASS** (n=10, all 10 won → zero outcome variance, the
+  t-CI collapses to measuring price dispersion) — now guarded **in the tool**, and under that guard **no cell anywhere
+  in the 14 runs shows a readable positive**. Both pinned by tests. Suite **3,421 green** (+24, no regression),
+  typecheck clean. Read-only throughout — nothing placed, no credentials read. Full record:
+  **`docs/ops/CONVERGENCE-CAPTURE-RESULTS.md`**; folded into `FINDINGS.md` + `SIGNAL-BACKLOG.md` §13-R. **Live lane +
+  Google panel keep running unchanged; the 07-31 override renewal is still the one operator click.**
 - **▶▶ 2026-07-24 (operator: "the play is to bet what the MARKET will guess … catch it cheap early and sell
   into likelihood … prep another analytics run for next session — switching model, clean context") — HANDOFF
   PREPPED, not run.** Verified (last session) the Google "win rate" is a CONVERGENCE rate, not forecast
