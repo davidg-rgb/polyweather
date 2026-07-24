@@ -1,5 +1,5 @@
-# Whale one-off insider ledger — 2026-07-23
-Graded this run: 0 (still-open, retried later: 1705) · total graded: 0
+# Whale one-off insider ledger — 2026-07-24
+Graded this run: 0 (still-open, retried later: 1711) · total graded: 0
 Informative bets seen (non-sports, ≤0.90, >1d lead): 0 · of those WON & flagged: 0
 
 ## ⚑ Flagged one-off candidates (resolved · won · insider-shaped) — newest-profit first
