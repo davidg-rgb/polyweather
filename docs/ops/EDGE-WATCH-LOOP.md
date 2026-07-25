@@ -21,6 +21,13 @@
 
 _Claude keeps this block current every material cycle. Whole status in 20 seconds._
 
+> **⟳ Idle heartbeat (rolled in place each quiet cycle — no new bullet for zero-change sweeps):** 2026-07-25
+> **~09:50Z — GREEN.** Buy lane mode live / lead_window (next candidate window 07-26 00:00Z; cash **$97.39**; 2
+> benign orphan `placed` rows) · all crons 0-fail/24h (only the aging 07-24 metar transient) · DB **2068 MB** /
+> captures **624 MB** (under the 3.5 GB / 2 GB bars) · mode live · eff-monitor **S1 KILL** (08:25Z) · 0 unsent
+> alerts. Nothing needs the operator (07-31 override renewal re-surfaces ~07-28). Material events get their own
+> dated bullet below.
+
 - **▶▶ 2026-07-25 ~06:42Z (loop wake, +1h) — STILL ALL-GREEN; one routine live fill confirms the lane is actively
   working.** A 07-25 city market entered the [2,12]h window between cycles and the lane bought it: **partial FAK fill
   06:20:06Z, 18 of 28 sh @ 0.14 avg = $2.52** (market 0x371c…f9dd, one of the 4 allowlisted cities). Within envelope
