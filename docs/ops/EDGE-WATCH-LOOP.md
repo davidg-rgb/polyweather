@@ -22,11 +22,12 @@
 _Claude keeps this block current every material cycle. Whole status in 20 seconds._
 
 > **⟳ Idle heartbeat (rolled in place each quiet cycle — no new bullet for zero-change sweeps):** 2026-07-25
-> **~16:35Z — GREEN.** Buy lane mode live / lead_window (next candidate window 07-26 00:00Z; cash **$97.39**, 13
-> dust positions; 2 benign orphan `placed` rows) · all crons 0-fail/24h (only the aging 07-24 metar transient) ·
-> DB **2103 MB** / captures **648 MB** (under the 3.5 GB / 2 GB bars) · mode live · eff-monitor **S1 KILL**
-> (08:25Z) · 0 unsent alerts. Nothing needs the operator (07-31 override renewal re-surfaces ~07-28). Material
-> events get their own dated bullet below.
+> **~18:00Z — GREEN.** Buy lane mode live / lead_window (next candidate window 07-26 00:00Z; today's 06:20Z
+> $2.52 partial fill resolved a loss, booked 17:23Z — routine; 2 benign orphan `placed` rows) · all crons
+> 0-fail/24h (only the aging 07-24 metar transient) · DB **2110 MB** (under bars) · mode live · eff-monitor
+> **S1 KILL** (08:25Z) · 0 unsent alerts · cheap-early panel accruing on its own cron (snap 3, 7 mkts) ·
+> synoptic lane live (first scheduled fire 18:05Z — verify next wake). Nothing needs the operator (07-31
+> override renewal re-surfaces ~07-28). Material events get their own dated bullet below.
 
 - **▶▶ 2026-07-25 ~18:05Z (operator: "test the Synoptic API and if it works, integrate/log data") — the
   SYNOPTIC SUB-HOURLY NOWCAST LANE is BUILT + DEPLOYED + VERIFIED LIVE end-to-end in one session.** The
@@ -74,9 +75,11 @@ _Claude keeps this block current every material cycle. Whole status in 20 second
   `forward-cheap-early`, distinct from the live lane's preflight source by design). First SCHEDULED cron fire
   **verified 16:47:00Z: pg_cron fired + the fn answered 409 `ERR_ALREADY_RAN`** — the hourly period claim
   `…T16:00` was already consumed by the 16:01Z build-session verification tick, so the dedupe did exactly its
-  job (same claim discipline as the §8.1 periodKey lesson; NOT a failure). First clean scheduled snapshot =
-  the **17:47Z** run (period T17:00) — confirmed next wakeup. **No capital before a frozen paper PASS;
-  watch-only.** ③ Sweep otherwise
+  job (same claim discipline as the §8.1 periodKey lesson; NOT a failure). **↳ ~18:00Z: the first CLEAN
+  scheduled snapshot CONFIRMED — 17:47:01Z claimed `…T17:00`, ok, snapshotId 3, 7 markets.** The running
+  mean flipped **+7.65% → −8.2%** as the 7th market realized — the day-one positive is already small-n
+  noise, exactly what the ≥40-market sufficiency floor exists to gate; no verdict until it fills. **No
+  capital before a frozen paper PASS; watch-only.** ③ Sweep otherwise
   GREEN (numbers in the heartbeat); the 07-24 22:23Z `maker-exit`-tagged SELL row in orders-24h is the routine
   resolution-loss bookkeeping for the 07-24 @0.23 buy (21.68 sh, basis $4.99, expired worthless) — already
   folded into the cash accounting, not a new event.
