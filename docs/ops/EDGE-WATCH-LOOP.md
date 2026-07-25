@@ -31,6 +31,12 @@ _Claude keeps this block current every material cycle. Whole status in 20 second
   Google panel 6 dates (sawtooth). Efficiency-monitor: today's Action is drift-pending (`gh run list` shows its
   scheduled fire lands stably ~08:44Z, not 06:17Z — so 07-24 08:44Z is still the latest snapshot; **not a skip**, no
   dispatch). Nothing needs you; 07-31 override renewal re-surfaces from ~07-28.
+  - **↳ ~07:46Z (+1h): quiet, still green.** No new fills (lead_window; 06:20Z partial stands, cash **$97.39** =
+    $99.94 − the $2.52 fill, accounting checks out). DB **2058 MB** / captures **616 MB** (under bars). Google panel
+    ticked **6→7 dates** (27 mkts / 12 cities — INSUFFICIENT still, <40-market bar; the sawtooth re-accruing).
+    A momentary `opening-capture:1` in the raw fail count was an **in-flight `running` row**, not a failure (C96
+    false-positive: last 12 runs all ok, direct fail-query empty) — captures 100% healthy. 2 orphan `placed` rows
+    and mode live unchanged; eff-monitor Action still pending its ~08:44Z fire.
 - **▶▶ 2026-07-25 ~05:40Z (loop wake — first cycle after the convergence-capture close) — ALL-GREEN sweep; the
   live lane is still confirming the KILL with real money and is HEALTHY; nothing needs you today.** ① **Buy lane:**
   mode live, interlock **ok:true** (override id=2 → **07-31 00:00Z**), 4-city allowlist, cap 0.30,
