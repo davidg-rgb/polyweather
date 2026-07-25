@@ -17,6 +17,17 @@
 > (mid-band buckets at 3 h-to-close carry ~23 h-stale quotes) and killed on a live-price filter. New durable
 > catch for future price-path work: **filter on quote freshness or illiquid mid buckets fabricate an
 > untradeable mispricing.** 12 signals stay dead; none reopened.
+>
+> **↳ 2026-07-25 (2) — operator "buy earlier + cap at 3×" proposal → INSUFFICIENT, the first cheap-buy variant
+> that isn't dead (`docs/ops/CHEAP-EARLY-ENTRY.md`).** Tested on the real book (opening-captures, 76 live-city
+> events / 19 days). Both operator instincts check out: (1) capping the price in the final [2,12]h buys
+> abandoned "lost causes" (win ~1%), but the **12–36h band** buys before the floor forms (win ~25–42% in-sample);
+> (2) **cost is not the wall** — real half-spread 0.3–1c, house-pick executable depth **$130–310 median** in that
+> band (correcting an initial "$1–2" read that had included dead longshots). BUT the edge doesn't clear: best
+> real-book cells straddle zero at ±100% CI (n=10–17), the larger mid panel puts the gap at **+1.2pp — inside
+> cost**, and the mid vs real-book samples disagree on the best window (noise fingerprint). **Not KILL, not GO:
+> earns a forward paper test** at [24,36]h / 0.20–0.33 ask (operator-gated deploy; ~2 months to power at 4
+> cities), **never capital before a frozen PASS.** "Occasional buy" helps deployment but slows inference.
 
 ---
 
