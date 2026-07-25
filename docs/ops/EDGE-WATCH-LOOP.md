@@ -29,6 +29,27 @@ _Claude keeps this block current every material cycle. Whole status in 20 second
 > synoptic lane live (first scheduled fire 18:05Z — verify next wake). Nothing needs the operator (07-31
 > override renewal re-surfaces ~07-28). Material events get their own dated bullet below.
 
+- **▶▶ 2026-07-25 ~19:10Z (operator: "log every 5-min ob per relevant city, connect to Polymarket minute
+  prices, isolate how fresh obs affect price — backtrack as far as possible") — the OBS↔PRICE RESEARCH
+  CORPUS is BUILT + the FIRST-PASS TRANSMISSION READ is in; the trial's rolling history window is SECURED.**
+  ① **0119** widened the lane: capture universe = `list_active_stations` around the clock (45 polled / **11 US
+  returned incl. KBKF**; live-verified on the 18:19Z scheduled fire) + retention 14d→90d. ② **History
+  boundary probed: the trial serves ~6 rolling days** (5d back OK, 7d back 403 — deep backfill vs the 522-day
+  price archive is NOT possible); pulled the full available window immediately (time-sensitive — it slides
+  daily): **20,587 five-min obs / 11 stations / 07-19..07-25** → local NDJSON archive + DB. ③ Minute prices
+  pulled for the same window: **99 events / 1,089 buckets / 3.09M points**. ④ **First-pass event study**
+  (`synoptic-price-join.py`; two bugs caught: the label-regex range-dash read hi=−79, and the archive
+  `targetDate`-is-resolution-date trap — weather day now parsed from the SLUG): **A. floor-kill events**
+  (n=88, bucket ≥5¢ at T−30): median Δp **−0.5¢ in [T−30,T) vs −6.0¢ in [T,T+15) and −2.2¢ in [T+15,T+60)**
+  — the collapse concentrates AFTER the 5-min obs timestamp; 45% pre-drop ≥1¢, 88% post. **B. winner
+  lead-lag**: argmax at **+25 min median** (obs leads price 55/67 city-days; pooled r small ~0.03).
+  **Honest caveats (NOT a signal yet):** trade-print MID basis (no bid/ask — trap #1/#8), selection excludes
+  buckets the market killed BEFORE the obs (the "market faster" cases), obs-time ≠ publish-time, and the
+  tradable form (buy NO on freshly-killed buckets) must clear fees+spread+depth on the real book. **Next:
+  the real-book cross-check on `opening_captures` for these exact events** (we hold 5-min book snapshots for
+  the same markets), + the pre-kill denominator. Consistent with WO-5's 5–30-min reaction read — the open
+  question is only whether ANY meat survives the first 15 min at executable prices. Forward capture accrues
+  daily; trial ends ~08-08.
 - **▶▶ 2026-07-25 ~18:05Z (operator: "test the Synoptic API and if it works, integrate/log data") — the
   SYNOPTIC SUB-HOURLY NOWCAST LANE is BUILT + DEPLOYED + VERIFIED LIVE end-to-end in one session.** The
   first source from the new-data-sources research is in production: ① **Smoke-tested** the operator's new
