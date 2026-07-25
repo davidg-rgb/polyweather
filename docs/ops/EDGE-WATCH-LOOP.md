@@ -562,7 +562,12 @@ _Claude keeps this block current every material cycle. Whole status in 20 second
 6. **Watch items.** ~~price_cap 0.40~~ **CLOSED** (operator lowered to 0.30 at the 07-18 continuous-buying
    config) · **gate override expires 07-31 00:00Z** → surface the renewal from ~07-28 (the one live click) ·
    active_until **09-15** (operator-extended) → surface before expiry · city_sim_config runway 09-30 →
-   surface ~09-25 · storage: opening_captures → 2 GB bar ~07-29 (run the §Storage prune playbook off-peak).
+   surface ~09-25 · storage: opening_captures → 2 GB bar ~07-29 (run the §Storage prune playbook off-peak) ·
+   **synoptic TRIAL ends ~08-08** (operator-corrected 07-25: 14-day trial, commercial = contact-sales, no
+   self-serve tier, .edu-only open access) → when the tick starts 401ing/empty, `cron.unschedule
+   ('synoptic-nowcast')` (0118 rollback header) + keep the 14d `synoptic_obs` corpus; do NOT recommend
+   enterprise pricing (sub-hourly obs = truth/analytics freshness, zero trading edge per WO-5); free
+   freshness fallback = restore metar-nowcast to */15 (C15 shed it for compute, not necessity).
 7. **Calm-day build queue (all-green cycles only, in order).** ① ~~F4 cloud reconcile sweep~~ **DONE
    C20** (deployed + tick-verified + merged, PR #24). ② ~~google-paper-panel incremental replay~~
    **DONE C34** (0103 applied + fn deployed ~10:15Z 07-17; first incremental tick verification = the

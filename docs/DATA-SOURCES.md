@@ -147,10 +147,20 @@ FULL minute price path we pull a standalone local archive (gitignored, `scripts/
   "no access" (RESPONSE_CODE 2 = a valid EMPTY parse, not an error). A paid tier upgrade lights
   the intl cities with ZERO code change; `stationsReturned` in the tick stats is the gauge
   (currently 10 of ~29 polled).
-- **Free-tier budget: 5,000 requests + 5M service units / month.** The lane spends ONE batched
-  multi-station request per tick on the `5,19,35,49` cron (≤96/day ≈ 2,976/mo ≈ 59% of the
-  request cap; SU usage is negligible at ~80 obs/tick). Ad-hoc research pulls share the same
-  account — keep them inside the remaining ~2,000/mo or they starve the lane.
+- **⚠ ACCOUNT REALITY (corrected 2026-07-25): this is a 14-DAY TRIAL, not a free tier.** The
+  account was created 2026-07-25 → trial ends **~2026-08-08**. Current synopticdata.com pricing:
+  commercial = contact-sales only (no self-serve price); their "Open Access" program is
+  US-academic-.edu-only (we don't qualify). The "5,000 req + 5M SU/month free tier" cited at
+  build time was a stale docs-page claim — treat it as trial-period budget discipline only
+  (the lane spends ≤96 req/day ≈ 1 batched call/tick on the `5,19,35,49` cron).
+  **At expiry:** expect 401/RESPONSE_CODE-2 → the tick starts erroring/empty; the play is
+  `select cron.unschedule('synoptic-nowcast');` (rollback header in 0118) unless the operator
+  has negotiated pricing. Everything else keeps working — metar-nowcast never stopped covering
+  all stations at 30-min. The 14 days of 5-min `synoptic_obs` remain a research corpus
+  (sensor-peak vs WU-print). Free fallback for freshness: restore metar-nowcast to */15
+  (it was shed to 30-min by C15 compute-shed, not by necessity); the truly-5-min US feed has
+  no free real-time replacement (IEM 1-min is 18–36h delayed; NWS/aviationweather is
+  hourly+SPECI).
 - Auth: `SYNOPTIC_PUBLIC_TOKEN` (Edge secret + `.env.local`). The PRIVATE key only manages
   tokens account-side — the lane never uses it. The token is never printed or logged (handler
   redacts thrown errors; `fetchJson` errors carry the hostname only).
