@@ -125,6 +125,18 @@ describe('synopticNowcast', () => {
     expect(stats).toMatchObject({ stationsPolled: 1, stationsReturned: 0, obsLogged: 0, maxesAdvanced: 0 });
   });
 
+  it('0119: capture logs around the clock — pre-dawn (no live target) still logs obs', async () => {
+    const NIGHT = new Date('2026-07-26T09:00:00Z'); // Chicago 04:00 local — nowcast set empty
+    const stats = await synopticNowcast(ctx(), {
+      fetchJson: async () => synopticBody([22.8], ['2026-07-26T08:55:00Z']),
+      now: NIGHT,
+      token: TOKEN,
+    });
+    expect(stats).toMatchObject({ stationsPolled: 1, obsLogged: 1, liveTargets: 0, maxesAdvanced: 0 });
+    const logged = await rows(db, `select count(*)::int as n from synoptic_obs where icao = 'KORD'`);
+    expect((logged[0] as { n: number }).n).toBe(4); // 2 + 1 (lower-ob test) + 1 night ob
+  });
+
   it('a thrown fetch error never leaks the token', async () => {
     await expect(
       synopticNowcast(ctx(), {

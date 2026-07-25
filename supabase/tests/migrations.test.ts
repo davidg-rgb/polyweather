@@ -536,6 +536,9 @@ describe('migrations 0001–0010', () => {
       // the synoptic-nowcast cron. Feeds the SAME monotonic upsert_intraday as metar-nowcast (floor only
       // tightens). Open-access tier = US stations only; token = SYNOPTIC_PUBLIC_TOKEN edge secret.
       '0118_synoptic_nowcast.sql',
+      // 0119: the obs↔price research corpus widening — capture universe = list_active_stations (around
+      // the clock, tier decides coverage) + synoptic_obs retention 14d→90d. Same cron; no new job.
+      '0119_synoptic_continuous_capture.sql',
     ]);
   });
 });
