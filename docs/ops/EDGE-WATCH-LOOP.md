@@ -589,6 +589,11 @@ _Claude keeps this block current every material cycle. Whole status in 20 second
    ('synoptic-nowcast')` (0118 rollback header) + keep the 14d `synoptic_obs` corpus; do NOT recommend
    enterprise pricing (sub-hourly obs = truth/analytics freshness, zero trading edge per WO-5); free
    freshness fallback = restore metar-nowcast to */15 (C15 shed it for compute, not necessity).
+6b. **Synoptic daily top-up (while the trial lives, ends ~08-08).** Once per day:
+   `pnpm tsx scripts/research/synoptic-history-pull.ts` (defaults = last 5 days; idempotent both sides,
+   ~6 requests) — keeps the LOCAL NDJSON archive current with the rolling trial window so nothing is lost
+   when history access dies at trial end. After 08-08: dump any DB-only remainder from `synoptic_obs` to
+   the archive, then `cron.unschedule('synoptic-nowcast')`.
 7. **Calm-day build queue (all-green cycles only, in order).** ① ~~F4 cloud reconcile sweep~~ **DONE
    C20** (deployed + tick-verified + merged, PR #24). ② ~~google-paper-panel incremental replay~~
    **DONE C34** (0103 applied + fn deployed ~10:15Z 07-17; first incremental tick verification = the
