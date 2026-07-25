@@ -37,8 +37,12 @@ _Claude keeps this block current every material cycle. Whole status in 20 second
   4 cities, running mean net +7.65%**, label INSUFFICIENT_DATA, cityErrors 0, ~33 s/tick);
   `gateWriteSkipped:'degraded'` confirmed as the INTENDED sufficiency withhold (`nMarkets 6 <` the 40 floor —
   NOT the maker-exit infra-block pattern; the gate-of-record row starts writing at ≥40 markets, source
-  `forward-cheap-early`, distinct from the live lane's preflight source by design). First SCHEDULED fire lands
-  **16:47Z** — verified next wakeup. **No capital before a frozen paper PASS; watch-only.** ③ Sweep otherwise
+  `forward-cheap-early`, distinct from the live lane's preflight source by design). First SCHEDULED cron fire
+  **verified 16:47:00Z: pg_cron fired + the fn answered 409 `ERR_ALREADY_RAN`** — the hourly period claim
+  `…T16:00` was already consumed by the 16:01Z build-session verification tick, so the dedupe did exactly its
+  job (same claim discipline as the §8.1 periodKey lesson; NOT a failure). First clean scheduled snapshot =
+  the **17:47Z** run (period T17:00) — confirmed next wakeup. **No capital before a frozen paper PASS;
+  watch-only.** ③ Sweep otherwise
   GREEN (numbers in the heartbeat); the 07-24 22:23Z `maker-exit`-tagged SELL row in orders-24h is the routine
   resolution-loss bookkeeping for the 07-24 @0.23 buy (21.68 sh, basis $4.99, expired worthless) — already
   folded into the cash accounting, not a new event.
