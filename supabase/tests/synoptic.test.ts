@@ -1,7 +1,12 @@
 /**
- * synoptic-nowcast handler — PGlite integration tests (0118).
- * Mirrors the metar-nowcast tests in truth.test.ts: real migrations, real
- * upsert_intraday semantics, fake fetchJson.
+ * synoptic-nowcast handler — PGlite integration tests (0118, capture-only since
+ * the 2026-07-25 resolution-oracle finding).
+ *
+ * THE LOAD-BEARING PIN here: the 5-min obs stream is NOT resolution-grade (WU's
+ * table renders METAR/SPECI reports only — validated 66/66 winner-replication,
+ * with the 5-min max EXCEEDING the METAR-table max on ~42% of days), so this
+ * lane must NEVER write the resolution-grade `intraday_max` floor. That floor
+ * belongs exclusively to metar-nowcast.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { PGlite } from '@electric-sql/pglite';
@@ -53,7 +58,7 @@ afterAll(async () => {
   await db.close();
 });
 
-describe('synopticNowcast', () => {
+describe('synopticNowcast (capture-only)', () => {
   it('no token → clean no-op, no fetch', async () => {
     const stats = await synopticNowcast(ctx(), {
       fetchJson: async () => {
@@ -63,10 +68,10 @@ describe('synopticNowcast', () => {
       token: undefined,
     });
     expect(stats.skipped).toBe('no_token');
-    expect(stats.maxesAdvanced).toBe(0);
+    expect(stats.obsLogged).toBe(0);
   });
 
-  it('advances the intraday max from 5-min obs and logs raw obs', async () => {
+  it('logs raw 5-min obs — and NEVER touches the resolution-grade intraday_max floor', async () => {
     const stats = await synopticNowcast(ctx(), {
       fetchJson: async () => synopticBody([26.0, 27.2], ['2026-07-25T17:40:00Z', '2026-07-25T17:45:00Z']),
       now: NOW,
@@ -76,44 +81,47 @@ describe('synopticNowcast', () => {
       stationsPolled: 1,
       stationsReturned: 1,
       obsLogged: 2,
-      maxesAdvanced: 1,
     });
 
-    const max = await rows(
-      db,
-      `select max_tenths_c::text as t, max_native, n_obs from intraday_max where icao = 'KORD' and date_local = '2026-07-25'`,
-    );
-    expect(max.length).toBe(1);
-    expect(Number((max[0] as { t: string }).t)).toBe(27.2);
-    // 27.2°C → 80.96°F → native 81 (the KORD 30.6→87 rounding rule).
-    expect((max[0] as { max_native: number }).max_native).toBe(81);
+    // THE oracle-finding pin: a 5-min ob that would have "advanced the floor"
+    // under 0118 must leave intraday_max untouched (resolution-grade only).
+    const max = await rows(db, `select count(*)::int as n from intraday_max where icao = 'KORD'`);
+    expect((max[0] as { n: number }).n).toBe(0);
 
     const logged = await rows(db, `select count(*)::int as n from synoptic_obs where icao = 'KORD'`);
     expect((logged[0] as { n: number }).n).toBe(2);
   });
 
-  it('re-run with the same obs: idempotent (no advance, no re-log)', async () => {
+  it('re-run with the same obs: idempotent (no re-log)', async () => {
     const stats = await synopticNowcast(ctx(), {
       fetchJson: async () => synopticBody([26.0, 27.2], ['2026-07-25T17:40:00Z', '2026-07-25T17:45:00Z']),
       now: NOW,
       token: TOKEN,
     });
-    expect(stats.maxesAdvanced).toBe(0);
     expect(stats.obsLogged).toBe(0);
     const logged = await rows(db, `select count(*)::int as n from synoptic_obs where icao = 'KORD'`);
     expect((logged[0] as { n: number }).n).toBe(2);
   });
 
-  it('a LOWER later ob never regresses the max (monotone floor)', async () => {
+  it('a pre-existing METAR-lane floor is never advanced by a HIGHER 5-min ob', async () => {
+    // metar-nowcast (the resolution-grade writer) floors the day at 26.7°C/80F…
+    await db.exec(`
+      insert into intraday_max (icao, date_local, max_tenths_c, max_native, n_obs, last_obs_at)
+      values ('KORD', '2026-07-25', 26.7, 80, 5, now());
+    `);
+    // …then a synoptic 5-min blip of 28.3°C (would be 83F — the overshoot class)
     const stats = await synopticNowcast(ctx(), {
-      fetchJson: async () => synopticBody([24.4], ['2026-07-25T17:50:00Z']),
+      fetchJson: async () => synopticBody([28.3], ['2026-07-25T17:50:00Z']),
       now: NOW,
       token: TOKEN,
     });
-    expect(stats.maxesAdvanced).toBe(0);
-    expect(stats.obsLogged).toBe(1); // new raw ob logs; the floor holds
-    const max = await rows(db, `select max_tenths_c::text as t from intraday_max where icao = 'KORD' and date_local = '2026-07-25'`);
-    expect(Number((max[0] as { t: string }).t)).toBe(27.2);
+    expect(stats.obsLogged).toBe(1);
+    const max = await rows(
+      db,
+      `select max_tenths_c::text as t, max_native from intraday_max where icao = 'KORD' and date_local = '2026-07-25'`,
+    );
+    expect(Number((max[0] as { t: string }).t)).toBe(26.7); // METAR floor untouched
+    expect((max[0] as { max_native: number }).max_native).toBe(80);
   });
 
   it('out-of-tier response (RESPONSE_CODE 2) is a quiet zero, not an error', async () => {
@@ -122,19 +130,19 @@ describe('synopticNowcast', () => {
       now: NOW,
       token: TOKEN,
     });
-    expect(stats).toMatchObject({ stationsPolled: 1, stationsReturned: 0, obsLogged: 0, maxesAdvanced: 0 });
+    expect(stats).toMatchObject({ stationsPolled: 1, stationsReturned: 0, obsLogged: 0 });
   });
 
-  it('0119: capture logs around the clock — pre-dawn (no live target) still logs obs', async () => {
-    const NIGHT = new Date('2026-07-26T09:00:00Z'); // Chicago 04:00 local — nowcast set empty
+  it('0119: capture logs around the clock — pre-dawn still logs obs', async () => {
+    const NIGHT = new Date('2026-07-26T09:00:00Z'); // Chicago 04:00 local
     const stats = await synopticNowcast(ctx(), {
       fetchJson: async () => synopticBody([22.8], ['2026-07-26T08:55:00Z']),
       now: NIGHT,
       token: TOKEN,
     });
-    expect(stats).toMatchObject({ stationsPolled: 1, obsLogged: 1, liveTargets: 0, maxesAdvanced: 0 });
+    expect(stats).toMatchObject({ stationsPolled: 1, obsLogged: 1 });
     const logged = await rows(db, `select count(*)::int as n from synoptic_obs where icao = 'KORD'`);
-    expect((logged[0] as { n: number }).n).toBe(4); // 2 + 1 (lower-ob test) + 1 night ob
+    expect((logged[0] as { n: number }).n).toBe(4); // 2 + 1 (blip test) + 1 night ob
   });
 
   it('a thrown fetch error never leaks the token', async () => {

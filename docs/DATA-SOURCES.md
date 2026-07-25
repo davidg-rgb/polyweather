@@ -129,6 +129,35 @@ FULL minute price path we pull a standalone local archive (gitignored, `scripts/
   7d TTL; 401 → forced refresh + one retry; refresh failure → CRITICAL WU_KEY).
 - Truth = `wuDailyMax` over the local day (≥6 obs else sparse → IEM fallback).
 
+## ⭐ The resolution oracle, decoded (2026-07-25 — operator doc, validated 66/66 in-house)
+
+Source: `docs/ops/POLYMARKET-TEMP-ORACLE.md` (operator-supplied, empirically verified externally);
+**independently validated here on 66 resolved US city-days 07-19..25 — 100% winner replication**
+(`scripts/research/oracle-replica-validation.py` + cached IEM pulls in `out/iem-asos-cache/`).
+
+- **WU's Daily Observations table is a bit-for-bit re-render of the disseminated METAR/SPECI
+  stream** (row-for-row identity, incl. off-hour SPECIs). Nothing else enters it — NOT the 5-min
+  obs, NOT the METAR 6-hour max/min groups (`1xxxx`/`2xxxx`, which can exceed the table max).
+- **Rounding (the part everyone gets wrong):** WU renders the tenths-°C `Txxxxxxxx` remark group,
+  rounded ONCE — `°F = round(tenths_C × 9/5 + 32)`, `°C = round(tenths_C)`; fallback = the
+  whole-degree group when no T-group. This is exactly our `metarMaxToNative`/`wuRound`
+  (units.ts) — already correct, now doubly confirmed.
+- **Daily max = max over the table rows**, bounded by the **station-local calendar day**
+  (`obs_time.astimezone(station_tz).date()`).
+- **Revisions are honoured until the first next-day datapoint publishes**, then ignored.
+- Station gotchas (all verified matching our `city_stations`): NYC=KLGA, Houston=KHOU,
+  Denver=KBKF, Paris=LFPB, London=EGLC.
+- **Free replica endpoints:** AWC `metars.cache.csv.gz` (all world METARs, 1×/min refresh,
+  ~2–6 min latency, no key) / per-station `aviationweather.gov/api/data/metar` (what
+  metar-nowcast already uses) · **IEM `asos.py` per-ob `tmpf` with `report_type=3,4`**
+  (METAR+SPECI stream; matches WU exactly — the backtest/audit source; our `iem.ts` daily
+  endpoint is a DIFFERENT, non-resolution quantity) · api.weather.gov 5-min obs (US, whole °C,
+  14–19 min lag) = **leading indicator only, never resolution truth**.
+- **THE OPERATIONAL LAW this implies: only METAR/SPECI-grade data may write the resolution
+  floor (`intraday_max`).** The 5-min stream (Synoptic/api.weather.gov) overshoots the
+  METAR-table max on **~42% of days** (28/66, by 1–3°F) — it predicts the next METAR, it does
+  not bound the resolution. This is what fabricated OBS-TRANSMISSION's 19 winner-"kills".
+
 ## aviationweather.gov (intraday METAR replica)
 
 - `GET aviationweather.gov/api/data/metar?ids={ICAO}&format=json&hours=72`
@@ -164,12 +193,16 @@ FULL minute price path we pull a standalone local archive (gitignored, `scripts/
 - Auth: `SYNOPTIC_PUBLIC_TOKEN` (Edge secret + `.env.local`). The PRIVATE key only manages
   tokens account-side — the lane never uses it. The token is never printed or logged (handler
   redacts thrown errors; `fetchJson` errors carry the hostname only).
-- Writes: `upsert_intraday` — the SAME monotonic advance as metar-nowcast, so the 0111
-  dead-bucket floor + §6.16 nowcast rebuilds get sub-hourly freshness for free — plus
-  `synoptic_obs` raw log (14d in-RPC retention) for sensor-peak-vs-WU-print research.
-- Verified live on the first prod tick (2026-07-25 17:57Z): 10 US stations, 76 obs logged,
-  **8 intraday maxes advanced, 7 nowcasts rebuilt**. Smoke: `scripts/research/synoptic-smoke.ts`
-  (+ `synoptic-probe-intl.ts`); secret sync: `scripts/ops/synoptic-set-secret.ts` (never echoes).
+- Writes: **`synoptic_obs` raw log ONLY (capture-only since 2026-07-25, same day as launch —
+  the resolution-oracle finding, section above).** The 0118 build originally advanced
+  `upsert_intraday` ("the floor can only tighten") — WRONG-grade: the 5-min stream overshoots
+  the METAR-table max on ~42% of days, so those advances tightened the resolution floor with
+  values resolution never sees (false dead-bucket kills). Removed the same day; the 11
+  contaminated `intraday_max` rows (07-25) were deleted and re-floored METAR-grade by the next
+  metar-nowcast tick. `intraday_max` is exclusively metar-nowcast's.
+- First prod tick 2026-07-25 17:57Z: 10 US stations, 76 obs logged. Smoke:
+  `scripts/research/synoptic-smoke.ts` (+ `synoptic-probe-intl.ts`); secret sync:
+  `scripts/ops/synoptic-set-secret.ts` (never echoes).
 
 ## IEM (Iowa Environmental Mesonet — WU fallback)
 

@@ -29,6 +29,28 @@ _Claude keeps this block current every material cycle. Whole status in 20 second
 > rows; archive current). Nothing needs the operator (07-31 override renewal re-surfaces ~07-28). Material
 > events get their own dated bullet below.
 
+- **▶▶ 2026-07-25 ~21:45Z (operator: "read polymarket-temp-oracle.md, implement what benefits the cause") —
+  the RESOLUTION ORACLE is DECODED + VALIDATED 66/66 → the OBS-TRANSMISSION fabrication mechanism is
+  RESOLVED, and a WRONG-GRADE floor write in the day-old synoptic lane is FIXED + REDEPLOYED.** The
+  operator's doc claims WU's resolution table is a bit-for-bit re-render of the METAR/SPECI stream (T-group
+  tenths, rounded once; no 5-min obs; no 6-hr max groups; station-local day). **Verified in-house before
+  building** (`oracle-replica-validation.py`, IEM per-ob `asos.py` feed): the replica reproduces the
+  resolved market winner on **66/66 city-days** — and the synoptic 5-min max EXCEEDS the METAR-table max on
+  **28/66 days (42%, 1–3°F)**. That is the OBS-TRANSMISSION fabrication mechanism, exactly: the 19
+  winner-"kills" were 5-min blips resolution never sees; the market's high residual bids were sharps who
+  know the oracle. **Shipped:** ① `synoptic-nowcast` → **CAPTURE-ONLY** (the 0118 `upsert_intraday` writes
+  were tightening the resolution-grade 0111 floor with wrong-grade data — removed; fn redeployed ~21:40Z;
+  the 11 contaminated 07-25 `intraday_max` rows deleted → metar-nowcast re-floors METAR-grade on its next
+  */30 tick, rebuild fires on the advance; live lane untouched — its 4 cities are non-US). ② Tests: the
+  suite pins "synoptic NEVER touches intraday_max" incl. the overshoot case (suite 3,471+ green,
+  typecheck clean). ③ Docs: `docs/DATA-SOURCES.md` §resolution-oracle (the law: only METAR/SPECI-grade
+  data writes the resolution floor) + the operator doc preserved at `docs/ops/POLYMARKET-TEMP-ORACLE.md` +
+  `OBS-TRANSMISSION.md` addendum. ④ The **08-06 re-adjudication design corrected**: METAR-grade kills
+  (fabrication-free by construction) + the 5-min stream as anticipatory trigger; per-city blip-confirmation
+  rates now measurable from the two archived streams. ⑤ Bonus checks: our `wuRound`/`metarMaxToNative` was
+  already the exact WU rule (doubly confirmed); `city_stations` matches every station gotcha in the doc
+  (KLGA/KHOU/KBKF/LFPB/EGLC). Verify next wake: first capture-only tick stats (no maxesAdvanced key) + the
+  US floors re-created METAR-grade.
 - **▶▶ 2026-07-25 ~19:45Z (the decisive cheap test from last session) — the REAL-BOOK CROSS-CHECK is DONE
   and ADJUDICATED: the 5-min obs LEAD is REAL, the taker trade is NOT — the market's residual bid on
   "obs-dead" buckets is correctly-priced resolution-source insurance. No §13 reopen; no build.** Ran the
@@ -607,10 +629,11 @@ _Claude keeps this block current every material cycle. Whole status in 20 second
    ('synoptic-nowcast')` (0118 rollback header) + keep the 14d `synoptic_obs` corpus; do NOT recommend
    enterprise pricing (sub-hourly obs = truth/analytics freshness, zero trading edge per WO-5); free
    freshness fallback = restore metar-nowcast to */15 (C15 shed it for compute, not necessity) ·
-   **OBS-TRANSMISSION re-adjudication ~08-06** (before the trial dies): re-run
-   `python scripts/research/synoptic-realbook-crosscheck.py` after `--incremental` capture dump — margin-3
-   cell needs ≥40 trades / 0 fabrications / clean clustered CI to be surfaced (scrap-sized pot, caveat
-   first; INSUFFICIENT as of 07-25, `OBS-TRANSMISSION.md`).
+   **OBS-TRANSMISSION re-adjudication ~08-06** (before the trial dies), on the CORRECTED design
+   (oracle addendum): kills at METAR/SPECI grade (IEM `asos.py` replica — fabrication-free by
+   construction, no margin heuristic), 5-min stream as the anticipatory trigger, after the daily obs
+   top-up + an `--incremental` capture dump. Surface only at ≥40 trades + wholly-positive clustered CI
+   (scrap-sized pot, caveat first; INSUFFICIENT as of 07-25, `OBS-TRANSMISSION.md`).
 6b. **Synoptic daily top-up (while the trial lives, ends ~08-08).** Once per day:
    `pnpm tsx scripts/research/synoptic-history-pull.ts` (defaults = last 5 days; idempotent both sides,
    ~6 requests) — keeps the LOCAL NDJSON archive current with the rolling trial window so nothing is lost

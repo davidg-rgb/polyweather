@@ -1,5 +1,25 @@
 # OBS-TRANSMISSION — does the 5-min obs feed lead the market, and is any of it takeable?
 
+> **↳ ADDENDUM (2026-07-25, same evening — the fabrication mechanism is RESOLVED, and it rewrites
+> the experiment.** The operator supplied `docs/ops/POLYMARKET-TEMP-ORACLE.md`: WU's resolution
+> table is a bit-for-bit re-render of the **METAR/SPECI stream only** — the 5-min obs stream never
+> appears in it. **Validated in-house at 100%**: `oracle-replica-validation.py` reproduces the
+> resolved market winner on **66/66** city-days from IEM's per-ob METAR/SPECI feed
+> (`max(round_half_up(tmpf))`, report_type 3,4), and shows the synoptic 5-min max **EXCEEDS the
+> METAR-table max on 28/66 days (42%, by 1–3°F)**. So the 19 winner-"kills" were not "WU sensor
+> divergence" — they were 5-min blips that resolution, by construction, never sees; the market's
+> 0.30–0.93 residual bids were sharps who know the oracle. **Consequences shipped same-day:**
+> ① the `synoptic-nowcast` lane is now **CAPTURE-ONLY** (its `upsert_intraday` writes removed —
+> it was tightening the resolution-grade 0111 floor with wrong-grade data; 11 contaminated
+> `intraday_max` rows deleted + re-floored METAR-grade); ② the **08-06 re-adjudication design is
+> corrected**: kills must be METAR/SPECI-grade (zero fabrication risk *by construction* — no
+> margin heuristic needed), with the 5-min stream as the **anticipatory trigger** (hit the bid
+> when a 5-min ob makes the next METAR's kill near-certain; the risk to price = "no METAR/SPECI
+> confirms", now measurable per city from the two streams). The margin≥3 cell was a crude proxy
+> for exactly this; the clean design measures it directly. Verdict unchanged today (INSUFFICIENT,
+> scrap-sized pot) — but the re-run gets a fabrication-free kill rule and a per-city
+> blip-confirmation prior.
+
 > **VERDICT (2026-07-25, real-book cross-check): the LEAD IS REAL, the TRADE IS NOT (yet/likely ever).**
 > On real `opening_captures` bids, the floor-kill collapse concentrates **after** the 5-min obs print
 > (median pre-print quote drift **0.0000**) — the sub-hourly obs genuinely lead the book. But the
