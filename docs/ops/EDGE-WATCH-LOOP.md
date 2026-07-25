@@ -22,12 +22,26 @@
 _Claude keeps this block current every material cycle. Whole status in 20 seconds._
 
 > **⟳ Idle heartbeat (rolled in place each quiet cycle — no new bullet for zero-change sweeps):** 2026-07-25
-> **~10:53Z — GREEN.** Buy lane mode live / lead_window (next candidate window 07-26 00:00Z; cash **$97.39**; 2
-> benign orphan `placed` rows) · all crons 0-fail/24h (only the aging 07-24 metar transient) · DB **2072 MB** /
-> captures **627 MB** (under the 3.5 GB / 2 GB bars) · mode live · eff-monitor **S1 KILL** (08:25Z) · 0 unsent
-> alerts. Nothing needs the operator (07-31 override renewal re-surfaces ~07-28). Material events get their own
-> dated bullet below.
+> **~16:35Z — GREEN.** Buy lane mode live / lead_window (next candidate window 07-26 00:00Z; cash **$97.39**, 13
+> dust positions; 2 benign orphan `placed` rows) · all crons 0-fail/24h (only the aging 07-24 metar transient) ·
+> DB **2103 MB** / captures **648 MB** (under the 3.5 GB / 2 GB bars) · mode live · eff-monitor **S1 KILL**
+> (08:25Z) · 0 unsent alerts. Nothing needs the operator (07-31 override renewal re-surfaces ~07-28). Material
+> events get their own dated bullet below.
 
+- **▶▶ 2026-07-25 ~16:35Z (loop wake — first cycle after the cheap-early build session) — the CHEAP-EARLY
+  FORWARD PAPER PANEL is LIVE END-TO-END + the loop branch is reconciled with main.** ① PR #46 (squash
+  `bbbc0f8`: replay engine + view + migration **0117** + edge fn `cheap-early-panel` + the `/cheap-early` page)
+  merged to main and deployed last session; this cycle merged origin/main back into the loop branch (`a417392`,
+  pushed — the standing post-squash reconcile, PR-#23 lesson). ② Panel verified on prod: cron `47 * * * *`
+  active; the two build-session ticks wrote snapshots 1–2 (**34 considered / 9 entered / 6 realized markets /
+  4 cities, running mean net +7.65%**, label INSUFFICIENT_DATA, cityErrors 0, ~33 s/tick);
+  `gateWriteSkipped:'degraded'` confirmed as the INTENDED sufficiency withhold (`nMarkets 6 <` the 40 floor —
+  NOT the maker-exit infra-block pattern; the gate-of-record row starts writing at ≥40 markets, source
+  `forward-cheap-early`, distinct from the live lane's preflight source by design). First SCHEDULED fire lands
+  **16:47Z** — verified next wakeup. **No capital before a frozen paper PASS; watch-only.** ③ Sweep otherwise
+  GREEN (numbers in the heartbeat); the 07-24 22:23Z `maker-exit`-tagged SELL row in orders-24h is the routine
+  resolution-loss bookkeeping for the 07-24 @0.23 buy (21.68 sh, basis $4.99, expired worthless) — already
+  folded into the cash accounting, not a new event.
 - **▶▶ 2026-07-25 ~06:42Z (loop wake, +1h) — STILL ALL-GREEN; one routine live fill confirms the lane is actively
   working.** A 07-25 city market entered the [2,12]h window between cycles and the lane bought it: **partial FAK fill
   06:20:06Z, 18 of 28 sh @ 0.14 avg = $2.52** (market 0x371c…f9dd, one of the 4 allowlisted cities). Within envelope
