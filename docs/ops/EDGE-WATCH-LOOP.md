@@ -21,6 +21,16 @@
 
 _Claude keeps this block current every material cycle. Whole status in 20 seconds._
 
+- **▶▶ 2026-07-25 ~06:42Z (loop wake, +1h) — STILL ALL-GREEN; one routine live fill confirms the lane is actively
+  working.** A 07-25 city market entered the [2,12]h window between cycles and the lane bought it: **partial FAK fill
+  06:20:06Z, 18 of 28 sh @ 0.14 avg = $2.52** (market 0x371c…f9dd, one of the 4 allowlisted cities). Within envelope
+  by construction — 0.14 ≪ the 0.30 cap, $2.52 < the $5 stake, passed the allowlist/dead-pick/favorite-veto gates —
+  and `status='partial'` is a terminal recorded fill (the FAK killed the unfilled 10 sh), NOT dangling. Everything
+  else steady vs the 05:40Z sweep: jobs 0-fail/24h (the same 1 transient metar blip in-window) · 0 unsent alerts ·
+  DB **2053 MB** / captures **612 MB** (under bars) · the 2 benign orphan `placed` rows unchanged · mode live ·
+  Google panel 6 dates (sawtooth). Efficiency-monitor: today's Action is drift-pending (`gh run list` shows its
+  scheduled fire lands stably ~08:44Z, not 06:17Z — so 07-24 08:44Z is still the latest snapshot; **not a skip**, no
+  dispatch). Nothing needs you; 07-31 override renewal re-surfaces from ~07-28.
 - **▶▶ 2026-07-25 ~05:40Z (loop wake — first cycle after the convergence-capture close) — ALL-GREEN sweep; the
   live lane is still confirming the KILL with real money and is HEALTHY; nothing needs you today.** ① **Buy lane:**
   mode live, interlock **ok:true** (override id=2 → **07-31 00:00Z**), 4-city allowlist, cap 0.30,
