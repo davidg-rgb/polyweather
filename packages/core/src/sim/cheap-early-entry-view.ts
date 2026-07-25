@@ -84,7 +84,10 @@ export interface CheapEarlyMoney {
 
 /** The measured reads the ~1-month backtest could not settle (CHEAP-EARLY-ENTRY.md §4/§5). */
 export interface CheapEarlyAssumptions {
-  /** the forward mean net-return + its city-clustered 95% CI — the GATE DRIVER (the backtest cells straddled 0). */
+  /** the RUNNING forward mean net-return over realized trades (simple mean — finite from the first realized trade,
+   *  so the headline read is populated from day one). Its city-clustered 95% CI (ciLow/ciHigh) is the GATE DRIVER
+   *  (the backtest cells straddled 0) and stays NaN until the §9R-E sufficiency floor — see the gate for the
+   *  rigorous clustered mean + CI. */
   meanNetReturn: number;
   ciLow: number;
   ciHigh: number;
@@ -244,7 +247,9 @@ export function buildCheapEarlyView(
   // ── the measured reads (CHEAP-EARLY-ENTRY.md §4/§5) — over the REALIZED ledger + the gate verdict ──────
   const v = panel.verdict;
   const assumptions: CheapEarlyAssumptions = {
-    meanNetReturn: v.meanNetReturn,
+    // the RUNNING simple mean (finite from the first realized trade) — the headline read is useful from day one;
+    // the rigorous city-clustered mean + CI live on the gate (v.*), which stay NaN until the sufficiency floor.
+    meanNetReturn: panel.meanNetReturn,
     ciLow: v.ciLow,
     ciHigh: v.ciHigh,
     winRate: panel.winRate,

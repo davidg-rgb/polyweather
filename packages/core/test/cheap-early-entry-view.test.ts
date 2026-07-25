@@ -64,6 +64,10 @@ describe('buildCheapEarlyView', () => {
     // the measured reads: 2 markets → INSUFFICIENT (< 40); cost/depth confirmed
     expect(view.assumptions.nMarkets).toBe(2);
     expect(view.assumptions.nCities).toBe(2);
+    // the RUNNING mean net-return is finite from the first realized trade (usable day one), while the rigorous
+    // gate CI stays NaN until the sufficiency floor.
+    expect(Number.isFinite(view.assumptions.meanNetReturn)).toBe(true);
+    expect(Number.isNaN(view.gate.ciLow)).toBe(true);
     expect(view.assumptions.winRate).toBeCloseTo(0.5, 9);
     expect(view.assumptions.meanEntryAsk).toBeCloseTo(0.25, 9);
     expect(view.assumptions.meanDepthUsd).toBeCloseTo(200, 6);

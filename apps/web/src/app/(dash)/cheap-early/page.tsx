@@ -103,12 +103,15 @@ function ReadTiles({ view }: { view: CheapEarlyView }): ReactElement {
       <div className="tile rec">
         <div className="tile-head">
           <span className="cap">Mean net-return</span>
-          <span className="chip soft">the gate driver</span>
+          <span className="chip soft">running</span>
         </div>
         <div className="big" style={{ color: Number.isFinite(a.meanNetReturn) ? pnlColor(a.meanNetReturn) : undefined }}>
           {signedPct(a.meanNetReturn)}
         </div>
-        <div className="sub">CI [{signedPct(a.ciLow)}, {signedPct(a.ciHigh)}] — the backtest cells straddled 0</div>
+        <div className="sub">
+          over {a.nMarkets} realized · the city-clustered CI [{signedPct(a.ciLow)}, {signedPct(a.ciHigh)}] (the gate
+          driver — backtest cells straddled 0) populates at the ≥{view.gate.minMarkets}-market floor
+        </div>
       </div>
       <div className="tile">
         <div className="cap">Win rate</div>
