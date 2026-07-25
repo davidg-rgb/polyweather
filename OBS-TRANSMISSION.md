@@ -111,13 +111,48 @@ someone who understands the resolution source.**
   0 fabrications AND a wholly-positive clustered CI, bring it to the operator as a **scrap-sized**
   finding — with the constant-outcome caveat stated first.
 
+## Pass 3 — the deep-history METAR-grade replay (2026-07-25 evening, operator: "Build it")
+
+The oracle finding unlocked the capability this study lacked: the **historical resolution-state
+path**. `iem-backfill.py` pulled the METAR/SPECI stream for **all 45 stations × 90 days**
+(109,954 rows, one polite ranged request per station); `metar-kill-replay.py` replayed
+resolution-grade kills against the deep price archive: **2,161 events joined · replication 96.2%**
+(divergence is city-dependent: US/EU ≈ perfect; hotspots shenzhen 16 / seoul 7 winner-"kills" —
+IEM≠WU divergence, kept in the trade panel as the honest fabrication channel, 36 kills = 0.27%).
+
+**The methodology catch worth more than the numbers:** entering at the first print ≥ T (the
+METAR's *valid* time) produced +0.78..+1.08/$1 "edge" — pure LOOK-AHEAD, because AWC publishes
+2–6 min after valid time. Shifting entry to [T+6m, T+21m] collapsed the universe **2,523 → 298
+trades (−88%)**: the market eats METAR kills within minutes. Now pinned in the tool.
+
+**Honest read (13,406 kills · 12,872 clean):**
+- **Denominator law at scale:** 64.6% of METAR kills land with the bucket already **<1¢**;
+  only 19.8% alive ≥5¢ at T−30. Timing (alive cohort): mid 0.215 (T−30) → 0.115 (T) →
+  **0.0005 (T+15)** — once the METAR lands it is over in minutes. Unified story with passes
+  1–2: the only window where any bid survives is the 5-min-obs → confirming-METAR gap.
+- **The clean scrap is ZERO:** entries <10¢ (n=145, the margin-3 thesis at scale): mean
+  **−0.003/$1** on optimistic mids → dead before the real book even takes its cut. The July
+  margin-3 INSUFFICIENT cell should be expected to die as n grows; prior for the 08-06 re-run
+  is now firmly negative.
+- **The +0.33/$1 headline CI[+0.19,+0.50] is carried by 18 trades at ≥60¢ entries (+3.93
+  mean)** — post-kill prints where the market REFUSED the METAR's finality. Unclaimable:
+  mid-basis (law: ≤ PASS_PENDING_REAL_BOOK), n=18, and an unresolved look-ahead channel —
+  IEM archives *corrected* METARs while WU honors revisions until the next-day first print,
+  so some "kills" may not have existed in the live stream when those prints traded.
+  **Classified artifact-risk, not a signal; no build.** The passive forward corpora
+  (opening_captures + synoptic_obs through ~08-08) already record what a real-book
+  confirmation would need.
+
 ## Reproduce
 
 ```
 pnpm tsx scripts/research/synoptic-history-pull.ts        # daily obs top-up (trial ends ~08-08)
 pnpm tsx scripts/ops/dump-opening-captures.ts --incremental
 python scripts/research/synoptic-price-join.py            # pass 1 (mid-basis, timing only)
-python scripts/research/synoptic-realbook-crosscheck.py   # pass 2 (the verdict)
+python scripts/research/synoptic-realbook-crosscheck.py   # pass 2 (the July real-book verdict)
+python scripts/research/iem-backfill.py --days 90         # resolution-stream backfill (45 stations)
+python scripts/research/metar-kill-replay.py --days 90    # pass 3 (deep-history METAR-grade replay)
 ```
 
-Full pass-2 output: `scripts/research/out/synoptic-realbook-crosscheck-result.txt`.
+Full outputs: `scripts/research/out/synoptic-realbook-crosscheck-result.txt` +
+`out/metar-kill-replay-result.json`; the oracle validation: `oracle-replica-validation.py` (66/66).

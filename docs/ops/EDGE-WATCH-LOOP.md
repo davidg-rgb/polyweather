@@ -29,6 +29,24 @@ _Claude keeps this block current every material cycle. Whole status in 20 second
 > rows; archive current). Nothing needs the operator (07-31 override renewal re-surfaces ~07-28). Material
 > events get their own dated bullet below.
 
+- **▶▶ 2026-07-25 ~22:45Z (operator: "Build it") — the DEEP-HISTORY RESOLUTION-STATE CAPABILITY is BUILT +
+  the 90-DAY METAR-GRADE KILL REPLAY is ADJUDICATED: the fresh-kill scrap is ZERO at scale; the one
+  positive band is artifact-class. No signal; capability + two tool-guards retained.** ① `iem-backfill.py`
+  pulled the resolution stream for **45 stations × 90 days** (109,954 METAR/SPECI rows, 1 ranged
+  request/station, merge-idempotent, `out/iem-asos-archive/`) + committed `city-map.json` (DB export).
+  ② `metar-kill-replay.py`: **2,161 events · replication 96.2%** (divergence city-dependent — shenzhen 16 /
+  seoul 7 winner-"kills", 0.27% of 13,406 kills, kept as the honest fabrication channel). **Methodology
+  catch pinned in the tool:** entry at the METAR's *valid* time = LOOK-AHEAD (AWC publishes 2–6 min later) —
+  it faked +0.78..+1.08/$1; honest [T+6m,T+21m] entry collapses the universe **−88%** (the market eats METAR
+  kills in minutes). ③ **Verdict:** the clean <10¢ fresh-kill fade = **−0.003/$1 on optimistic mids (n=145)**
+  → dead before the real book's cut; the +0.33/$1 headline is 18 trades at ≥60¢ entries (+3.93) with an
+  unresolved COR-revision look-ahead channel (IEM archives *corrected* METARs; WU honors revisions till
+  next-day) → **artifact-risk, mid-basis-capped, no build**. The July margin-3 INSUFFICIENT cell is expected
+  to die as n grows — 08-06 re-run prior now firmly negative. Denominator law at scale: **64.6% of METAR
+  kills land on an already-dead (<1¢) bucket**; alive-cohort mid 0.115 (T) → 0.0005 (T+15). Full record:
+  `OBS-TRANSMISSION.md` §Pass 3. ④ Prod verify from the oracle fix landed clean: 19:49Z synoptic tick =
+  capture-only shape (no floor keys); 20:04Z metar tick re-floored all 11 US stations METAR-grade (several
+  floors dropped 1–2°F — the contamination was real, now gone).
 - **▶▶ 2026-07-25 ~21:45Z (operator: "read polymarket-temp-oracle.md, implement what benefits the cause") —
   the RESOLUTION ORACLE is DECODED + VALIDATED 66/66 → the OBS-TRANSMISSION fabrication mechanism is
   RESOLVED, and a WRONG-GRADE floor write in the day-old synoptic lane is FIXED + REDEPLOYED.** The
@@ -630,10 +648,11 @@ _Claude keeps this block current every material cycle. Whole status in 20 second
    enterprise pricing (sub-hourly obs = truth/analytics freshness, zero trading edge per WO-5); free
    freshness fallback = restore metar-nowcast to */15 (C15 shed it for compute, not necessity) ·
    **OBS-TRANSMISSION re-adjudication ~08-06** (before the trial dies), on the CORRECTED design
-   (oracle addendum): kills at METAR/SPECI grade (IEM `asos.py` replica — fabrication-free by
-   construction, no margin heuristic), 5-min stream as the anticipatory trigger, after the daily obs
-   top-up + an `--incremental` capture dump. Surface only at ≥40 trades + wholly-positive clustered CI
-   (scrap-sized pot, caveat first; INSUFFICIENT as of 07-25, `OBS-TRANSMISSION.md`).
+   (oracle addendum): kills at METAR/SPECI grade (IEM `asos.py` replica), 5-min stream as the
+   anticipatory trigger, after the daily obs top-up + an `--incremental` capture dump. **Prior now
+   firmly negative** — the 90-day deep replay (§Pass 3) reads the clean <10¢ scrap at −0.003/$1 on
+   mids; expect the July margin-3 cell to die as n grows. Surface only at ≥40 trades + wholly-positive
+   clustered CI on the REAL book (caveat first; INSUFFICIENT as of 07-25, `OBS-TRANSMISSION.md`).
 6b. **Synoptic daily top-up (while the trial lives, ends ~08-08).** Once per day:
    `pnpm tsx scripts/research/synoptic-history-pull.ts` (defaults = last 5 days; idempotent both sides,
    ~6 requests) — keeps the LOCAL NDJSON archive current with the rolling trial window so nothing is lost

@@ -1,0 +1,320 @@
+{
+ "_generated": "2026-07-25 from live city_stations (valid_to is null) \u2014 slug: [icao, tz, unit, country_code, us_state]",
+ "cities": {
+  "amsterdam": [
+   "EHAM",
+   "Europe/Amsterdam",
+   "C",
+   "NL",
+   null
+  ],
+  "ankara": [
+   "LTAC",
+   "Europe/Istanbul",
+   "C",
+   "TR",
+   null
+  ],
+  "atlanta": [
+   "KATL",
+   "America/New_York",
+   "F",
+   "US",
+   "GA"
+  ],
+  "austin": [
+   "KAUS",
+   "America/Chicago",
+   "F",
+   "US",
+   "TX"
+  ],
+  "beijing": [
+   "ZBAA",
+   "Asia/Shanghai",
+   "C",
+   "CN",
+   null
+  ],
+  "buenos-aires": [
+   "SAEZ",
+   "America/Argentina/Buenos_Aires",
+   "C",
+   "AR",
+   null
+  ],
+  "busan": [
+   "RKPK",
+   "Asia/Seoul",
+   "C",
+   "KR",
+   null
+  ],
+  "cape-town": [
+   "FACT",
+   "Africa/Johannesburg",
+   "C",
+   "ZA",
+   null
+  ],
+  "chengdu": [
+   "ZUUU",
+   "Asia/Shanghai",
+   "C",
+   "CN",
+   null
+  ],
+  "chicago": [
+   "KORD",
+   "America/Chicago",
+   "F",
+   "US",
+   "IL"
+  ],
+  "chongqing": [
+   "ZUCK",
+   "Asia/Shanghai",
+   "C",
+   "CN",
+   null
+  ],
+  "dallas": [
+   "KDAL",
+   "America/Chicago",
+   "F",
+   "US",
+   "TX"
+  ],
+  "denver": [
+   "KBKF",
+   "America/Denver",
+   "F",
+   "US",
+   "CO"
+  ],
+  "guangzhou": [
+   "ZGGG",
+   "Asia/Shanghai",
+   "C",
+   "CN",
+   null
+  ],
+  "helsinki": [
+   "EFHK",
+   "Europe/Helsinki",
+   "C",
+   "FI",
+   null
+  ],
+  "houston": [
+   "KHOU",
+   "America/Chicago",
+   "F",
+   "US",
+   "TX"
+  ],
+  "jeddah": [
+   "OEJN",
+   "Asia/Riyadh",
+   "C",
+   "SA",
+   null
+  ],
+  "karachi": [
+   "OPKC",
+   "Asia/Karachi",
+   "C",
+   "PK",
+   null
+  ],
+  "kuala-lumpur": [
+   "WMKK",
+   "Asia/Kuala_Lumpur",
+   "C",
+   "MY",
+   null
+  ],
+  "london": [
+   "EGLC",
+   "Europe/London",
+   "C",
+   "GB",
+   null
+  ],
+  "los-angeles": [
+   "KLAX",
+   "America/Los_Angeles",
+   "F",
+   "US",
+   "CA"
+  ],
+  "lucknow": [
+   "VILK",
+   "Asia/Kolkata",
+   "C",
+   "IN",
+   null
+  ],
+  "madrid": [
+   "LEMD",
+   "Europe/Madrid",
+   "C",
+   "ES",
+   null
+  ],
+  "manila": [
+   "RPLL",
+   "Asia/Manila",
+   "C",
+   "PH",
+   null
+  ],
+  "mexico-city": [
+   "MMMX",
+   "America/Mexico_City",
+   "C",
+   "MX",
+   null
+  ],
+  "miami": [
+   "KMIA",
+   "America/New_York",
+   "F",
+   "US",
+   "FL"
+  ],
+  "milan": [
+   "LIMC",
+   "Europe/Rome",
+   "C",
+   "IT",
+   null
+  ],
+  "munich": [
+   "EDDM",
+   "Europe/Berlin",
+   "C",
+   "DE",
+   null
+  ],
+  "nyc": [
+   "KLGA",
+   "America/New_York",
+   "F",
+   "US",
+   "NY"
+  ],
+  "panama-city": [
+   "MPMG",
+   "America/Panama",
+   "C",
+   "PA",
+   null
+  ],
+  "paris": [
+   "LFPB",
+   "Europe/Paris",
+   "C",
+   "FR",
+   null
+  ],
+  "qingdao": [
+   "ZSQD",
+   "Asia/Shanghai",
+   "C",
+   "CN",
+   null
+  ],
+  "san-francisco": [
+   "KSFO",
+   "America/Los_Angeles",
+   "F",
+   "US",
+   "CA"
+  ],
+  "sao-paulo": [
+   "SBGR",
+   "America/Sao_Paulo",
+   "C",
+   "BR",
+   null
+  ],
+  "seattle": [
+   "KSEA",
+   "America/Los_Angeles",
+   "F",
+   "US",
+   "WA"
+  ],
+  "seoul": [
+   "RKSI",
+   "Asia/Seoul",
+   "C",
+   "KR",
+   null
+  ],
+  "shanghai": [
+   "ZSPD",
+   "Asia/Shanghai",
+   "C",
+   "CN",
+   null
+  ],
+  "shenzhen": [
+   "ZGSZ",
+   "Asia/Shanghai",
+   "C",
+   "CN",
+   null
+  ],
+  "singapore": [
+   "WSSS",
+   "Asia/Singapore",
+   "C",
+   "SG",
+   null
+  ],
+  "taipei": [
+   "RCSS",
+   "Asia/Taipei",
+   "C",
+   "TW",
+   null
+  ],
+  "tokyo": [
+   "RJTT",
+   "Asia/Tokyo",
+   "C",
+   "JP",
+   null
+  ],
+  "toronto": [
+   "CYYZ",
+   "America/Toronto",
+   "C",
+   "CA",
+   null
+  ],
+  "warsaw": [
+   "EPWA",
+   "Europe/Warsaw",
+   "C",
+   "PL",
+   null
+  ],
+  "wellington": [
+   "NZWN",
+   "Pacific/Auckland",
+   "C",
+   "NZ",
+   null
+  ],
+  "wuhan": [
+   "ZHHH",
+   "Asia/Shanghai",
+   "C",
+   "CN",
+   null
+  ]
+ }
+}
