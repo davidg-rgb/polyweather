@@ -88,7 +88,11 @@ over the very first hours of listing.
 - **The test that would settle it:** a forward paper panel at the **[24,36]h window, 0.20–0.33 ask band**
   (the liquid, best-looking cell), house-pick, hold-to-resolution, graded by the §9R-E gate — run until
   n≥40 / ≥6 cities / ≥7 days (~2 months at 4 cities). The opening-capture stream already collects the book;
-  this is a scoring layer, not new capture. **Operator-gated** (a deploy) — I did not build it unprompted.
+  this is a scoring layer, not new capture. **BUILT + tested 2026-07-25** (operator-directed): engine
+  `core/sim/cheap-early-entry-replay.ts` + view + migration `0117` + edge fn `cheap-early-panel` (hourly) + the
+  `/cheap-early` dashboard; the forward engine reproduces this doc's §2 [24,36]/0.20–0.33 cell byte-for-byte
+  (`scripts/research/cheap-early-forward-regression.ts`: n=12 / win 42% / net +33.9%). **Deploy is operator-gated**
+  (apply 0117 + deploy the edge fn — `CHEAP-EARLY-ENTRY-FORWARD-HANDOFF.md` §Deploy); no capital before a frozen PASS.
 - **What would change the verdict fast:** widening to more cities raises the fire rate and powers it sooner
   (the mechanism, if real, isn't city-specific). Modelling (the operator's note) could help *selection*
   within the band, but can't manufacture an edge the market hasn't left — the ceiling is the +1.2pp gap.

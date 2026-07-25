@@ -24,6 +24,7 @@ import type {
   AppConfig,
   ArmGradedBets,
   BestTimeView,
+  CheapEarlyView,
   CityRoi,
   ConvergenceView,
   DailyRow,
@@ -2055,6 +2056,49 @@ export async function getMakerExit(db: WebDb): Promise<MakerExitFeed | null> {
   let v: MakerExitFeed | null;
   try {
     v = await one<MakerExitFeed>(db, 'dash_maker_exit', {});
+  } catch {
+    return null;
+  }
+  if (!v) return null;
+  return { generatedAt: v.generatedAt ?? null, view: v.view ?? null, gateSnapshot: v.gateSnapshot ?? null };
+}
+
+// ── cheap-early-entry forward paper loop (dash_cheap_early, migration 0117) ──────────────────────────
+/** The persisted forward §9R-E verdict for the cheap-early loop (source='forward-cheap-early'), for the header. */
+export interface CheapEarlyGateSnapshot {
+  computedAt: string | null;
+  label: string;
+  nMarkets: number | null;
+  nCities: number | null;
+  nDistinctDays: number | null;
+  winFrac: number | null;
+  meanNetReturn: number | null;
+  ciLow: number | null;
+  ciHigh: number | null;
+  zeroSkillPassRate: number | null;
+  totalNetUsd: number | null;
+  nOpen: number | null;
+  reason: string | null;
+}
+
+export interface CheapEarlyFeed {
+  /** when the cheap-early-panel Edge tick produced the snapshot (null if none captured yet). */
+  generatedAt: string | null;
+  /** the computed view (entries / measured reads / money tracker / gate); null until the first tick. */
+  view: CheapEarlyView | null;
+  /** the latest persisted forward verdict row (null until the first gate write). */
+  gateSnapshot: CheapEarlyGateSnapshot | null;
+}
+
+/**
+ * The forward cheap-early-entry paper loop (dash_cheap_early, 0117) for /cheap-early. Reads the latest snapshot the
+ * cheap-early-panel Edge tick (hourly) computed. Degrades to null (not a thrown 500) if the RPC errors so the page
+ * can deploy ahead of the 0117 RPC.
+ */
+export async function getCheapEarly(db: WebDb): Promise<CheapEarlyFeed | null> {
+  let v: CheapEarlyFeed | null;
+  try {
+    v = await one<CheapEarlyFeed>(db, 'dash_cheap_early', {});
   } catch {
     return null;
   }

@@ -33,6 +33,7 @@ export const DASH_NAV: ReadonlyArray<readonly [string, string]> = [
   ['/monitor', 'monitor'], // forward paper CONFIRMATION of C23/C24 — §9R-E gate over time (dash_efficiency_monitor, 0091)
   ['/convergence', 'google'], // "Test 2" — Google-picks-bucket taker forward-paper panel (dash_google_paper)
   ['/maker-exit', 'maker-exit'], // the maker-exit variant — first +EV config (dash_maker_exit)
+  ['/cheap-early', 'cheap-early'], // the operator's buy-early/cap-3× forward paper test (dash_cheap_early, 0117)
   ['/trading', 'trading'], // LIVE-RAIL activation + risk console (dash_trading, 0082 staged dark)
   ['/amsterdam', 'amsterdam'], // the one-accurate-city paper-trade head-to-head
   ['/paper-trade', 'buy-table'], // per-city "$10 on our high, bought cheap" archive backtest (city-buy-table-results)
