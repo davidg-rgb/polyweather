@@ -37,6 +37,10 @@ _Claude keeps this block current every material cycle. Whole status in 20 second
     A momentary `opening-capture:1` in the raw fail count was an **in-flight `running` row**, not a failure (C96
     false-positive: last 12 runs all ok, direct fail-query empty) — captures 100% healthy. 2 orphan `placed` rows
     and mode live unchanged; eff-monitor Action still pending its ~08:44Z fire.
+  - **↳ ~08:48Z (+1h): green; today's eff-monitor Action LANDED (08:25Z) → S1 KILL n=5,757** (the well-powered
+    null holds). No new fills (lead_window, cash **$97.39** unchanged). DB **2063 MB** / captures **620 MB** (under
+    bars). Only real cron blip in 24h is still the aging 07-24 18:04Z metar transient (fail filter now excludes
+    in-flight `running` rows, so the raw count is clean). Mode live · 2 orphans · 0 unsent alerts — all unchanged.
 - **▶▶ 2026-07-25 ~05:40Z (loop wake — first cycle after the convergence-capture close) — ALL-GREEN sweep; the
   live lane is still confirming the KILL with real money and is HEALTHY; nothing needs you today.** ① **Buy lane:**
   mode live, interlock **ok:true** (override id=2 → **07-31 00:00Z**), 4-city allowlist, cap 0.30,
