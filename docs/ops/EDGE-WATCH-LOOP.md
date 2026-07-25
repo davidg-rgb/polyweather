@@ -22,9 +22,9 @@
 _Claude keeps this block current every material cycle. Whole status in 20 seconds._
 
 > **⟳ Idle heartbeat (rolled in place each quiet cycle — no new bullet for zero-change sweeps):** 2026-07-25
-> **~09:50Z — GREEN.** Buy lane mode live / lead_window (next candidate window 07-26 00:00Z; cash **$97.39**; 2
-> benign orphan `placed` rows) · all crons 0-fail/24h (only the aging 07-24 metar transient) · DB **2068 MB** /
-> captures **624 MB** (under the 3.5 GB / 2 GB bars) · mode live · eff-monitor **S1 KILL** (08:25Z) · 0 unsent
+> **~10:53Z — GREEN.** Buy lane mode live / lead_window (next candidate window 07-26 00:00Z; cash **$97.39**; 2
+> benign orphan `placed` rows) · all crons 0-fail/24h (only the aging 07-24 metar transient) · DB **2072 MB** /
+> captures **627 MB** (under the 3.5 GB / 2 GB bars) · mode live · eff-monitor **S1 KILL** (08:25Z) · 0 unsent
 > alerts. Nothing needs the operator (07-31 override renewal re-surfaces ~07-28). Material events get their own
 > dated bullet below.
 
