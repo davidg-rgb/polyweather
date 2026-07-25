@@ -28,6 +28,23 @@ _Claude keeps this block current every material cycle. Whole status in 20 second
 > (08:25Z) · 0 unsent alerts. Nothing needs the operator (07-31 override renewal re-surfaces ~07-28). Material
 > events get their own dated bullet below.
 
+- **▶▶ 2026-07-25 ~17:15Z (operator: "turn every stone — how do we improve live trading net profit from all
+  historic data?") — ADJUDICATED FROM THE RECORD, no new run: every named dimension already carries a
+  well-powered verdict; the ONE live candidate is the cheap-early forward panel, already running.** The Lane-3
+  filter's step-2 check found the question fully covered: **data patterns** = BID-PATH-DISCOVERY (238M rows:
+  mid-price martingale, path shape ~0 OOS AUC, NO missed pattern) + pricing-bucket exhaustive ("any future
+  price-only angle is a re-skin") + nonprice-fingerprint (price is a sufficient statistic; only `house_gap`
+  carries residual info and its trade loses); **time patterns** = entry-hour/lead (07-23: win rate purchasable,
+  rises ≈1:1 with price+hour, EV flat; MARKET-PNL: the bet-earlier ramp is convergence carry), horizon
+  freshness (the 23h ghost-quote artifact), regime/season/extreme-day/cross-horizon all KILL; **prediction
+  patterns** = BREAKEVEN-SKILL (our forecast's residual info is REAL, +2.7…+6.7pp within-band, but buying our
+  own bucket nets **−2.2%/$1, day-clustered CI [−4.3,−0.2]** against a 3.7–5.1pp cost wall) + C24 disagreement
+  quartiles (+1.05pp, CI incl 0, 21 Q4 days) + model-trim/source-accuracy (calibrated blend dominates). REC-1's
+  INSUFFICIENT (the one non-KILL) is moot — it's a maker-selection lever and the maker path measured 6.5% live
+  fills. **Structural conclusion: the edge exists and is smaller than the toll; only cost-side mechanisms
+  (maker: dead live · fee/rewards flip: tripwire ②) or NEW out-of-market info can change the sign — historic
+  data cannot.** No new computation run (re-litigation refused per board law); full per-dimension map delivered
+  in-chat. Live candidate status: cheap-early panel day one, running mean +7.65%, INSUFFICIENT (<40 mkts).
 - **▶▶ 2026-07-25 ~16:35Z (loop wake — first cycle after the cheap-early build session) — the CHEAP-EARLY
   FORWARD PAPER PANEL is LIVE END-TO-END + the loop branch is reconciled with main.** ① PR #46 (squash
   `bbbc0f8`: replay engine + view + migration **0117** + edge fn `cheap-early-panel` + the `/cheap-early` page)
