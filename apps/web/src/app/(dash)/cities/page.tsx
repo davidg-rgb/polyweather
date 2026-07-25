@@ -13,6 +13,7 @@
 import type { ReactElement } from 'react';
 import { wilsonInterval } from '@weather-edge/core';
 import { CitiesTable, SMALL_N_FLOOR, rateColor, type CitiesTableRow } from '../../../components/CitiesTable.tsx';
+import { CityFloorStrip } from '../../../components/CityFloorStrip.tsx';
 import { fmtAgo, fmtDate, fmtDateTime, num } from '../../../lib/format.ts';
 import { polymarketEventUrl } from '../../../lib/market-link.ts';
 import { getCityPredictions, type CityPredictionStat } from '../../../lib/loaders.ts';
@@ -46,6 +47,7 @@ export default async function CitiesPage(): Promise<ReactElement> {
           lights up the moment the operator applies 0106 — the migration also backfills the per-city success
           rates from the existing capture archive, so it arrives populated, not empty.
         </div>
+        <CityFloorStrip nowMs={Date.now()} />
       </div>
     );
   }
@@ -199,6 +201,8 @@ export default async function CitiesPage(): Promise<ReactElement> {
           </div>
         </>
       ) : null}
+
+      <CityFloorStrip nowMs={nowMs} />
 
       <h2>How to read this</h2>
       <div className="panel">

@@ -28,6 +28,8 @@ export * from './distributions/nowcast.ts';
 export * from './sim/amsterdam.ts';
 export * from './sim/amsterdam-besttime.ts';
 export * from './sim/city-climatology.ts';
+export * from './sim/city-floor-climatology.ts';
+export * from './sim/resolution-risk.ts';
 export * from './sim/stats.ts';
 export * from './sim/entry-watch.ts';
 export * from './sim/city-promotion.ts';

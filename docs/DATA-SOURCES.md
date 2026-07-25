@@ -153,6 +153,12 @@ Source: `docs/ops/POLYMARKET-TEMP-ORACLE.md` (operator-supplied, empirically ver
   (METAR+SPECI stream; matches WU exactly — the backtest/audit source; our `iem.ts` daily
   endpoint is a DIFFERENT, non-resolution quantity) · api.weather.gov 5-min obs (US, whole °C,
   14–19 min lag) = **leading indicator only, never resolution truth**.
+- **Per-city replica trustworthiness is MEASURED (2026-07-25, Build 2): `docs/RESOLUTION-RISK.md`**
+  — 90d WU-truth vs METAR-replica crosscheck, market-winner-adjudicated. 97.25% overall; shenzhen's
+  WU page is NOT a ZGSZ METAR render (23% agreement, market sides with WU 46:2 — replica-derived
+  analytics are wrong there); °F cities show a small one-sided truth-side gap (replica +1°F higher
+  ~4-6%, market sides with the replica 17:4) — the stored v1-API truth misses the resolved value on
+  ~1-2% of °F days. Committed asset `core/sim/resolution-risk.ts`, surfaced on `/cities`.
 - **THE OPERATIONAL LAW this implies: only METAR/SPECI-grade data may write the resolution
   floor (`intraday_max`).** The 5-min stream (Synoptic/api.weather.gov) overshoots the
   METAR-table max on **~42% of days** (28/66, by 1–3°F) — it predicts the next METAR, it does
