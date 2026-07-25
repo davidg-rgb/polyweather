@@ -22,13 +22,31 @@
 _Claude keeps this block current every material cycle. Whole status in 20 seconds._
 
 > **⟳ Idle heartbeat (rolled in place each quiet cycle — no new bullet for zero-change sweeps):** 2026-07-25
-> **~18:00Z — GREEN.** Buy lane mode live / lead_window (next candidate window 07-26 00:00Z; today's 06:20Z
-> $2.52 partial fill resolved a loss, booked 17:23Z — routine; 2 benign orphan `placed` rows) · all crons
-> 0-fail/24h (only the aging 07-24 metar transient) · DB **2110 MB** (under bars) · mode live · eff-monitor
-> **S1 KILL** (08:25Z) · 0 unsent alerts · cheap-early panel accruing on its own cron (snap 3, 7 mkts) ·
-> synoptic lane live (first scheduled fire 18:05Z — verify next wake). Nothing needs the operator (07-31
-> override renewal re-surfaces ~07-28). Material events get their own dated bullet below.
+> **~19:45Z — GREEN.** Buy lane mode live / lead_window (next candidate window 07-26 00:00Z; the 06:20Z
+> $2.52 partial fill's resolution loss booked 17:23Z — routine; 2 benign orphan `placed` rows; tick clean
+> 18:53Z) · all crons 0-fail/24h · DB **2116 MB** / captures **657 MB** (under bars) · mode live · 0 unsent
+> alerts · cheap-early panel accruing on its own cron · synoptic lane live + daily obs top-up done (7 new
+> rows; archive current). Nothing needs the operator (07-31 override renewal re-surfaces ~07-28). Material
+> events get their own dated bullet below.
 
+- **▶▶ 2026-07-25 ~19:45Z (the decisive cheap test from last session) — the REAL-BOOK CROSS-CHECK is DONE
+  and ADJUDICATED: the 5-min obs LEAD is REAL, the taker trade is NOT — the market's residual bid on
+  "obs-dead" buckets is correctly-priced resolution-source insurance. No §13 reopen; no build.** Ran the
+  first pass's 354 floor-kill events against the real `opening_captures` bids (66 city-days joined; archive
+  brought current first via `--incremental`, +88k rows — build-queue item ③ done for real). ① **Timing
+  CONFIRMED on quotes:** median pre-print bid drift **0.0000**; the whole collapse is post-print — the
+  sub-hourly lead is real (analytics value; the nowcast lane already eats it). ② **The trade dies on
+  adverse selection:** at walked `execBid` the city-day-clustered CI straddles 0 at margin 1–2 (best
+  [−0.095, +0.266]); **19/19 winner-"kills"** (buckets our °C→°F conversion killed that then WON —
+  SF 4 / Austin 3 / Chicago 3, the WU-vs-sensor divergence cities) kept 0.05–0.93 bids and the market won
+  every one. ③ The clean-looking **margin ≥3°F cell (0 fabrications, CI [+0.111,+0.385]) is a
+  CONSTANT-OUTCOME cell** — all 14 trades won, the CI measures price dispersion not fabrication risk (the
+  07-24 convergence-capture trap, now guarded in this tool too) — at a **$52–156/week** pot. **Label
+  INSUFFICIENT** (n=14 ≪ 40). ④ Denominator the mid-basis pass hid: only **~22%** of obs-kills had ≥5¢
+  real bids at T−30. **Standing item: re-run `synoptic-realbook-crosscheck.py` ~08-06** (both corpora
+  accrue daily; ~3× window by then) — if margin-3 reaches ≥40 trades / 0 fabrications / clean CI, surface
+  to the operator as a scrap-sized finding, caveat first. Full record: **`OBS-TRANSMISSION.md`** +
+  FINDINGS.md row.
 - **▶▶ 2026-07-25 ~19:10Z (operator: "log every 5-min ob per relevant city, connect to Polymarket minute
   prices, isolate how fresh obs affect price — backtrack as far as possible") — the OBS↔PRICE RESEARCH
   CORPUS is BUILT + the FIRST-PASS TRANSMISSION READ is in; the trial's rolling history window is SECURED.**
@@ -588,7 +606,11 @@ _Claude keeps this block current every material cycle. Whole status in 20 second
    self-serve tier, .edu-only open access) → when the tick starts 401ing/empty, `cron.unschedule
    ('synoptic-nowcast')` (0118 rollback header) + keep the 14d `synoptic_obs` corpus; do NOT recommend
    enterprise pricing (sub-hourly obs = truth/analytics freshness, zero trading edge per WO-5); free
-   freshness fallback = restore metar-nowcast to */15 (C15 shed it for compute, not necessity).
+   freshness fallback = restore metar-nowcast to */15 (C15 shed it for compute, not necessity) ·
+   **OBS-TRANSMISSION re-adjudication ~08-06** (before the trial dies): re-run
+   `python scripts/research/synoptic-realbook-crosscheck.py` after `--incremental` capture dump — margin-3
+   cell needs ≥40 trades / 0 fabrications / clean clustered CI to be surfaced (scrap-sized pot, caveat
+   first; INSUFFICIENT as of 07-25, `OBS-TRANSMISSION.md`).
 6b. **Synoptic daily top-up (while the trial lives, ends ~08-08).** Once per day:
    `pnpm tsx scripts/research/synoptic-history-pull.ts` (defaults = last 5 days; idempotent both sides,
    ~6 requests) — keeps the LOCAL NDJSON archive current with the rolling trial window so nothing is lost
@@ -597,8 +619,9 @@ _Claude keeps this block current every material cycle. Whole status in 20 second
 7. **Calm-day build queue (all-green cycles only, in order).** ① ~~F4 cloud reconcile sweep~~ **DONE
    C20** (deployed + tick-verified + merged, PR #24). ② ~~google-paper-panel incremental replay~~
    **DONE C34** (0103 applied + fn deployed ~10:15Z 07-17; first incremental tick verification = the
-   next :24 run — check stats.incremental=true + duration collapse; then PR to main). ③ opening_captures
-   archive prep (dump tooling dry-run so the prune is one command when needed). ④ **[NEW, 07-25, LOW]
+   next :24 run — check stats.incremental=true + duration collapse; then PR to main). ③ ~~opening_captures
+   archive prep~~ **DONE 07-25** (incremental append ran live for the OBS-TRANSMISSION cross-check: +88k
+   rows to id 703395, coverage-verified — the prune is one command whenever the 2 GB bar threatens). ④ **[NEW, 07-25, LOW]
    orphan zero-fill FAK reconcile gap.** When the fill-poll THROWS at placement (net/timeout), the row is
    left `status='placed'`+order_id/0-fill and the inline F1 zero-fill→canceled adjudication (handler.ts:1086,
    acts on the SAME-tick result only) is skipped; the reconcile sweep never re-examines it because
