@@ -22,12 +22,12 @@
 _Claude keeps this block current every material cycle. Whole status in 20 seconds._
 
 > **⟳ Idle heartbeat (rolled in place each quiet cycle — no new bullet for zero-change sweeps):** 2026-07-25
-> **~19:45Z — GREEN.** Buy lane mode live / lead_window (next candidate window 07-26 00:00Z; the 06:20Z
-> $2.52 partial fill's resolution loss booked 17:23Z — routine; 2 benign orphan `placed` rows; tick clean
-> 18:53Z) · all crons 0-fail/24h · DB **2116 MB** / captures **657 MB** (under bars) · mode live · 0 unsent
-> alerts · cheap-early panel accruing on its own cron · synoptic lane live + daily obs top-up done (7 new
-> rows; archive current). Nothing needs the operator (07-31 override renewal re-surfaces ~07-28). Material
-> events get their own dated bullet below.
+> **~20:20Z — GREEN.** Buy lane mode live / lead_window (next candidate window 07-26 00:00Z; 0 new orders;
+> tick clean 20:13Z; 2 benign orphan `placed` rows) · all crons 0-fail/24h · DB **2123 MB** / captures
+> **661 MB** (under bars) · mode live · override id=2 → 07-31 · 0 unsent alerts · cheap-early panel accruing
+> (19:47Z ok) · synoptic lane CAPTURE-ONLY confirmed on consecutive ticks (obsLogged 38, no floor keys) ·
+> US floors METAR-grade post-refloor · daily obs top-up done. Nothing needs the operator (07-31 override
+> renewal re-surfaces ~07-28). Material events get their own dated bullet below.
 
 - **▶▶ 2026-07-25 ~22:45Z (operator: "Build it") — the DEEP-HISTORY RESOLUTION-STATE CAPABILITY is BUILT +
   the 90-DAY METAR-GRADE KILL REPLAY is ADJUDICATED: the fresh-kill scrap is ZERO at scale; the one
