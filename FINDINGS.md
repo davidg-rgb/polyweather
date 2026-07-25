@@ -6,6 +6,28 @@
 > links down to the deep doc that proves it.
 >
 > Authored 2026-06-23 · scope: personal R&D record · status: **investigation CLOSED** (analytics product retained).
+>
+> **↳ 2026-07-25 — full-history bidding-pattern re-sweep (operator-requested): still NO missed pattern
+> (`docs/ops/BID-PATH-DISCOVERY.md`).** A from-scratch *discovery* pass (unsupervised path-shape lift, not a
+> named-hypothesis re-run) over the entire price-path panel — **238M rows / 45 cities / 522 dates**: the market
+> mid-price is an efficient **martingale** — its current LEVEL is a sufficient statistic (path SHAPE adds ΔAUC
+> **+0.001 / −0.0004** out-of-sample at the powered 24 h/12 h horizons), and its only calibration bias
+> (favorite-longshot, ±1–3 pp) sits INSIDE the taker spread (every band's taker EV negative — maker edge, not
+> taker). One seductive short-horizon "−27 pp overpricing" was caught as a **ghost-price staleness artifact**
+> (mid-band buckets at 3 h-to-close carry ~23 h-stale quotes) and killed on a live-price filter. New durable
+> catch for future price-path work: **filter on quote freshness or illiquid mid buckets fabricate an
+> untradeable mispricing.** 12 signals stay dead; none reopened.
+>
+> **↳ 2026-07-25 (2) — operator "buy earlier + cap at 3×" proposal → INSUFFICIENT, the first cheap-buy variant
+> that isn't dead (`docs/ops/CHEAP-EARLY-ENTRY.md`).** Tested on the real book (opening-captures, 76 live-city
+> events / 19 days). Both operator instincts check out: (1) capping the price in the final [2,12]h buys
+> abandoned "lost causes" (win ~1%), but the **12–36h band** buys before the floor forms (win ~25–42% in-sample);
+> (2) **cost is not the wall** — real half-spread 0.3–1c, house-pick executable depth **$130–310 median** in that
+> band (correcting an initial "$1–2" read that had included dead longshots). BUT the edge doesn't clear: best
+> real-book cells straddle zero at ±100% CI (n=10–17), the larger mid panel puts the gap at **+1.2pp — inside
+> cost**, and the mid vs real-book samples disagree on the best window (noise fingerprint). **Not KILL, not GO:
+> earns a forward paper test** at [24,36]h / 0.20–0.33 ask (operator-gated deploy; ~2 months to power at 4
+> cities), **never capital before a frozen PASS.** "Occasional buy" helps deployment but slows inference.
 
 ---
 
@@ -293,6 +315,41 @@ genuinely out-of-market information.
 > by Supabase-Micro saturation at US-evening peak (every panel tick degraded, cErr > 2 → the gate correctly refused
 > to auto-write to `bot_gate_snapshot`); with the verdict settled and robust across city/date subsets, the operator
 > authorized recording it directly (2026-07-07). Re-open criteria: `SIGNAL-BACKLOG.md` §13.
+
+> **↳ NEW 2026-07-24 — the 12th signal re-tested from a NEW angle at operator request (select the bucket from the
+> MARKET's own signal, not our forecast) → KILL on selection, a powered NULL on the inverse, KILL on holding. It
+> stays dead; the durable result is the mechanism.** The operator's framing was *"bet what the MARKET will guess the
+> max temperature will be, catch the guess cheap early and sell it as it enters higher likelihood"*, plus a
+> cross-check: *"a potential negative buying pattern, betting 'no' … or possibly hold to finish."* Three arms, all
+> scored on the **real captured order book**, the same gates and the same frozen §9R-E estimators. **(1) Market-signal
+> SELECTION into the bracket exit — KILL, 14 of 14 cells** (the frozen 10-city gate universe plus an EXPLORATORY
+> 45-city panel; headline pre-registered TP 0.25). Every clustered CI is wholly negative and every winFrac lands
+> **8.7–32.7%** against the 0.50 bar. **(2) Betting NO on the selected bucket — a powered NULL**: it straddles zero
+> on every powered cell (45-city M0-pure **−0.83¢/share**, city-clustered CI **[−3.77¢, +1.82¢]**, n=754 / 45 cities
+> / 23 days; a seeded cluster bootstrap agrees, so the inverted 0.86-to-win-0.14 tail is not what drives the answer).
+> **(3) HOLD to resolution — KILL**: **−4.30¢ to −5.57¢/share** across all four 45-city panels, CI excluding zero;
+> you pay ~18¢ for a bucket that wins ~13% of the time.
+>
+> **The mechanism is the durable finding.** The favorite-longshot bias on the cheap bucket is **REAL at +2–3¢/share**
+> — and it is **almost exactly cancelled by the 2.2–2.3¢ half-spread a taker must cross** to monetise it, with the
+> **0.55–0.58¢** taker fee consuming the residual (45-city pure: +2.08¢ bias − 2.33¢ half-spread − 0.57¢ fee =
+> −0.83¢; the same shape holds on the strict and 10-city panels). This is the **identical "maker edge, not a taker
+> edge"** conclusion as `CONVERGENCE-TUNING.md`, now measured **independently from the inverse side**: it is the
+> tightest efficiency measurement this project has produced — **the market prices the NO side correctly to within
+> ±2.5¢ at 95% confidence.**
+>
+> **The operator's premise is falsified in the direction opposite to the ask: market selection is WORSE than our
+> forecast at picking winners, not better.** Pure-cell winFrac **M1 13.8% / M2 15.9% / M4 12.6% / M3 8.7%** against
+> **M0 24.5%**; corroborated independently on the unfiltered ladder, where the forecast picks the winner **31.3%** of
+> the time vs **M1 21.8% / M2 25.5% / M4 20.9%**. Our forecast has real skill — the market has already priced it.
+> **Panel:** two on-disk archives merged (the 835-event primary + the c96 pre-07-06 dump; only **131** events
+> overlapped, so it contributed **344 genuinely new events, +41%**) → **1,179 events / 45 cities / 27 dates,
+> resolution coverage 100%**. **Depth binds harder than price:** fillable NO size is the thinner YES **bid**-side
+> depth (median $49.5) — a **$50** floor removes **55.6%** of the panel, and at **$150** every cell in all 14 runs
+> falls under the §9R-E floor. Same capacity wall as the 10th signal. **No arm earns a forward paper test** — a null
+> does not earn capital, it earns being written down. Rail stays **DORMANT** with no scoped exception pending;
+> read-only run, nothing placed, no credentials read. Full record: **`docs/ops/CONVERGENCE-CAPTURE-RESULTS.md`**;
+> re-open criteria unchanged: `SIGNAL-BACKLOG.md` §13.
 
 ---
 

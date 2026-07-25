@@ -48,6 +48,9 @@ import { takerFeePerShare } from '../fees.ts';
 
 const fin = (v: number | null | undefined): v is number => v != null && Number.isFinite(v);
 
+/** a missing/absent book field → NaN (the file's convention for "not observed"), never a silent 0. */
+const numOrNaN = (v: number | null | undefined): number => (fin(v) ? v : NaN);
+
 /** mean (NaN on empty) — local copy so the engine pulls in no stats dep. */
 function mean(xs: number[]): number {
   return xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : NaN;
@@ -93,8 +96,31 @@ export interface BracketTrade {
   /** the realized BUY price (makerLimit on a maker fill, worse-of+slippage on a taker fallback). */
   entryPrice: number;
   isMaker: boolean;
+  // ── the ENTRY-TICK BOOK (the four fields below are snapshotted at the FILL tick — the tick capital was actually
+  //    deployed, the same tick entryAgeH and entryPrice are anchored to, NOT the earlier decision tick a maker order
+  //    was placed on). REPORT-ONLY: nothing in this engine reads them. They exist so an INVERSE-SIDE arm (buy NO
+  //    instead of YES) is computable as post-processing on the SAME executed population — identical selection,
+  //    identical gates, inverse side — rather than needing a second engine. All NaN when never filled. ──
+  /** the YES bestBid at the fill tick. NaN when the book showed no bid (or the bucket vanished from the ladder). */
+  entryBestBid: number;
+  /** the YES executable (depth-walked) BID at the fill tick — a NO position's cost basis is `1 − this`. NaN when
+   *  the source row predates the exit-side columns (the earliest archive shards carry no execBid at all). */
+  entryExecBid: number;
+  /** buyable $ (ask-side depth-walk) at the fill tick — the YES arm's executable size. */
+  entryDepthUsd: number;
+  /** sellable $ (BID-side depth-walk) at the fill tick — the size someone could hit the YES bid for, i.e. the
+   *  executable-depth check for the NO arm. ⚠ 0 IS AMBIGUOUS: it means both "genuinely no bid-side depth" and
+   *  "this row has no sellback_depth_usd field at all" (mapBucket floors that absent column to 0, not null). */
+  entrySellbackDepthUsd: number;
   /** the forecast-center bucket label we BOUGHT — the predicted-Tmax bucket / the temperature the bet opened on. */
   entryLabel: string;
+  /** the ladder idx we BOUGHT (−1 when never filled) — REPORT-ONLY; the selection-rule attribution key. */
+  bucketIdx: number;
+  /** REPORT-ONLY momentum-vs-information diagnostic: would the bucket we bought have WON at resolution?
+   *  null = unknown (unresolved or grading_mismatch). Read against a take_profit exit it separates "we harvested
+   *  a transient re-rating bump" (mostly false) from "the market was pricing in a correct outcome" (mostly true).
+   *  NEVER a decision input — it reads the resolution, which the replay cannot see at decision time. */
+  wouldHaveWonAtResolution: boolean | null;
   /** the exit kind + reason (take_profit / stop_loss / time_stop / resolution_settle / mtm_*). */
   exitReason: string;
   /** the realized SELL/settle price (execBid on a bracket exit, $1/$0 on resolution, last bid on a mark). */
@@ -175,11 +201,44 @@ function captureOf(input: EventReplayInput, tick: ReplayTick): OpeningCapture {
   };
 }
 
+/**
+ * OPTIONAL replay overrides (the 2026-07-24 MARKET-SIGNAL seam — scripts/research/convergence-capture-score.ts).
+ * Both default off ⇒ byte-identical to the frozen forecast-seeded replay.
+ *
+ *  - selectRule(pastTicks, i): the center bucket idx to buy at tick `i`, chosen from the MARKET's revealed
+ *    signal instead of our forecast's argmax(houseProb). NO LOOK-AHEAD IS STRUCTURALLY ENFORCED: the rule is
+ *    handed `ticks.slice(0, i + 1)` — a fresh array that physically cannot contain a future tick — so a rule
+ *    cannot cheat even by accident. Returning null falls back to the default forecast-argmax center.
+ *  - ignoreHouseEdge: forwarded verbatim to selectEntries (drop the model-edge requirement; the entry
+ *    reservation becomes the hard maxEntryPrice cap). Also governs the no-chase taker-fallback reservation
+ *    below, so the two stay the same bar.
+ */
+export interface ReplayOpts {
+  selectRule?: (ticks: ReplayTick[], i: number) => number | null;
+  ignoreHouseEdge?: boolean;
+  /**
+   * How a `selectRule` returning null is read. Default (false, and the frozen behavior) = "no opinion, use the
+   * forecast argmax". True = "no signal at this tick, DO NOT ENTER — try the next tick".
+   *
+   * This matters more than it looks. A market-signal arm that falls back to argmax(houseProb) whenever its rule
+   * is silent is not a market-signal arm — it is a BLEND of the market rule and the forecast control, and the
+   * contamination is worst exactly where the rule is weakest. It also makes a "wait for the signal" rule
+   * expressible at all (e.g. a momentum rule that needs a prior tick before it can say anything).
+   */
+  requireRuleTarget?: boolean;
+}
+
 const NOT_EXECUTED = (reason: string): BracketTrade => ({
   entryAgeH: null,
   entryPrice: NaN,
   isMaker: false,
+  entryBestBid: NaN,
+  entryExecBid: NaN,
+  entryDepthUsd: NaN,
+  entrySellbackDepthUsd: NaN,
   entryLabel: '',
+  bucketIdx: -1,
+  wouldHaveWonAtResolution: null,
   exitReason: reason,
   exitPrice: NaN,
   netPnlUsd: 0,
@@ -212,11 +271,16 @@ export interface EntryFill {
  * maker-EXIT engine (sim/opening-maker-exit-replay.ts) share ONE tested entry path — the entry leg is identical
  * across the two; only the exit differs. (selectEntries' requireFlatOpen:false is the post-falsification universe.)
  */
-export function enterAndFill(input: EventReplayInput, cfg: OpeningCfg): EntryFill | { reason: string } {
+export function enterAndFill(
+  input: EventReplayInput,
+  cfg: OpeningCfg,
+  opts?: ReplayOpts,
+): EntryFill | { reason: string } {
   if (!input || !Array.isArray(input.ticks) || input.ticks.length === 0) return { reason: 'no_ticks' };
   const ticks = input.ticks;
+  const ignoreHouseEdge = opts?.ignoreHouseEdge === true;
 
-  // ── (1) find the FIRST enterable tick + the forecast-center candidate ─────────────────────────────────
+  // ── (1) find the FIRST enterable tick + the center candidate ──────────────────────────────────────────
   // the OPTIONAL minEntryAgeH entry-timing gate (0/unset = off → byte-identical): skip ticks younger than the
   // floor; an unknown age fails the armed gate (fail closed — cannot verify "old enough").
   const minAgeH = cfg.minEntryAgeH ?? 0;
@@ -225,10 +289,26 @@ export function enterAndFill(input: EventReplayInput, cfg: OpeningCfg): EntryFil
   for (let i = 0; i < ticks.length; i++) {
     const t = ticks[i]!;
     if (minAgeH > 0 && !(fin(t.hoursSinceListing) && t.hoursSinceListing >= minAgeH)) continue;
-    const cands = selectEntries(captureOf(input, t), cfg, new Date(t.capturedAt), { requireFlatOpen: false });
+    // the OPTIONAL market-signal target (unset = the frozen forecast argmax). ticks.slice(0, i + 1) is the
+    // no-look-ahead enforcement: the rule is handed a COPY that ends at the current tick.
+    const target = opts?.selectRule ? opts.selectRule(ticks.slice(0, i + 1), i) : null;
+    // a silent rule under requireRuleTarget means "no signal yet", NOT "use the forecast" — skip the tick.
+    if (opts?.requireRuleTarget === true && opts.selectRule && !fin(target)) continue;
+    const cands = selectEntries(captureOf(input, t), cfg, new Date(t.capturedAt), {
+      requireFlatOpen: false,
+      ...(fin(target) ? { targetIdx: target } : {}),
+      ...(ignoreHouseEdge ? { ignoreHouseEdge: true } : {}),
+    });
     if (cands.length > 0) {
-      // the forecast CENTER = the highest-modelProb (argmax houseProb) candidate; ONE entry per event.
-      chosen = cands.reduce((a, b) => (b.modelProb > a.modelProb ? b : a));
+      // Default (no explicit target): the forecast CENTER = the highest-modelProb (argmax houseProb) candidate.
+      // With an explicit market-signal target: the TARGET bucket itself when selectEntries admitted it (the
+      // centerHalfWidth neighbours are still emitted and still enterable, but the signal named ONE bucket —
+      // buying a neighbour instead would silently re-introduce a different selection rule). Falls back to the
+      // argmax-modelProb reduce when the target itself failed a gate (which is NaN-total: NaN > NaN is false,
+      // so an all-NaN candidate set deterministically keeps the first/lowest idx). ONE entry per event.
+      chosen =
+        (fin(target) ? cands.find((c) => c.bucketIdx === target) : undefined) ??
+        cands.reduce((a, b) => (b.modelProb > a.modelProb ? b : a));
       entryIdx = i;
       break;
     }
@@ -254,7 +334,11 @@ export function enterAndFill(input: EventReplayInput, cfg: OpeningCfg): EntryFil
       // the OPTIONAL no-chase guard (unset = off → byte-identical): never take a book that ran away past the
       // reservation the entry decision was priced at — retry when it comes back inside, else never_filled.
       if (cfg.noChaseTakerFallback === true) {
-        const reservation = Math.min(cfg.maxEntryPrice, chosen.modelProb - cfg.entryEdgeMargin);
+        // the same bar the entry decision passed — which under ignoreHouseEdge is the hard cap alone (a NaN
+        // modelProb would otherwise make `liveAsk > NaN` false and disable the guard entirely).
+        const reservation = ignoreHouseEdge
+          ? cfg.maxEntryPrice
+          : Math.min(cfg.maxEntryPrice, chosen.modelProb - cfg.entryEdgeMargin);
         if (liveAsk > reservation) continue;
       }
       fill = paperFill(chosen, chosen.execAsk, liveAsk, cfg, false);
@@ -288,8 +372,13 @@ export function enterAndFill(input: EventReplayInput, cfg: OpeningCfg): EntryFil
  *
  * cfgWithTp overrides cfg.tpDeltaPp with the swept value. bestReachableBid is a SEPARATE report-only pass.
  */
-export function replayEvent(input: EventReplayInput, cfg: OpeningCfg, tpDeltaPp: number): BracketTrade {
-  const ef = enterAndFill(input, cfg);
+export function replayEvent(
+  input: EventReplayInput,
+  cfg: OpeningCfg,
+  tpDeltaPp: number,
+  opts?: ReplayOpts,
+): BracketTrade {
+  const ef = enterAndFill(input, cfg, opts);
   if ('reason' in ef) return NOT_EXECUTED(ef.reason);
   const ticks = input.ticks;
   const cfgTp: OpeningCfg = { ...cfg, tpDeltaPp };
@@ -299,6 +388,8 @@ export function replayEvent(input: EventReplayInput, cfg: OpeningCfg, tpDeltaPp:
   const stakeUsd = fill.price * fill.shares;
   const entryFee = fill.feeUsd;
   const entryAgeH = fin(ticks[fillIdx]!.hoursSinceListing) ? ticks[fillIdx]!.hoursSinceListing : null;
+  // the FILL-tick book of the bucket we bought — report-only, for the inverse-side (NO) arm's cost basis + capacity.
+  const fillBook = bucketOf(ticks[fillIdx]!, chosen.bucketIdx);
 
   // ── bestReachableBid: a SEPARATE report-only pass over EVERY post-fill tick (NEVER a decision input) ───
   let best = Number.NEGATIVE_INFINITY;
@@ -396,7 +487,16 @@ export function replayEvent(input: EventReplayInput, cfg: OpeningCfg, tpDeltaPp:
     entryAgeH,
     entryPrice: fill.price,
     isMaker,
+    entryBestBid: numOrNaN(fillBook?.bestBid),
+    entryExecBid: numOrNaN(fillBook?.execBid),
+    entryDepthUsd: numOrNaN(fillBook?.depthUsd),
+    entrySellbackDepthUsd: numOrNaN(fillBook?.sellbackDepthUsd),
     entryLabel: chosen.label,
+    bucketIdx: chosen.bucketIdx,
+    wouldHaveWonAtResolution:
+      input.resolution.gradingMismatch || input.resolution.winnerIdx == null
+        ? null
+        : input.resolution.winnerIdx === chosen.bucketIdx,
     exitReason,
     exitPrice,
     netPnlUsd,
@@ -417,8 +517,15 @@ export function replayPanel(
   events: EventReplayInput[],
   cfg: OpeningCfg,
   tpValues: number[],
-  verdictOpts: VerdictOpts = {},
+  verdictOpts: VerdictOpts & ReplayOpts = {},
 ): BracketPanel {
+  // the selection seam rides on the same opts bag as the verdict flags (one call site, one object); it is
+  // forwarded to replayEvent and IGNORED by openingVerdict, which reads only its own keys.
+  const replayOpts: ReplayOpts = {
+    selectRule: verdictOpts.selectRule,
+    ignoreHouseEdge: verdictOpts.ignoreHouseEdge,
+    requireRuleTarget: verdictOpts.requireRuleTarget,
+  };
   const evs = (Array.isArray(events) ? events : []).filter((e): e is EventReplayInput => !!e && Array.isArray(e.ticks));
   // the headline TP (cfg.tpDeltaPp) is ALWAYS in the sweep — that row is the pre-registered gate even if a caller
   // passes a --tps set without it. de-dup + sort for a stable table.
@@ -435,7 +542,7 @@ export function replayPanel(
     const realized: BracketTrade[] = []; // bracket-exited or resolution-settled only — the §9R-E gate basis
     const panel: OpeningMarketResult[] = [];
     for (const e of considered) {
-      const t = replayEvent(e, cfg, tp);
+      const t = replayEvent(e, cfg, tp, replayOpts);
       if (t.executed && Number.isFinite(t.netReturn) && Number.isFinite(t.netPnlUsd)) {
         scored.push(t);
         // REALIZED-ONLY gate: exclude still-in-flight, conservatively mark-to-bid positions (mtm_unresolved /

@@ -367,22 +367,43 @@ function drawUnit(t: number, i: number, salt: number): number {
   return hashUnit(key);
 }
 
-/** The clustered-by-city mean-return 95% t-CI over a panel (the crossVenueVerdict idiom). */
+/**
+ * The clustered mean 95% t-CI (the crossVenueVerdict idiom), generalized over the cluster key AND the
+ * measured value: cluster means → the t-CI on THOSE, so the independent unit is the cluster, not the row.
+ *
+ * EXPORTED ON PURPOSE. The frozen §9R-E gate below is one caller; the post-hoc arms scored on the SAME
+ * executed population (the inverse-side / hold-to-resolution arithmetic in
+ * `scripts/research/convergence-side-arms.ts`) are another. They MUST share this implementation rather than
+ * copy the formula — a re-derived CI that drifts by a t-table row or a Bessel correction would make an arm
+ * look narrower than the gate that killed it, which is the exact failure mode this project audits for. Note
+ * the t-table below is `tCrit`, NOT `selector-learn.tCritical95`: they disagree at df 11–14, and the gate's
+ * is the frozen one. Do not "unify" them without re-running every recorded verdict.
+ */
+export function clusteredMeanCi<T>(
+  rows: readonly T[],
+  keyOf: (r: T) => string,
+  valueOf: (r: T) => number,
+): { groupMeans: number[]; mean: number; ciLow: number; ciHigh: number } {
+  const keys = [...new Set(rows.map(keyOf))];
+  const groupMeans = keys.map((k) => {
+    const cr = rows.filter((r) => keyOf(r) === k);
+    return cr.reduce((a, r) => a + valueOf(r), 0) / cr.length;
+  });
+  const C = groupMeans.length;
+  const mean = C > 0 ? groupMeans.reduce((a, v) => a + v, 0) / C : NaN;
+  const variance = C > 1 ? groupMeans.reduce((a, v) => a + (v - mean) ** 2, 0) / (C - 1) : 0;
+  const se = Math.sqrt(variance / Math.max(1, C));
+  const t = tCrit(C - 1);
+  return { groupMeans, mean, ciLow: mean - t * se, ciHigh: mean + t * se };
+}
+
+/** The clustered-by-city mean-RETURN CI the gate runs on (`cityMeans` name pinned for its call sites). */
 function clusteredCiBy(
   rows: OpeningMarketResult[],
   keyOf: (r: OpeningMarketResult) => string,
 ): { cityMeans: number[]; mean: number; ciLow: number; ciHigh: number } {
-  const keys = [...new Set(rows.map(keyOf))];
-  const cityMeans = keys.map((k) => {
-    const cr = rows.filter((r) => keyOf(r) === k);
-    return cr.reduce((a, r) => a + r.netReturn, 0) / cr.length;
-  });
-  const C = cityMeans.length;
-  const mean = C > 0 ? cityMeans.reduce((a, v) => a + v, 0) / C : NaN;
-  const variance = C > 1 ? cityMeans.reduce((a, v) => a + (v - mean) ** 2, 0) / (C - 1) : 0;
-  const se = Math.sqrt(variance / Math.max(1, C));
-  const t = tCrit(C - 1);
-  return { cityMeans, mean, ciLow: mean - t * se, ciHigh: mean + t * se };
+  const { groupMeans, mean, ciLow, ciHigh } = clusteredMeanCi(rows, keyOf, (r) => r.netReturn);
+  return { cityMeans: groupMeans, mean, ciLow, ciHigh };
 }
 
 /** the frozen §9R-E CI — CITY clusters (this wrapper pins the historical behavior byte-for-byte). */
@@ -429,11 +450,36 @@ export function isFlatOpen(
 // 2 · selectEntries — pick the buckets to buy at the flat open (F-OC-03 / §9R-B)
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 
+/**
+ * OPTIONAL selection overrides (the 2026-07-24 MARKET-SIGNAL seam). Both default off ⇒ every existing caller
+ * is byte-identical to the frozen forecast-seeded behavior.
+ *
+ *  - targetIdx: use an EXPLICIT center bucket index instead of `argmax(houseProb)`. The convergence-capture run
+ *    picks the center from the MARKET's own revealed signal (bid leader / market mode / floor-adjacent /
+ *    momentum — scripts/research/convergence-capture-score.ts), not from our forecast. An explicit target IS a
+ *    valid center even when NO bucket carries a houseProb, so the `no_house_prob` guard must not fire on it.
+ *  - ignoreHouseEdge: drop the model-edge requirement — admit buckets with a null houseProb and price the entry
+ *    reservation at the hard `maxEntryPrice` cap alone (instead of min(cap, houseProb − entryEdgeMargin)). This
+ *    is what makes a market-signal target enterable at all: the bucket the BOOK points to routinely has no
+ *    forecast prob, and gating it on our model would silently re-introduce the forecast selection we are trying
+ *    to remove. `modelProb`/`edge` on the emitted candidate then carry NaN when unknown (every downstream
+ *    consumer — bracketDecision's tpAtModelProb, the no-chase reservation — is NaN-total by comparison, never
+ *    by division).
+ *
+ * EVERY other gate (city allowlist, flat-open, runway, centerHalfWidth, depth floor, execAsk > 0, the 20% price
+ * cap) is preserved in ALL modes — selection is the only moving part, which is what keeps the comparison clean.
+ */
+export interface SelectOpts {
+  requireFlatOpen?: boolean;
+  targetIdx?: number;
+  ignoreHouseEdge?: boolean;
+}
+
 export function selectEntries(
   cap: OpeningCapture,
   cfg: OpeningCfg,
   now: Date,
-  opts?: { requireFlatOpen?: boolean },
+  opts?: SelectOpts,
 ): EntryCandidate[] {
   // universe + flat-open gate (§9R-B). NO 24h-volume gate (CAP-2, 2026-06-27): the thesis ENTERS at the flat
   // OPEN, where a freshly-listed market has ~$0 traded volume BY CONSTRUCTION — a vol floor would disqualify the
@@ -462,25 +508,37 @@ export function selectEntries(
   const runwayMin = (timeStopAt.getTime() - now.getTime()) / 60_000;
   if (!(runwayMin >= cfg.minHoldRunwayMin)) return []; // past_or_near_timestop
 
-  // modeIdx = argmax of the LIVE-aligned houseProb (W6b — never a dist-space index)
+  // the CENTER index. Default (frozen): modeIdx = argmax of the LIVE-aligned houseProb (W6b — never a
+  // dist-space index). An explicit opts.targetIdx (the market-signal seam) REPLACES it — and is a valid
+  // center even with no houseProb anywhere, so the no_house_prob guard below is skipped for it.
+  const ignoreHouseEdge = opts?.ignoreHouseEdge === true;
+  const explicitTarget = fin(opts?.targetIdx) ? opts.targetIdx : null;
   let modeIdx = -1;
-  let modeProb = Number.NEGATIVE_INFINITY;
-  for (const b of cap.buckets) {
-    if (fin(b.houseProb) && b.houseProb > modeProb) {
-      modeProb = b.houseProb;
-      modeIdx = b.idx;
+  if (explicitTarget != null) {
+    modeIdx = explicitTarget;
+  } else {
+    let modeProb = Number.NEGATIVE_INFINITY;
+    for (const b of cap.buckets) {
+      if (fin(b.houseProb) && b.houseProb > modeProb) {
+        modeProb = b.houseProb;
+        modeIdx = b.idx;
+      }
     }
+    if (modeIdx < 0) return []; // no_house_prob — unseeded / quality-gate-failed (C1/F15)
   }
-  if (modeIdx < 0) return []; // no_house_prob — unseeded / quality-gate-failed (C1/F15)
 
   const out: EntryCandidate[] = [];
   for (const b of cap.buckets) {
     if (Math.abs(b.idx - modeIdx) > cfg.centerHalfWidth) continue; // mode ± centerHalfWidth
-    if (!fin(b.houseProb)) continue; // no_house_prob for this bucket
+    if (!ignoreHouseEdge && !fin(b.houseProb)) continue; // no_house_prob for this bucket
     if (!fin(b.execAsk) || b.execAsk <= 0) continue; // no executable ask (a 0/neg ask → Infinity/neg shares — CORE2-1)
     if (!(b.depthUsd >= cfg.depthFloorUsd)) continue; // below_depth_floor
 
-    const reservation = Math.min(cfg.maxEntryPrice, b.houseProb - cfg.entryEdgeMargin);
+    // the entry reservation: the hard cap alone when the model edge is ignored (the market-signal modes), else
+    // the frozen min(cap, houseProb − entryEdgeMargin). Both still enforce the 20% hard cap.
+    const reservation = ignoreHouseEdge
+      ? cfg.maxEntryPrice
+      : Math.min(cfg.maxEntryPrice, b.houseProb! - cfg.entryEdgeMargin);
     if (!(b.execAsk <= reservation)) continue; // ask_above_reservation (also enforces the 20% hard cap)
 
     const targetUsd = cfg.perPositionUsd;
@@ -501,8 +559,11 @@ export function selectEntries(
       negRisk: cap.negRisk,
       resolvesAt: cap.resolvesAt,
       execAsk: b.execAsk,
-      modelProb: b.houseProb,
-      edge: b.houseProb - b.execAsk,
+      // NaN when the bucket carries no forecast prob (only reachable with ignoreHouseEdge) — every downstream
+      // consumer compares, never divides: bracketDecision's tpAtModelProb branch is false on NaN (so the TP
+      // falls back to entry+tpDeltaPp) and the no-chase reservation mirrors the ignoreHouseEdge rule.
+      modelProb: fin(b.houseProb) ? b.houseProb : NaN,
+      edge: fin(b.houseProb) ? b.houseProb - b.execAsk : NaN,
       makerLimit,
       targetShares,
       targetUsd,

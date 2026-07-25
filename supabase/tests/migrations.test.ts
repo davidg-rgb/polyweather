@@ -531,6 +531,7 @@ describe('migrations 0001–0010', () => {
       // reader, live /events wants latest ~44/event ≈ <2d). market_rewards + model_stats_history stay OUT of
       // the cron (archive-gated by the local scripts/ops/archive-retention.ts). See STORAGE-TIERING.md.
       '0116_retention_edge_evals_7d.sql',
+      '0117_cheap_early_paper_loop.sql',
     ]);
   });
 });
@@ -1017,6 +1018,7 @@ describe('0034: internal-RPC lockdown — anon/authenticated revoked except the 
     'dash_city_sim',  // 0070: /paper-trade multi-city paper-trade head-to-head operator read
     'dash_maker_exit',  // 0073: /maker-exit forward maker-exit paper loop operator read
     'dash_maker_exit_history',  // 0079: /maker-exit assumptions-over-time sparkline read (gate-day instrumentation)
+    'dash_cheap_early',  // 0117: /cheap-early forward cheap-early-entry paper loop operator read
     'dash_city_forecast',  // 0080: /paper-trade pre-placement forecast (current-bet box) operator read
     'dash_trading',  // 0082: /trading activation + risk console operator read (config + preflight + open orders + today spend)
     'trade_config_set',  // 0082: operator-guarded trade_config write (self-guards via operator_guard, like every operator_* RPC)
@@ -1165,6 +1167,9 @@ describe('pg_cron registrations (§7.22, W11)', () => {
       'city-paper-trade':         '0 10 * * *',
       // 0073: forward maker-exit paper view snapshot (http_post edge-fn job; W11-checked).
       'maker-exit-panel':         '*/15 * * * *',
+      // 0117: forward cheap-early-entry paper view snapshot (http_post edge-fn job; W11-checked). Hourly on a
+      // clean :47 minute lane (NOT :00/:15/:30/:45 — the Micro-pileup gotcha; :47 collides with no other cron).
+      'cheap-early-panel':        '47 * * * *',
       // 0086: Google-picks-bucket forward-paper view snapshot (http_post edge-fn job; W11-checked).
       'google-paper-panel':       '*/15 * * * *',
       // 0087→0089: continuous executable-depth capture into market_depth (http_post edge-fn job; W11-checked).
@@ -1191,7 +1196,7 @@ describe('pg_cron registrations (§7.22, W11)', () => {
       // contended/occupied minute lane (C15).
       'account-snapshot':         '9,39 * * * *',
     };
-    expect(jobs.length).toBe(37);
+    expect(jobs.length).toBe(38);
     for (const j of jobs) {
       expect(j.schedule, `schedule for ${j.jobname}`).toBe(expected[j.jobname]);
     }

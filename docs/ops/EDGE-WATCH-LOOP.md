@@ -21,6 +21,127 @@
 
 _Claude keeps this block current every material cycle. Whole status in 20 seconds._
 
+> **⟳ Idle heartbeat (rolled in place each quiet cycle — no new bullet for zero-change sweeps):** 2026-07-25
+> **~10:53Z — GREEN.** Buy lane mode live / lead_window (next candidate window 07-26 00:00Z; cash **$97.39**; 2
+> benign orphan `placed` rows) · all crons 0-fail/24h (only the aging 07-24 metar transient) · DB **2072 MB** /
+> captures **627 MB** (under the 3.5 GB / 2 GB bars) · mode live · eff-monitor **S1 KILL** (08:25Z) · 0 unsent
+> alerts. Nothing needs the operator (07-31 override renewal re-surfaces ~07-28). Material events get their own
+> dated bullet below.
+
+- **▶▶ 2026-07-25 ~06:42Z (loop wake, +1h) — STILL ALL-GREEN; one routine live fill confirms the lane is actively
+  working.** A 07-25 city market entered the [2,12]h window between cycles and the lane bought it: **partial FAK fill
+  06:20:06Z, 18 of 28 sh @ 0.14 avg = $2.52** (market 0x371c…f9dd, one of the 4 allowlisted cities). Within envelope
+  by construction — 0.14 ≪ the 0.30 cap, $2.52 < the $5 stake, passed the allowlist/dead-pick/favorite-veto gates —
+  and `status='partial'` is a terminal recorded fill (the FAK killed the unfilled 10 sh), NOT dangling. Everything
+  else steady vs the 05:40Z sweep: jobs 0-fail/24h (the same 1 transient metar blip in-window) · 0 unsent alerts ·
+  DB **2053 MB** / captures **612 MB** (under bars) · the 2 benign orphan `placed` rows unchanged · mode live ·
+  Google panel 6 dates (sawtooth). Efficiency-monitor: today's Action is drift-pending (`gh run list` shows its
+  scheduled fire lands stably ~08:44Z, not 06:17Z — so 07-24 08:44Z is still the latest snapshot; **not a skip**, no
+  dispatch). Nothing needs you; 07-31 override renewal re-surfaces from ~07-28.
+  - **↳ ~07:46Z (+1h): quiet, still green.** No new fills (lead_window; 06:20Z partial stands, cash **$97.39** =
+    $99.94 − the $2.52 fill, accounting checks out). DB **2058 MB** / captures **616 MB** (under bars). Google panel
+    ticked **6→7 dates** (27 mkts / 12 cities — INSUFFICIENT still, <40-market bar; the sawtooth re-accruing).
+    A momentary `opening-capture:1` in the raw fail count was an **in-flight `running` row**, not a failure (C96
+    false-positive: last 12 runs all ok, direct fail-query empty) — captures 100% healthy. 2 orphan `placed` rows
+    and mode live unchanged; eff-monitor Action still pending its ~08:44Z fire.
+  - **↳ ~08:48Z (+1h): green; today's eff-monitor Action LANDED (08:25Z) → S1 KILL n=5,757** (the well-powered
+    null holds). No new fills (lead_window, cash **$97.39** unchanged). DB **2063 MB** / captures **620 MB** (under
+    bars). Only real cron blip in 24h is still the aging 07-24 18:04Z metar transient (fail filter now excludes
+    in-flight `running` rows, so the raw count is clean). Mode live · 2 orphans · 0 unsent alerts — all unchanged.
+- **▶▶ 2026-07-25 ~05:40Z (loop wake — first cycle after the convergence-capture close) — ALL-GREEN sweep; the
+  live lane is still confirming the KILL with real money and is HEALTHY; nothing needs you today.** ① **Buy lane:**
+  mode live, interlock **ok:true** (override id=2 → **07-31 00:00Z**), 4-city allowlist, cap 0.30,
+  `stopAfterFirstSuccess` false (continuous), `laneHalted` false; tick clean (**344 ok / 0 fail / 24h**, latest
+  05:36Z). No candidates now = `lead_window` (all 8 markets 30.5h/54.5h to close; next window ~**07-26 00:00Z**).
+  Recent fills all within per-city caps: 07-24 @0.23 (21.7 sh) + @0.27 (18 sh) · 07-23 @0.34 + @0.42 · 07-22 ×3.
+  **Money-safe:** cash **$99.94**, positions_value **$0.00** (12 dust positions), no unaccounted exposure.
+  **One benign housekeeping note (no money, no action needed):** 2 orphan `placed`/zero-fill FAK rows (07-23 04:18Z,
+  07-24 07:48Z) — the fill-poll threw at placement (same class as the 07-19 wellington incident), so they skipped
+  the inline zero-fill→canceled adjudication AND sit outside the reconcile sweep (`bot_order_list_dangling` only
+  covers `intent`+no-order_id). They filled nothing (cash is *up* since 07-22, not down), their markets have
+  resolved, and they block nothing live. This is the **conservative-safe** outcome by design — an orphan `placed`
+  row over-blocks rather than risking a double-place — so it is NOT broken; logged as a LOW-severity build-queue
+  item (§7④), not rushed into the live double-place guard. ② **Cron health:** all 19 jobs 0-fail/24h except **1**
+  transient `metar-nowcast` fail (07-24 18:04Z, `aviationweather.gov` upstream, self-recovered — 47 ok since);
+  **0 unsent alerts / 7d**; deadmen quiet. ③ **Storage:** DB **2046 MB** · opening_captures **606 MB** — far under
+  the 3.5 GB / 2 GB bars (~80 MB/day regrowth); no action, retention re-runs ~weekly. ④ **Forward instruments:**
+  efficiency-monitor **S1 KILL** (n=5,785 / 45c / 36d, mean −0.85% — well-powered null, still tightening; snapshot
+  07-24 08:44Z, today's Action not yet due) · **S2 INSUFFICIENT**. **Google panel INSUFFICIENT** (26 scored / 12
+  cities / **6 dates** — the expected post-prune sawtooth, just under the 7-date bar, re-accruing; non-load-bearing,
+  #12 dead). ⑤ **mode = live** (unchanged; the authorized live test, not a reopen). **YOURS — one click, not due
+  yet:** the 07-31 override renewal (I re-surface it from ~07-28). Everything else runs unattended.
+- **▶▶ 2026-07-24 (later) — the CONVERGENCE-CAPTURE run is COMPLETE (the entry below prepped it; this ran it).
+  All three arms closed, all KILL-or-NULL. Signal #12 stays dead; nothing needs you from this run.** ① **Market-signal
+  SELECTION** (buy the bucket the market's own bids point to, sell into convergence — your exact framing):
+  **KILL, 14 of 14 cells** (frozen 10-city gate + an exploratory 45-city panel, headline TP 0.25) — every clustered CI
+  wholly negative, winFrac **8.7–32.7%** against a 0.50 bar. ② **Betting NO** on that bucket: a **powered NULL** —
+  straddles zero on every powered cell (45c M0-pure **−0.83¢/share**, CI **[−3.77¢, +1.82¢]**, seeded bootstrap
+  agrees). ③ **HOLD to resolution**: **KILL**, −4.30¢ to −5.57¢/share, CI excludes zero. **One-line mechanism:** the
+  favorite-longshot bias on the cheap bucket is **real at +2–3¢/share** and the **2.2–2.3¢ half-spread a taker crosses
+  cancels it almost exactly**, with the 0.55–0.58¢ fee eating the residual — *maker edge, not taker edge*, the same
+  wall as CONVERGENCE-TUNING, now measured from the inverse side. Your premise came back falsified the other way:
+  **market selection is WORSE than our forecast at picking winners** (pure winFrac M1 13.8% / M2 15.9% / M4 12.6% vs
+  M0 24.5%; unfiltered ladder 31.3% ours vs 21.8/25.5/20.9%). Panel: two archives merged → **1,179 events / 45 cities
+  / 27 dates**, 100% resolution coverage. **Two methodology catches worth more than the numbers:** a `selectRule`
+  returning `null` silently meant *"fall back to forecast argmax"*, so M1–M4 were partly becoming **M0** — without the
+  `requireRuleTarget` fix the run would have reported "market selection ≈ neutral", a pure artifact; and an
+  underpowered constant-outcome cell read as a screaming **+16¢ PASS** (n=10, all 10 won → zero outcome variance, the
+  t-CI collapses to measuring price dispersion) — now guarded **in the tool**, and under that guard **no cell anywhere
+  in the 14 runs shows a readable positive**. Both pinned by tests. Suite **3,421 green** (+24, no regression),
+  typecheck clean. Read-only throughout — nothing placed, no credentials read. Full record:
+  **`docs/ops/CONVERGENCE-CAPTURE-RESULTS.md`**; folded into `FINDINGS.md` + `SIGNAL-BACKLOG.md` §13-R. **Live lane +
+  Google panel keep running unchanged; the 07-31 override renewal is still the one operator click.**
+- **▶▶ 2026-07-24 (operator: "the play is to bet what the MARKET will guess … catch it cheap early and sell
+  into likelihood … prep another analytics run for next session — switching model, clean context") — HANDOFF
+  PREPPED, not run.** Verified (last session) the Google "win rate" is a CONVERGENCE rate, not forecast
+  accuracy (engine `google-bucket-replay.ts:394-426`: 93% of wins = `take_profit` sells before resolution;
+  hold-to-resolution hit ~5%). New run tests the operator's exact framing: **select the buy bucket from the
+  MARKET's bids (not our forecast) + sell into convergence.** Only code change = the `selectEntries` seam
+  (`opening-convergence.ts:432`, argmax(houseProb) → market-signal). Engine/data/gate all exist
+  (`opening-bracket-replay.ts` + `openingVerdict` + the 835-event `opening-captures-archive` + `market_events`
+  resolution). Turnkey doc: **`docs/ops/CONVERGENCE-CAPTURE-HANDOFF.md`** (self-contained for a fresh model;
+  cites the KILLs so it doesn't redo dead work; honest prior = likely KILL — signal #12's home turf, taker
+  spread eats it / maker won't fill). Memory + index updated so next session's startup surfaces it. Read-only,
+  boundary intact. **Live lane + Google panel keep running unchanged; override renewal (07-31) still the one
+  operator click.**
+- **▶▶ 2026-07-23 ~12:00Z (operator: "we buy bad positions … some of our limits are holding our win rate
+  back" → "let it run a couple more days, improve what can be improved") — DIAGNOSED + verified; NO edge fix
+  exists, so improvement = the anti-junk guards (confirmed live) + a durable record.** Powered the operator's
+  hypothesis on the **624-bet / 4-city / 41-day** `city_paper_bets` corpus (live lane is n=13): the traded
+  edge is a **day-clustered null, mean −0.66%, 95% CI [−5.3%, +4.0%]**, net −$96 at a 63% win rate. Mechanism:
+  the lane enters at ~00:02Z = **12h before close** (far edge of [2,12]h) = pre-floor, max-uncertainty →
+  market prices our bucket cheap → we buy a low-prob bucket → it "realises faulty soon after." **Win rate
+  rises ≈1:1 with price** (≥0.60 favorites win 80% but are the biggest loser, −$237) and ≈1:1 with entry hour
+  (38%→85% as the floor forms, ask tracks it) → **win rate is a purchasable vanity metric; no cap/lead setting
+  adds profit** — signal #12, killed six ways (full write-up: `BUY-TABLE-LIVE.md` §2026-07-23). **What IS
+  improvable — verified live 2026-07-23:** the guards that stop pathological buys are firing —
+  `deadPickMinBid 0.02` + `favoriteVetoProb 0.85` (0115), 0111 dead-bucket floor, hard $0.01 min ask; post-guard
+  fills sit 0.26–0.44, no lottery tickets since. Did NOT build per-bet live grading (buy-table markets aren't in
+  `market_events`; winner source is the 2-day-pruned capture RPC — machinery not worth it for a dead signal /
+  n=13; the wallet aggregate + the paper corpus already answer it). **Operator-only levers surfaced, not
+  actioned** (they change the scoreboard, not the P&L): narrow the lead window / add a min-ask floor. **Decision:
+  run continues (operator), config unchanged; reassess ~07-25.** Lane state unchanged: mode live, override →
+  07-31, 4-city, cap 0.30, continuous; 3 fills 07-22 + 2 fills/1 pending 07-23 within caps.
+- **▶▶ 2026-07-22 ~18:00Z (loop wake — Cycle rota) — ALL-GREEN sweep; the continuous live lane is quietly
+  confirming the KILL with real money (≈−$30 over 5 days); the ONE upcoming click is the 07-31 override
+  renewal.** ① **Buy lane healthy:** mode live, interlock **ok:true** (override id=2 active → expires
+  **2026-07-31 00:00Z**), 4-city allowlist, `stopAfterFirstSuccess` false (continuous), `laneHalted` false;
+  tick 17:43Z clean, **344 ok / 0 fail / 24h**. **3 fills at the 07-22 00:02Z window** — the FIRST full
+  window under the 0115 dead-bucket guards: @0.32/15sh · @0.26/19sh · @0.40/12sh, all within their per-city
+  caps ($14.61 staked), resolved 12:00Z, ≥1 booked loss. Quiet now (all 8 markets outside the [2,12]h lead
+  window; next ~**07-23 00:00Z**). ② **Jobs:** all 19 crons **0-fail/24h**, 0 error rows/48h, deadmen quiet,
+  efficiency-monitor Action fired (snapshot 08:46Z). ③ **Storage:** DB **1744 MB** · opening_captures
+  **362 MB** — far under the 3.5 GB / 2 GB bars (~110 MB/day regrowth off the 07-21 reclaim floor of 1634 MB);
+  no action, retention re-runs ~weekly. ④ **Forward instruments:** efficiency-monitor **S1 KILL** (n=5,487 /
+  45c / 34d, mean −0.51% CI [−1.17%, +0.14%], zsMC 2.0% — tightening) · **S2 INSUFFICIENT** (15 troughs).
+  **Google panel: INSUFFICIENT (15 scored / 8 cities / 4 dates)** — dropped **53→15** after the 07-21 captures
+  prune (it replays opening_captures; the 2-day retention knocked its scorable window back to 07-19..07-22).
+  **NOT a regression** — it re-accrues dates between the ~weekly prunes (a sawtooth around the 7-date bar), and
+  #12 is dead so its verdict isn't load-bearing. ⑤ **mode = live** (unchanged; the authorized live test, not a
+  reopen). **YOURS — one click:** the 07-31 override renewal (I re-surface it from ~07-28). **DECISION FOR
+  YOU:** the lane is now down ≈**$30 real** since the 07-18 first fill (start $107.80 → cash $77.68 + $0.02
+  dust, 10 dust positions), staking ~$51 over 5 days — plumbing AND the KILL are both proven live now; keep it
+  running to 07-31 or wind it down early is your call (I never touch caps/allowlist/mode).
 - **▶▶ 2026-07-22 ~00:10Z (operator: "Run the multi-agent code review protocol") — 15-agent adversarial review of
   today's storage builds → 1 HIGH data-loss finding + 5 LOW, ALL fixed + re-verified.** Workflow: 6 dimension
   reviewers → adversarially refute each finding (9 raw → 6 confirmed). **HIGH (real):** the incremental gate
@@ -378,7 +499,10 @@ _Claude keeps this block current every material cycle. Whole status in 20 second
    run the C96 archive→prune→VACUUM-FULL playbook off-peak, archive verified before any delete, board
    log first. Baseline C19: DB 2,376 MB · captures 832 MB (~85 MB/day).
 4. **Forward instruments.** City race: 10:00/13:50/20:45Z lanes placed + grading current. Google panel
-   accruing toward n≥40. Efficiency-monitor S1/S2 verdict drift. `/paper-trade`, `/monitor` RPCs healthy.
+   toward n≥40 — **but note (07-22): it replays opening_captures, so the 2-day retention prune caps its
+   scorable window; INSUFFICIENT between the ~weekly prunes is EXPECTED (sawtooth around the 7-date bar),
+   NOT breakage — #12 is dead so its verdict is non-load-bearing.** Efficiency-monitor S1/S2 verdict drift.
+   `/paper-trade`, `/monitor` RPCs healthy.
 5. **Tripwires.** ⑤ (trade_config.mode) every cycle; ①–④ sweep every ~2–3 days.
 6. **Watch items.** ~~price_cap 0.40~~ **CLOSED** (operator lowered to 0.30 at the 07-18 continuous-buying
    config) · **gate override expires 07-31 00:00Z** → surface the renewal from ~07-28 (the one live click) ·
@@ -388,8 +512,18 @@ _Claude keeps this block current every material cycle. Whole status in 20 second
    C20** (deployed + tick-verified + merged, PR #24). ② ~~google-paper-panel incremental replay~~
    **DONE C34** (0103 applied + fn deployed ~10:15Z 07-17; first incremental tick verification = the
    next :24 run — check stats.incremental=true + duration collapse; then PR to main). ③ opening_captures
-   archive prep (dump tooling dry-run so the prune is one command when needed). ④ Anything newly broken
-   beats the queue. Suite + typecheck green after every change; board updated every material cycle.
+   archive prep (dump tooling dry-run so the prune is one command when needed). ④ **[NEW, 07-25, LOW]
+   orphan zero-fill FAK reconcile gap.** When the fill-poll THROWS at placement (net/timeout), the row is
+   left `status='placed'`+order_id/0-fill and the inline F1 zero-fill→canceled adjudication (handler.ts:1086,
+   acts on the SAME-tick result only) is skipped; the reconcile sweep never re-examines it because
+   `bot_order_list_dangling` (0082) filters `status='intent' AND order_id IS NULL`. Result: a permanent orphan
+   `placed` row that BLOCKS re-entry into that one market for the rest of its window (2 seen: 07-23, 07-24;
+   money-safe, resolved). The **safe** fix (do NOT blind-cancel — that would erode the double-place guard):
+   widen the dangling candidate set to also include `placed AND size_matched=0 AND order_id IS NOT NULL` rows
+   older than N min, and branch the reconcile "freed" path so a posted-then-zero-filled row records `canceled`
+   (FAK died) not `failed` (never posted). Touches the LIVE money-path reconcile → do it deliberately with
+   venue-evidence tests, not reflexively; lane winds down 07-31 so it is genuinely optional. ⑤ Anything newly
+   broken beats the queue. Suite + typecheck green after every change; board updated every material cycle.
 
 **Escalation rules.** *Autonomous (do, then log):* code/test/cron fixes, edge-fn redeploys with in-session
 precedent (buy-table-tick, health-monitor, daily-digest), failed-daily re-runs, GH Action manual dispatch,

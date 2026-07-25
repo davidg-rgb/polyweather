@@ -43,6 +43,8 @@ export * from './sim/opening-maker-exit-replay.ts';
 export * from './sim/history-replay-ingest.ts';
 export * from './sim/opening-convergence-view.ts';
 export * from './sim/opening-maker-exit-view.ts';
+export * from './sim/cheap-early-entry-replay.ts';
+export * from './sim/cheap-early-entry-view.ts';
 export * from './sim/google-bucket-replay.ts';
 export * from './sim/google-bucket-view.ts';
 export * from './sim/city-scan-results.ts';
