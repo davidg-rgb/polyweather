@@ -22,13 +22,36 @@
 _Claude keeps this block current every material cycle. Whole status in 20 seconds._
 
 > **⟳ Idle heartbeat (rolled in place each quiet cycle — no new bullet for zero-change sweeps):** 2026-07-25
-> **~20:20Z — GREEN.** Buy lane mode live / lead_window (next candidate window 07-26 00:00Z; 0 new orders;
-> tick clean 20:13Z; 2 benign orphan `placed` rows) · all crons 0-fail/24h · DB **2123 MB** / captures
-> **661 MB** (under bars) · mode live · override id=2 → 07-31 · 0 unsent alerts · cheap-early panel accruing
-> (19:47Z ok) · synoptic lane CAPTURE-ONLY confirmed on consecutive ticks (obsLogged 38, no floor keys) ·
-> US floors METAR-grade post-refloor · daily obs top-up done. Nothing needs the operator (07-31 override
-> renewal re-surfaces ~07-28). Material events get their own dated bullet below.
+> **~23:30Z — GREEN.** Buy lane mode live / lead_window (next candidate window opens **00:00Z in ~30 min** —
+> next wake lands just after the 00:02Z first tick; interlock ok:true, override id=2 → 07-31; 0 new orders
+> since the 07-25 06:20Z partial; 2 benign orphan `placed` rows unchanged) · all crons 0-fail/24h (buy-tick
+> 344 ok · capture 287 · metar 48 · synoptic 23 capture-only · cheap-early 8 hourly · city race 3 lanes) ·
+> DB **2137 MB** / captures **673 MB** (under bars) · 0 unsent alerts · daily synoptic obs top-up done
+> (rota 6b, 9 new rows). Nothing needs the operator (07-31 override renewal re-surfaces ~07-28). Material
+> events get their own dated bullet below.
 
+- **▶▶ 2026-07-26 ~00:00Z (operator-directed handoff session: "Start from CITY-ORACLE-BUILDOUT-HANDOFF.md")
+  — BUILDS 1→2→3 EXECUTED COMPLETE on the resolution-oracle data layer (analytics product; no trading, no
+  §13 reopen; commits `3646c42`+`66c28e8` pushed; suite 212 files / 3,577 green).** ① **Build 1 (flagship):**
+  IEM archive extended **2021→2026** (45 stations, ~4.3M METAR/SPECI rows, 91,187 complete local days, every
+  city ≥3 calendar years) → the 45-city × 12-month **floor-formation climatology in RENDERED-INTEGER space**
+  (committed `core/sim/city-floor-climatology.ts`; `/cities` "When is the day decided?" strip). ② **Build 2:**
+  WU-truth vs METAR-replica crosscheck, **market-winner-adjudicated** (`docs/RESOLUTION-RISK.md` + asset +
+  `/cities` column): 97.25% overall; **shenzhen 22.9% — WU is NOT a ZGSZ METAR render (market sides with WU
+  46:2; replica-based analytics untrustworthy there)**; °F cities 94–97% with a one-sided +1°F replica-higher
+  pattern where the market sides with the REPLICA 17:4 → our stored v1-API truth misses the resolved value on
+  ~1–2% of °F days (SPECI-peak-shaped; truth-hardening + fallback proposals written, operator-gated, ADR-04
+  untouched). Stretch smearing test adjudicated NOT-RUNNABLE (premise fails — one broken-instrument city +
+  a truth-side bias, not per-city noise). ③ **Build 3:** intraday convergence on 1,779 city-days
+  (`docs/INTRADAY-CONVERGENCE.md`): **market locks (Brier ≤0.1, stays) at median local 14–18 on ~100% of
+  days; our house_gaussian locks on only 2–51% (median 0.31 at day end); floor-only baseline never locks** —
+  "intraday is priced by a faster market", quantified per city; shenzhen's house curve alone never falls
+  (cross-validates ②). **Tool-law catch worth keeping: DB `market_consensus` is UNUSABLE for resolution-day
+  intraday reads** (dedup upsert never refreshes made_at + polling dies pre-resolution-day; 15.5h median
+  forward-fill lag at local 23:00 — the first naive read produced a flat "market never converges" curve,
+  pure censoring; the ghost-quote law INVERTS on dedup-upsert tables). Dashboard fold DEFERRED with reason.
+  Boundary intact throughout; live lane untouched. **Pending next cycle: main→loop merge-back** (cheap-early
+  PR #46 squash reconcile still outstanding on this branch).
 - **▶▶ 2026-07-25 ~22:45Z (operator: "Build it") — the DEEP-HISTORY RESOLUTION-STATE CAPABILITY is BUILT +
   the 90-DAY METAR-GRADE KILL REPLAY is ADJUDICATED: the fresh-kill scrap is ZERO at scale; the one
   positive band is artifact-class. No signal; capability + two tool-guards retained.** ① `iem-backfill.py`
