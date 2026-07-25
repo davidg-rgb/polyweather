@@ -145,13 +145,17 @@ export function gradeCity(
 const MH_DIR = join(HERE, 'out', 'market-history');
 const MONTHS = ['january', 'february', 'march', 'april', 'may', 'june', 'july',
   'august', 'september', 'october', 'november', 'december'];
+/** Slugs use full ("july") AND abbreviated ("jan") month names — accept both. */
+const MONTH_NO = new Map<string, number>(
+  MONTHS.flatMap((name, i) => [[name, i + 1] as const, [name.slice(0, 3), i + 1] as const]),
+);
 
 /** Resolution day from a market slug (the slug-day trap: targetDate = resolution day). */
 export function slugDay(slug: string): string | null {
   const m = /on-([a-z]+)-(\d+)(?:-(\d{4}))?$/.exec(slug);
   if (!m || !m[3]) return null;
-  const month = MONTHS.indexOf(m[1]!) + 1;
-  if (month === 0) return null;
+  const month = MONTH_NO.get(m[1]!);
+  if (!month) return null;
   return `${m[3]}-${String(month).padStart(2, '0')}-${String(Number(m[2])).padStart(2, '0')}`;
 }
 

@@ -89,6 +89,18 @@ the handoff they are **proposals only**:
 
 Neither is needed for any live surface today; both are cheap if the operator wants them.
 
+## The "resolution-noise smearing" stretch test — NOT RUNNABLE AS DESIGNED (adjudicated 2026-07-26)
+
+The handoff's stretch item (add a per-city resolution-noise term to bucketization for
+high-divergence cities; pre-registered OOS Brier test) presupposed that divergence is *noise* spread
+across cities. The measured structure is neither: (a) **shenzhen** is the only high-divergence city
+and its divergence is not noise — it is a broken replica instrument (WU renders a different feed
+entirely; adjudication 46:2 against the replica), so no smearing term derivable from ZGSZ METARs can
+model it; (b) the °F-city divergence is **truth-side** (our stored value misses the resolved one),
+which a forecast-side noise term cannot address; and (c) every other city sits at 96–100% agreement,
+leaving nothing to smear. A one-city, 96-day panel also has no power against a day-clustered OOS
+gate. Closed without running — the honest verdict is that the premise, not the execution, fails.
+
 ## Caveats
 
 - 90-day window; regen quarterly-ish (with the truth SQL + `--emit`) to keep the /cities column honest.
