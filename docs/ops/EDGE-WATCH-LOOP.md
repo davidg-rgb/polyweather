@@ -28,6 +28,23 @@ _Claude keeps this block current every material cycle. Whole status in 20 second
 > (08:25Z) · 0 unsent alerts. Nothing needs the operator (07-31 override renewal re-surfaces ~07-28). Material
 > events get their own dated bullet below.
 
+- **▶▶ 2026-07-25 ~18:05Z (operator: "test the Synoptic API and if it works, integrate/log data") — the
+  SYNOPTIC SUB-HOURLY NOWCAST LANE is BUILT + DEPLOYED + VERIFIED LIVE end-to-end in one session.** The
+  first source from the new-data-sources research is in production: ① **Smoke-tested** the operator's new
+  account (token in-process only, never printed): US stations serve the **hfmetars 5-min variant** (median
+  5.0-min cadence on KORD/KHOU vs our 30-min METAR lane) but the open-access tier is **US-ONLY** (EGLL/CYYZ/
+  LTAC probe: "no access" — a tier upgrade lights intl with zero code change). ② **Built** the metar-nowcast
+  twin: `parseSynopticTimeseries` (core, emits the same `MetarOb` shape → `metarRunningMax` reused verbatim),
+  edge fn `synoptic-nowcast` (feeds the SAME monotonic `upsert_intraday` — the 0111 floor can only TIGHTEN),
+  migration **0118** (`synoptic_obs` 14d raw log + cron `5,19,35,49` — minute lane checked against LIVE prod
+  crons after the first two picks collided with health-monitor/opening-capture). ③ **Deployed + secret set**
+  (`scripts/ops/synoptic-set-secret.ts` — loadEnv→CLI, value never surfaced) + **first prod tick verified
+  17:57Z: 10 US stations returned, 76 five-min obs logged, 8 intraday floors advanced, 7 nowcasts rebuilt** —
+  sub-hourly floors the METAR lane hadn't caught, propagated into distributions immediately. Suite green
+  (+12 tests: 6 parser / 6 PGlite handler incl. token-redaction + monotone-floor pins), typecheck clean.
+  **Free-tier budget noted: 5,000 req + 5M SU/mo; the lane uses ≈2,976 req/mo (59%)** — research pulls share
+  the account, keep them in the remainder. Boundary intact (data source, not trading; no credentials touched
+  beyond the operator's new data token, set without display).
 - **▶▶ 2026-07-25 ~17:15Z (operator: "turn every stone — how do we improve live trading net profit from all
   historic data?") — ADJUDICATED FROM THE RECORD, no new run: every named dimension already carries a
   well-powered verdict; the ONE live candidate is the cheap-early forward panel, already running.** The Lane-3

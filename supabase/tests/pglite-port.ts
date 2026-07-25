@@ -184,6 +184,8 @@ const FN_ARGS: Record<string, string[]> = {
   // 0084 trading hardening (#7 shared exposure read / #18 hold-to-resolution loss booking).
   trade_open_exposure: [],
   bot_order_record_resolution_loss: ['p_mode', 'p_market_id', 'p_token_id'],
+  // 0118 Synoptic sub-hourly obs lane.
+  synoptic_obs_log: ['p_rows'],
 };
 
 export function pglitePort(db: PGlite): DbPort {

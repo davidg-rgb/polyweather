@@ -136,6 +136,31 @@ FULL minute price path we pull a standalone local archive (gitignored, `scripts/
   Running max drives the nowcast constraint (`metarRunningMax`, `metarMaxToNative`
   — the live-verified KORD 30.6°C→87°F case).
 
+## Synoptic Data (US sub-hourly nowcast lane — 0118, 2026-07-25)
+
+- `GET api.synopticdata.com/v2/stations/timeseries?stid={ICAO,…}&recent=45&vars=air_temp&units=metric&hfmetars=1&token=…`
+  (`parseSynopticTimeseries` → the SAME `MetarOb` shape as `parseMetarJson`, °C with tenths —
+  `metarRunningMax`/`metarMaxToNative` reused verbatim). Cadence probed live: **median 5.0 min**
+  on KORD/KHOU (the hfmetars 5-min variant; HF-ASOS 1-min restored via Synoptic's new NWS/FAA
+  link Jan-2026).
+- **Tier (open access, probed 2026-07-25): US stations ONLY** — EGLL/CYYZ/LTAC/WSSS all return
+  "no access" (RESPONSE_CODE 2 = a valid EMPTY parse, not an error). A paid tier upgrade lights
+  the intl cities with ZERO code change; `stationsReturned` in the tick stats is the gauge
+  (currently 10 of ~29 polled).
+- **Free-tier budget: 5,000 requests + 5M service units / month.** The lane spends ONE batched
+  multi-station request per tick on the `5,19,35,49` cron (≤96/day ≈ 2,976/mo ≈ 59% of the
+  request cap; SU usage is negligible at ~80 obs/tick). Ad-hoc research pulls share the same
+  account — keep them inside the remaining ~2,000/mo or they starve the lane.
+- Auth: `SYNOPTIC_PUBLIC_TOKEN` (Edge secret + `.env.local`). The PRIVATE key only manages
+  tokens account-side — the lane never uses it. The token is never printed or logged (handler
+  redacts thrown errors; `fetchJson` errors carry the hostname only).
+- Writes: `upsert_intraday` — the SAME monotonic advance as metar-nowcast, so the 0111
+  dead-bucket floor + §6.16 nowcast rebuilds get sub-hourly freshness for free — plus
+  `synoptic_obs` raw log (14d in-RPC retention) for sensor-peak-vs-WU-print research.
+- Verified live on the first prod tick (2026-07-25 17:57Z): 10 US stations, 76 obs logged,
+  **8 intraday maxes advanced, 7 nowcasts rebuilt**. Smoke: `scripts/research/synoptic-smoke.ts`
+  (+ `synoptic-probe-intl.ts`); secret sync: `scripts/ops/synoptic-set-secret.ts` (never echoes).
+
 ## IEM (Iowa Environmental Mesonet — WU fallback)
 
 - `GET mesonet.agron.iastate.edu/api/1/daily.json?station={ID}&network={NET}&date=…`

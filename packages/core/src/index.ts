@@ -14,6 +14,7 @@ export * from './polymarket/rewards.ts';
 export * from './weather/openmeteo.ts';
 export * from './weather/wu.ts';
 export * from './weather/metar.ts';
+export * from './weather/synoptic.ts';
 export * from './weather/iem.ts';
 export * from './weather/openweathermap.ts';
 export * from './weather/weatherapi.ts';

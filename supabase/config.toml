@@ -103,3 +103,6 @@ verify_jwt = false
 # CRON_SECRET in the body, not a JWT); codified here so a plain `supabase functions deploy` matches prod.
 [functions.buy-table-tick]
 verify_jwt = false
+
+[functions.synoptic-nowcast]
+verify_jwt = false
