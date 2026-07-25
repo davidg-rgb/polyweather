@@ -27,6 +27,16 @@
 > is a re-skin. The still-open directions are NOT price slices: forecast-conditioned regime efficiency
 > (#3, unproven-dead, needs ≥10 Q4 wx-days), impossible order-placement data (#7), new instruments (#9).
 
+> **↳ UPDATE 2026-07-25 — the PRICE-PATH surface is now closed by a DISCOVERY pass, not just per-hypothesis.**
+> Operator asked for a fresh full-history sweep for any missed *bidding* pattern. `docs/ops/BID-PATH-DISCOVERY.md`
+> ran an unsupervised path-shape-lift test over **238M rows / 45 cities / 522 dates**: the mid-price is a
+> martingale (current level = sufficient statistic; path shape adds ~0 OOS AUC at powered horizons), the
+> favorite-longshot bias sits inside the taker spread, and the lone short-horizon "mispricing" was a ghost-price
+> **staleness** artifact. This complements the C23 pricing-bucket close: not just "price is a sufficient statistic
+> on the ladder vector" but "the price *path over time* carries no exploitable structure beyond the current level."
+> Any future price-path angle is a re-skin. New standing caveat: **freshness-filter any `market_price_history`
+> analysis** (illiquid mid buckets stop quoting ~a day early → a 23 h ghost price fabricates a fake edge).
+
 ## Why these and not others
 
 Every angle FINDINGS.md killed collapses into exactly two mechanisms: **(a)** forecast-conditioned

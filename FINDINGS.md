@@ -6,6 +6,17 @@
 > links down to the deep doc that proves it.
 >
 > Authored 2026-06-23 · scope: personal R&D record · status: **investigation CLOSED** (analytics product retained).
+>
+> **↳ 2026-07-25 — full-history bidding-pattern re-sweep (operator-requested): still NO missed pattern
+> (`docs/ops/BID-PATH-DISCOVERY.md`).** A from-scratch *discovery* pass (unsupervised path-shape lift, not a
+> named-hypothesis re-run) over the entire price-path panel — **238M rows / 45 cities / 522 dates**: the market
+> mid-price is an efficient **martingale** — its current LEVEL is a sufficient statistic (path SHAPE adds ΔAUC
+> **+0.001 / −0.0004** out-of-sample at the powered 24 h/12 h horizons), and its only calibration bias
+> (favorite-longshot, ±1–3 pp) sits INSIDE the taker spread (every band's taker EV negative — maker edge, not
+> taker). One seductive short-horizon "−27 pp overpricing" was caught as a **ghost-price staleness artifact**
+> (mid-band buckets at 3 h-to-close carry ~23 h-stale quotes) and killed on a live-price filter. New durable
+> catch for future price-path work: **filter on quote freshness or illiquid mid buckets fabricate an
+> untradeable mispricing.** 12 signals stay dead; none reopened.
 
 ---
 
