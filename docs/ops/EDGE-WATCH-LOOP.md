@@ -21,6 +21,28 @@
 
 _Claude keeps this block current every material cycle. Whole status in 20 seconds._
 
+- **▶▶ 2026-07-25 ~05:40Z (loop wake — first cycle after the convergence-capture close) — ALL-GREEN sweep; the
+  live lane is still confirming the KILL with real money and is HEALTHY; nothing needs you today.** ① **Buy lane:**
+  mode live, interlock **ok:true** (override id=2 → **07-31 00:00Z**), 4-city allowlist, cap 0.30,
+  `stopAfterFirstSuccess` false (continuous), `laneHalted` false; tick clean (**344 ok / 0 fail / 24h**, latest
+  05:36Z). No candidates now = `lead_window` (all 8 markets 30.5h/54.5h to close; next window ~**07-26 00:00Z**).
+  Recent fills all within per-city caps: 07-24 @0.23 (21.7 sh) + @0.27 (18 sh) · 07-23 @0.34 + @0.42 · 07-22 ×3.
+  **Money-safe:** cash **$99.94**, positions_value **$0.00** (12 dust positions), no unaccounted exposure.
+  **One benign housekeeping note (no money, no action needed):** 2 orphan `placed`/zero-fill FAK rows (07-23 04:18Z,
+  07-24 07:48Z) — the fill-poll threw at placement (same class as the 07-19 wellington incident), so they skipped
+  the inline zero-fill→canceled adjudication AND sit outside the reconcile sweep (`bot_order_list_dangling` only
+  covers `intent`+no-order_id). They filled nothing (cash is *up* since 07-22, not down), their markets have
+  resolved, and they block nothing live. This is the **conservative-safe** outcome by design — an orphan `placed`
+  row over-blocks rather than risking a double-place — so it is NOT broken; logged as a LOW-severity build-queue
+  item (§7④), not rushed into the live double-place guard. ② **Cron health:** all 19 jobs 0-fail/24h except **1**
+  transient `metar-nowcast` fail (07-24 18:04Z, `aviationweather.gov` upstream, self-recovered — 47 ok since);
+  **0 unsent alerts / 7d**; deadmen quiet. ③ **Storage:** DB **2046 MB** · opening_captures **606 MB** — far under
+  the 3.5 GB / 2 GB bars (~80 MB/day regrowth); no action, retention re-runs ~weekly. ④ **Forward instruments:**
+  efficiency-monitor **S1 KILL** (n=5,785 / 45c / 36d, mean −0.85% — well-powered null, still tightening; snapshot
+  07-24 08:44Z, today's Action not yet due) · **S2 INSUFFICIENT**. **Google panel INSUFFICIENT** (26 scored / 12
+  cities / **6 dates** — the expected post-prune sawtooth, just under the 7-date bar, re-accruing; non-load-bearing,
+  #12 dead). ⑤ **mode = live** (unchanged; the authorized live test, not a reopen). **YOURS — one click, not due
+  yet:** the 07-31 override renewal (I re-surface it from ~07-28). Everything else runs unattended.
 - **▶▶ 2026-07-24 (later) — the CONVERGENCE-CAPTURE run is COMPLETE (the entry below prepped it; this ran it).
   All three arms closed, all KILL-or-NULL. Signal #12 stays dead; nothing needs you from this run.** ① **Market-signal
   SELECTION** (buy the bucket the market's own bids point to, sell into convergence — your exact framing):
@@ -463,8 +485,18 @@ _Claude keeps this block current every material cycle. Whole status in 20 second
    C20** (deployed + tick-verified + merged, PR #24). ② ~~google-paper-panel incremental replay~~
    **DONE C34** (0103 applied + fn deployed ~10:15Z 07-17; first incremental tick verification = the
    next :24 run — check stats.incremental=true + duration collapse; then PR to main). ③ opening_captures
-   archive prep (dump tooling dry-run so the prune is one command when needed). ④ Anything newly broken
-   beats the queue. Suite + typecheck green after every change; board updated every material cycle.
+   archive prep (dump tooling dry-run so the prune is one command when needed). ④ **[NEW, 07-25, LOW]
+   orphan zero-fill FAK reconcile gap.** When the fill-poll THROWS at placement (net/timeout), the row is
+   left `status='placed'`+order_id/0-fill and the inline F1 zero-fill→canceled adjudication (handler.ts:1086,
+   acts on the SAME-tick result only) is skipped; the reconcile sweep never re-examines it because
+   `bot_order_list_dangling` (0082) filters `status='intent' AND order_id IS NULL`. Result: a permanent orphan
+   `placed` row that BLOCKS re-entry into that one market for the rest of its window (2 seen: 07-23, 07-24;
+   money-safe, resolved). The **safe** fix (do NOT blind-cancel — that would erode the double-place guard):
+   widen the dangling candidate set to also include `placed AND size_matched=0 AND order_id IS NOT NULL` rows
+   older than N min, and branch the reconcile "freed" path so a posted-then-zero-filled row records `canceled`
+   (FAK died) not `failed` (never posted). Touches the LIVE money-path reconcile → do it deliberately with
+   venue-evidence tests, not reflexively; lane winds down 07-31 so it is genuinely optional. ⑤ Anything newly
+   broken beats the queue. Suite + typecheck green after every change; board updated every material cycle.
 
 **Escalation rules.** *Autonomous (do, then log):* code/test/cron fixes, edge-fn redeploys with in-session
 precedent (buy-table-tick, health-monitor, daily-digest), failed-daily re-runs, GH Action manual dispatch,
