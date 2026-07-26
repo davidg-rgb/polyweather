@@ -21,20 +21,19 @@
 
 _Claude keeps this block current every material cycle. Whole status in 20 seconds._
 
-> **⏸ LOOP WAKEUPS DISARMED ~07:15Z 2026-07-26 (operator: /clear prep)** — re-enter the v18 rota + re-arm
-> self-paced wakeups next session. Watch-list on re-entry: today's ~08:25Z efficiency-monitor Action (verify
-> it fired, else manual-dispatch — C2 precedent) · rota 6b synoptic daily for 07-26 (run late-day) · buy
-> window 00–10Z had NO fills through 07:05Z (9 quiet sweeps, ticks clean throughout) · override renewal
-> re-surfaces from ~07-28 (expires 07-31 00:00Z).
->
 > **⟳ Idle heartbeat (rolled in place each quiet cycle — no new bullet for zero-change sweeps):** 2026-07-26
-> **~04:05Z — GREEN.** Buy window OPEN since 00:00Z, **no fills yet today** (5 sweeps 00:09–04:01Z: ticks
-> clean every 2 min, 0 candidates — asks haven't dipped under the caps; interlock ok:true, override id=2 →
-> 07-31; 2 benign orphan `placed` rows unchanged) · all crons 0-fail/24h · cheap-early panel hourly on
-> schedule · DB **2157 MB** / captures **690 MB** (under bars) · 0 unsent alerts · **CITY-ORACLE builds
-> 1-3 DEPLOYED to prod this night** (PR #47 → main `88a04e2`, Vercel success, `/cities` route verified;
-> loop branch reconciled `8dd4f23`) · 07-25 synoptic top-up done (07-26's runs late-day). Nothing needs
-> the operator (07-31 override renewal re-surfaces ~07-28). Material events get their own dated bullet below.
+> **~09:45Z — GREEN; loop RE-ARMED (the ~07:15Z /clear disarm is over; all re-entry watch items cleared).**
+> Today's efficiency-monitor Action **LANDED 08:39Z success** (drift-window normal) · buy window 00–10Z ends
+> with **NO fills 07-26** (344 ok / 0 fail ticks 24h, latest 09:34Z; 0 candidates the whole window — asks
+> never dipped under the caps; funnel now lead_window ×8, next window ~**07-27 00:00Z**; interlock ok:true,
+> override id=2 → 07-31; the 2 benign orphan `placed` rows + the known 07-25 partial unchanged, dangling
+> intents empty) · **all crons 0-fail/24h** (metar/synoptic/captures/health/digest/google all on schedule) ·
+> cheap-early panel hourly on schedule (snap 18 @08:47Z: 38 considered / 10 entered / **8 realized mkts,
+> mean −20.1%, win 25%** — small-n sawtooth under the ≥40 floor, INSUFFICIENT as designed; cityErrors 0) ·
+> DB **2187 MB** / captures **715 MB** (under bars) · 0 unsent alerts · mode live (tripwire ⑤ unchanged) ·
+> main→loop reconcile after PR #47 confirmed (`8dd4f23`). **Still owed today: rota 6b synoptic top-up
+> late-day (~18Z).** Nothing needs the operator (07-31 override renewal re-surfaces ~07-28). Material
+> events get their own dated bullet below.
 
 - **▶▶ 2026-07-26 ~00:00Z (operator-directed handoff session: "Start from CITY-ORACLE-BUILDOUT-HANDOFF.md")
   — BUILDS 1→2→3 EXECUTED COMPLETE on the resolution-oracle data layer (analytics product; no trading, no
