@@ -21,14 +21,14 @@
 
 _Claude keeps this block current every material cycle. Whole status in 20 seconds._
 
-> **⟳ Idle heartbeat (rolled in place each quiet cycle — no new bullet for zero-change sweeps):** 2026-07-25
-> **~23:30Z — GREEN.** Buy lane mode live / lead_window (next candidate window opens **00:00Z in ~30 min** —
-> next wake lands just after the 00:02Z first tick; interlock ok:true, override id=2 → 07-31; 0 new orders
-> since the 07-25 06:20Z partial; 2 benign orphan `placed` rows unchanged) · all crons 0-fail/24h (buy-tick
-> 344 ok · capture 287 · metar 48 · synoptic 23 capture-only · cheap-early 8 hourly · city race 3 lanes) ·
-> DB **2137 MB** / captures **673 MB** (under bars) · 0 unsent alerts · daily synoptic obs top-up done
-> (rota 6b, 9 new rows). Nothing needs the operator (07-31 override renewal re-surfaces ~07-28). Material
-> events get their own dated bullet below.
+> **⟳ Idle heartbeat (rolled in place each quiet cycle — no new bullet for zero-change sweeps):** 2026-07-26
+> **~04:05Z — GREEN.** Buy window OPEN since 00:00Z, **no fills yet today** (5 sweeps 00:09–04:01Z: ticks
+> clean every 2 min, 0 candidates — asks haven't dipped under the caps; interlock ok:true, override id=2 →
+> 07-31; 2 benign orphan `placed` rows unchanged) · all crons 0-fail/24h · cheap-early panel hourly on
+> schedule · DB **2157 MB** / captures **690 MB** (under bars) · 0 unsent alerts · **CITY-ORACLE builds
+> 1-3 DEPLOYED to prod this night** (PR #47 → main `88a04e2`, Vercel success, `/cities` route verified;
+> loop branch reconciled `8dd4f23`) · 07-25 synoptic top-up done (07-26's runs late-day). Nothing needs
+> the operator (07-31 override renewal re-surfaces ~07-28). Material events get their own dated bullet below.
 
 - **▶▶ 2026-07-26 ~00:00Z (operator-directed handoff session: "Start from CITY-ORACLE-BUILDOUT-HANDOFF.md")
   — BUILDS 1→2→3 EXECUTED COMPLETE on the resolution-oracle data layer (analytics product; no trading, no
