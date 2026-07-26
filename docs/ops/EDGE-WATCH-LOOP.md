@@ -22,8 +22,12 @@
 _Claude keeps this block current every material cycle. Whole status in 20 seconds._
 
 > **⟳ Idle heartbeat (rolled in place each quiet cycle — no new bullet for zero-change sweeps):** 2026-07-26
-> **~22:25Z — GREEN; MATERIAL cycle (see the 22:20Z dated bullet: 0120 orphan-reconcile fix DEPLOYED +
-> the operator's standing intent recorded — RENEW at 07-31, keep improving until the account is empty).**
+> **~23:48Z (NIGHT WATCH, operator sleeping) — GREEN pre-window check: ticks 18/0 (3h, latest 23:43Z),
+> reconcile clean post-0120 (held 0 / freed 0 / dangling EMPTY), no orders, crons 0-fail, DB 2251 MB,
+> mode live, interlock ok. The 00:00–10:00Z window opens in minutes on the NEW roster (KL .28 / madrid
+> .40 / singapore .35 / wellington .40); watching at ~30–45 min cadence all night.** Earlier material
+> cycles: the 22:46Z roster swap + the 22:20Z 0120 fix (dated bullets below); operator's standing
+> intent — RENEW at 07-31, keep improving until the account is empty.
 > Day recap: efficiency-monitor Action landed 08:39Z success · all three city-tick lanes verified on the
 > second (10:00 / 13:50 / 20:45Z) · buy window 00–10Z closed with NO fills 07-26 · **ROSTER SWAPPED
 > ~22:46Z on the operator's instruction: allowlist now kuala-lumpur/madrid/singapore/wellington, caps
