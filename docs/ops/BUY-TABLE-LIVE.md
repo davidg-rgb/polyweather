@@ -9,6 +9,25 @@
 > practical unlock for this lane is the **expiring (≤14d) `trade_gate_override`** — the forward paper gate of
 > record is a settled KILL and will not PASS on its own.
 
+## ▶ 2026-07-26 — the ORPHAN ZERO-FILL reconcile gap is CLOSED (0120; operator-directed "do the FAK reconcile fix")
+
+The last known hole in the live plumbing: when the placement fill-poll THREW after a successful post
+(net/timeout), the row froze at `status='placed'`+order_id+0-fill — outside both the inline F1 zero-fill
+adjudication (same-tick only) and the reconcile sweep (`bot_order_list_dangling` listed only
+`intent`+no-order_id). The orphan then **blocked re-entry into that market for the rest of its window**
+(2 occurrences: 07-23 04:18Z, 07-24 07:48Z — money-safe, silently retired the market both days).
+
+**Fix (0120 + executor):** the dangling RPC now also lists `placed AND order_id IS NOT NULL AND
+size_matched=0` rows (same ≥5-min age floor), and `reconcileOpenOrders` gives rows carrying a venue id
+**DIRECT evidence by order id** — never the heuristic match: venue fills found ⇒ `record_fill` with the
+trade-records size-weighted avg (the 07-19 fill-price-truth idiom, fail-soft to the poll price); dead
+zero-fill FAK/FOK ⇒ `record_canceled` (the F1 outcome — kill-type orders cannot rest, so dead+0 is
+proven; the market becomes retryable the SAME tick); GTC/GTD frees only on a known-dead venue status;
+still-open resting orders are left untouched (no ambiguity alert); unknown states hold + WARN. Operator
+config caveat noted in passing: per-city caps were tightened by the operator 07-23 09:28Z to
+`ankara 0.16 / helsinki 0.25 / wellington 0.40 / kuala-lumpur 0.20` (the 07-18 values in older notes are
+stale).
+
 ## ▶ 2026-07-23 — "the limits are holding back our win rate" — DIAGNOSED (win rate is a purchasable vanity metric; no limit setting adds profit)
 
 Operator observation: *"we buy bad positions that realise as faulty soon after we enter … based on

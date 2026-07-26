@@ -147,6 +147,11 @@ export interface OrderLedgerRow {
    *  sweeper (the cloud buy-table tick) scopes `reconcileOpenOrders` to its own tag via this field —
    *  untagged rows can only be another runner's and are left for that runner's own startup sweep. */
   strategy?: string | null;
+  /** the venue order type on the row (`live_orders.order_type` — 'GTC'|'GTD'|'FOK'|'FAK'). 0120: the
+   *  orphan-class reconcile branch keys its dead-proof on it (FAK/FOK cannot rest ⇒ zero venue fills
+   *  proves the order dead). Optional/null when a mock omits it — the branch then requires a
+   *  known-dead venue status instead (the conservative direction). */
+  orderType?: string | null;
 }
 
 /** The write payload for `reserveIntent` (the pre-placement intent reservation). Mode-scoped (F4). */

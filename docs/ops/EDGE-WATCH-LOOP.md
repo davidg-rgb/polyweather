@@ -22,20 +22,53 @@
 _Claude keeps this block current every material cycle. Whole status in 20 seconds._
 
 > **⟳ Idle heartbeat (rolled in place each quiet cycle — no new bullet for zero-change sweeps):** 2026-07-26
-> **~20:48Z — GREEN; loop RE-ARMED since ~09:45Z (the /clear disarm is over; all re-entry watch items
-> cleared).** Today's efficiency-monitor Action **LANDED 08:39Z success** (drift-window normal) · all three
-> city-tick lanes verified on the second today (10:00 / 13:50 / 20:45Z) · buy window
-> 00–10Z CLOSED with **NO fills 07-26** (344 ok / 0 fail ticks 24h, latest 20:43Z; 0 candidates the whole
-> window — asks never dipped under the caps; next window ~**07-27 00:00Z**; interlock ok:true, override
-> id=2 → 07-31; the 2 benign orphan `placed` rows + the known 07-25 partial unchanged, dangling intents
-> empty) · **all crons 0-fail/24h** (metar/synoptic/captures/health/digest/google + the 10Z city tick all
-> on schedule) · cheap-early panel hourly (snap 18 @08:47Z: 38 considered / 10 entered / **8 realized mkts,
-> mean −20.1%, win 25%** — small-n sawtooth under the ≥40 floor, INSUFFICIENT as designed; cityErrors 0) ·
-> DB **2239 MB** / captures **755 MB** (under bars) · 0 unsent alerts · mode live (tripwire ⑤ unchanged) ·
-> main→loop reconcile after PR #47 confirmed (`8dd4f23`) · **rota 6b synoptic top-up for 07-26 DONE 17:45Z**
-> (17,582 obs archived locally / 13 new DB rows — day fully covered). Nothing needs the operator (07-31
-> override renewal re-surfaces ~07-28). Material events get their own dated bullet below.
+> **~22:25Z — GREEN; MATERIAL cycle (see the 22:20Z dated bullet: 0120 orphan-reconcile fix DEPLOYED +
+> the operator's standing intent recorded — RENEW at 07-31, keep improving until the account is empty).**
+> Day recap: efficiency-monitor Action landed 08:39Z success · all three city-tick lanes verified on the
+> second (10:00 / 13:50 / 20:45Z) · buy window 00–10Z closed with NO fills 07-26 (0 candidates all
+> window — asks never dipped under the operator's 07-23 tightened caps: ankara 0.16/helsinki 0.25/
+> wellington 0.40/KL 0.20; next window ~**07-27 00:00Z**; interlock ok:true, override id=2 → 07-31) ·
+> all crons 0-fail/24h · cheap-early panel hourly (snap 18: 8 realized mkts, mean −20.1% — small-n
+> sawtooth under the ≥40 floor, INSUFFICIENT as designed) · DB **2243 MB** / captures **758 MB** (under
+> bars) · 0 unsent alerts · mode live (tripwire ⑤ unchanged) · the 2 historic orphan `placed` rows are
+> now ADJUDICATED canceled (0120 bullet) — dangling should read EMPTY from here · rota 6b synoptic
+> top-up for 07-26 DONE 17:45Z (17,582 obs / 13 new rows). **Yours: the 07-31 override renewal
+> (re-surfaces ~07-28 — you've signaled you WILL renew; the click is still needed).** Material events
+> get their own dated bullet below.
 
+- **▶▶ 2026-07-26 ~22:20Z (operator, interactive: "do the FAK reconcile fix, and explore any other path
+  that may give increased results. We aim to renew the live placements and try for improvement until
+  account is empty") — the ORPHAN ZERO-FILL RECONCILE GAP is CLOSED (0120 + executor, build-queue ④ DONE,
+  deployed to prod) + the fresh per-city read is IN + the operator's standing intent is RECORDED.**
+  ① **Standing intent (changes the 07-31 posture):** the operator will RENEW the override at/before
+  07-31 and wants continued live improvement attempts with the remaining balance (~$97). The renewal
+  click is still his (≤14d DB cap, not defeatable); I surface it from ~07-28 as before. ② **The fix
+  (operator-directed):** `bot_order_list_dangling` widened with the orphan class (`placed` + order_id +
+  0-fill, 0120) and `reconcileOpenOrders` gained a DIRECT-evidence branch (getOrder by id; fills →
+  record_fill venue-truth avg; dead zero-fill FAK → record_canceled = retryable same tick; GTC frees
+  only on known-dead status; resting untouched; unknown holds+WARN). No more silently-retired markets
+  (the 07-23/07-24 orphans cost two re-entry days). Fn deployed FIRST then 0120 applied (old-code+new-RPC
+  would have mis-routed orphans through the heuristic path). Suite **3,586 green** (+11: 8 executor
+  orphan cases, END-TO-END handler orphan→canceled→re-bought, 0120 RPC pins), typecheck clean.
+  **Live verification (22:13Z tick, first post-deploy): the sweep picked up BOTH historic orphans
+  (`reconcileHeld: 2`) and correctly HELD them** — the venue no longer serves getOrder for 2–4-day-old
+  resolved-market orders, and the sweep never frees without evidence (the conservative design working;
+  fresh orphans — the actual target — adjudicate minutes later while getOrder still answers). The two
+  stale rows were then manually adjudicated `canceled` per the C18/07-19 precedent (venue truth already
+  board-recorded 07-25: cash-continuity proves $0 moved, both markets resolved) — next tick expected
+  clean (0 dangling).
+  ③ **Board corrections from the sweep:** per-city caps were TIGHTENED BY THE OPERATOR 07-23 09:28Z to
+  **ankara 0.16 / helsinki 0.25 / wellington 0.40 / kuala-lumpur 0.20** (older board notes citing the
+  07-18 caps are stale — this also explains the fill drought since 07-24: asks rarely dip under 0.16–0.25).
+  ④ **Fresh per-city prediction success (city_prediction_grades, n≈20-22/city all-time · n≈8-9 since
+  07-18):** wellington HOLDS (**81.8% / 88.9%** recent) · kuala-lumpur holds (59.1%/55.6%) · **ankara
+  COLLAPSED (66.7% all-time but 25% since 07-18** — the 07-18 92% was n=13 small-sample flattery) ·
+  **helsinki deteriorated (52.4%/25%)** · non-allowlist **madrid (81.0%/100%)** and **singapore
+  (68.2%/77.8%)** now outrank both. Operator-gated proposal (allowlist is his lever): swap
+  helsinki+ankara → madrid+singapore, caps ≤ ~half the measured rate. HONEST FRAME: the 07-23 six-way
+  kill stands — roster/cap changes redistribute the same ≈zero-EV pool, they do not create edge; the
+  only levers that change the SIGN remain cost-side mechanisms or new out-of-market information.
+  Boundary intact throughout (no config touched; operator funds/keys/toggles).
 - **▶▶ 2026-07-26 ~00:00Z (operator-directed handoff session: "Start from CITY-ORACLE-BUILDOUT-HANDOFF.md")
   — BUILDS 1→2→3 EXECUTED COMPLETE on the resolution-oracle data layer (analytics product; no trading, no
   §13 reopen; commits `3646c42`+`66c28e8` pushed; suite 212 files / 3,577 green).** ① **Build 1 (flagship):**
@@ -702,7 +735,8 @@ _Claude keeps this block current every material cycle. Whole status in 20 second
    widen the dangling candidate set to also include `placed AND size_matched=0 AND order_id IS NOT NULL` rows
    older than N min, and branch the reconcile "freed" path so a posted-then-zero-filled row records `canceled`
    (FAK died) not `failed` (never posted). Touches the LIVE money-path reconcile → do it deliberately with
-   venue-evidence tests, not reflexively; lane winds down 07-31 so it is genuinely optional. ⑤ Anything newly
+   venue-evidence tests, not reflexively. **↳ DONE 2026-07-26 ~22:15Z (operator-directed): 0120 + the
+   executor direct-evidence branch, deployed to prod; see the dated bullet.** ⑤ Anything newly
    broken beats the queue. Suite + typecheck green after every change; board updated every material cycle.
 
 **Escalation rules.** *Autonomous (do, then log):* code/test/cron fixes, edge-fn redeploys with in-session

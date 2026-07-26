@@ -58,6 +58,7 @@ describe('rpcOrderLedger — the mode-scoped RPC contract for T3', () => {
       marketId: '0xc',
       createdAt: '2026-07-05T00:00:00Z',
       strategy: null,
+      orderType: null, // dbRow omits order_type — 0120 maps it null (the executor then needs a known-dead status)
     });
   });
 

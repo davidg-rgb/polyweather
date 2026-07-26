@@ -1036,8 +1036,17 @@ export class MakerExecutor {
 
   /**
    * HIGH-2 — the startup reconcile sweep (T2 calls this BEFORE its first tick; research report §5,
-   * ADR-OC-5). For every non-terminal ledger row still missing a venue orderId (a crash hit between
-   * postOrder and recordPlaced), decide:
+   * ADR-OC-5). Two dangling classes (0120 widened the RPC):
+   *
+   *   · `intent` + no orderId — a crash inside the post→record_placed critical section. Venue identity
+   *     is UNKNOWN → the HEURISTIC path below (open-orders match / trades match / free).
+   *   · `placed` + orderId + size_matched 0 (0120, build-queue ④) — the fill-poll crashed AFTER a
+   *     successful post+record. Venue identity is KNOWN → DIRECT evidence by order id: fills found ⇒
+   *     record_fill (venue-truth avg); dead zero-fill FAK/FOK ⇒ record_canceled (the F1 outcome —
+   *     kill-type orders cannot rest); GTC/GTD frees only on a known-dead status; still-open rests
+   *     untouched (no ambiguity alert); unknown status holds.
+   *
+   * For the heuristic (no-orderId) class, decide:
    *
    *   adopt — exactly ONE venue open order matches HEURISTICALLY (side exact, price within one tick,
    *           original size exact — there is NO server-side client-order-id on the CLOB, so identity
@@ -1095,6 +1104,83 @@ export class MakerExecutor {
       };
 
       try {
+        // 0120 — the ORPHAN ZERO-FILL class (build-queue ④): the row already carries a venue orderId
+        // (postOrder + recordPlaced succeeded; the fill-poll crashed before the same-tick F1
+        // adjudication), so evidence is DIRECT — the order record itself, by id — never the heuristic
+        // open-orders/trades match below. listDanglingIntents surfaces these only at size_matched = 0.
+        if (row.orderId != null) {
+          const poll = parseOrderFillPoll(await client.getOrder(row.orderId), row.orderId, row.size);
+          if (poll.sizeMatched > 0) {
+            // The "orphan" actually filled. FILL-PRICE TRUTH (the 2026-07-19 wellington lesson):
+            // getOrder's `price` is the LIMIT — prefer the trade records' size-weighted average for
+            // this order's own taker fills; fail-soft to the poll price (the avg is bookkeeping; the
+            // fill DECISION is getOrder's size_matched, which is direct evidence).
+            let avg = poll.avgPrice ?? row.price;
+            try {
+              const rawTrades = await client.getTrades({ asset_id: row.tokenId });
+              if (!tradesResponseTruncated(rawTrades)) {
+                const fills = parseTrades(rawTrades).filter(
+                  (t) => t.traderSide === 'TAKER' && t.takerOrderId === row.orderId && t.size > 0,
+                );
+                const tot = fills.reduce((s, t) => s + t.size, 0);
+                if (tot > 0) avg = round6(fills.reduce((s, t) => s + t.size * t.price, 0) / tot);
+              }
+            } catch {
+              /* fail-soft: the poll price stands */
+            }
+            // The venue fee is unattributable at reconcile distance (the per-row rate isn't stored) —
+            // recorded 0; the wallet aggregate carries fee truth.
+            await this.ledger.recordFill(
+              row.clientOrderId,
+              poll.sizeMatched,
+              avg,
+              poll.filled ? 'filled' : 'partial',
+            );
+            out.push({
+              kind: 'adopted',
+              clientOrderId: row.clientOrderId,
+              intentKey: row.intentKey,
+              orderId: row.orderId,
+              reason: `posted order has venue fills (${poll.sizeMatched} @ ${avg}) — recorded from venue truth`,
+            });
+            continue;
+          }
+          // Zero venue fills. A kill-type order (FAK/FOK) cannot rest — dead + 0 is PROVEN, the exact
+          // outcome the crashed inline F1 adjudication would have written: canceled (retryable), never
+          // failed (it DID post). A GTC/GTD row (a daemon maker order after downtime) frees only on a
+          // known-dead venue status; a still-open resting order is left alone WITHOUT the ambiguity
+          // alert (resting is legitimate, not ambiguous); anything else holds.
+          const status = poll.status.toUpperCase();
+          const killType = (row.orderType ?? '').toUpperCase();
+          const cannotRest = killType === 'FAK' || killType === 'FOK';
+          const knownDead = status === 'CANCELED' || status === 'CANCELLED' || status === 'EXPIRED';
+          if (cannotRest || knownDead) {
+            await this.ledger.recordCanceled(row.clientOrderId);
+            out.push({
+              kind: 'freed',
+              clientOrderId: row.clientOrderId,
+              intentKey: row.intentKey,
+              orderId: row.orderId,
+              reason: `posted order is dead at the venue with zero fills (${cannotRest ? `${killType} cannot rest` : `status ${poll.status}`}) — canceled (the F1 zero-fill outcome; key retryable)`,
+            });
+            continue;
+          }
+          if (status === 'LIVE') {
+            out.push({
+              kind: 'held',
+              clientOrderId: row.clientOrderId,
+              intentKey: row.intentKey,
+              orderId: row.orderId,
+              reason: 'order still open at the venue (legitimate resting order) — no action',
+            });
+            continue;
+          }
+          await held(
+            `posted order ${row.orderId} reports zero fills with unrecognized status '${poll.status}' — cannot prove dead`,
+          );
+          continue;
+        }
+
         const open = parseOpenOrders(await client.getOpenOrders({ asset_id: row.tokenId }));
         const tick = Number(await client.getTickSize(row.tokenId)) || 0.01;
         const match = matchDanglingIntent(row, open, tick);

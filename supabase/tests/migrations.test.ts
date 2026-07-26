@@ -539,6 +539,10 @@ describe('migrations 0001–0010', () => {
       // 0119: the obs↔price research corpus widening — capture universe = list_active_stations (around
       // the clock, tier decides coverage) + synoptic_obs retention 14d→90d. Same cron; no new job.
       '0119_synoptic_continuous_capture.sql',
+      // 0120: reconcile the orphan placed/zero-fill class (build-queue ④) — bot_order_list_dangling
+      // widened with (placed AND order_id set AND size_matched=0); the executor adjudicates those by
+      // DIRECT order-id evidence (fills → record_fill venue truth; dead zero-fill FAK → record_canceled).
+      '0120_reconcile_orphan_zerofill.sql',
     ]);
   });
 });

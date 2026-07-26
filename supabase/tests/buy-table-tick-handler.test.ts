@@ -1339,6 +1339,38 @@ describe('buy-table-tick — the F4 lane-scoped reconcile sweep', () => {
     expect(h.client.postCalls).toBe(1);
   });
 
+  it('0120 END-TO-END: an orphan placed/zero-fill FAK row (fill-poll crashed at placement) is freed as CANCELED by direct order-id evidence and the market is re-bought the SAME tick', async () => {
+    const h = harness(
+      {
+        mode: 'live',
+        preflightOk: true,
+        configRows: [{ key: 'buy_table.max_entry_attempts', value: '2' }],
+        captures: [capture({ eventId: 'ev-1', ask: 0.12, hoursToClose: 6 })],
+        entries: [entryRow('placed')], // the orphan class: pre-0120 this blocked the market forever
+        dangling: [danglingRow({ status: 'placed', order_id: '0xORPHAN', order_type: 'FAK' })],
+      },
+      'live',
+      // the venue's truth for the orphan: dead, zero fills. (The SAME override also serves the
+      // re-buy's fill poll — its FAK then adjudicates zero-fill inline, which is fine: postCalls
+      // is the assertion that the market became retryable.)
+      { getOrder: async () => ({ status: 'canceled', original_size: 33, size_matched: 0 }) },
+    );
+    const stats = await buyTableTick(h.ctx, h.deps);
+
+    expect(stats.reconcileFreed).toBe(1);
+    expect(stats.reconcileFailed).toBe(false);
+    // adjudicated CANCELED (posted, FAK died) — never failed (that would claim it never posted)
+    const canceled = h.db.calls.filter((c) => c.fn === 'bot_order_record_canceled' && c.args['p_client_order_id'] === 'cid-stuck');
+    expect(canceled.length).toBe(1);
+    expect(h.db.calls.some((c) => c.fn === 'bot_order_record_failed' && c.args['p_client_order_id'] === 'cid-stuck')).toBe(false);
+    // ordering: sweep adjudication strictly BEFORE the entries read; the freed market re-bought this tick
+    const idx = (fn: string): number => h.db.calls.findIndex((c) => c.fn === fn);
+    expect(idx('bot_order_list_dangling')).toBeLessThan(idx('bot_order_record_canceled'));
+    expect(idx('bot_order_record_canceled')).toBeLessThan(idx('buy_table_entries'));
+    expect(stats.candidates).toBe(1);
+    expect(h.client.postCalls).toBe(1);
+  });
+
   it('scope: foreign-strategy and untagged rows are left untouched — venue evidence is never read', async () => {
     let openOrdersReads = 0;
     const h = harness(
