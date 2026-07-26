@@ -22,12 +22,169 @@
 _Claude keeps this block current every material cycle. Whole status in 20 seconds._
 
 > **⟳ Idle heartbeat (rolled in place each quiet cycle — no new bullet for zero-change sweeps):** 2026-07-25
-> **~10:53Z — GREEN.** Buy lane mode live / lead_window (next candidate window 07-26 00:00Z; cash **$97.39**; 2
-> benign orphan `placed` rows) · all crons 0-fail/24h (only the aging 07-24 metar transient) · DB **2072 MB** /
-> captures **627 MB** (under the 3.5 GB / 2 GB bars) · mode live · eff-monitor **S1 KILL** (08:25Z) · 0 unsent
-> alerts. Nothing needs the operator (07-31 override renewal re-surfaces ~07-28). Material events get their own
-> dated bullet below.
+> **~23:30Z — GREEN.** Buy lane mode live / lead_window (next candidate window opens **00:00Z in ~30 min** —
+> next wake lands just after the 00:02Z first tick; interlock ok:true, override id=2 → 07-31; 0 new orders
+> since the 07-25 06:20Z partial; 2 benign orphan `placed` rows unchanged) · all crons 0-fail/24h (buy-tick
+> 344 ok · capture 287 · metar 48 · synoptic 23 capture-only · cheap-early 8 hourly · city race 3 lanes) ·
+> DB **2137 MB** / captures **673 MB** (under bars) · 0 unsent alerts · daily synoptic obs top-up done
+> (rota 6b, 9 new rows). Nothing needs the operator (07-31 override renewal re-surfaces ~07-28). Material
+> events get their own dated bullet below.
 
+- **▶▶ 2026-07-26 ~00:00Z (operator-directed handoff session: "Start from CITY-ORACLE-BUILDOUT-HANDOFF.md")
+  — BUILDS 1→2→3 EXECUTED COMPLETE on the resolution-oracle data layer (analytics product; no trading, no
+  §13 reopen; commits `3646c42`+`66c28e8` pushed; suite 212 files / 3,577 green).** ① **Build 1 (flagship):**
+  IEM archive extended **2021→2026** (45 stations, ~4.3M METAR/SPECI rows, 91,187 complete local days, every
+  city ≥3 calendar years) → the 45-city × 12-month **floor-formation climatology in RENDERED-INTEGER space**
+  (committed `core/sim/city-floor-climatology.ts`; `/cities` "When is the day decided?" strip). ② **Build 2:**
+  WU-truth vs METAR-replica crosscheck, **market-winner-adjudicated** (`docs/RESOLUTION-RISK.md` + asset +
+  `/cities` column): 97.25% overall; **shenzhen 22.9% — WU is NOT a ZGSZ METAR render (market sides with WU
+  46:2; replica-based analytics untrustworthy there)**; °F cities 94–97% with a one-sided +1°F replica-higher
+  pattern where the market sides with the REPLICA 17:4 → our stored v1-API truth misses the resolved value on
+  ~1–2% of °F days (SPECI-peak-shaped; truth-hardening + fallback proposals written, operator-gated, ADR-04
+  untouched). Stretch smearing test adjudicated NOT-RUNNABLE (premise fails — one broken-instrument city +
+  a truth-side bias, not per-city noise). ③ **Build 3:** intraday convergence on 1,779 city-days
+  (`docs/INTRADAY-CONVERGENCE.md`): **market locks (Brier ≤0.1, stays) at median local 14–18 on ~100% of
+  days; our house_gaussian locks on only 2–51% (median 0.31 at day end); floor-only baseline never locks** —
+  "intraday is priced by a faster market", quantified per city; shenzhen's house curve alone never falls
+  (cross-validates ②). **Tool-law catch worth keeping: DB `market_consensus` is UNUSABLE for resolution-day
+  intraday reads** (dedup upsert never refreshes made_at + polling dies pre-resolution-day; 15.5h median
+  forward-fill lag at local 23:00 — the first naive read produced a flat "market never converges" curve,
+  pure censoring; the ghost-quote law INVERTS on dedup-upsert tables). Dashboard fold DEFERRED with reason.
+  Boundary intact throughout; live lane untouched. **Pending next cycle: main→loop merge-back** (cheap-early
+  PR #46 squash reconcile still outstanding on this branch).
+- **▶▶ 2026-07-25 ~22:45Z (operator: "Build it") — the DEEP-HISTORY RESOLUTION-STATE CAPABILITY is BUILT +
+  the 90-DAY METAR-GRADE KILL REPLAY is ADJUDICATED: the fresh-kill scrap is ZERO at scale; the one
+  positive band is artifact-class. No signal; capability + two tool-guards retained.** ① `iem-backfill.py`
+  pulled the resolution stream for **45 stations × 90 days** (109,954 METAR/SPECI rows, 1 ranged
+  request/station, merge-idempotent, `out/iem-asos-archive/`) + committed `city-map.json` (DB export).
+  ② `metar-kill-replay.py`: **2,161 events · replication 96.2%** (divergence city-dependent — shenzhen 16 /
+  seoul 7 winner-"kills", 0.27% of 13,406 kills, kept as the honest fabrication channel). **Methodology
+  catch pinned in the tool:** entry at the METAR's *valid* time = LOOK-AHEAD (AWC publishes 2–6 min later) —
+  it faked +0.78..+1.08/$1; honest [T+6m,T+21m] entry collapses the universe **−88%** (the market eats METAR
+  kills in minutes). ③ **Verdict:** the clean <10¢ fresh-kill fade = **−0.003/$1 on optimistic mids (n=145)**
+  → dead before the real book's cut; the +0.33/$1 headline is 18 trades at ≥60¢ entries (+3.93) with an
+  unresolved COR-revision look-ahead channel (IEM archives *corrected* METARs; WU honors revisions till
+  next-day) → **artifact-risk, mid-basis-capped, no build**. The July margin-3 INSUFFICIENT cell is expected
+  to die as n grows — 08-06 re-run prior now firmly negative. Denominator law at scale: **64.6% of METAR
+  kills land on an already-dead (<1¢) bucket**; alive-cohort mid 0.115 (T) → 0.0005 (T+15). Full record:
+  `OBS-TRANSMISSION.md` §Pass 3. ④ Prod verify from the oracle fix landed clean: 19:49Z synoptic tick =
+  capture-only shape (no floor keys); 20:04Z metar tick re-floored all 11 US stations METAR-grade (several
+  floors dropped 1–2°F — the contamination was real, now gone).
+- **▶▶ 2026-07-25 ~21:45Z (operator: "read polymarket-temp-oracle.md, implement what benefits the cause") —
+  the RESOLUTION ORACLE is DECODED + VALIDATED 66/66 → the OBS-TRANSMISSION fabrication mechanism is
+  RESOLVED, and a WRONG-GRADE floor write in the day-old synoptic lane is FIXED + REDEPLOYED.** The
+  operator's doc claims WU's resolution table is a bit-for-bit re-render of the METAR/SPECI stream (T-group
+  tenths, rounded once; no 5-min obs; no 6-hr max groups; station-local day). **Verified in-house before
+  building** (`oracle-replica-validation.py`, IEM per-ob `asos.py` feed): the replica reproduces the
+  resolved market winner on **66/66 city-days** — and the synoptic 5-min max EXCEEDS the METAR-table max on
+  **28/66 days (42%, 1–3°F)**. That is the OBS-TRANSMISSION fabrication mechanism, exactly: the 19
+  winner-"kills" were 5-min blips resolution never sees; the market's high residual bids were sharps who
+  know the oracle. **Shipped:** ① `synoptic-nowcast` → **CAPTURE-ONLY** (the 0118 `upsert_intraday` writes
+  were tightening the resolution-grade 0111 floor with wrong-grade data — removed; fn redeployed ~21:40Z;
+  the 11 contaminated 07-25 `intraday_max` rows deleted → metar-nowcast re-floors METAR-grade on its next
+  */30 tick, rebuild fires on the advance; live lane untouched — its 4 cities are non-US). ② Tests: the
+  suite pins "synoptic NEVER touches intraday_max" incl. the overshoot case (suite 3,471+ green,
+  typecheck clean). ③ Docs: `docs/DATA-SOURCES.md` §resolution-oracle (the law: only METAR/SPECI-grade
+  data writes the resolution floor) + the operator doc preserved at `docs/ops/POLYMARKET-TEMP-ORACLE.md` +
+  `OBS-TRANSMISSION.md` addendum. ④ The **08-06 re-adjudication design corrected**: METAR-grade kills
+  (fabrication-free by construction) + the 5-min stream as anticipatory trigger; per-city blip-confirmation
+  rates now measurable from the two archived streams. ⑤ Bonus checks: our `wuRound`/`metarMaxToNative` was
+  already the exact WU rule (doubly confirmed); `city_stations` matches every station gotcha in the doc
+  (KLGA/KHOU/KBKF/LFPB/EGLC). Verify next wake: first capture-only tick stats (no maxesAdvanced key) + the
+  US floors re-created METAR-grade.
+- **▶▶ 2026-07-25 ~19:45Z (the decisive cheap test from last session) — the REAL-BOOK CROSS-CHECK is DONE
+  and ADJUDICATED: the 5-min obs LEAD is REAL, the taker trade is NOT — the market's residual bid on
+  "obs-dead" buckets is correctly-priced resolution-source insurance. No §13 reopen; no build.** Ran the
+  first pass's 354 floor-kill events against the real `opening_captures` bids (66 city-days joined; archive
+  brought current first via `--incremental`, +88k rows — build-queue item ③ done for real). ① **Timing
+  CONFIRMED on quotes:** median pre-print bid drift **0.0000**; the whole collapse is post-print — the
+  sub-hourly lead is real (analytics value; the nowcast lane already eats it). ② **The trade dies on
+  adverse selection:** at walked `execBid` the city-day-clustered CI straddles 0 at margin 1–2 (best
+  [−0.095, +0.266]); **19/19 winner-"kills"** (buckets our °C→°F conversion killed that then WON —
+  SF 4 / Austin 3 / Chicago 3, the WU-vs-sensor divergence cities) kept 0.05–0.93 bids and the market won
+  every one. ③ The clean-looking **margin ≥3°F cell (0 fabrications, CI [+0.111,+0.385]) is a
+  CONSTANT-OUTCOME cell** — all 14 trades won, the CI measures price dispersion not fabrication risk (the
+  07-24 convergence-capture trap, now guarded in this tool too) — at a **$52–156/week** pot. **Label
+  INSUFFICIENT** (n=14 ≪ 40). ④ Denominator the mid-basis pass hid: only **~22%** of obs-kills had ≥5¢
+  real bids at T−30. **Standing item: re-run `synoptic-realbook-crosscheck.py` ~08-06** (both corpora
+  accrue daily; ~3× window by then) — if margin-3 reaches ≥40 trades / 0 fabrications / clean CI, surface
+  to the operator as a scrap-sized finding, caveat first. Full record: **`OBS-TRANSMISSION.md`** +
+  FINDINGS.md row.
+- **▶▶ 2026-07-25 ~19:10Z (operator: "log every 5-min ob per relevant city, connect to Polymarket minute
+  prices, isolate how fresh obs affect price — backtrack as far as possible") — the OBS↔PRICE RESEARCH
+  CORPUS is BUILT + the FIRST-PASS TRANSMISSION READ is in; the trial's rolling history window is SECURED.**
+  ① **0119** widened the lane: capture universe = `list_active_stations` around the clock (45 polled / **11 US
+  returned incl. KBKF**; live-verified on the 18:19Z scheduled fire) + retention 14d→90d. ② **History
+  boundary probed: the trial serves ~6 rolling days** (5d back OK, 7d back 403 — deep backfill vs the 522-day
+  price archive is NOT possible); pulled the full available window immediately (time-sensitive — it slides
+  daily): **20,587 five-min obs / 11 stations / 07-19..07-25** → local NDJSON archive + DB. ③ Minute prices
+  pulled for the same window: **99 events / 1,089 buckets / 3.09M points**. ④ **First-pass event study**
+  (`synoptic-price-join.py`; two bugs caught: the label-regex range-dash read hi=−79, and the archive
+  `targetDate`-is-resolution-date trap — weather day now parsed from the SLUG): **A. floor-kill events**
+  (n=88, bucket ≥5¢ at T−30): median Δp **−0.5¢ in [T−30,T) vs −6.0¢ in [T,T+15) and −2.2¢ in [T+15,T+60)**
+  — the collapse concentrates AFTER the 5-min obs timestamp; 45% pre-drop ≥1¢, 88% post. **B. winner
+  lead-lag**: argmax at **+25 min median** (obs leads price 55/67 city-days; pooled r small ~0.03).
+  **Honest caveats (NOT a signal yet):** trade-print MID basis (no bid/ask — trap #1/#8), selection excludes
+  buckets the market killed BEFORE the obs (the "market faster" cases), obs-time ≠ publish-time, and the
+  tradable form (buy NO on freshly-killed buckets) must clear fees+spread+depth on the real book. **Next:
+  the real-book cross-check on `opening_captures` for these exact events** (we hold 5-min book snapshots for
+  the same markets), + the pre-kill denominator. Consistent with WO-5's 5–30-min reaction read — the open
+  question is only whether ANY meat survives the first 15 min at executable prices. Forward capture accrues
+  daily; trial ends ~08-08.
+- **▶▶ 2026-07-25 ~18:05Z (operator: "test the Synoptic API and if it works, integrate/log data") — the
+  SYNOPTIC SUB-HOURLY NOWCAST LANE is BUILT + DEPLOYED + VERIFIED LIVE end-to-end in one session.** The
+  first source from the new-data-sources research is in production: ① **Smoke-tested** the operator's new
+  account (token in-process only, never printed): US stations serve the **hfmetars 5-min variant** (median
+  5.0-min cadence on KORD/KHOU vs our 30-min METAR lane) but the open-access tier is **US-ONLY** (EGLL/CYYZ/
+  LTAC probe: "no access" — a tier upgrade lights intl with zero code change). ② **Built** the metar-nowcast
+  twin: `parseSynopticTimeseries` (core, emits the same `MetarOb` shape → `metarRunningMax` reused verbatim),
+  edge fn `synoptic-nowcast` (feeds the SAME monotonic `upsert_intraday` — the 0111 floor can only TIGHTEN),
+  migration **0118** (`synoptic_obs` 14d raw log + cron `5,19,35,49` — minute lane checked against LIVE prod
+  crons after the first two picks collided with health-monitor/opening-capture). ③ **Deployed + secret set**
+  (`scripts/ops/synoptic-set-secret.ts` — loadEnv→CLI, value never surfaced) + **first prod tick verified
+  17:57Z: 10 US stations returned, 76 five-min obs logged, 8 intraday floors advanced, 7 nowcasts rebuilt** —
+  sub-hourly floors the METAR lane hadn't caught, propagated into distributions immediately. Suite green
+  (+12 tests: 6 parser / 6 PGlite handler incl. token-redaction + monotone-floor pins), typecheck clean.
+  **Free-tier budget noted: 5,000 req + 5M SU/mo; the lane uses ≈2,976 req/mo (59%)** — research pulls share
+  the account, keep them in the remainder. Boundary intact (data source, not trading; no credentials touched
+  beyond the operator's new data token, set without display).
+- **▶▶ 2026-07-25 ~17:15Z (operator: "turn every stone — how do we improve live trading net profit from all
+  historic data?") — ADJUDICATED FROM THE RECORD, no new run: every named dimension already carries a
+  well-powered verdict; the ONE live candidate is the cheap-early forward panel, already running.** The Lane-3
+  filter's step-2 check found the question fully covered: **data patterns** = BID-PATH-DISCOVERY (238M rows:
+  mid-price martingale, path shape ~0 OOS AUC, NO missed pattern) + pricing-bucket exhaustive ("any future
+  price-only angle is a re-skin") + nonprice-fingerprint (price is a sufficient statistic; only `house_gap`
+  carries residual info and its trade loses); **time patterns** = entry-hour/lead (07-23: win rate purchasable,
+  rises ≈1:1 with price+hour, EV flat; MARKET-PNL: the bet-earlier ramp is convergence carry), horizon
+  freshness (the 23h ghost-quote artifact), regime/season/extreme-day/cross-horizon all KILL; **prediction
+  patterns** = BREAKEVEN-SKILL (our forecast's residual info is REAL, +2.7…+6.7pp within-band, but buying our
+  own bucket nets **−2.2%/$1, day-clustered CI [−4.3,−0.2]** against a 3.7–5.1pp cost wall) + C24 disagreement
+  quartiles (+1.05pp, CI incl 0, 21 Q4 days) + model-trim/source-accuracy (calibrated blend dominates). REC-1's
+  INSUFFICIENT (the one non-KILL) is moot — it's a maker-selection lever and the maker path measured 6.5% live
+  fills. **Structural conclusion: the edge exists and is smaller than the toll; only cost-side mechanisms
+  (maker: dead live · fee/rewards flip: tripwire ②) or NEW out-of-market info can change the sign — historic
+  data cannot.** No new computation run (re-litigation refused per board law); full per-dimension map delivered
+  in-chat. Live candidate status: cheap-early panel day one, running mean +7.65%, INSUFFICIENT (<40 mkts).
+- **▶▶ 2026-07-25 ~16:35Z (loop wake — first cycle after the cheap-early build session) — the CHEAP-EARLY
+  FORWARD PAPER PANEL is LIVE END-TO-END + the loop branch is reconciled with main.** ① PR #46 (squash
+  `bbbc0f8`: replay engine + view + migration **0117** + edge fn `cheap-early-panel` + the `/cheap-early` page)
+  merged to main and deployed last session; this cycle merged origin/main back into the loop branch (`a417392`,
+  pushed — the standing post-squash reconcile, PR-#23 lesson). ② Panel verified on prod: cron `47 * * * *`
+  active; the two build-session ticks wrote snapshots 1–2 (**34 considered / 9 entered / 6 realized markets /
+  4 cities, running mean net +7.65%**, label INSUFFICIENT_DATA, cityErrors 0, ~33 s/tick);
+  `gateWriteSkipped:'degraded'` confirmed as the INTENDED sufficiency withhold (`nMarkets 6 <` the 40 floor —
+  NOT the maker-exit infra-block pattern; the gate-of-record row starts writing at ≥40 markets, source
+  `forward-cheap-early`, distinct from the live lane's preflight source by design). First SCHEDULED cron fire
+  **verified 16:47:00Z: pg_cron fired + the fn answered 409 `ERR_ALREADY_RAN`** — the hourly period claim
+  `…T16:00` was already consumed by the 16:01Z build-session verification tick, so the dedupe did exactly its
+  job (same claim discipline as the §8.1 periodKey lesson; NOT a failure). **↳ ~18:00Z: the first CLEAN
+  scheduled snapshot CONFIRMED — 17:47:01Z claimed `…T17:00`, ok, snapshotId 3, 7 markets.** The running
+  mean flipped **+7.65% → −8.2%** as the 7th market realized — the day-one positive is already small-n
+  noise, exactly what the ≥40-market sufficiency floor exists to gate; no verdict until it fills. **No
+  capital before a frozen paper PASS; watch-only.** ③ Sweep otherwise
+  GREEN (numbers in the heartbeat); the 07-24 22:23Z `maker-exit`-tagged SELL row in orders-24h is the routine
+  resolution-loss bookkeeping for the 07-24 @0.23 buy (21.68 sh, basis $4.99, expired worthless) — already
+  folded into the cash accounting, not a new event.
 - **▶▶ 2026-07-25 ~06:42Z (loop wake, +1h) — STILL ALL-GREEN; one routine live fill confirms the lane is actively
   working.** A 07-25 city market entered the [2,12]h window between cycles and the lane bought it: **partial FAK fill
   06:20:06Z, 18 of 28 sh @ 0.14 avg = $2.52** (market 0x371c…f9dd, one of the 4 allowlisted cities). Within envelope
@@ -507,12 +664,29 @@ _Claude keeps this block current every material cycle. Whole status in 20 second
 6. **Watch items.** ~~price_cap 0.40~~ **CLOSED** (operator lowered to 0.30 at the 07-18 continuous-buying
    config) · **gate override expires 07-31 00:00Z** → surface the renewal from ~07-28 (the one live click) ·
    active_until **09-15** (operator-extended) → surface before expiry · city_sim_config runway 09-30 →
-   surface ~09-25 · storage: opening_captures → 2 GB bar ~07-29 (run the §Storage prune playbook off-peak).
+   surface ~09-25 · storage: opening_captures → 2 GB bar ~07-29 (run the §Storage prune playbook off-peak) ·
+   **synoptic TRIAL ends ~08-08** (operator-corrected 07-25: 14-day trial, commercial = contact-sales, no
+   self-serve tier, .edu-only open access) → when the tick starts 401ing/empty, `cron.unschedule
+   ('synoptic-nowcast')` (0118 rollback header) + keep the 14d `synoptic_obs` corpus; do NOT recommend
+   enterprise pricing (sub-hourly obs = truth/analytics freshness, zero trading edge per WO-5); free
+   freshness fallback = restore metar-nowcast to */15 (C15 shed it for compute, not necessity) ·
+   **OBS-TRANSMISSION re-adjudication ~08-06** (before the trial dies), on the CORRECTED design
+   (oracle addendum): kills at METAR/SPECI grade (IEM `asos.py` replica), 5-min stream as the
+   anticipatory trigger, after the daily obs top-up + an `--incremental` capture dump. **Prior now
+   firmly negative** — the 90-day deep replay (§Pass 3) reads the clean <10¢ scrap at −0.003/$1 on
+   mids; expect the July margin-3 cell to die as n grows. Surface only at ≥40 trades + wholly-positive
+   clustered CI on the REAL book (caveat first; INSUFFICIENT as of 07-25, `OBS-TRANSMISSION.md`).
+6b. **Synoptic daily top-up (while the trial lives, ends ~08-08).** Once per day:
+   `pnpm tsx scripts/research/synoptic-history-pull.ts` (defaults = last 5 days; idempotent both sides,
+   ~6 requests) — keeps the LOCAL NDJSON archive current with the rolling trial window so nothing is lost
+   when history access dies at trial end. After 08-08: dump any DB-only remainder from `synoptic_obs` to
+   the archive, then `cron.unschedule('synoptic-nowcast')`.
 7. **Calm-day build queue (all-green cycles only, in order).** ① ~~F4 cloud reconcile sweep~~ **DONE
    C20** (deployed + tick-verified + merged, PR #24). ② ~~google-paper-panel incremental replay~~
    **DONE C34** (0103 applied + fn deployed ~10:15Z 07-17; first incremental tick verification = the
-   next :24 run — check stats.incremental=true + duration collapse; then PR to main). ③ opening_captures
-   archive prep (dump tooling dry-run so the prune is one command when needed). ④ **[NEW, 07-25, LOW]
+   next :24 run — check stats.incremental=true + duration collapse; then PR to main). ③ ~~opening_captures
+   archive prep~~ **DONE 07-25** (incremental append ran live for the OBS-TRANSMISSION cross-check: +88k
+   rows to id 703395, coverage-verified — the prune is one command whenever the 2 GB bar threatens). ④ **[NEW, 07-25, LOW]
    orphan zero-fill FAK reconcile gap.** When the fill-poll THROWS at placement (net/timeout), the row is
    left `status='placed'`+order_id/0-fill and the inline F1 zero-fill→canceled adjudication (handler.ts:1086,
    acts on the SAME-tick result only) is skipped; the reconcile sweep never re-examines it because

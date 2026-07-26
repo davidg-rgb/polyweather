@@ -1,0 +1,204 @@
+{
+  "STATION": [
+    {
+      "ID": "4778",
+      "STID": "KHOU",
+      "NAME": "Houston, Houston Hobby Airport",
+      "ELEVATION": "46.0",
+      "LATITUDE": "29.63750",
+      "LONGITUDE": "-95.28250",
+      "STATUS": "ACTIVE",
+      "MNET_ID": "1",
+      "STATE": "TX",
+      "COUNTRY": "US",
+      "TIMEZONE": "America/Chicago",
+      "ELEV_DEM": "39.4",
+      "PERIOD_OF_RECORD": {
+        "start": "2002-08-14T00:00:00Z",
+        "end": "2026-07-25T17:20:00Z"
+      },
+      "UNITS": {
+        "position": "m",
+        "elevation": "ft"
+      },
+      "SENSOR_VARIABLES": {
+        "air_temp": {
+          "air_temp_set_1": {}
+        }
+      },
+      "OBSERVATIONS": {
+        "date_time": [
+          "2026-07-25T15:40:00Z",
+          "2026-07-25T15:45:00Z",
+          "2026-07-25T15:50:00Z",
+          "2026-07-25T15:53:00Z",
+          "2026-07-25T15:55:00Z",
+          "2026-07-25T16:00:00Z",
+          "2026-07-25T16:05:00Z",
+          "2026-07-25T16:10:00Z",
+          "2026-07-25T16:15:00Z",
+          "2026-07-25T16:20:00Z",
+          "2026-07-25T16:25:00Z",
+          "2026-07-25T16:30:00Z",
+          "2026-07-25T16:35:00Z",
+          "2026-07-25T16:40:00Z",
+          "2026-07-25T16:45:00Z",
+          "2026-07-25T16:50:00Z",
+          "2026-07-25T16:53:00Z",
+          "2026-07-25T16:55:00Z",
+          "2026-07-25T17:00:00Z",
+          "2026-07-25T17:05:00Z",
+          "2026-07-25T17:10:00Z",
+          "2026-07-25T17:15:00Z",
+          "2026-07-25T17:20:00Z",
+          "2026-07-25T17:25:00Z",
+          "2026-07-25T17:30:00Z"
+        ],
+        "air_temp_set_1": [
+          31,
+          31,
+          31,
+          30.6,
+          31,
+          31,
+          32,
+          32,
+          31,
+          31,
+          31,
+          32,
+          31,
+          31,
+          32,
+          32,
+          31.7,
+          31,
+          31,
+          32,
+          32,
+          31,
+          31,
+          32,
+          31
+        ]
+      },
+      "QC_FLAGGED": false,
+      "RESTRICTED": false,
+      "RESTRICTED_METADATA": false
+    },
+    {
+      "ID": "5520",
+      "STID": "KORD",
+      "NAME": "Chicago, Chicago-O'Hare International Airport",
+      "ELEVATION": "666.0",
+      "LATITUDE": "41.97972",
+      "LONGITUDE": "-87.90444",
+      "STATUS": "ACTIVE",
+      "MNET_ID": "1",
+      "STATE": "IL",
+      "COUNTRY": "US",
+      "TIMEZONE": "America/Chicago",
+      "ELEV_DEM": "682.4",
+      "PERIOD_OF_RECORD": {
+        "start": "2002-08-15T00:00:00Z",
+        "end": "2026-07-25T17:22:00Z"
+      },
+      "UNITS": {
+        "position": "m",
+        "elevation": "ft"
+      },
+      "SENSOR_VARIABLES": {
+        "air_temp": {
+          "air_temp_set_1": {}
+        }
+      },
+      "OBSERVATIONS": {
+        "date_time": [
+          "2026-07-25T15:40:00Z",
+          "2026-07-25T15:45:00Z",
+          "2026-07-25T15:50:00Z",
+          "2026-07-25T15:51:00Z",
+          "2026-07-25T15:55:00Z",
+          "2026-07-25T16:00:00Z",
+          "2026-07-25T16:05:00Z",
+          "2026-07-25T16:10:00Z",
+          "2026-07-25T16:15:00Z",
+          "2026-07-25T16:20:00Z",
+          "2026-07-25T16:25:00Z",
+          "2026-07-25T16:30:00Z",
+          "2026-07-25T16:35:00Z",
+          "2026-07-25T16:40:00Z",
+          "2026-07-25T16:45:00Z",
+          "2026-07-25T16:50:00Z",
+          "2026-07-25T16:51:00Z",
+          "2026-07-25T16:55:00Z",
+          "2026-07-25T17:00:00Z",
+          "2026-07-25T17:05:00Z",
+          "2026-07-25T17:10:00Z",
+          "2026-07-25T17:15:00Z",
+          "2026-07-25T17:20:00Z",
+          "2026-07-25T17:22:00Z",
+          "2026-07-25T17:25:00Z",
+          "2026-07-25T17:30:00Z"
+        ],
+        "air_temp_set_1": [
+          24,
+          24,
+          25,
+          25,
+          25,
+          25,
+          25,
+          24,
+          24,
+          24,
+          24,
+          24,
+          24,
+          24,
+          24,
+          24,
+          23.9,
+          24,
+          24,
+          24,
+          24,
+          24,
+          24,
+          23.9,
+          24,
+          24
+        ]
+      },
+      "QC_FLAGGED": false,
+      "RESTRICTED": false,
+      "RESTRICTED_METADATA": false
+    }
+  ],
+  "SUMMARY": {
+    "NUMBER_OF_OBJECTS": 2,
+    "RESPONSE_CODE": 1,
+    "RESPONSE_MESSAGE": "OK",
+    "METADATA_QUERY_TIME": "3.3 ms",
+    "METADATA_PARSE_TIME": "0.2 ms",
+    "TOTAL_METADATA_TIME": "3.5 ms",
+    "DATA_QUERY_TIME": "2.4 ms",
+    "QC_QUERY_TIME": "0.0 ms",
+    "DATA_PARSE_TIME": "0.5 ms",
+    "TOTAL_DATA_TIME": "2.8 ms",
+    "TOTAL_TIME": "6.3 ms",
+    "VERSION": "v2.36.1"
+  },
+  "QC_SUMMARY": {
+    "QC_CHECKS_APPLIED": [
+      "sl_range_check"
+    ],
+    "TOTAL_OBSERVATIONS_FLAGGED": 0,
+    "PERCENT_OF_TOTAL_OBSERVATIONS_FLAGGED": 0
+  },
+  "UNITS": {
+    "position": "m",
+    "elevation": "ft",
+    "air_temp": "Celsius"
+  }
+}

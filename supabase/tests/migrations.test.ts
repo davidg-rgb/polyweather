@@ -532,6 +532,13 @@ describe('migrations 0001–0010', () => {
       // the cron (archive-gated by the local scripts/ops/archive-retention.ts). See STORAGE-TIERING.md.
       '0116_retention_edge_evals_7d.sql',
       '0117_cheap_early_paper_loop.sql',
+      // 0118: Synoptic Data sub-hourly obs lane — synoptic_obs (14d in-RPC retention) + synoptic_obs_log +
+      // the synoptic-nowcast cron. Feeds the SAME monotonic upsert_intraday as metar-nowcast (floor only
+      // tightens). Open-access tier = US stations only; token = SYNOPTIC_PUBLIC_TOKEN edge secret.
+      '0118_synoptic_nowcast.sql',
+      // 0119: the obs↔price research corpus widening — capture universe = list_active_stations (around
+      // the clock, tier decides coverage) + synoptic_obs retention 14d→90d. Same cron; no new job.
+      '0119_synoptic_continuous_capture.sql',
     ]);
   });
 });
@@ -1195,8 +1202,12 @@ describe('pg_cron registrations (§7.22, W11)', () => {
       // 0113: the /trading account-overview snapshot (venue cash + data-api marks) — 9,39 avoids every
       // contended/occupied minute lane (C15).
       'account-snapshot':         '9,39 * * * *',
+      // 0118: Synoptic US sub-hourly (5-min METAR / HF-ASOS) nowcast twin (http_post edge-fn job;
+      // W11-checked). Odd-minute lane checked against LIVE prod crons 2026-07-25 (7,37 health-monitor,
+      // 21,51 opening-capture, quarters banned — 5,19,35,49 collide with nothing hourly) (C15).
+      'synoptic-nowcast':         '5,19,35,49 * * * *',
     };
-    expect(jobs.length).toBe(38);
+    expect(jobs.length).toBe(39);
     for (const j of jobs) {
       expect(j.schedule, `schedule for ${j.jobname}`).toBe(expected[j.jobname]);
     }
