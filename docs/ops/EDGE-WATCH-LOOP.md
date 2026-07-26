@@ -22,16 +22,16 @@
 _Claude keeps this block current every material cycle. Whole status in 20 seconds._
 
 > **⟳ Idle heartbeat (rolled in place each quiet cycle — no new bullet for zero-change sweeps):** 2026-07-26
-> **~14:42Z — GREEN; loop RE-ARMED since ~09:45Z (the /clear disarm is over; all re-entry watch items
+> **~15:43Z — GREEN; loop RE-ARMED since ~09:45Z (the /clear disarm is over; all re-entry watch items
 > cleared).** Today's efficiency-monitor Action **LANDED 08:39Z success** (drift-window normal) · 13:50Z
 > city tick landed on the second (10Z + 13:50Z lanes both verified today) · buy window
-> 00–10Z CLOSED with **NO fills 07-26** (344 ok / 0 fail ticks 24h, latest 14:33Z; 0 candidates the whole
+> 00–10Z CLOSED with **NO fills 07-26** (344 ok / 0 fail ticks 24h, latest 15:43Z; 0 candidates the whole
 > window — asks never dipped under the caps; next window ~**07-27 00:00Z**; interlock ok:true, override
 > id=2 → 07-31; the 2 benign orphan `placed` rows + the known 07-25 partial unchanged, dangling intents
 > empty) · **all crons 0-fail/24h** (metar/synoptic/captures/health/digest/google + the 10Z city tick all
 > on schedule) · cheap-early panel hourly (snap 18 @08:47Z: 38 considered / 10 entered / **8 realized mkts,
 > mean −20.1%, win 25%** — small-n sawtooth under the ≥40 floor, INSUFFICIENT as designed; cityErrors 0) ·
-> DB **2213 MB** / captures **734 MB** (under bars) · 0 unsent alerts · mode live (tripwire ⑤ unchanged) ·
+> DB **2217 MB** / captures **738 MB** (under bars) · 0 unsent alerts · mode live (tripwire ⑤ unchanged) ·
 > main→loop reconcile after PR #47 confirmed (`8dd4f23`). **Still owed today: rota 6b synoptic top-up
 > late-day (~18Z).** Nothing needs the operator (07-31 override renewal re-surfaces ~07-28). Material
 > events get their own dated bullet below.
