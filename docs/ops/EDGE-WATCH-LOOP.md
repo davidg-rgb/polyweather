@@ -21,6 +21,12 @@
 
 _Claude keeps this block current every material cycle. Whole status in 20 seconds._
 
+> **⏸ LOOP WAKEUPS DISARMED ~07:15Z 2026-07-26 (operator: /clear prep)** — re-enter the v18 rota + re-arm
+> self-paced wakeups next session. Watch-list on re-entry: today's ~08:25Z efficiency-monitor Action (verify
+> it fired, else manual-dispatch — C2 precedent) · rota 6b synoptic daily for 07-26 (run late-day) · buy
+> window 00–10Z had NO fills through 07:05Z (9 quiet sweeps, ticks clean throughout) · override renewal
+> re-surfaces from ~07-28 (expires 07-31 00:00Z).
+>
 > **⟳ Idle heartbeat (rolled in place each quiet cycle — no new bullet for zero-change sweeps):** 2026-07-26
 > **~04:05Z — GREEN.** Buy window OPEN since 00:00Z, **no fills yet today** (5 sweeps 00:09–04:01Z: ticks
 > clean every 2 min, 0 candidates — asks haven't dipped under the caps; interlock ok:true, override id=2 →
