@@ -25,9 +25,10 @@ _Claude keeps this block current every material cycle. Whole status in 20 second
 > **~22:25Z — GREEN; MATERIAL cycle (see the 22:20Z dated bullet: 0120 orphan-reconcile fix DEPLOYED +
 > the operator's standing intent recorded — RENEW at 07-31, keep improving until the account is empty).**
 > Day recap: efficiency-monitor Action landed 08:39Z success · all three city-tick lanes verified on the
-> second (10:00 / 13:50 / 20:45Z) · buy window 00–10Z closed with NO fills 07-26 (0 candidates all
-> window — asks never dipped under the operator's 07-23 tightened caps: ankara 0.16/helsinki 0.25/
-> wellington 0.40/KL 0.20; next window ~**07-27 00:00Z**; interlock ok:true, override id=2 → 07-31) ·
+> second (10:00 / 13:50 / 20:45Z) · buy window 00–10Z closed with NO fills 07-26 · **ROSTER SWAPPED
+> ~22:46Z on the operator's instruction: allowlist now kuala-lumpur/madrid/singapore/wellington, caps
+> KL 0.28 / madrid 0.40 / singapore 0.35 / wellington 0.40** (see the 22:46Z bullet; next window
+> ~**07-27 00:00Z** runs the NEW roster; interlock ok:true, override id=2 → 07-31) ·
 > all crons 0-fail/24h · cheap-early panel hourly (snap 18: 8 realized mkts, mean −20.1% — small-n
 > sawtooth under the ≥40 floor, INSUFFICIENT as designed) · DB **2243 MB** / captures **758 MB** (under
 > bars) · 0 unsent alerts · mode live (tripwire ⑤ unchanged) · the 2 historic orphan `placed` rows are
@@ -36,7 +37,20 @@ _Claude keeps this block current every material cycle. Whole status in 20 second
 > (re-surfaces ~07-28 — you've signaled you WILL renew; the click is still needed).** Material events
 > get their own dated bullet below.
 
-- **▶▶ 2026-07-26 ~22:20Z (operator, interactive: "do the FAK reconcile fix, and explore any other path
+- **▶▶ 2026-07-26 ~22:46Z (operator, interactive: "Make the swap — madrid and singapore in, helsinki and
+  ankara out. Change entry points to reasonable levels. write me a loop check for the night") — the ROSTER
+  SWAP IS EXECUTED (authorization = the chat instruction, the 07-18 direct-write precedent; trigger-audited)
+  + the NIGHT WATCH is ARMED.** ① `trade_config.city_allowlist` → **['kuala-lumpur','madrid','singapore',
+  'wellington']** (helsinki + ankara OUT — both 25% predicted-success since 07-18). ② `buy_table.
+  city_price_caps` → **madrid 0.40 · singapore 0.35 · wellington 0.40 (unchanged) · kuala-lumpur 0.28**
+  (the ≤½-measured-rate framework; KL raised from the operator's 07-23 0.20 to sit at half its 59% rate).
+  ③ Verified end-to-end via diag: `allowlist_used` = the new four, madrid/singapore 07-27+07-28 markets in
+  the funnel (13.2h/37.2h — first eligible ~00:00Z), interlock ok:true (override → 07-31), tick clean.
+  ④ **Night watch:** self-paced wakeups through the 00:00–10:00Z window (~30–45 min cadence, first landing
+  just before the open); any fill gets the C44-class verification (ledger transitions, caps honored,
+  venue-truth price); quiet sweeps roll the heartbeat. Stake $5 · global cap 0.30 · window [2,12]h ·
+  active_until 09-15 all unchanged. Boundary intact: the operator instructed the values; the override
+  renewal click (07-31) is still his.
   that may give increased results. We aim to renew the live placements and try for improvement until
   account is empty") — the ORPHAN ZERO-FILL RECONCILE GAP is CLOSED (0120 + executor, build-queue ④ DONE,
   deployed to prod) + the fresh per-city read is IN + the operator's standing intent is RECORDED.**
