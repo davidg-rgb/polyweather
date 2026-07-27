@@ -26,7 +26,7 @@ _Claude keeps this block current every material cycle. Whole status in 20 second
 > window produced TWO fills ~04:14–04:16Z — kuala-lumpur 32°C 18 sh @ 0.23 ($4.14; recovered by the
 > 0120 sweep after a poll-throw — the fix's first real save) + singapore 31°C 8.07 sh @ 0.34 ($2.74,
 > Slack pushed). Both C44-verified, caps honored, dangling EMPTY (see the 05:00Z dated bullet). ~$7.02
-> staked; both resolve ~12:00Z. No further fills through 06:06Z. Ticks 159/0 since 00:00Z; crons 0-fail; DB 2284 MB; mode live;
+> staked; both resolve ~12:00Z. No further fills through 06:47Z. Ticks 176/0 since 00:00Z; crons 0-fail; DB 2288 MB; mode live;
 > interlock ok (override → 07-31). Watching at ~30 min cadence while positions ride.** Material
 > cycles tonight: fills 05:00Z · roster swap 22:46Z · 0120 fix 22:20Z (dated bullets below);
 > operator's standing intent — RENEW at 07-31, keep improving until the account is empty.
