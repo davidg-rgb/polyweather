@@ -22,12 +22,13 @@
 _Claude keeps this block current every material cycle. Whole status in 20 seconds._
 
 > **⟳ Idle heartbeat (rolled in place each quiet cycle — no new bullet for zero-change sweeps):** 2026-07-26
-> **2026-07-27 ~04:00Z (NIGHT WATCH, operator sleeping) — GREEN; the FIRST window on the NEW roster is
-> RUNNING (opened 00:00Z): 104/0 ticks at the 2-min cadence, `requoted: 4` every tick (live re-pricing
-> all four cities), NO fills yet (asks above the caps so far — KL .28 / madrid .40 / singapore .35 /
-> wellington .40), 0 candidates, reconcile clean post-0120 (dangling EMPTY), crons 0-fail, DB 2274 MB,
-> mode live, interlock ok (override → 07-31). Watching at ~30–45 min cadence all night.** Material
-> cycles earlier tonight: the 22:46Z roster swap + the 22:20Z 0120 fix (dated bullets below);
+> **2026-07-27 ~05:00Z (NIGHT WATCH, operator sleeping) — GREEN with FILLS: the new roster's first
+> window produced TWO fills ~04:14–04:16Z — kuala-lumpur 32°C 18 sh @ 0.23 ($4.14; recovered by the
+> 0120 sweep after a poll-throw — the fix's first real save) + singapore 31°C 8.07 sh @ 0.34 ($2.74,
+> Slack pushed). Both C44-verified, caps honored, dangling EMPTY (see the 05:00Z dated bullet). ~$7.02
+> staked; both resolve ~12:00Z. Ticks 129/0 since 00:00Z; crons 0-fail; DB 2278 MB; mode live;
+> interlock ok (override → 07-31). Watching at ~30 min cadence while positions ride.** Material
+> cycles tonight: fills 05:00Z · roster swap 22:46Z · 0120 fix 22:20Z (dated bullets below);
 > operator's standing intent — RENEW at 07-31, keep improving until the account is empty.
 > Day recap: efficiency-monitor Action landed 08:39Z success · all three city-tick lanes verified on the
 > second (10:00 / 13:50 / 20:45Z) · buy window 00–10Z closed with NO fills 07-26 · **ROSTER SWAPPED
@@ -42,6 +43,22 @@ _Claude keeps this block current every material cycle. Whole status in 20 second
 > (re-surfaces ~07-28 — you've signaled you WILL renew; the click is still needed).** Material events
 > get their own dated bullet below.
 
+- **▶▶ 2026-07-27 ~05:00Z (night watch) — FIRST TWO FILLS ON THE NEW ROSTER, both C44-verified — and the
+  4-hour-old 0120 fix ALREADY RECOVERED ITS FIRST REAL ORPHAN.** ① **kuala-lumpur 32°C** (04:14Z tick):
+  FAK 21 sh limit 0.23 posted (venue 0x10446ad7…) but the fill-poll THREW (tick stats: candidates 1 /
+  failed 1) → the row orphaned `placed`/0-fill — the EXACT 07-23/07-24 failure class — and the **04:20Z
+  tick's 0120 sweep adjudicated it by direct order-id evidence (`reconcileAdopted: 1`): 18/21 sh @ 0.23
+  = $4.14, partial (terminal FAK record)**. Pre-0120 this was a permanently stuck row hiding 18 REAL
+  shares at the venue outside the ledger; now it is booked and the market's bookkeeping is correct. Cap
+  honored (0.23 ≤ KL's 0.28). Two known limits of the recovery path, both by design and now queue item
+  ⑤ (LOW): a reconcile-recovered fill records fee $0 (wallet carries fee truth; ~$0.21 actual) and does
+  NOT push BUY_TABLE_FILLED (the notify hook lives in the placement flow) — add a notify to the
+  adopted-with-fills branch on a calm cycle, NOT mid-window. ② **singapore 31°C** (04:16Z tick, clean
+  inline path): FAK 14 sh limit 0.35 → partial **8.07 sh @ 0.34 venue-truth avg = $2.74**, fee $0.137
+  (5% ✓), **Slack BUY_TABLE_FILLED sent=true** ✓, cap honored (0.34 ≤ 0.35). ③ Ledger clean: both
+  partials terminal, dangling EMPTY, no residue; ~$7.02 staked tonight; both hold to resolution ~12:00Z
+  07-27 (KL 18 sh → $18 if 32°C wins; singapore 8.07 sh → $8.07 if 31°C wins). Madrid + wellington
+  unfilled so far (asks above caps); window runs to 10:00Z.
 - **▶▶ 2026-07-26 ~22:46Z (operator, interactive: "Make the swap — madrid and singapore in, helsinki and
   ankara out. Change entry points to reasonable levels. write me a loop check for the night") — the ROSTER
   SWAP IS EXECUTED (authorization = the chat instruction, the 07-18 direct-write precedent; trigger-audited)
