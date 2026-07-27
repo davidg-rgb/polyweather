@@ -306,6 +306,98 @@ function TpComparisonTable({ view }: { view: GoogleView }): ReactElement {
   );
 }
 
+/**
+ * EU-cluster forward watch (pre-registered 2026-07-27, GOOGLE-CITY-PNL.md): the six cities whose
+ * full-record replay printed positive are adjudicated on FORWARD entries only (target day ≥ 07-28) —
+ * no re-selection, no re-tune. This card is the raw forward progress; the verdict of record is the
+ * §9R-E day-clustered read of scripts/research/google-city-pnl.ts over the full archive (the panel
+ * window rolls at ~21d, so old forward entries age out of THIS view but never out of the archive).
+ */
+const EU_CLUSTER_CITIES = ['milan', 'paris', 'london', 'cape-town', 'warsaw', 'lucknow'] as const;
+const EU_CLUSTER_CUTOFF = '2026-07-28'; // first forward target day (pre-registered 2026-07-27)
+
+function EuClusterPanel({ view }: { view: GoogleView }): ReactElement {
+  const forward = view.entries.filter(
+    (e) => (EU_CLUSTER_CITIES as readonly string[]).includes(e.city) && e.targetDate >= EU_CLUSTER_CUTOFF,
+  );
+  const realized = forward.filter((e) => e.status === 'realized');
+  const wins = realized.filter((e) => e.netPnlUsd > 0);
+  const netAll = forward.reduce((a, e) => a + e.netPnlUsd, 0);
+  const netRealized = realized.reduce((a, e) => a + e.netPnlUsd, 0);
+  const days = new Set(forward.map((e) => e.targetDate)).size;
+  const byCity = EU_CLUSTER_CITIES.map((city) => {
+    const rows = forward.filter((e) => e.city === city);
+    const real = rows.filter((e) => e.status === 'realized');
+    return {
+      city,
+      n: rows.length,
+      nRealized: real.length,
+      nTp: real.filter((e) => e.exitKind === 'take_profit').length,
+      nLose: real.filter((e) => e.exitKind === 'resolution_lose').length,
+      net: rows.reduce((a, e) => a + e.netPnlUsd, 0),
+    };
+  });
+  return (
+    <div className="panel">
+      <p className="muted small" style={{ marginTop: 0 }}>
+        The six cities the full-record per-city replay flagged positive (<span className="mono">GOOGLE-CITY-PNL.md</span>,
+        2026-07-27) — <strong>pre-registered</strong> that day and scored on <strong>forward entries only</strong>{' '}
+        (target day ≥ {fmtDate(EU_CLUSTER_CUTOFF)}), no re-selection, no re-tune. Caveats that made the flag
+        unproven: n=2–4 per city, all-TP streaks, config tuned in-sample, and the entry self-extinguishes when the
+        market stops disagreeing with Google — <strong>zero forward entries is itself a result</strong>. Verdict of
+        record: the §9R-E day-clustered read over the full archive (<span className="mono">scripts/research/google-city-pnl.ts</span>);
+        this card is the raw progress (the panel window rolls ~{view.days}d, the archive keeps everything).
+      </p>
+      <div className="strip">
+        <div className="tile rec">
+          <div className="tile-head">
+            <span className="cap">Forward net P&amp;L</span>
+            <span className="chip soft">fictive</span>
+          </div>
+          <div className="big" style={{ color: pnlColor(netAll) }}>{signedUsd(netAll)}</div>
+          <div className="sub">{signedUsd(netRealized)} realized · {forward.length - realized.length} open</div>
+        </div>
+        <div className="tile">
+          <div className="cap">Forward entries</div>
+          <div className="big sky">{forward.length}</div>
+          <div className="sub">across {days} target day{days === 1 ? '' : 's'}</div>
+        </div>
+        <div className="tile">
+          <div className="cap">Realized</div>
+          <div className="big">{realized.length}</div>
+          <div className="sub">{wins.length}W / {realized.length - wins.length}L{realized.length > 0 ? ` · ${fmtPct(wins.length / realized.length, 0)}` : ''}</div>
+        </div>
+      </div>
+      <div className="tbl-scroll" style={{ marginTop: '0.6rem' }}>
+        <table>
+          <thead>
+            <tr>
+              <th>city</th>
+              <th className="num">entries</th>
+              <th className="num">realized</th>
+              <th className="num">TP</th>
+              <th className="num">res-lose</th>
+              <th className="num">net P&amp;L</th>
+            </tr>
+          </thead>
+          <tbody>
+            {byCity.map((c) => (
+              <tr key={c.city}>
+                <td className="small">{c.city}</td>
+                <td className="num">{c.n}</td>
+                <td className="num">{c.nRealized}</td>
+                <td className="num">{c.nTp}</td>
+                <td className="num">{c.nLose}</td>
+                <td className="num" style={{ color: c.n > 0 ? pnlColor(c.net) : undefined }}>{c.n > 0 ? signedUsd(c.net) : '—'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 // ─── page ────────────────────────────────────────────────────────────────────
 
 export default async function ConvergencePage(): Promise<ReactElement> {
@@ -359,6 +451,9 @@ export default async function ConvergencePage(): Promise<ReactElement> {
       </p>
 
       <GateBanner view={view} />
+
+      <h2>EU-cluster forward watch <span className="chip soft">pre-registered 2026-07-27</span></h2>
+      <EuClusterPanel view={view} />
 
       <h2>Fictive money tracker</h2>
       <MoneyTiles view={view} />

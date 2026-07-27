@@ -921,15 +921,23 @@ describe('0082 §9 — the six bot_order_* RPCs (the T1 OrderLedger contract)', 
     expect(Number(o!.avg_price)).toBeCloseTo(0.3); // basis preserved too
   });
 
-  it('ADDENDUM: bot_order_list_dangling returns {rows:[...]} of intent+order_id-null rows, mode-scoped', async () => {
-    // c1: live intent, no order_id → DANGLING. c2: live placed (has order_id) → not dangling.
-    // c3: dry-run intent, no order_id → dangling only under p_mode='dry-run'. c4: live canceled → never.
+  it('ADDENDUM (0120): bot_order_list_dangling returns {rows:[...]} of BOTH dangling classes, mode-scoped', async () => {
+    // c1: live intent, no order_id → DANGLING (0082 class). c2: live placed + order_id + 0-fill →
+    // DANGLING (0120 orphan zero-fill class — the fill-poll-crashed-at-placement row). c3: dry-run
+    // intent → dangling only under p_mode='dry-run'. c4: live canceled → never. c5: live placed +
+    // order_id + FILLS RECORDED → never (size_matched=0 is load-bearing: partial fill state is
+    // terminal-recorded, not dangling).
     await reserve();                                                              // c1/k1 live intent
     await reserve({ p_intent_key: 'k2', p_client_order_id: 'c2' });
     await port.rpc('bot_order_record_placed', { p_client_order_id: 'c2', p_order_id: 'venue-2' });
     await reserve({ p_mode: 'dry-run', p_intent_key: 'k3', p_client_order_id: 'c3' });
     await reserve({ p_intent_key: 'k4', p_client_order_id: 'c4' });
     await port.rpc('bot_order_record_canceled', { p_client_order_id: 'c4' });
+    await reserve({ p_intent_key: 'k5', p_client_order_id: 'c5' });
+    await port.rpc('bot_order_record_placed', { p_client_order_id: 'c5', p_order_id: 'venue-5' });
+    await port.rpc('bot_order_record_fill', {
+      p_client_order_id: 'c5', p_size_matched: 3, p_avg_price: 0.2, p_status: 'partial',
+    });
 
     // Envelope shape (post-0081 idiom): an OBJECT carrying rows — never a top-level array, args or not.
     const [shape] = await rows<{ outer: string; inner: string }>(
@@ -945,13 +953,18 @@ describe('0082 §9 — the six bot_order_* RPCs (the T1 OrderLedger contract)', 
       'bot_order_list_dangling', { p_mode: 'live', p_older_than_min: 0 },
     );
     const liveRows = live!.bot_order_list_dangling.rows;
-    expect(liveRows.map((r) => r['client_order_id'])).toEqual(['c1']);
+    expect(liveRows.map((r) => r['client_order_id'])).toEqual(['c1', 'c2']);
     // the row shape matches bot_order_by_intent's (same to_jsonb(live_orders) fields)
     expect(liveRows[0]!['intent_key']).toBe('k1');
     expect(liveRows[0]!['status']).toBe('intent');
     expect(liveRows[0]!['order_id']).toBeNull();
     expect(liveRows[0]!['side']).toBe('BUY');
     expect(Number(liveRows[0]!['size_matched'])).toBe(0);
+    // the 0120 orphan class carries its venue id + order_type (the executor's dead-proof key)
+    expect(liveRows[1]!['status']).toBe('placed');
+    expect(liveRows[1]!['order_id']).toBe('venue-2');
+    expect(Number(liveRows[1]!['size_matched'])).toBe(0);
+    expect(typeof liveRows[1]!['order_type']).toBe('string');
 
     const [dry] = await port.rpc<{ bot_order_list_dangling: { rows: Record<string, unknown>[] } }>(
       'bot_order_list_dangling', { p_mode: 'dry-run', p_older_than_min: 0 },

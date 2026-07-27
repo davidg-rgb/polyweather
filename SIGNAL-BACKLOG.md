@@ -993,6 +993,19 @@ backtest's 49% synthetic), which is precisely why that arm died (§13). Nothing 
 **Re-open only per §13's rule** — a measured, understood mechanism change to the maker-fill rate, never a backtest
 re-tune.
 
+## 13-R2. Take-profit exit on the live buy-table lane — CLOSED 2026-07-27 (operator question: "sell at 80%?")
+
+Operator asked whether the live lane should take profit when a position runs north of 0.80 instead of holding to
+resolution (prompted by watching high-probability positions later lose to late-day heating). Measured on the lane's
+own fills **and** a powered mirror panel (`scripts/research/tp-exit-panel.py`, 795 events / 45 cities / 38 days):
+**win-rate-given-touch sits at or slightly above the martingale null at every threshold** (0.814 realized vs 0.80
+implied; 0.911 vs 0.90 — the §13-R favorite tilt from the other side), so a TP sell is EV-neutral **before** costs and
+strictly negative after the taker spread — Δ(TP−hold) ≤ 0 across the whole threshold grid at mid, day-clustered CIs
+excluding zero at half the grid at a 1¢ spread. The lane's own five ≥0.80 touches went 4-1 = the exact base rate.
+Maker-TP is already dead at the 6.5% real-book fill rate (§13); path rules (stops, trailing) add nothing (mid is a
+martingale, `BID-PATH-DISCOVERY.md`). **Hold-to-resolution stands; no config change.** Full record:
+`docs/ops/BUY-TABLE-LIVE.md` (2026-07-27 section).
+
 ## What NOT to do
 
 Don't build items 5–10 before items 1–4 resolve — 1–4 are all read-only analysis over data that

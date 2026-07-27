@@ -9,6 +9,63 @@
 > practical unlock for this lane is the **expiring (≤14d) `trade_gate_override`** — the forward paper gate of
 > record is a settled KILL and will not PASS on its own.
 
+## ▶ 2026-07-27 — "should we take profit when the position goes north of 80%?" — MEASURED: NO (the price is already the fair exit)
+
+Operator observation: *"a few days where we made gains with probability going north of 80% only to later lose as the
+temperature rises — should we introduce a take-profit to sell off at certain stages?"* Answered on both the lane's own
+fills and a powered mirror panel. **Verdict: no TP mechanic — at every threshold it is EV-neutral-to-negative before
+costs, and strictly negative after the spread a taker crosses.**
+
+**The live corpus (16 resolved fills, 07-18 → 07-24):** five positions ever showed a sellable bid ≥ 0.80 → **four won,
+one lost** (helsinki 07-24 20°C, peak bid 0.84 at 14:42Z, overtaken by 21°C late-day heating) — a **0.80 realized win
+rate given touching 0.80**, exactly what the price implied. TP@0.80 on those five is a stake-normalized wash
+(5 × 0.80 sold = 4 × 1.00 held); the apparent +$4 dollar edge is size noise (the one loser happened to carry 18
+shares vs the winners' avg 13). TP@0.70 gives up 0.30 on four eventual winners (−$; worse); TP@0.90 forgoes 0.10 × 4
+and saves nothing (helsinki never printed 0.90; worse). The "80% then lost" days ARE the base rate: at 0.80 one in
+five must lose, and only that one registers as an event.
+
+**The powered mirror panel** (`scripts/research/tp-exit-panel.py` → `out/tp-exit-{panel.csv,verdict.json}`; enriched
+price archive 2026-03-28 → 07-02): entry = our lead-0 predicted bucket at its first tick ≤ $0.45 inside the lane's
+[2,12]h window → **795 events / 45 cities / 38 days**. Two results, both fatal to TP:
+
+1. **Win-rate-given-touch sits AT or ABOVE the martingale null at every threshold** — 0.545 vs 0.50 · 0.728 vs 0.70 ·
+   **0.814 vs 0.80** · 0.911 vs 0.90 · 0.948 vs 0.95 (Wilson CIs contain or exceed the null everywhere). There is no
+   overpricing at 0.80 to sell into; the touched favorite is if anything slightly *under*priced (the same
+   favorite-longshot tilt §13-R measured at +2–3¢/share). Selling at touch forfeits that tilt.
+2. **Δ(TP − hold)** = touch-rate × (X − spread − win|touch): at mid it is ≤ 0 at every threshold (best cell +0.13pp
+   at 0.75 = noise); at a 1¢ bid-spread it is negative across the grid with day-clustered CIs excluding zero at half
+   of it (X=0.50: −3.5pp [−6.7, −1.0] · X=0.90: −0.78pp [−2.0, −0.02]). The **allowlist-6 subset** (n=113) shows
+   positive point deltas at 0.70–0.90 but day-CIs like [−4.6, +12.5] — an underpowered wash, and cherry-picking that
+   subset *and* threshold post-hoc is the winner's curse trap (§traps 6/10).
+
+**Reconciliation — this is the third independent measurement of the same mechanism, now on the lane's own cohort:**
+sell-the-rise as a TAKER dies to the spread (`CONVERGENCE-TUNING.md` breakeven ×0.70; §13-R hold-vs-sell); as a MAKER
+it dies to the 6.5% real-book fill rate (the forward maker-exit gate of record, §13). The mid path is a martingale —
+level is the sufficient statistic, no path/exit rule adds information (`BID-PATH-DISCOVERY.md`, OOS AUC ≈ 0). Same
+logic kills stop-losses and trailing stops. And an information-based exit (METAR shows the temp rising through our
+bucket top) sells to a book that already knows — the market locks (Brier ≤ 0.1) by local 14–18 on ~100% of days while
+our house model locks 2–51% (`CITY-ORACLE`); by the time the rise is visible the bid has already repriced, so the
+"save" sells at the new fair price minus the spread. **Config unchanged: hold-to-resolution stands.**
+
+## ▶ 2026-07-26 — the ORPHAN ZERO-FILL reconcile gap is CLOSED (0120; operator-directed "do the FAK reconcile fix")
+
+The last known hole in the live plumbing: when the placement fill-poll THREW after a successful post
+(net/timeout), the row froze at `status='placed'`+order_id+0-fill — outside both the inline F1 zero-fill
+adjudication (same-tick only) and the reconcile sweep (`bot_order_list_dangling` listed only
+`intent`+no-order_id). The orphan then **blocked re-entry into that market for the rest of its window**
+(2 occurrences: 07-23 04:18Z, 07-24 07:48Z — money-safe, silently retired the market both days).
+
+**Fix (0120 + executor):** the dangling RPC now also lists `placed AND order_id IS NOT NULL AND
+size_matched=0` rows (same ≥5-min age floor), and `reconcileOpenOrders` gives rows carrying a venue id
+**DIRECT evidence by order id** — never the heuristic match: venue fills found ⇒ `record_fill` with the
+trade-records size-weighted avg (the 07-19 fill-price-truth idiom, fail-soft to the poll price); dead
+zero-fill FAK/FOK ⇒ `record_canceled` (the F1 outcome — kill-type orders cannot rest, so dead+0 is
+proven; the market becomes retryable the SAME tick); GTC/GTD frees only on a known-dead venue status;
+still-open resting orders are left untouched (no ambiguity alert); unknown states hold + WARN. Operator
+config caveat noted in passing: per-city caps were tightened by the operator 07-23 09:28Z to
+`ankara 0.16 / helsinki 0.25 / wellington 0.40 / kuala-lumpur 0.20` (the 07-18 values in older notes are
+stale).
+
 ## ▶ 2026-07-23 — "the limits are holding back our win rate" — DIAGNOSED (win rate is a purchasable vanity metric; no limit setting adds profit)
 
 Operator observation: *"we buy bad positions that realise as faulty soon after we enter … based on

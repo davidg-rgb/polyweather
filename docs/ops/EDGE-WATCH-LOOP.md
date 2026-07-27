@@ -21,15 +21,114 @@
 
 _Claude keeps this block current every material cycle. Whole status in 20 seconds._
 
-> **⟳ Idle heartbeat (rolled in place each quiet cycle — no new bullet for zero-change sweeps):** 2026-07-25
-> **~23:30Z — GREEN.** Buy lane mode live / lead_window (next candidate window opens **00:00Z in ~30 min** —
-> next wake lands just after the 00:02Z first tick; interlock ok:true, override id=2 → 07-31; 0 new orders
-> since the 07-25 06:20Z partial; 2 benign orphan `placed` rows unchanged) · all crons 0-fail/24h (buy-tick
-> 344 ok · capture 287 · metar 48 · synoptic 23 capture-only · cheap-early 8 hourly · city race 3 lanes) ·
-> DB **2137 MB** / captures **673 MB** (under bars) · 0 unsent alerts · daily synoptic obs top-up done
-> (rota 6b, 9 new rows). Nothing needs the operator (07-31 override renewal re-surfaces ~07-28). Material
-> events get their own dated bullet below.
+> **⟳ Idle heartbeat (rolled in place each quiet cycle — no new bullet for zero-change sweeps):** 2026-07-26
+> **2026-07-27 ~12:10Z (MORNING) — both overnight positions LOST to late-day heating (−$7.0 all-in);
+> everything else GREEN.** Full story in the ▶▶ 12:10Z MORNING SUMMARY bullet below. Venue grade was
+> still lagging at write time (winner=null ~12:08Z) but both losses are FLOOR-CERTAIN (METAR floors:
+> WMKK 33°C > our 32°C · WSSS 32°C > our 31°C); the tick's idempotent resolution-loss booking fires
+> when the grade lands — **verify next cycle: winner idx recorded + N1 daily-loss booked.** Crons
+> 0-fail/24h; ticks at */10 out-of-window pace; dangling EMPTY (0120 holding); mode live; interlock
+> ok. **Yours TODAY: the 07-31 override renewal click (you've signaled you WILL renew).**** Material
+> cycles tonight: fills 05:00Z · roster swap 22:46Z · 0120 fix 22:20Z (dated bullets below);
+> operator's standing intent — RENEW at 07-31, keep improving until the account is empty.
+> Day recap: efficiency-monitor Action landed 08:39Z success · all three city-tick lanes verified on the
+> second (10:00 / 13:50 / 20:45Z) · buy window 00–10Z closed with NO fills 07-26 · **ROSTER SWAPPED
+> ~22:46Z on the operator's instruction: allowlist now kuala-lumpur/madrid/singapore/wellington, caps
+> KL 0.28 / madrid 0.40 / singapore 0.35 / wellington 0.40** (see the 22:46Z bullet; next window
+> ~**07-27 00:00Z** runs the NEW roster; interlock ok:true, override id=2 → 07-31) ·
+> all crons 0-fail/24h · cheap-early panel hourly (snap 18: 8 realized mkts, mean −20.1% — small-n
+> sawtooth under the ≥40 floor, INSUFFICIENT as designed) · DB **2243 MB** / captures **758 MB** (under
+> bars) · 0 unsent alerts · mode live (tripwire ⑤ unchanged) · the 2 historic orphan `placed` rows are
+> now ADJUDICATED canceled (0120 bullet) — dangling should read EMPTY from here · rota 6b synoptic
+> top-up for 07-26 DONE 17:45Z (17,582 obs / 13 new rows). **Yours: the 07-31 override renewal
+> (re-surfaces ~07-28 — you've signaled you WILL renew; the click is still needed).** Material events
+> get their own dated bullet below.
 
+- **▶▶ 2026-07-27 ~12:10Z — MORNING SUMMARY (night watch 00:00–12:00Z, operator slept through it).**
+  **The night in one line: the new roster's first window bought two positions (~$7.02), both died to
+  late-day heating — and every piece of overnight plumbing worked, including two first-time saves.**
+  ① **Fills + outcomes:** kuala-lumpur 32°C 18 sh @ 0.23 ($4.14) — METAR floor hit **33°C** → LOSS;
+  singapore 31°C 8.07 sh @ 0.34 ($2.74) — floor hit **32°C** → LOSS. **−$6.88 stake + fees ≈ −$7.0**;
+  lane lifetime ≈ **−$37** since 07-18 (record now 4W/14L resolved); balance ≈ **$90**. Venue grade
+  lagged at 12:08Z (winner=null); both losses floor-certain by the monotone running max — ledger
+  booking auto-follows via `bot_order_record_resolution_loss`, verify next cycle. **Honest footnote
+  (today's TP adjudication, §13-R2):** singapore touched ~0.87 bid intraday before dying — ON THIS
+  PAIR a TP@0.80 would have saved ~$6.9. That is the 1-in-5-at-0.80 case the 795-event panel prices
+  exactly; the same panel says the rule LOSES money on average (win|touch ≥ the price at every
+  threshold). Hold stands — do not re-litigate off a single night. ② **0120's FIRST REAL SAVE:** the
+  KL fill-poll threw at 04:14Z (the exact 07-23/07-24 orphan class) → the 04:20Z sweep adopted it by
+  direct order-id evidence, 18/21 sh booked correctly. ③ **metar-nowcast 08:04Z transient self-healed**
+  (0 fails since). ④ **eff-monitor Action skipped its drift window → manually dispatched 09:16Z (C2
+  precedent) → run 30253227300 SUCCESS 09:17Z.** ⑤ **YOURS TODAY: the override renewal (id=2 expires
+  07-31 00:00Z)** — you've signaled you WILL renew; the click is still needed. ⑥ Later today: rota 6b
+  synoptic top-up (`pnpm tsx scripts/research/synoptic-history-pull.ts`); queue ⑤ (notify+fee on the
+  0120 adopted-fills branch) stays calm-cycle work. ⑦ **Session research committed on this branch:**
+  the TP-exit mechanic measured → **KILL** (`SIGNAL-BACKLOG.md` §13-R2; live corpus 4-1 on ≥0.80
+  touches = the price-implied rate) · Google paper lane per-city full-record P&L (`GOOGLE-CITY-PNL.md`:
+  lane **−$431** overall; milan/paris/london/cape-town/warsaw/lucknow pre-registered for a
+  FORWARD-ONLY §9R-E watch — no config change, no capital implication).
+- **▶▶ 2026-07-27 ~05:00Z (night watch) — FIRST TWO FILLS ON THE NEW ROSTER, both C44-verified — and the
+  4-hour-old 0120 fix ALREADY RECOVERED ITS FIRST REAL ORPHAN.** ① **kuala-lumpur 32°C** (04:14Z tick):
+  FAK 21 sh limit 0.23 posted (venue 0x10446ad7…) but the fill-poll THREW (tick stats: candidates 1 /
+  failed 1) → the row orphaned `placed`/0-fill — the EXACT 07-23/07-24 failure class — and the **04:20Z
+  tick's 0120 sweep adjudicated it by direct order-id evidence (`reconcileAdopted: 1`): 18/21 sh @ 0.23
+  = $4.14, partial (terminal FAK record)**. Pre-0120 this was a permanently stuck row hiding 18 REAL
+  shares at the venue outside the ledger; now it is booked and the market's bookkeeping is correct. Cap
+  honored (0.23 ≤ KL's 0.28). Two known limits of the recovery path, both by design and now queue item
+  ⑤ (LOW): a reconcile-recovered fill records fee $0 (wallet carries fee truth; ~$0.21 actual) and does
+  NOT push BUY_TABLE_FILLED (the notify hook lives in the placement flow) — add a notify to the
+  adopted-with-fills branch on a calm cycle, NOT mid-window. ② **singapore 31°C** (04:16Z tick, clean
+  inline path): FAK 14 sh limit 0.35 → partial **8.07 sh @ 0.34 venue-truth avg = $2.74**, fee $0.137
+  (5% ✓), **Slack BUY_TABLE_FILLED sent=true** ✓, cap honored (0.34 ≤ 0.35). ③ Ledger clean: both
+  partials terminal, dangling EMPTY, no residue; ~$7.02 staked tonight; both hold to resolution ~12:00Z
+  07-27 (KL 18 sh → $18 if 32°C wins; singapore 8.07 sh → $8.07 if 31°C wins). Madrid + wellington
+  unfilled so far (asks above caps); window runs to 10:00Z.
+- **▶▶ 2026-07-26 ~22:46Z (operator, interactive: "Make the swap — madrid and singapore in, helsinki and
+  ankara out. Change entry points to reasonable levels. write me a loop check for the night") — the ROSTER
+  SWAP IS EXECUTED (authorization = the chat instruction, the 07-18 direct-write precedent; trigger-audited)
+  + the NIGHT WATCH is ARMED.** ① `trade_config.city_allowlist` → **['kuala-lumpur','madrid','singapore',
+  'wellington']** (helsinki + ankara OUT — both 25% predicted-success since 07-18). ② `buy_table.
+  city_price_caps` → **madrid 0.40 · singapore 0.35 · wellington 0.40 (unchanged) · kuala-lumpur 0.28**
+  (the ≤½-measured-rate framework; KL raised from the operator's 07-23 0.20 to sit at half its 59% rate).
+  ③ Verified end-to-end via diag: `allowlist_used` = the new four, madrid/singapore 07-27+07-28 markets in
+  the funnel (13.2h/37.2h — first eligible ~00:00Z), interlock ok:true (override → 07-31), tick clean.
+  ④ **Night watch:** self-paced wakeups through the 00:00–10:00Z window (~30–45 min cadence, first landing
+  just before the open); any fill gets the C44-class verification (ledger transitions, caps honored,
+  venue-truth price); quiet sweeps roll the heartbeat. Stake $5 · global cap 0.30 · window [2,12]h ·
+  active_until 09-15 all unchanged. Boundary intact: the operator instructed the values; the override
+  renewal click (07-31) is still his.
+  that may give increased results. We aim to renew the live placements and try for improvement until
+  account is empty") — the ORPHAN ZERO-FILL RECONCILE GAP is CLOSED (0120 + executor, build-queue ④ DONE,
+  deployed to prod) + the fresh per-city read is IN + the operator's standing intent is RECORDED.**
+  ① **Standing intent (changes the 07-31 posture):** the operator will RENEW the override at/before
+  07-31 and wants continued live improvement attempts with the remaining balance (~$97). The renewal
+  click is still his (≤14d DB cap, not defeatable); I surface it from ~07-28 as before. ② **The fix
+  (operator-directed):** `bot_order_list_dangling` widened with the orphan class (`placed` + order_id +
+  0-fill, 0120) and `reconcileOpenOrders` gained a DIRECT-evidence branch (getOrder by id; fills →
+  record_fill venue-truth avg; dead zero-fill FAK → record_canceled = retryable same tick; GTC frees
+  only on known-dead status; resting untouched; unknown holds+WARN). No more silently-retired markets
+  (the 07-23/07-24 orphans cost two re-entry days). Fn deployed FIRST then 0120 applied (old-code+new-RPC
+  would have mis-routed orphans through the heuristic path). Suite **3,586 green** (+11: 8 executor
+  orphan cases, END-TO-END handler orphan→canceled→re-bought, 0120 RPC pins), typecheck clean.
+  **Live verification (22:13Z tick, first post-deploy): the sweep picked up BOTH historic orphans
+  (`reconcileHeld: 2`) and correctly HELD them** — the venue no longer serves getOrder for 2–4-day-old
+  resolved-market orders, and the sweep never frees without evidence (the conservative design working;
+  fresh orphans — the actual target — adjudicate minutes later while getOrder still answers). The two
+  stale rows were then manually adjudicated `canceled` per the C18/07-19 precedent (venue truth already
+  board-recorded 07-25: cash-continuity proves $0 moved, both markets resolved) — next tick expected
+  clean (0 dangling).
+  ③ **Board corrections from the sweep:** per-city caps were TIGHTENED BY THE OPERATOR 07-23 09:28Z to
+  **ankara 0.16 / helsinki 0.25 / wellington 0.40 / kuala-lumpur 0.20** (older board notes citing the
+  07-18 caps are stale — this also explains the fill drought since 07-24: asks rarely dip under 0.16–0.25).
+  ④ **Fresh per-city prediction success (city_prediction_grades, n≈20-22/city all-time · n≈8-9 since
+  07-18):** wellington HOLDS (**81.8% / 88.9%** recent) · kuala-lumpur holds (59.1%/55.6%) · **ankara
+  COLLAPSED (66.7% all-time but 25% since 07-18** — the 07-18 92% was n=13 small-sample flattery) ·
+  **helsinki deteriorated (52.4%/25%)** · non-allowlist **madrid (81.0%/100%)** and **singapore
+  (68.2%/77.8%)** now outrank both. Operator-gated proposal (allowlist is his lever): swap
+  helsinki+ankara → madrid+singapore, caps ≤ ~half the measured rate. HONEST FRAME: the 07-23 six-way
+  kill stands — roster/cap changes redistribute the same ≈zero-EV pool, they do not create edge; the
+  only levers that change the SIGN remain cost-side mechanisms or new out-of-market information.
+  Boundary intact throughout (no config touched; operator funds/keys/toggles).
 - **▶▶ 2026-07-26 ~00:00Z (operator-directed handoff session: "Start from CITY-ORACLE-BUILDOUT-HANDOFF.md")
   — BUILDS 1→2→3 EXECUTED COMPLETE on the resolution-oracle data layer (analytics product; no trading, no
   §13 reopen; commits `3646c42`+`66c28e8` pushed; suite 212 files / 3,577 green).** ① **Build 1 (flagship):**
@@ -696,7 +795,8 @@ _Claude keeps this block current every material cycle. Whole status in 20 second
    widen the dangling candidate set to also include `placed AND size_matched=0 AND order_id IS NOT NULL` rows
    older than N min, and branch the reconcile "freed" path so a posted-then-zero-filled row records `canceled`
    (FAK died) not `failed` (never posted). Touches the LIVE money-path reconcile → do it deliberately with
-   venue-evidence tests, not reflexively; lane winds down 07-31 so it is genuinely optional. ⑤ Anything newly
+   venue-evidence tests, not reflexively. **↳ DONE 2026-07-26 ~22:15Z (operator-directed): 0120 + the
+   executor direct-evidence branch, deployed to prod; see the dated bullet.** ⑤ Anything newly
    broken beats the queue. Suite + typecheck green after every change; board updated every material cycle.
 
 **Escalation rules.** *Autonomous (do, then log):* code/test/cron fixes, edge-fn redeploys with in-session

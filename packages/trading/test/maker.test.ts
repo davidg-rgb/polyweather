@@ -105,7 +105,13 @@ function mockLedger(seed: OrderLedgerRow[] = []) {
     }),
     listDanglingIntents: vi.fn(async (mode) => {
       calls.push({ fn: 'listDanglingIntents', args: [mode] });
-      return [...rows.values()].filter((r) => r.mode === mode && r.status === 'intent' && r.orderId === null);
+      // mirrors the 0120 RPC WHERE: the intent class + the orphan placed/zero-fill class
+      return [...rows.values()].filter(
+        (r) =>
+          r.mode === mode &&
+          ((r.status === 'intent' && r.orderId === null) ||
+            (r.status === 'placed' && r.orderId !== null && r.sizeMatched === 0)),
+      );
     }),
     // T3 round-2 fidelity: record_* on an UNKNOWN client_order_id RAISES (reconcile-bug surfacing);
     // a late record_placed never regresses a partial/filled status.
@@ -1038,6 +1044,132 @@ describe('MakerExecutor.reconcileOpenOrders — the startup sweep (HIGH-2)', () 
     expect(out[0]!.reason).not.toContain('hunter2secret42');
     expect(out[0]!.reason).toContain('REDACTED');
     expect(alerts[0]!.body).not.toContain('hunter2secret42');
+  });
+});
+
+describe('MakerExecutor.reconcileOpenOrders — the 0120 orphan placed/zero-fill class (direct evidence by order id)', () => {
+  const orphan = (over: Partial<OrderLedgerRow> = {}): OrderLedgerRow =>
+    row({ clientOrderId: 'cid-orphan', status: 'placed', orderId: '0xORPHAN', orderType: 'FAK', size: 28, price: 0.19, ...over });
+
+  it('dead zero-fill FAK → freed as CANCELED (the F1 outcome; retryable) — never failed, and the heuristic open-orders read is skipped', async () => {
+    const client = mockClient({
+      getOrder: vi.fn(async () => ({ status: 'canceled', original_size: '28', size_matched: '0' })),
+    });
+    const { ledger, calls, rows } = mockLedger([orphan()]);
+    const exec = new MakerExecutor(deps('live', client, ledger));
+
+    const out = await exec.reconcileOpenOrders();
+
+    expect(out[0]).toMatchObject({ kind: 'freed', clientOrderId: 'cid-orphan', orderId: '0xORPHAN' });
+    expect(rows.get('cid-orphan')!.status).toBe('canceled'); // canceled (posted, FAK died) — NOT failed
+    expect(calls.some((c) => c.fn === 'recordFailed')).toBe(false);
+    expect(client.getOrder).toHaveBeenCalledWith('0xORPHAN');
+    expect(client.getOpenOrders).not.toHaveBeenCalled(); // direct evidence, never the heuristic match
+  });
+
+  it('a FAK reported with a non-dead status but zero fills is STILL freed — a kill-type order cannot rest (the F1 axiom)', async () => {
+    const client = mockClient({
+      getOrder: vi.fn(async () => ({ status: 'live', original_size: '28', size_matched: '0' })),
+    });
+    const { ledger, rows } = mockLedger([orphan()]);
+    const exec = new MakerExecutor(deps('live', client, ledger));
+
+    const out = await exec.reconcileOpenOrders();
+
+    expect(out[0]).toMatchObject({ kind: 'freed' });
+    expect(rows.get('cid-orphan')!.status).toBe('canceled');
+  });
+
+  it('the orphan actually FILLED → recordFill from venue truth, avg from the trade records (fill-price truth), outcome adopted', async () => {
+    const client = mockClient({
+      getOrder: vi.fn(async () => ({ status: 'matched', original_size: '28', size_matched: '28', price: '0.19' })),
+      getTrades: vi.fn(async () => [
+        { price: '0.155', side: 'BUY', size: '28', asset_id: 'tok-yes', status: 'CONFIRMED', trader_side: 'TAKER', taker_order_id: '0xORPHAN', maker_orders: [] },
+      ]),
+    });
+    const { ledger, calls, rows } = mockLedger([orphan()]);
+    const exec = new MakerExecutor(deps('live', client, ledger));
+
+    const out = await exec.reconcileOpenOrders();
+
+    expect(out[0]).toMatchObject({ kind: 'adopted', clientOrderId: 'cid-orphan', orderId: '0xORPHAN' });
+    const fill = calls.find((c) => c.fn === 'recordFill');
+    expect(fill!.args).toEqual(['cid-orphan', 28, 0.155, 'filled']); // trade-records avg, NOT the 0.19 limit
+    expect(rows.get('cid-orphan')!.status).toBe('filled');
+  });
+
+  it('partial venue fill → recordFill(…, partial); fill-price truth fail-soft: a TRUNCATED trades page falls back to the poll price', async () => {
+    const client = mockClient({
+      getOrder: vi.fn(async () => ({ status: 'canceled', original_size: '28', size_matched: '18', price: '0.19' })),
+      getTrades: vi.fn(async () => ({ next_cursor: 'MORE', data: [] })), // truncated → avg falls back
+    });
+    const { ledger, calls, rows } = mockLedger([orphan()]);
+    const exec = new MakerExecutor(deps('live', client, ledger));
+
+    const out = await exec.reconcileOpenOrders();
+
+    expect(out[0]).toMatchObject({ kind: 'adopted' });
+    const fill = calls.find((c) => c.fn === 'recordFill');
+    expect(fill!.args).toEqual(['cid-orphan', 18, 0.19, 'partial']); // the getOrder poll price stands
+    expect(rows.get('cid-orphan')!.status).toBe('partial');
+  });
+
+  it('GTC orphan still LIVE at the venue → held WITHOUT the ambiguity alert (resting is legitimate); the row stays placed', async () => {
+    const client = mockClient({
+      getOrder: vi.fn(async () => ({ status: 'live', original_size: '28', size_matched: '0' })),
+    });
+    const { ledger, calls, rows } = mockLedger([orphan({ orderType: 'GTC' })]);
+    const alerts: TradeAlert[] = [];
+    const exec = new MakerExecutor(deps('live', client, ledger, { notify: async (a: TradeAlert) => (alerts.push(a), true) }));
+
+    const out = await exec.reconcileOpenOrders();
+
+    expect(out[0]).toMatchObject({ kind: 'held' });
+    expect(alerts).toEqual([]); // no RECONCILE_AMBIGUOUS — resting is not ambiguity
+    expect(rows.get('cid-orphan')!.status).toBe('placed');
+    expect(calls.some((c) => c.fn === 'recordCanceled' || c.fn === 'recordFailed')).toBe(false);
+  });
+
+  it('no orderType on the row (mock/pre-0120 shape) + a known-dead venue status → freed as canceled (the conservative fallback path)', async () => {
+    const client = mockClient({
+      getOrder: vi.fn(async () => ({ status: 'EXPIRED', original_size: '28', size_matched: '0' })),
+    });
+    const { ledger, rows } = mockLedger([orphan({ orderType: null })]);
+    const exec = new MakerExecutor(deps('live', client, ledger));
+
+    const out = await exec.reconcileOpenOrders();
+
+    expect(out[0]).toMatchObject({ kind: 'freed' });
+    expect(rows.get('cid-orphan')!.status).toBe('canceled');
+  });
+
+  it('GTC orphan with an unrecognized zero-fill status → held + WARN alert (cannot prove dead)', async () => {
+    const client = mockClient({
+      getOrder: vi.fn(async () => ({ status: 'DELAYED', original_size: '28', size_matched: '0' })),
+    });
+    const { ledger, rows } = mockLedger([orphan({ orderType: 'GTC' })]);
+    const alerts: TradeAlert[] = [];
+    const exec = new MakerExecutor(deps('live', client, ledger, { notify: async (a: TradeAlert) => (alerts.push(a), true) }));
+
+    const out = await exec.reconcileOpenOrders();
+
+    expect(out[0]).toMatchObject({ kind: 'held' });
+    expect(alerts[0]).toMatchObject({ kind: 'RECONCILE_AMBIGUOUS', severity: 'WARN' });
+    expect(rows.get('cid-orphan')!.status).toBe('placed');
+  });
+
+  it('getOrder throwing → held + alert; the row stays placed (never freed on missing evidence)', async () => {
+    const client = mockClient({ getOrder: vi.fn(async () => Promise.reject(new Error('502 upstream'))) });
+    const { ledger, calls, rows } = mockLedger([orphan()]);
+    const alerts: TradeAlert[] = [];
+    const exec = new MakerExecutor(deps('live', client, ledger, { notify: async (a: TradeAlert) => (alerts.push(a), true) }));
+
+    const out = await exec.reconcileOpenOrders();
+
+    expect(out[0]).toMatchObject({ kind: 'held' });
+    expect(alerts[0]).toMatchObject({ kind: 'RECONCILE_AMBIGUOUS' });
+    expect(rows.get('cid-orphan')!.status).toBe('placed');
+    expect(calls.some((c) => c.fn === 'recordCanceled' || c.fn === 'recordFailed' || c.fn === 'recordFill')).toBe(false);
   });
 });
 
