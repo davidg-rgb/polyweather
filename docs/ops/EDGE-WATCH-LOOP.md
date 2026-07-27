@@ -22,18 +22,13 @@
 _Claude keeps this block current every material cycle. Whole status in 20 seconds._
 
 > **⟳ Idle heartbeat (rolled in place each quiet cycle — no new bullet for zero-change sweeps):** 2026-07-26
-> **2026-07-27 ~10:03Z (NIGHT WATCH close-out) — GREEN, WINDOW CLOSED with the two fills RIDING:**
-> buy window 00–10Z closed; no further fills after the 04:14–04:16Z pair — kuala-lumpur 32°C 18 sh
-> @ 0.23 ($4.14; the 0120 sweep's first real save) + singapore 31°C 8.07 sh @ 0.34 ($2.74, Slack
-> pushed); ~$7.02 staked, both resolve ~12:00Z (singapore's bucket re-rated to ~0.87 bid intraday —
-> the operator's TP question was adjudicated today: HOLD stands, `SIGNAL-BACKLOG.md` §13-R2).
-> **The manually-dispatched eff-monitor Action run 30253227300 = SUCCESS 09:17Z** (C2 precedent,
-> closed clean). Ticks: 2-min fast lane held through 09:58Z, first out-of-window tick 10:03Z ok
-> (344/24h, 0 fails); crons 0-fail/24h (digest 07:00Z ok; metar-nowcast 0 fails since the 08:04Z
-> transient self-heal); dangling EMPTY (0120 holding); mode live; interlock ok (override id=2 →
-> 07-31 — **the renewal click re-surfaces from TODAY; operator has signaled he WILL renew**).
-> Next wakeups: ~11:05Z light mid-hop → ~12:15Z book BOTH resolutions + write the operator's
-> MORNING SUMMARY dated bullet.** Material
+> **2026-07-27 ~12:10Z (MORNING) — both overnight positions LOST to late-day heating (−$7.0 all-in);
+> everything else GREEN.** Full story in the ▶▶ 12:10Z MORNING SUMMARY bullet below. Venue grade was
+> still lagging at write time (winner=null ~12:08Z) but both losses are FLOOR-CERTAIN (METAR floors:
+> WMKK 33°C > our 32°C · WSSS 32°C > our 31°C); the tick's idempotent resolution-loss booking fires
+> when the grade lands — **verify next cycle: winner idx recorded + N1 daily-loss booked.** Crons
+> 0-fail/24h; ticks at */10 out-of-window pace; dangling EMPTY (0120 holding); mode live; interlock
+> ok. **Yours TODAY: the 07-31 override renewal click (you've signaled you WILL renew).**** Material
 > cycles tonight: fills 05:00Z · roster swap 22:46Z · 0120 fix 22:20Z (dated bullets below);
 > operator's standing intent — RENEW at 07-31, keep improving until the account is empty.
 > Day recap: efficiency-monitor Action landed 08:39Z success · all three city-tick lanes verified on the
@@ -49,6 +44,29 @@ _Claude keeps this block current every material cycle. Whole status in 20 second
 > (re-surfaces ~07-28 — you've signaled you WILL renew; the click is still needed).** Material events
 > get their own dated bullet below.
 
+- **▶▶ 2026-07-27 ~12:10Z — MORNING SUMMARY (night watch 00:00–12:00Z, operator slept through it).**
+  **The night in one line: the new roster's first window bought two positions (~$7.02), both died to
+  late-day heating — and every piece of overnight plumbing worked, including two first-time saves.**
+  ① **Fills + outcomes:** kuala-lumpur 32°C 18 sh @ 0.23 ($4.14) — METAR floor hit **33°C** → LOSS;
+  singapore 31°C 8.07 sh @ 0.34 ($2.74) — floor hit **32°C** → LOSS. **−$6.88 stake + fees ≈ −$7.0**;
+  lane lifetime ≈ **−$37** since 07-18 (record now 4W/14L resolved); balance ≈ **$90**. Venue grade
+  lagged at 12:08Z (winner=null); both losses floor-certain by the monotone running max — ledger
+  booking auto-follows via `bot_order_record_resolution_loss`, verify next cycle. **Honest footnote
+  (today's TP adjudication, §13-R2):** singapore touched ~0.87 bid intraday before dying — ON THIS
+  PAIR a TP@0.80 would have saved ~$6.9. That is the 1-in-5-at-0.80 case the 795-event panel prices
+  exactly; the same panel says the rule LOSES money on average (win|touch ≥ the price at every
+  threshold). Hold stands — do not re-litigate off a single night. ② **0120's FIRST REAL SAVE:** the
+  KL fill-poll threw at 04:14Z (the exact 07-23/07-24 orphan class) → the 04:20Z sweep adopted it by
+  direct order-id evidence, 18/21 sh booked correctly. ③ **metar-nowcast 08:04Z transient self-healed**
+  (0 fails since). ④ **eff-monitor Action skipped its drift window → manually dispatched 09:16Z (C2
+  precedent) → run 30253227300 SUCCESS 09:17Z.** ⑤ **YOURS TODAY: the override renewal (id=2 expires
+  07-31 00:00Z)** — you've signaled you WILL renew; the click is still needed. ⑥ Later today: rota 6b
+  synoptic top-up (`pnpm tsx scripts/research/synoptic-history-pull.ts`); queue ⑤ (notify+fee on the
+  0120 adopted-fills branch) stays calm-cycle work. ⑦ **Session research committed on this branch:**
+  the TP-exit mechanic measured → **KILL** (`SIGNAL-BACKLOG.md` §13-R2; live corpus 4-1 on ≥0.80
+  touches = the price-implied rate) · Google paper lane per-city full-record P&L (`GOOGLE-CITY-PNL.md`:
+  lane **−$431** overall; milan/paris/london/cape-town/warsaw/lucknow pre-registered for a
+  FORWARD-ONLY §9R-E watch — no config change, no capital implication).
 - **▶▶ 2026-07-27 ~05:00Z (night watch) — FIRST TWO FILLS ON THE NEW ROSTER, both C44-verified — and the
   4-hour-old 0120 fix ALREADY RECOVERED ITS FIRST REAL ORPHAN.** ① **kuala-lumpur 32°C** (04:14Z tick):
   FAK 21 sh limit 0.23 posted (venue 0x10446ad7…) but the fill-poll THREW (tick stats: candidates 1 /
