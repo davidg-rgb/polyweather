@@ -22,13 +22,18 @@
 _Claude keeps this block current every material cycle. Whole status in 20 seconds._
 
 > **⟳ Idle heartbeat (rolled in place each quiet cycle — no new bullet for zero-change sweeps):** 2026-07-26
-> **2026-07-27 ~12:10Z (MORNING) — both overnight positions LOST to late-day heating (−$7.0 all-in);
-> everything else GREEN.** Full story in the ▶▶ 12:10Z MORNING SUMMARY bullet below. Venue grade was
-> still lagging at write time (winner=null ~12:08Z) but both losses are FLOOR-CERTAIN (METAR floors:
-> WMKK 33°C > our 32°C · WSSS 32°C > our 31°C); the tick's idempotent resolution-loss booking fires
-> when the grade lands — **verify next cycle: winner idx recorded + N1 daily-loss booked.** Crons
-> 0-fail/24h; ticks at */10 out-of-window pace; dangling EMPTY (0120 holding); mode live; interlock
-> ok. **Yours TODAY: the 07-31 override renewal click (you've signaled you WILL renew).**** Material
+> **2026-07-27 ~16:50Z (LATE-DAY batch done) — both overnight positions LOST to late-day heating
+> (−$7.0 all-in, floor-certain: WMKK 33°C > our 32°C · WSSS 32°C > our 31°C); everything else GREEN.**
+> Full story in the ▶▶ 12:10Z MORNING SUMMARY bullet below. Venue grade STILL pending at 16:48Z
+> (winner=null — normal venue lag; the station-local day only ended 16:00Z; C18 manual-adjudication
+> deadline 18:00Z, then re-check each cycle); entry rows correctly `partial` with no synthetic loss
+> rows yet — the idempotent resolution-loss booking fires when the grade lands. Rota 6b synoptic
+> top-up DONE 16:48Z (17,600 obs archived / 47 new DB rows). **NEW since morning: PR #48 MERGED →
+> the EU-cluster forward-watch card (milan/paris/london/cape-town/warsaw/lucknow, pre-registered,
+> forward-only ≥07-28) is LIVE on `/convergence` prod; main merged back into the loop branch.**
+> Crons 0-fail/24h; ticks */10 out-of-window; dangling EMPTY (0120 holding); 0 unsent alerts;
+> DB 2341 MB; mode live; interlock ok. Next buy window 07-28 00:00Z (roster/caps UNCHANGED).
+> **Yours: the 07-31 override renewal click (you've signaled you WILL renew).**** Material
 > cycles tonight: fills 05:00Z · roster swap 22:46Z · 0120 fix 22:20Z (dated bullets below);
 > operator's standing intent — RENEW at 07-31, keep improving until the account is empty.
 > Day recap: efficiency-monitor Action landed 08:39Z success · all three city-tick lanes verified on the
