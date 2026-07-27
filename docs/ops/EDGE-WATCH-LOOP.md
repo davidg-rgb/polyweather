@@ -22,10 +22,10 @@
 _Claude keeps this block current every material cycle. Whole status in 20 seconds._
 
 > **⟳ Idle heartbeat (rolled in place each quiet cycle — no new bullet for zero-change sweeps):** 2026-07-26
-> **2026-07-27 ~02:07Z (NIGHT WATCH, operator sleeping) — GREEN; the FIRST window on the NEW roster is
-> RUNNING (opened 00:00Z): 55/0 ticks at the 2-min cadence, `requoted: 4` every tick (live re-pricing
+> **2026-07-27 ~03:04Z (NIGHT WATCH, operator sleeping) — GREEN; the FIRST window on the NEW roster is
+> RUNNING (opened 00:00Z): 80/0 ticks at the 2-min cadence, `requoted: 4` every tick (live re-pricing
 > all four cities), NO fills yet (asks above the caps so far — KL .28 / madrid .40 / singapore .35 /
-> wellington .40), 0 candidates, reconcile clean post-0120 (dangling EMPTY), crons 0-fail, DB 2263 MB,
+> wellington .40), 0 candidates, reconcile clean post-0120 (dangling EMPTY), crons 0-fail, DB 2269 MB,
 > mode live, interlock ok (override → 07-31). Watching at ~30–45 min cadence all night.** Material
 > cycles earlier tonight: the 22:46Z roster swap + the 22:20Z 0120 fix (dated bullets below);
 > operator's standing intent — RENEW at 07-31, keep improving until the account is empty.
