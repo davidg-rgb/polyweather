@@ -26,10 +26,11 @@ _Claude keeps this block current every material cycle. Whole status in 20 second
 > window produced TWO fills ~04:14–04:16Z — kuala-lumpur 32°C 18 sh @ 0.23 ($4.14; recovered by the
 > 0120 sweep after a poll-throw — the fix's first real save) + singapore 31°C 8.07 sh @ 0.34 ($2.74,
 > Slack pushed). Both C44-verified, caps honored, dangling EMPTY (see the 05:00Z dated bullet). ~$7.02
-> staked; both resolve ~12:00Z. No further fills through 08:29Z (digest 07:00Z ok; today's eff-monitor
-> Action pending its ~08:25–08:45Z drift window — verify next cycle; 1 transient metar-nowcast fail
-> 08:04Z, aviationweather.gov upstream, next attempt 08:34Z — known class, synoptic covers US
-> freshness). Ticks 221/0 since 00:00Z; crons otherwise 0-fail; DB 2296 MB; mode live;
+> staked; both resolve ~12:00Z. No further fills through 09:16Z (digest 07:00Z ok; metar-nowcast
+> RECOVERED after the 08:04Z transient — 09:04Z ok, 0 fails since; **today's eff-monitor Action did
+> NOT fire in its drift window → manually dispatched 09:16Z per the C2 precedent, run 30253227300
+> in_progress — verify success next cycle**). Ticks 241/0 since 00:00Z; crons otherwise 0-fail;
+> DB 2301 MB; mode live;
 > interlock ok (override → 07-31). Watching at ~30 min cadence while positions ride.** Material
 > cycles tonight: fills 05:00Z · roster swap 22:46Z · 0120 fix 22:20Z (dated bullets below);
 > operator's standing intent — RENEW at 07-31, keep improving until the account is empty.
