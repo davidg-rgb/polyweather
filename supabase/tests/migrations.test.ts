@@ -543,6 +543,7 @@ describe('migrations 0001–0010', () => {
       // widened with (placed AND order_id set AND size_matched=0); the executor adjudicates those by
       // DIRECT order-id evidence (fills → record_fill venue truth; dead zero-fill FAK → record_canceled).
       '0120_reconcile_orphan_zerofill.sql',
+      '0121_buy_table_floor_veto.sql',
     ]);
   });
 });

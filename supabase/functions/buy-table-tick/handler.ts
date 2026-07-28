@@ -40,6 +40,15 @@
  * near-certain of a different outcome, so cancel. bestBid is the liveness measure (real buyers; dust asks can't
  * move it). Both FAIL-OPEN on a fetch miss, but the dead-pick guard runs on the pick's own bid as the backstop.
  *
+ * 0121 FLOOR VETO (FLOOR-VETO.md — the 07-28 KL 33°C @ 31°C-floor class): the dead-bucket gate only kills
+ * IMPOSSIBLE buckets; this one skips the merely-implausible — a pick whose LOW sits ≥ buy_table.floor_veto_gap_c
+ * °C above the observed intraday running max once the station-local hour ≥ buy_table.floor_veto_min_local_hour.
+ * Mechanism: the house gaussian doesn't condition on the intraday floor; the market does (CITY-ORACLE build 3) —
+ * a big remaining gap late in the heating day means the "edge" is model overconfidence vs an informed book.
+ * Backtest (829 events / 44 cities / 22 days, real-book hourly replay): the vetoed class nets −25%/$1
+ * (test-split −35%, city-day CI [−0.55, −0.16]); morning big-gap entries win and are deliberately spared by
+ * the hour cutoff. Default OFF (gap 0); migration 0121 arms 3°C / 10h. Fails OPEN on missing floor/tz/label.
+ *
  * TRADE MODE LADDER (the double gate, preserved): the Edge secret TRADE_MODE resolved by the T1
  * `resolveTradeMode` — absent/typo ⇒ dry-run (records the intent in the ledger, NEVER posts), 'off' ⇒
  * inert. A REAL post needs TRADE_MODE=live AND trade_config.mode='live' AND
@@ -158,6 +167,16 @@ export interface BuyTableCfg {
    *  market is near-certain of a DIFFERENT outcome, so our pick is a written-off longshot → cancel the buy.
    *  Default 0.85. Set to a value > 1 (e.g. 2) to DISABLE. */
   favoriteVetoProb: number;
+  /** 0121 FLOOR VETO (FLOOR-VETO.md — the 07-28 KL 33°C @ 31°C-floor class): skip an entry whose picked
+   *  bucket's LOW sits ≥ this many °C above the observed intraday running max once the station-local day
+   *  has mostly heated (hour ≥ floorVetoMinLocalHour). The house gaussian doesn't condition on the
+   *  intraday floor; the market does — a large late-day remaining gap marks the model fighting the
+   *  thermometer (backtest 07-05..07-27: the vetoed class returns −25% per $1, test-split −35%,
+   *  CI[−0.55,−0.16]). Default 0 = DISABLED; the 0121 migration arms it at 3. */
+  floorVetoGapC: number;
+  /** 0121: the station-local fractional hour from which the floor veto applies (before it, the day
+   *  hasn't heated and a big gap is normal — morning big-gap entries WIN in the backtest). Default 10. */
+  floorVetoMinLocalHour: number;
 }
 
 const num = (v: string | undefined, dflt: number): number => {
@@ -207,7 +226,29 @@ export function parseBuyTableConfig(rows: { key: string; value: string }[]): Buy
     stopAfterFirstSuccess: stopRaw === 'true' || stopRaw === '1',
     deadPickMinBid: num(map.get('buy_table.dead_pick_min_bid'), 0.02),
     favoriteVetoProb: num(map.get('buy_table.favorite_veto_prob'), 0.85),
+    floorVetoGapC: num(map.get('buy_table.floor_veto_gap_c'), 0),
+    floorVetoMinLocalHour: num(map.get('buy_table.floor_veto_min_local_hour'), 10),
   };
+}
+
+/** Station-local fractional hour of `now` in `tzName` (Intl-based, Deno-safe). Null on a missing or
+ *  invalid zone — the floor veto then FAILS OPEN (same posture as every other floor-gate miss). */
+export function stationLocalHour(now: Date, tzName: string | null | undefined): number | null {
+  if (!tzName) return null;
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: tzName,
+      hour12: false,
+      hour: 'numeric',
+      minute: 'numeric',
+    }).formatToParts(now);
+    const h = Number(parts.find((p) => p.type === 'hour')?.value);
+    const m = Number(parts.find((p) => p.type === 'minute')?.value);
+    if (!Number.isFinite(h) || !Number.isFinite(m)) return null;
+    return (h === 24 ? 0 : h) + m / 60; // some ICU builds render midnight as '24'
+  } catch {
+    return null;
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
@@ -393,6 +434,27 @@ export function selectBuyTableCandidates(args: {
             skips.push({
               ref,
               reason: `dead_bucket (observed running max ${floorTenths}°C → ${observedNative}°${def.unit} native > bucket top ${def.high}°${def.unit} — cannot win)`,
+            });
+            continue;
+          }
+        }
+        // 0121 FLOOR VETO (FLOOR-VETO.md): the bucket isn't dead, but its LOW sits far above the observed
+        // running max late in the station-local day — the class where the house gaussian is fighting the
+        // thermometer while the market has already priced the intraday obs (backtested −25%/$1 net, the
+        // 07-28 KL 33°C-vs-31°C-floor failure mode). Bottom-tail buckets (low null) are never gap-vetoed;
+        // a missing tz/floor fails OPEN like every other floor-gate miss. Disabled while floorVetoGapC ≤ 0.
+        if (cfg.floorVetoGapC > 0 && def.low != null) {
+          const lowC = def.unit === 'F' ? ((def.low - 32) * 5) / 9 : def.low;
+          const gapC = lowC - Number(floorTenths);
+          const localHour = stationLocalHour(now, r.tzName);
+          if (
+            gapC >= cfg.floorVetoGapC - 1e-9 &&
+            localHour != null &&
+            localHour >= cfg.floorVetoMinLocalHour
+          ) {
+            skips.push({
+              ref,
+              reason: `floor_veto (pick low ${def.low}°${def.unit} is ${gapC.toFixed(1)}°C above the observed running max ${floorTenths}°C at station-local ${localHour.toFixed(1)}h ≥ ${cfg.floorVetoMinLocalHour}h — a late ≥${cfg.floorVetoGapC}°C remaining jump is the backtested-toxic entry class)`,
             });
             continue;
           }
@@ -1161,6 +1223,8 @@ export async function buyTableTick(ctx: JobCtx, deps: BuyTableTickDeps): Promise
     favoriteVetoed,
     deadPickMinBid: cfg.deadPickMinBid,
     favoriteVetoProb: cfg.favoriteVetoProb,
+    floorVetoGapC: cfg.floorVetoGapC,
+    floorVetoMinLocalHour: cfg.floorVetoMinLocalHour,
     captures: captures.length,
     entriesSeen: entries.length,
     candidates: candidates.length,

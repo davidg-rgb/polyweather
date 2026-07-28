@@ -55,6 +55,9 @@ describe('0095 config defaults (+ the 0102 entry-rule defaults)', () => {
       // 0115: the dead-bucket guards (dead-pick min bid + favorite veto prob)
       'buy_table.dead_pick_min_bid': '0.02',
       'buy_table.favorite_veto_prob': '0.85',
+      // 0121: the floor veto (armed by the seed — gap 3°C above the running max at local ≥10h)
+      'buy_table.floor_veto_gap_c': '3',
+      'buy_table.floor_veto_min_local_hour': '10',
     });
   });
 
