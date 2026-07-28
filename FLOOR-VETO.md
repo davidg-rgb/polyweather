@@ -98,10 +98,11 @@ write time) · floor-grade validated (0 impossible-bucket wins).
 - Research artifacts: `scripts/research/floor-veto-pull.ts`, `scripts/research/floor-veto-backtest.py`
   → `scripts/research/out/floor-veto/{panel.csv,RESULT.json}` (gitignored).
 
-**Operator go-live (deploy law: fn first, migration second):**
-1. `supabase functions deploy buy-table-tick` — inert (keys absent → veto off);
-2. apply `0121` — the veto arms at 3°C/10h on the next tick. Skips surface in the tick logs as
-   `buy-table.skip` with a `floor_veto (…)` reason; `floorVetoGapC` is in every tick's job stats.
+**DEPLOYED + ARMED 2026-07-28 ~14:15Z (operator-authorized "deploy all"):** `buy-table-tick` v20
+live (sb.ts CLI deploy, fn first), then `0121` + `0122` applied via MCP — all three keys verified in
+`config` (`gap_c=3`, `min_local_hour=10`, `lock…=13`). First armed entry window: 2026-07-29 00:00Z.
+Skips surface in the tick logs as `buy-table.skip` with `floor_veto (…)` / `floor_lock_veto (…)`
+reasons; both cfg values are in every tick's job stats.
 
 ## 7. Carry-forward
 
@@ -145,5 +146,5 @@ fail-open posture; code default OFF) + **migration `0122`** seeding
 (fire, rounding boundary 29.5/29.4, hour cutoff, tail exclusion, default-off, dead-bucket
 precedence); suite 212 files / 3,599 green, typecheck clean.
 
-**Operator go-live is unchanged and cumulative:** deploy `buy-table-tick` FIRST, then apply 0121
-(+0122 if you want both guards). Each veto is independently armable/disarmable by its config key.
+**Go-live executed 2026-07-28 (see §6):** fn v20 + 0121 + 0122 all live — both guards ARMED. Each
+veto stays independently disarmable by its config key (`gap_c` → 0 / `lock…hour` → 0).
