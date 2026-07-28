@@ -177,6 +177,13 @@ export interface BuyTableCfg {
   /** 0121: the station-local fractional hour from which the floor veto applies (before it, the day
    *  hasn't heated and a big gap is normal — morning big-gap entries WIN in the backtest). Default 10. */
   floorVetoMinLocalHour: number;
+  /** 0122 FLOOR-LOCK VETO (FLOOR-VETO.md §8 — the 07-28 Wellington 12°C class): skip a pick whose bucket
+   *  CONTAINS the current running max (official-rounded) once the station-local hour ≥ this — betting
+   *  "the day's high is already in" against a book with fresher obs. Backtest: −33.5%/$1 full
+   *  (n=92, city-day CI [−0.60, −0.07]; test −49%), win rate 22.8%, worst in laggy-METAR stations.
+   *  Only single/range buckets (both bounds) — tails were not in the measured class. Default 0 = OFF;
+   *  migration 0122 arms 13. */
+  floorLockVetoMinLocalHour: number;
 }
 
 const num = (v: string | undefined, dflt: number): number => {
@@ -228,6 +235,7 @@ export function parseBuyTableConfig(rows: { key: string; value: string }[]): Buy
     favoriteVetoProb: num(map.get('buy_table.favorite_veto_prob'), 0.85),
     floorVetoGapC: num(map.get('buy_table.floor_veto_gap_c'), 0),
     floorVetoMinLocalHour: num(map.get('buy_table.floor_veto_min_local_hour'), 10),
+    floorLockVetoMinLocalHour: num(map.get('buy_table.floor_lock_veto_min_local_hour'), 0),
   };
 }
 
@@ -434,6 +442,26 @@ export function selectBuyTableCandidates(args: {
             skips.push({
               ref,
               reason: `dead_bucket (observed running max ${floorTenths}°C → ${observedNative}°${def.unit} native > bucket top ${def.high}°${def.unit} — cannot win)`,
+            });
+            continue;
+          }
+        }
+        // 0122 FLOOR-LOCK VETO (FLOOR-VETO.md §8): the inverse failure of the gap veto — the pick IS the
+        // bucket the running max already sits in (official-rounded), late in the station-local day. That is
+        // a bet that the day's high is already in, made against a book with fresher obs (the 07-28
+        // Wellington 12°C @ 0.33 with house q 0.896: one +1°C tick 48 min later killed it). Backtested
+        // −33.5%/$1 (n=92, test −49%, CI clear of 0 on both clusterings, hour-robust 12–14h). Single/range
+        // buckets only — both bounds required (tails were not in the measured class). Same fail-open posture.
+        if (cfg.floorLockVetoMinLocalHour > 0 && def.low != null && def.high != null) {
+          const nativeFloor = metarMaxToNative(Number(floorTenths), def.unit);
+          const localHour = stationLocalHour(now, r.tzName);
+          if (
+            nativeFloor >= def.low && nativeFloor <= def.high &&
+            localHour != null && localHour >= cfg.floorLockVetoMinLocalHour
+          ) {
+            skips.push({
+              ref,
+              reason: `floor_lock_veto (the observed running max ${floorTenths}°C → ${nativeFloor}°${def.unit} native already sits INSIDE the pick ${def.low}–${def.high}°${def.unit} at station-local ${localHour.toFixed(1)}h ≥ ${cfg.floorLockVetoMinLocalHour}h — buying "the high is already in" against a fresher book is the backtested-toxic lock bet)`,
             });
             continue;
           }
@@ -1225,6 +1253,7 @@ export async function buyTableTick(ctx: JobCtx, deps: BuyTableTickDeps): Promise
     favoriteVetoProb: cfg.favoriteVetoProb,
     floorVetoGapC: cfg.floorVetoGapC,
     floorVetoMinLocalHour: cfg.floorVetoMinLocalHour,
+    floorLockVetoMinLocalHour: cfg.floorLockVetoMinLocalHour,
     captures: captures.length,
     entriesSeen: entries.length,
     candidates: candidates.length,

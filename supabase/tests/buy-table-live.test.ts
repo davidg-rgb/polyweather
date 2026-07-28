@@ -58,6 +58,8 @@ describe('0095 config defaults (+ the 0102 entry-rule defaults)', () => {
       // 0121: the floor veto (armed by the seed — gap 3°C above the running max at local ≥10h)
       'buy_table.floor_veto_gap_c': '3',
       'buy_table.floor_veto_min_local_hour': '10',
+      // 0122: the floor-lock veto (armed by the seed — never buy the contains-floor bucket at local ≥13h)
+      'buy_table.floor_lock_veto_min_local_hour': '13',
     });
   });
 

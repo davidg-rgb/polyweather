@@ -1,4 +1,4 @@
-# FLOOR-VETO — the intraday running-max entry guard (built + backtested 2026-07-28)
+# FLOOR-VETO — the intraday running-max entry guard (built + backtested 2026-07-28; §8 extensions swept same day)
 
 **Verdict: SHIP as a cost-reduction guard (armed at gap ≥3°C / local ≥10h). It is NOT an edge** — the
 buy-table lane's candidate pool stays ≈zero-to-negative EV (consistent with `FINDINGS.md`); this guard
@@ -105,7 +105,45 @@ write time) · floor-grade validated (0 impossible-bucket wins).
 
 ## 7. Carry-forward
 
-- The 2°C/12h tightening: re-adjudicate on forward lane data once ~2 weeks of armed-veto ticks exist.
+- ~~The 2°C/12h tightening: re-adjudicate on forward lane data~~ **RESOLVED by §8 — REJECTED** (its
+  incremental slice sign-flips across splits; do not set it).
 - The deeper fix stays open and is NOT this guard: the house gaussian itself could floor-condition
   (truncate mass below the running max and renormalize) — that changes every downstream consumer and
   needs its own backtest before anyone touches `bucket_probabilities`.
+
+---
+
+## 8. Extension sweep (2026-07-28, operator ask: "more cost cutoffs?") → ONE adopted, four rejected
+
+Pre-registered families over the same panel (`scripts/research/floor-veto-extensions.py` →
+`out/floor-veto/EXTENSIONS.json`), each scored on its **increment beyond the armed (3,10) veto**,
+with the second-look rule fixed in advance (test CIs must clear 0 on BOTH clusterings AND train must
+agree in sign — this was the test split's second use, so marginal = INSUFFICIENT):
+
+| Family | Test increment | Verdict |
+|---|---|---|
+| A gap 2°C/12h tightening (and the B union) | n=80, −0.428 [−0.73,−0.12] but **train +0.176** | **REJECTED — sign-flip across splits** (regime-unstable; retracts §4's "operator option") |
+| C overconfidence (house q − ask ≥ δ, late) | n≤48, train/test sign-flips at every δ | REJECTED (too thin, unstable) |
+| D late-hour blanket (block all entries ≥13/14/15h) | ≈0.00 at every cutoff | REJECTED — late entries per se are FAIRLY priced; the toxicity is floor-relative, not clock-relative |
+| E ask-level cutoffs (ask ≥ 0.30/0.35/0.40 late) | ≈0 at every level | REJECTED — price level carries no signal (price-sufficiency, `FINDINGS.md`) |
+| **F floor-lock: pick bucket CONTAINS the rounded running max at local ≥13h** | **n=48, −0.490 [−0.81,−0.17] cd / [−1.05,−0.24] day; train −0.136 (sign agrees)** | **ADOPTED → 0122** |
+
+**The floor-lock veto (F)** is the inverse failure of the gap veto: instead of betting on a big late
+jump, the lane bets the day's high is *already in* (the 07-28 Wellington 12°C @ 0.33, house q 0.896,
+killed by one +1°C tick 48 min later). Full-window −33.5%/$1 (n=92, win 22.8%), hour-robust
+(≥12h −38%, ≥14h −48%), worst where METAR is laggy (wuhan 1/16, beijing 0/11, KL 0/5 — the market
+has fresher obs than our hourly floor feed; some tropical lock bets DO win: singapore 4/5). On the
+real fills it blocks KL 07-21 (lost) and Wellington 07-28 (lost) — zero real winners; hourly-grid
+lane replay: gap veto +$15 → both vetoes +$23.8 vs baseline (it re-blocks one singapore winner,
++$11.18, and four losers). Honest weight: n=92 and train-alone not significant — a cost guard with
+moderate evidence, adjudicated forward by the armed lane like everything else.
+
+**Shipped (same merged-dark pattern):** handler clause `floor_lock_veto` (fires only on single/range
+buckets — both bounds — reusing `metarMaxToNative` rounding, after the 0111 dead-bucket check, same
+fail-open posture; code default OFF) + **migration `0122`** seeding
+`buy_table.floor_lock_veto_min_local_hour = 13` (**applying = arming**). Six new handler tests
+(fire, rounding boundary 29.5/29.4, hour cutoff, tail exclusion, default-off, dead-bucket
+precedence); suite 212 files / 3,599 green, typecheck clean.
+
+**Operator go-live is unchanged and cumulative:** deploy `buy-table-tick` FIRST, then apply 0121
+(+0122 if you want both guards). Each veto is independently armable/disarmable by its config key.

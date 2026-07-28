@@ -544,6 +544,7 @@ describe('migrations 0001–0010', () => {
       // DIRECT order-id evidence (fills → record_fill venue truth; dead zero-fill FAK → record_canceled).
       '0120_reconcile_orphan_zerofill.sql',
       '0121_buy_table_floor_veto.sql',
+      '0122_buy_table_floor_lock_veto.sql',
     ]);
   });
 });

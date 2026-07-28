@@ -270,7 +270,7 @@ describe('parseBuyTableConfig', () => {
     expect(parseBuyTableConfig([])).toEqual({
       priceCap: 0.15, leadMaxH: 12, leadMinH: 2, tickEnabled: true, cityCaps: {},
       maxEntryAttempts: 1, stopAfterFirstSuccess: false, deadPickMinBid: 0.02, favoriteVetoProb: 0.85,
-      floorVetoGapC: 0, floorVetoMinLocalHour: 10,
+      floorVetoGapC: 0, floorVetoMinLocalHour: 10, floorLockVetoMinLocalHour: 0,
     });
     expect(
       parseBuyTableConfig([
@@ -283,11 +283,12 @@ describe('parseBuyTableConfig', () => {
         { key: 'buy_table.favorite_veto_prob', value: '0.9' },
         { key: 'buy_table.floor_veto_gap_c', value: '3' },
         { key: 'buy_table.floor_veto_min_local_hour', value: '12' },
+        { key: 'buy_table.floor_lock_veto_min_local_hour', value: '13' },
       ]),
     ).toEqual({
       priceCap: 0.1, leadMaxH: 24, leadMinH: 2, tickEnabled: false, cityCaps: {},
       maxEntryAttempts: 3, stopAfterFirstSuccess: true, deadPickMinBid: 0.05, favoriteVetoProb: 0.9,
-      floorVetoGapC: 3, floorVetoMinLocalHour: 12,
+      floorVetoGapC: 3, floorVetoMinLocalHour: 12, floorLockVetoMinLocalHour: 13,
     });
   });
 
@@ -574,6 +575,75 @@ describe('buy-table-tick — the FLOOR VETO (0121): skip a late-day pick sitting
       'dry-run',
     );
     expect((await buyTableTick(b.ctx, b.deps)).candidates).toBe(1);
+  });
+});
+
+describe('buy-table-tick — the FLOOR-LOCK VETO (0122): never buy the bucket the running max sits in, late-day', () => {
+  // fixture pick = idx 1 '30°C'. NOW = 10:00Z. Europe/Helsinki → local 13:00 (≥ the 13h cutoff);
+  // Europe/Amsterdam → local 12:00 (below it).
+  const armed = [{ key: 'buy_table.floor_lock_veto_min_local_hour', value: '13' }];
+  const floorsFor = (maxTenthsC: number) => [{ city: 'testville', targetDate: '2026-07-11', maxTenthsC }];
+  const at13 = (over: Parameters<typeof capture>[0]) => {
+    const cap = capture(over);
+    cap.tzName = 'Europe/Helsinki';
+    return cap;
+  };
+
+  it('vetoes the pick when the rounded floor sits INSIDE its bucket at local ≥13h (the 07-28 Wellington class)', async () => {
+    const h = harness(
+      { mode: 'off', configRows: armed, captures: [at13({ eventId: 'ev-1', ask: 0.12, hoursToClose: 6 })], floors: floorsFor(30.0) },
+      'dry-run',
+    );
+    const stats = await buyTableTick(h.ctx, h.deps);
+    expect(stats.candidates).toBe(0);
+    expect(h.logs.some((l) => l.msg === 'buy-table.skip' && /floor_lock_veto .*INSIDE/.test(String(l.extra?.reason)))).toBe(true);
+  });
+
+  it('rounding decides containment: 29.5 rounds INTO 30°C → vetoed; 29.4 → 29 stays outside → enters', async () => {
+    const inside = harness(
+      { mode: 'off', configRows: armed, captures: [at13({ eventId: 'ev-1', ask: 0.12, hoursToClose: 6 })], floors: floorsFor(29.5) },
+      'dry-run',
+    );
+    expect((await buyTableTick(inside.ctx, inside.deps)).candidates).toBe(0);
+    const outside = harness(
+      { mode: 'off', configRows: armed, captures: [at13({ eventId: 'ev-1', ask: 0.12, hoursToClose: 6 })], floors: floorsFor(29.4) },
+      'dry-run',
+    );
+    expect((await buyTableTick(outside.ctx, outside.deps)).candidates).toBe(1);
+  });
+
+  it('the HOUR cutoff holds: same containment at local 12:00 (Amsterdam) enters', async () => {
+    const h = harness(
+      { mode: 'off', configRows: armed, captures: [capture({ eventId: 'ev-1', ask: 0.12, hoursToClose: 6 })], floors: floorsFor(30.0) },
+      'dry-run',
+    );
+    expect((await buyTableTick(h.ctx, h.deps)).candidates).toBe(1);
+  });
+
+  it('a TAIL pick (one bound missing) is never lock-vetoed — the measured class was single/range buckets', async () => {
+    const cap = at13({ eventId: 'ev-t', ask: 0.12, hoursToClose: 6 });
+    cap.buckets = cap.buckets!.map((b, i) => (i === 1 ? { ...b, label: '30°C or higher' } : b));
+    const h = harness({ mode: 'off', configRows: armed, captures: [cap], floors: floorsFor(31.0) }, 'dry-run');
+    expect((await buyTableTick(h.ctx, h.deps)).candidates).toBe(1);
+  });
+
+  it('DEFAULT OFF: without the 0122 seed the same lock entry passes untouched', async () => {
+    const h = harness(
+      { mode: 'off', captures: [at13({ eventId: 'ev-1', ask: 0.12, hoursToClose: 6 })], floors: floorsFor(30.0) },
+      'dry-run',
+    );
+    expect((await buyTableTick(h.ctx, h.deps)).candidates).toBe(1);
+  });
+
+  it('composes with 0111: a floor ABOVE the bucket top is dead_bucket, not floor_lock_veto', async () => {
+    const h = harness(
+      { mode: 'off', configRows: armed, captures: [at13({ eventId: 'ev-1', ask: 0.12, hoursToClose: 6 })], floors: floorsFor(31.0) },
+      'dry-run',
+    );
+    const stats = await buyTableTick(h.ctx, h.deps);
+    expect(stats.candidates).toBe(0);
+    expect(h.logs.some((l) => l.msg === 'buy-table.skip' && /dead_bucket/.test(String(l.extra?.reason)))).toBe(true);
+    expect(h.logs.some((l) => l.msg === 'buy-table.skip' && /floor_lock_veto/.test(String(l.extra?.reason)))).toBe(false);
   });
 });
 
@@ -1302,7 +1372,7 @@ describe('selectBuyTableCandidates — pure edge shapes', () => {
   const baseCfg = {
     priceCap: 0.15, leadMaxH: 12, leadMinH: 2, tickEnabled: true, cityCaps: {},
     maxEntryAttempts: 1, stopAfterFirstSuccess: false, deadPickMinBid: 0.02, favoriteVetoProb: 0.85,
-    floorVetoGapC: 0, floorVetoMinLocalHour: 10,
+    floorVetoGapC: 0, floorVetoMinLocalHour: 10, floorLockVetoMinLocalHour: 0,
   };
 
   it('skips unseeded captures (no houseProb → no forecast center to buy)', () => {
