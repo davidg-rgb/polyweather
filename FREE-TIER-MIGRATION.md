@@ -79,19 +79,40 @@ funds/keys/authorizes; Claude never trades.
 > `synoptic-nowcast` was capture-only on a 14-day trial ending ~2026-08-08 — stopped early here. Its token
 > secret stays set; re-schedule if the US 5-min lane is ever wanted again.
 
-## 5. Hot windows (`archive-retention.ts` → `RETENTION`)
+## 5. Result: 3,030 MB → 434 MB (executed 2026-08-02)
+
+| Stage | Size |
+|---|---|
+| Before | **3,030 MB** |
+| After archive + prune + `VACUUM FULL` (pass 1) | 785 MB |
+| After tightened windows (pass 2) | 528 MB |
+| After closed-signal archival + final windows (pass 3) | **434 MB — 66 MB headroom** |
+
+**It keeps falling on its own.** `opening_captures` (183 MB, the largest remaining table) is still holding
+rows captured at the old 12×/hour cadence; at 3×/hour those age out within ~2 days and it settles near
+50–70 MB, putting the database around **~300 MB steady state**.
+
+Archived locally and verified before any delete: **~4.1M rows / ~245 MB gzipped** across 13 tables, plus
+the 570k-row raw order-book dump. Zero unverified days — the prune is structurally gated on verification.
+
+### Hot windows (`archive-retention.ts` → `RETENTION`)
 
 Server keeps the hot window; local keeps everything.
 
 | Table | Hot window | Deepest live reader |
 |---|---|---|
-| `opening_captures` | resolved + 2 days | Google panel replays *open* events (≤3-day life) |
-| `market_snapshots` | 10 days | `/events` + panels want days, not months |
-| `bucket_probabilities` | 14 days | panels replay open events — 4× margin |
-| `forecast_snapshots` | 45 days | longest lead (16d) + grading lag, 2× margin; calibration state lives in `model_stats` |
-| `job_runs` | 7 days | deadman checks read the last few runs |
-| `model_stats_history` | 14 days | no live reader |
+| `opening_captures` | resolved + **1 day** | Google panel replays *open* events (≤3-day life); the 1-day grace gives the hourly panel ~24 chances to grade a just-resolved event before its captures go |
+| `market_snapshots` | 3 days | `/events` + panels want days, not months |
+| `bucket_probabilities` | 7 days | panels replay open events — 2× margin |
+| `forecast_snapshots` | 25 days | longest lead (16d) + grading lag; calibration state lives in `model_stats` |
+| `job_runs` / `model_stats_history` | 7 days | deadman reads the last few runs / no live reader |
 | `market_rewards` | 14 days | signal closed |
+| `edge_evaluations` | 2 days | the PAUSED lane's own log; no training value, no new writes |
+| closed-signal tables † | 1 day (full archive kept) | none — producing job unscheduled |
+
+† `complete_set_depth_captures`, `convergence_panel`, `maker_exit_panel`, `whale_trades`,
+`wallet_positions_daily`, `wallet_bet_calibration`, `synoptic_obs`. Static datasets whose verdicts are
+written up in the canonical docs; re-import from the shards if a signal is ever reopened.
 
 ## 6. The weekly command (this is the new operational habit)
 
@@ -104,8 +125,10 @@ Chains: raw-book archive → dump-gated raw-book prune → table archive + verif
 **prints headroom vs the 500 MB ceiling**. Warns under 120 MB headroom (≈one week of capture growth),
 shouts if over.
 
-**Cadence: weekly.** Capture adds roughly 100–120 MB/week at the new cadences; the configured windows settle
-the server near ~280–350 MB. Skipping the sweep for ~2 weeks is what puts the project back at the ceiling.
+**Cadence: weekly — this is now load-bearing, not hygiene.** The windows above are steady-state only if the
+sweep actually runs; skipping it lets `opening_captures` and `market_snapshots` grow past the ceiling, and an
+over-limit project goes read-only (capture stops). Verified post-migration: every capture job green, the
+Google panel writing hourly.
 `--full` adds `VACUUM FULL` (returns space to the OS; takes exclusive locks — run it off-window, not while
 capture is mid-write).
 

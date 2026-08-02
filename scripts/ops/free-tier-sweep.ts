@@ -44,7 +44,7 @@ export const FREE_TIER_LIMIT_MB = 500;
 /** warn below this much remaining headroom — roughly one week of capture growth. */
 export const HEADROOM_WARN_MB = 120;
 /** resolved-event age past which archived raw-book ticks are dropped (the panel replays open events only). */
-export const OC_RESOLVED_AGE_DAYS = 2;
+export const OC_RESOLVED_AGE_DAYS = 1;
 /** tables the sweep vacuums (the ones archive-retention + the raw-book prune delete from). */
 export const SWEPT_TABLES = [
   'opening_captures', 'market_snapshots', 'bucket_probabilities',
