@@ -65,8 +65,35 @@ export const RETENTION: RetentionConfig[] = [
   {
     table: 'model_stats_history',
     tsColumn: 'created_at',
-    hotWindowDays: 30,
-    note: 'calibration audit log; no live or research reader — 30d kept purely for recency',
+    hotWindowDays: 14,
+    note: 'calibration audit log; no live or research reader — 14d on free tier (was 30d)',
+  },
+  // ── FREE-TIER WINDOWS (2026-08-02, FREE-TIER-MIGRATION.md) ────────────────────────────────────────────
+  // The 500 MB ceiling forces the hot window down to what LIVE readers need; every pruned row is archived
+  // locally first (verify-gated), so the statistics record is COMPLETE on disk — only the server copy shrinks.
+  {
+    table: 'market_snapshots',
+    tsColumn: 'captured_at',
+    hotWindowDays: 10,
+    note: 'top-of-book history; live readers (/events, panels) want days not months — full path archive also lives in market-history-flat.parquet',
+  },
+  {
+    table: 'bucket_probabilities',
+    tsColumn: 'made_at',
+    hotWindowDays: 14,
+    note: 'house distributions; panels replay open events (≤3d life) — 14d is 4× the deepest live need',
+  },
+  {
+    table: 'forecast_snapshots',
+    tsColumn: 'captured_at',
+    hotWindowDays: 45,
+    note: 'THE forecasting panel. Calibration reads residuals via model_stats (kept warm); 45d covers the longest lead (16d) plus grading lag with margin. Full history archived locally for training.',
+  },
+  {
+    table: 'job_runs',
+    tsColumn: 'started_at',
+    hotWindowDays: 7,
+    note: 'ops log; deadman checks read the last few runs — 7d is generous',
   },
 ];
 
