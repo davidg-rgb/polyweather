@@ -216,9 +216,10 @@ describe('0095/0108 crons — the laned edge tick with the §8.1 body periodKey 
     );
     expect(j).toBeTruthy();
     // 0108: the C15 compute-shed minute lane codified (was 0095's */10 — quarter minutes are contended).
-    // 0114: window-split — the 10-min lane keeps only the OFF-window hours (candidates exist only ~00-10Z;
-    // the fast lane below covers the window).
-    expect(j!.schedule).toBe('3,13,23,33,43,53 10-23 * * *');
+    // 0114: window-split — the 10-min lane kept only the OFF-window hours (candidates existed only ~00-10Z).
+    // 0123: the split is RETIRED for the cheap-early cell — entries are 24-36h out, so no hour is dead and
+    // the lane runs all day every 5 min, offset one minute off the banned quarters and off every other lane.
+    expect(j!.schedule).toBe('1,6,11,16,21,26,31,36,41,46,51,56 * * * *');
     expect(j!.command).toContain(`vault.decrypted_secrets where name = 'project_url'`);
     expect(j!.command).toContain(`vault.decrypted_secrets where name = 'cron_secret'`);
     expect(j!.command).toContain('/functions/v1/buy-table-tick');

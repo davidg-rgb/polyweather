@@ -184,6 +184,17 @@ export interface BuyTableCfg {
    *  Only single/range buckets (both bounds) — tails were not in the measured class. Default 0 = OFF;
    *  migration 0122 arms 13. */
   floorLockVetoMinLocalHour: number;
+  /** 0123 ASK FLOOR — the complement of priceCap, for the CHEAP-EARLY cell (CHEAP-EARLY-ENTRY.md): enter
+   *  only while the live re-quoted ask is AT OR ABOVE this. The cell's thesis is a [0.20,0.33] band 24–36h
+   *  out; without a floor the lane still takes the sub-20¢ longshots the §16 record shows losing 20–49% of
+   *  stake. Default 0 = DISABLED (no minimum — the pre-0123 max-only gate, unchanged). The HARD $0.01 floor
+   *  applies underneath regardless. */
+  askFloor: number;
+  /** 0123 DAILY BUY CAP — the most successful live buys the lane may open per UTC day, counted across the
+   *  whole lane from the ledger (rows with a real fill, `createdAt` on today's UTC date). All-day ticking
+   *  removes the old 00–10Z window's natural throttle, so this is the replacement exposure bound. Default
+   *  0 = UNCAPPED (pre-0123 behavior). Counts PARTIAL fills too — money is deployed either way. */
+  maxBuysPerDay: number;
 }
 
 const num = (v: string | undefined, dflt: number): number => {
@@ -236,6 +247,12 @@ export function parseBuyTableConfig(rows: { key: string; value: string }[]): Buy
     floorVetoGapC: num(map.get('buy_table.floor_veto_gap_c'), 0),
     floorVetoMinLocalHour: num(map.get('buy_table.floor_veto_min_local_hour'), 10),
     floorLockVetoMinLocalHour: num(map.get('buy_table.floor_lock_veto_min_local_hour'), 0),
+    askFloor: num(map.get('buy_table.ask_floor'), 0),
+    // an integer ≥ 0 (a fractional/negative hand-edit falls back to the safe default: uncapped)
+    maxBuysPerDay: (() => {
+      const n = num(map.get('buy_table.max_buys_per_day'), 0);
+      return Number.isInteger(n) && n >= 0 ? n : 0;
+    })(),
   };
 }
 
@@ -269,6 +286,10 @@ export interface EntryGate {
   blockedIntentKeys: ReadonlySet<string>;
   /** Rule 2: a real fill exists in this mode and stop_after_first_success is on — place NOTHING. */
   laneHalted: boolean;
+  /** 0123: successful buys (rows with a real fill) already opened on the CURRENT UTC day. */
+  buysToday: number;
+  /** 0123: buysToday has reached buy_table.max_buys_per_day (>0) — place NOTHING more today. */
+  dayCapReached: boolean;
 }
 
 /** A row with a REAL fill — we own shares (partial fills count: money is deployed). */
@@ -290,7 +311,11 @@ const isUnknownState = (e: BuyTableEntryRow): boolean =>
  * and zero-fill 'canceled' rows are the ONLY retryable classes — the same line the executor draws when
  * deciding whether to free a key.
  */
-export function deriveEntryGate(entries: BuyTableEntryRow[], cfg: BuyTableCfg): EntryGate {
+export function deriveEntryGate(
+  entries: BuyTableEntryRow[],
+  cfg: BuyTableCfg,
+  now: Date = new Date(),
+): EntryGate {
   const rows = Array.isArray(entries) ? entries : [];
   const byKey = new Map<string, BuyTableEntryRow[]>();
   for (const e of rows) {
@@ -306,7 +331,23 @@ export function deriveEntryGate(entries: BuyTableEntryRow[], cfg: BuyTableCfg): 
     anyFill ||= filled;
     if (filled || group.some(isUnknownState) || group.length >= cfg.maxEntryAttempts) blocked.add(key);
   }
-  return { blockedIntentKeys: blocked, laneHalted: cfg.stopAfterFirstSuccess && anyFill };
+  // 0123 DAILY BUY CAP — count the lane's FILLED entries stamped with today's UTC date. Same day key the
+  // tick already uses for its degraded-alert dedupe (`toISOString().slice(0, 10)`). A row whose createdAt is
+  // missing/unparseable is NOT counted: the cap must never block on a shapeless timestamp (fail-open, the
+  // posture every other ledger-derived gate takes) — the one-entry-per-market gate still bounds exposure.
+  const today = now.toISOString().slice(0, 10);
+  let buysToday = 0;
+  for (const e of rows) {
+    if (!hasFill(e)) continue;
+    const created = typeof e.createdAt === 'string' ? e.createdAt.slice(0, 10) : null;
+    if (created === today) buysToday++;
+  }
+  return {
+    blockedIntentKeys: blocked,
+    laneHalted: cfg.stopAfterFirstSuccess && anyFill,
+    buysToday,
+    dayCapReached: cfg.maxBuysPerDay > 0 && buysToday >= cfg.maxBuysPerDay,
+  };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
@@ -358,6 +399,9 @@ export interface BuyTableEntryRow {
   intentKey: string;
   status: string;
   sizeMatched: number;
+  /** ISO timestamp the ledger row was created (buy_table_entries has always returned it) — the 0123
+   *  daily-buy-cap day key. Optional: a pre-0123 fixture without it simply never counts toward the cap. */
+  createdAt?: string;
 }
 
 export function selectBuyTableCandidates(args: {
@@ -518,6 +562,16 @@ export function selectBuyTableCandidates(args: {
     // bucket dead; never buy it however far under the cap it sits.
     if (ask < HARD_MIN_ASK - 1e-9) {
       skips.push({ ref, reason: `below_min_price (ask ${ask.toFixed(4)} < the hard $0.01 floor — non-configurable)` });
+      continue;
+    }
+    // 0123 ASK FLOOR — the cheap-early cell's lower edge. Applied BEFORE the cap so the band reads as one
+    // gate [askFloor, cap]. Disabled at 0 (the pre-0123 max-only behavior). Deliberately GLOBAL: the
+    // per-city 0109 map is a max-only override and gains no floor twin — one band for the whole lane.
+    if (cfg.askFloor > 0 && ask < cfg.askFloor - 1e-9) {
+      skips.push({
+        ref,
+        reason: `ask_floor (ask ${ask.toFixed(3)} < floor ${cfg.askFloor} — below the cheap-early entry band; the sub-floor longshots are the measured-losing class)`,
+      });
       continue;
     }
     // 0109: MAX-ONLY price gate — a per-city cap override REPLACES the global cap when the operator set one;
@@ -1048,7 +1102,7 @@ export async function buyTableTick(ctx: JobCtx, deps: BuyTableTickDeps): Promise
   // 7 · candidates (pure) — the BUY-TABLE gates over the latest capture per market, behind the 0102
   //     entry gate (rule 1: bounded retry only after PROVABLY-dead attempts; rule 2: a real fill +
   //     stop_after_first_success halts ALL new entries — the operator's one-verified-buy semantics).
-  const gate = deriveEntryGate(entries, cfg);
+  const gate = deriveEntryGate(entries, cfg, now);
   let { candidates, skips } = degraded
     ? { candidates: [] as BuyTableCandidate[], skips: [{ ref: 'ALL', reason: 'degraded — failed read is never "no candidates"' }] }
     : selectBuyTableCandidates({
@@ -1082,6 +1136,18 @@ export async function buyTableTick(ctx: JobCtx, deps: BuyTableTickDeps): Promise
       candidates.map((c) => ({
         ref: `${c.city}/${c.tradeDate}`,
         reason: 'lane_halted — a successful buy exists and stop_after_first_success is on (working as designed)',
+      })),
+    );
+    candidates = [];
+  }
+
+  // 0123 DAILY BUY CAP — the all-day lane's exposure bound (the old 00–10Z window used to throttle this
+  // implicitly). Applied AFTER lane_halted so the more specific reason wins, and BEFORE any placement.
+  if (gate.dayCapReached && candidates.length > 0) {
+    skips = skips.concat(
+      candidates.map((c) => ({
+        ref: `${c.city}/${c.tradeDate}`,
+        reason: `day_cap (${gate.buysToday} successful buy(s) already opened today ≥ max_buys_per_day ${cfg.maxBuysPerDay} — the lane is done for this UTC day)`,
       })),
     );
     candidates = [];
@@ -1265,8 +1331,12 @@ export async function buyTableTick(ctx: JobCtx, deps: BuyTableTickDeps): Promise
     lossesBooked,
     preflightOk,
     priceCap: cfg.priceCap,
+    askFloor: cfg.askFloor,
     cityOverrides: Object.keys(cfg.cityCaps).length,
     leadWindowH: [cfg.leadMinH, cfg.leadMaxH],
+    maxBuysPerDay: cfg.maxBuysPerDay,
+    buysToday: gate.buysToday,
+    dayCapReached: gate.dayCapReached,
     stakeUsd,
     cities: allowlist.length,
     maxEntryAttempts: cfg.maxEntryAttempts,

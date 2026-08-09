@@ -545,6 +545,7 @@ describe('migrations 0001–0010', () => {
       '0120_reconcile_orphan_zerofill.sql',
       '0121_buy_table_floor_veto.sql',
       '0122_buy_table_floor_lock_veto.sql',
+      '0123_buy_table_cheap_early_lane.sql',
     ]);
   });
 });
@@ -1182,7 +1183,8 @@ describe('pg_cron registrations (§7.22, W11)', () => {
       'maker-exit-panel':         '*/15 * * * *',
       // 0117: forward cheap-early-entry paper view snapshot (http_post edge-fn job; W11-checked). Hourly on a
       // clean :47 minute lane (NOT :00/:15/:30/:45 — the Micro-pileup gotcha; :47 collides with no other cron).
-      'cheap-early-panel':        '47 * * * *',
+      // 0123: hourly -> 4x/day on the unused :38 lane (free-tier compute; it is a benchmark, not a gate).
+      'cheap-early-panel':        '38 1,7,13,19 * * *',
       // 0086: Google-picks-bucket forward-paper view snapshot (http_post edge-fn job; W11-checked).
       'google-paper-panel':       '*/15 * * * *',
       // 0087→0089: continuous executable-depth capture into market_depth (http_post edge-fn job; W11-checked).
@@ -1198,9 +1200,15 @@ describe('pg_cron registrations (§7.22, W11)', () => {
       // 0114: window-split — the 10-min lane keeps only the off-window hours (candidates exist only
       // ~00-10Z: every allowlist market closes 12:00Z, lead window [2,12]h); the fast lane below covers
       // the window at ~2-min.
-      'buy-table-tick':           '3,13,23,33,43,53 10-23 * * *',
-      // 0114: the fast lane — even minutes minus {0,30} (C15 permanently-bad quarters) minus {12,42}
-      // (poll-markets stays sole-tenant), hours 0-9. Posts the SAME buy-table-tick fn (W11 fnName map).
+      // 0123: the window split is RETIRED — the cheap-early cell enters 24-36h out, so the lane must be
+      // awake all day. Every 5 min offset by one minute: off the banned quarters (C15) AND off every
+      // existing hourly lane (:03/:23/:43 opening-capture, :04/:34 metar, :07 health, :10 discover,
+      // :12/:42 poll-markets, :20 fetch-actuals, :24 google-paper-panel).
+      'buy-table-tick':           '1,6,11,16,21,26,31,36,41,46,51,56 * * * *',
+      // 0123 RETIRES the fast lane (`perform cron.unschedule('buy-table-tick-fast')`), but that call is
+      // guarded on `to_regprocedure('cron.unschedule(text)')` and the PGlite harness stubs cron.schedule +
+      // cron.job WITHOUT cron.unschedule — so the replayed state still carries the 0114 row while PROD does
+      // not. Pinned here as the harness's truth; on prod this job is absent after 0123.
       'buy-table-tick-fast':
         '2,4,6,8,10,14,16,18,20,22,24,26,28,32,34,36,38,40,44,46,48,50,52,54,56,58 0-9 * * *',
       // 0095: the lane deadman (pure-SQL cron like the 0066/0089 deadmen — excluded from W11 below).
