@@ -100,6 +100,13 @@ export interface MakerSprayOpts {
   /** Only buckets whose rested price < this enter the cheap-longshot study (default 0.25 — the §3 cut). */
   cheapMax?: number;
   /**
+   * Lower edge of the study band: only buckets whose rested price >= this are eligible (default 0 —
+   * the frozen §12 behaviour, an open-below band). Set together with `cheapMax` to study an INTERIOR
+   * band rather than the cheap tail — §16.6 pre-registers [0.15,0.45), the band that now carries
+   * badatmath's engine and the one cell §12 never tested.
+   */
+  cheapMin?: number;
+  /**
    * Which cheap buckets to rest on (the SELECTION axis — the difference between "mechanically mirror
    * badatmath's broad spray" and "test OUR forecast as a maker"):
    *   'all'      → rest on EVERY cheap bucket (default; ADR-07 — badatmath sprays a RANGE, its edge is
@@ -256,6 +263,13 @@ export interface MakerSprayReport {
 export interface MakerSprayVerdict {
   /** PASS = the pooled filled fee-net EV 95% CI lower bound clears 0 (the BINDING gate). */
   pass: boolean;
+  /**
+   * TRUE when `nFilled` is below the sufficiency floor (`minFilled`) — the run carries too little data
+   * to adjudicate. An INSUFFICIENT verdict is NOT a FAIL: an empty report's CI is [NaN, NaN], which the
+   * `pass` test rejects, so without this flag a ZERO-DATA run rendered as a confident falsification
+   * ("market efficient to a rested maker bid"). Callers must branch on this BEFORE reading `pass`.
+   */
+  insufficient: boolean;
   /** PASS AND the point EV ≥ the operational-margin threshold (default +2% EV/$1). */
   clearsMargin: boolean;
   /** Robustness DESCRIPTOR — the stations whose own filled-EV CI clears 0 (NOT a gate, W4). */
@@ -413,6 +427,7 @@ export function makerEntry(bid: RestingBid, opts: MakerSprayOpts = {}): MakerEnt
   const rule = opts.rule ?? 'bid';
   const fillModel = opts.fillModel ?? 'ask_touch';
   const cheapMax = opts.cheapMax ?? 0.25;
+  const cheapMin = opts.cheapMin ?? 0;
   const rebate = opts.rebate ?? 0;
   const rebateRate = opts.rebateRate ?? 0;
   const askOffset = opts.askOffset ?? 0.07;
@@ -457,7 +472,7 @@ export function makerEntry(bid: RestingBid, opts: MakerSprayOpts = {}): MakerEnt
   const select = opts.select ?? 'all';
   const forecastOk =
     select === 'all' || (Number.isFinite(bid.calibratedP) && bid.calibratedP > restPx);
-  const eligibleCheap = restPx < cheapMax && postEntry.length > 0 && forecastOk;
+  const eligibleCheap = restPx >= cheapMin && restPx < cheapMax && postEntry.length > 0 && forecastOk;
 
   if (!eligibleCheap) {
     return {
@@ -798,11 +813,24 @@ function miniReport(
  */
 export function makerSprayVerdict(
   report: MakerSprayReport,
-  opts: { marginThreshold?: number; minStations?: number; mcMode?: boolean } = {},
+  opts: {
+    marginThreshold?: number;
+    minStations?: number;
+    mcMode?: boolean;
+    /**
+     * Sufficiency floor on `nFilled` (default 1 — only a ZERO-fill run is insufficient, so every
+     * pre-existing caller is unaffected). §16.6 freezes 200 for the maker-band adjudication; the
+     * script wires that as its CLI default. Never applied in `mcMode`: the shuffled mini-report is a
+     * skill test on the SAME fills, so the floor belongs to the one real top-level verdict.
+     */
+    minFilled?: number;
+  } = {},
 ): MakerSprayVerdict {
   const marginThreshold = opts.marginThreshold ?? 0.02;
+  const minFilled = opts.minFilled ?? 1;
   const net = report.filledNetEv;
-  const pass = Number.isFinite(net.evCiLo) && net.evCiLo > 0;
+  const insufficient = !opts.mcMode && report.nFilled < minFilled;
+  const pass = !insufficient && Number.isFinite(net.evCiLo) && net.evCiLo > 0;
   const clearsMargin = pass && Number.isFinite(net.ev) && net.ev >= marginThreshold;
 
   // Robustness descriptors — COUNT stations whose own filled-EV CI clears 0 (read, never re-stat).
@@ -820,7 +848,10 @@ export function makerSprayVerdict(
   const asSuspect = opts.mcMode ? false : !report.adverseSelection.asConfirmed;
 
   const pctf = (v: number): string => (Number.isFinite(v) ? `${(v * 100).toFixed(2)}%` : '—');
-  const summary = pass
+  const summary = insufficient
+    ? `INSUFFICIENT — ${report.nFilled} filled bid(s), below the ${minFilled}-fill sufficiency floor: ` +
+      'the pooled CI is not adjudicable. This is NOT evidence of efficiency — the run carries no data.'
+    : pass
     ? `PASS — pooled filled fee-net EV ${pctf(net.ev)} /$1, 95% CI [${pctf(net.evCiLo)}, ${pctf(
         net.evCiHi,
       )}] clears 0` +
@@ -836,6 +867,7 @@ export function makerSprayVerdict(
 
   return {
     pass,
+    insufficient,
     clearsMargin,
     stationsClearing,
     ehamOnly,
