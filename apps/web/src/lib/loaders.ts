@@ -2743,6 +2743,33 @@ export interface OperationSkipTelemetry {
   degraded: boolean | null;
 }
 
+/** One append-only narrative entry (operation_log, 0125) — the "why", not the numbers. */
+export interface OperationLogEntry {
+  id: number;
+  at: string;
+  kind: 'decision' | 'adjudication' | 'config_change' | 'evaluation' | 'incident' | 'info';
+  title: string;
+  body: string;
+  meta: Record<string, unknown>;
+}
+
+/**
+ * One day of the read-derived digest (0125). `topSkipTag` is the day's LAST skip histogram's largest tag —
+ * a snapshot, not a daily total: candidates/skips are per-tick, so summing them across ~288 ticks would
+ * multiply every unbought market by the tick rate. `nTicks` is the honest count.
+ */
+export interface OperationDailyRow {
+  date: string;
+  nOrders: number;
+  nFills: number;
+  stakedUsd: number;
+  realizedUsd: number;
+  cumRealizedUsd: number;
+  nTicks: number;
+  topSkipTag: string | null;
+  topSkipN: number | null;
+}
+
 export interface OperationFeed {
   lane: OperationLane;
   money: OperationMoney;
@@ -2752,6 +2779,10 @@ export interface OperationFeed {
   byBand: OperationBandRow[];
   benchmark: OperationBenchmark | null;
   skipTelemetry: OperationSkipTelemetry | null;
+  /** newest first, capped at 50 by the RPC. */
+  log: OperationLogEntry[];
+  /** last 14 days, newest first. */
+  daily: OperationDailyRow[];
 }
 
 /**
@@ -2777,5 +2808,7 @@ export async function getOperation(db: WebDb): Promise<OperationFeed | null> {
     byBand: v.byBand ?? [],
     benchmark: v.benchmark ?? null,
     skipTelemetry: v.skipTelemetry ?? null,
+    log: v.log ?? [],
+    daily: v.daily ?? [],
   };
 }

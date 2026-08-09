@@ -768,6 +768,37 @@ whole block is skipped. They remain armed and will re-engage automatically if th
 back inside the target day. **No guard was added and none is needed** — verified 2026-08-09 against the 0111
 RPC body. (They are not merely "unlikely to fire": the join makes firing impossible without an obs row.)
 
+### THE HUB CONVENTION (binding from 2026-08-09) — `/operation` is the system of record
+
+The operator asked for `/operation` to be "our overall information hub with trade tracking, choices etc".
+That only works if the narrative actually lands there, so:
+
+> **Every session that makes an operation-affecting decision MUST append an `operation_log` row in the same
+> session, before it reports back.** Not "later", not "in the summary" — in the session.
+
+Operation-affecting means any of: a **config change** (knob, roster, cadence), a **prune** (city dropped or
+re-added), an **override action** (created, renewed, cleared), an **adjudication** (a stale row manually
+resolved, a verdict called), a **weekly evaluation**, or an **incident** (a lane fault, a bad fill, a
+degraded tick that mattered).
+
+Write path — service-role only, so a browser session can never edit the record:
+```sql
+select public.operation_log_append(
+  'config_change',                   -- decision|adjudication|config_change|evaluation|incident|info
+  'Short title the operator can scan',
+  'Tight body. Numbers, not adjectives. Say what changed and WHY. <=15 lines.',
+  '{"migration":"0125"}'::jsonb      -- optional structured meta
+);
+```
+
+**Chat is the exception channel, not the record.** If a decision exists only in a transcript, it is lost the
+moment the session ends — which is exactly the failure this convention closes. When the two disagree, the log
+wins, because it is the thing the operator can read cold.
+
+**Evaluation cadence: weekly**, aligned with the prune rule's n≥8 accrual (a per-city read needs ~8 resolved
+entries before it means anything, which at 4 buys/day across 46 cities is a matter of weeks, not days). The
+operator pings ad hoc between; those pings do not replace the weekly entry.
+
 ### Weekly attribution + prune checklist (run every Monday; the badatmath discipline)
 
 The whole point of the re-point is that we now have a band and a roster we can *falsify per-city*. Run this

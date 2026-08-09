@@ -71,6 +71,7 @@ describe('0124 dash_operation — the live cheap-early operation read', () => {
   }
 
   afterEach(async () => {
+    await db.exec(`delete from public.operation_log`);
     await db.exec(`delete from public.live_orders`);
     await db.exec(`delete from public.market_buckets`);
     await db.exec(`delete from public.market_events`);
@@ -202,6 +203,51 @@ describe('0124 dash_operation — the live cheap-early operation read', () => {
     expect(row.status).toBe('filled');
     expect(row.won).toBe(true);
     expect(row.side).toBe('BUY');
+  });
+
+  it('0125 operation_log_append: inserts, returns the id, and is service-role only', async () => {
+    const [ins] = await rows<{ id: string }>(
+      db, `select public.operation_log_append('decision', 'Path selected', 'Cheap-early cell.', '{"a":1}'::jsonb) as id`);
+    expect(Number(ins!.id)).toBeGreaterThan(0);
+    // the table is operator-READ; the write RPC is revoked from authenticated
+    await expect(
+      asOperator(() => rows(db, `select public.operation_log_append('info','t','b')`)),
+    ).rejects.toThrow();
+  });
+
+  it('0125 operation_log_append: REJECTS an unknown kind and empty title/body', async () => {
+    await expect(rows(db, `select public.operation_log_append('gossip', 't', 'b')`)).rejects.toThrow(/ERR_BAD_KIND/);
+    await expect(rows(db, `select public.operation_log_append('info', '  ', 'b')`)).rejects.toThrow(/ERR_EMPTY_TITLE/);
+    await expect(rows(db, `select public.operation_log_append('info', 't', '   ')`)).rejects.toThrow(/ERR_EMPTY_BODY/);
+    // every allowed kind is accepted
+    for (const k of ['decision', 'adjudication', 'config_change', 'evaluation', 'incident', 'info']) {
+      await expect(rows(db, `select public.operation_log_append($1, 'k', 'b')`, [k])).resolves.toBeDefined();
+    }
+  });
+
+  it('0125 dash_operation.log: newest-first, operator-gated, carries kind/title/body/meta', async () => {
+    await rows(db, `select public.operation_log_append('info', 'older', 'first entry')`);
+    await rows(db, `select public.operation_log_append('incident', 'newer', 'second entry', '{"sev":"high"}'::jsonb)`);
+    const out = await asOperator(call);
+    const log = out.log as Array<{ kind: string; title: string; body: string; meta: Record<string, unknown> }>;
+    expect(log.length).toBeGreaterThanOrEqual(2);
+    expect(log[0]!.title).toBe('newer');          // newest first
+    expect(log[0]!.kind).toBe('incident');
+    expect(log[0]!.meta).toEqual({ sev: 'high' });
+    expect(log[1]!.title).toBe('older');
+  });
+
+  it('0125 dash_operation.daily: 14 rows newest-first, cumulative realized, zero-filled quiet days', async () => {
+    const out = await asOperator(call);
+    const daily = out.daily as Array<{ date: string; nOrders: number; realizedUsd: number; cumRealizedUsd: number; nTicks: number }>;
+    expect(daily.length).toBe(14);
+    // newest first
+    expect(new Date(daily[0]!.date).getTime()).toBeGreaterThan(new Date(daily[13]!.date).getTime());
+    // a day with no activity is present and zeroed, not missing — the digest must not have holes
+    expect(daily.every((d) => typeof d.nOrders === 'number' && typeof d.nTicks === 'number')).toBe(true);
+    // cumulative is monotone in the sense that it only changes where realized does
+    const oldest = daily[13]!;
+    expect(Number(oldest.cumRealizedUsd)).toBe(Number(oldest.realizedUsd));
   });
 
   it('lane state mirrors the config keys the tick reads (defaults when unset)', async () => {
