@@ -27,6 +27,9 @@ const INCLUDE_SIGNALS = true;
  */
 export const DASH_NAV: ReadonlyArray<readonly [string, string]> = [
   ['/', 'overview'], // the analytics front door — forecast skill vs. market (reference idiom)
+  // FIRST after overview deliberately: this is the only page carrying REAL MONEY (the operator-directed
+  // continuous cheap-early operation, 2026-08-09). Everything else on this bar is paper or analytics.
+  ['/operation', 'operation'], // the LIVE lane — state, ledger, attribution, paper control (dash_operation, 0124)
   ['/efficiency', 'efficiency'], // THE VERDICT — the falsified-lever proof (reference idiom)
   ...(INCLUDE_SIGNALS ? ([['/signals', 'signals']] as const) : []), // the verdict explorer — flagship (N1), immediately after /efficiency
   ['/cities', 'cities'], // the CITIES PREDICTION TABLE — per-city pick + success rate + time to close (dash_city_predictions, 0106)

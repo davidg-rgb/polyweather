@@ -546,6 +546,7 @@ describe('migrations 0001–0010', () => {
       '0121_buy_table_floor_veto.sql',
       '0122_buy_table_floor_lock_veto.sql',
       '0123_buy_table_cheap_early_lane.sql',
+      '0124_dash_operation.sql',
     ]);
   });
 });
@@ -1033,6 +1034,7 @@ describe('0034: internal-RPC lockdown — anon/authenticated revoked except the 
     'dash_maker_exit',  // 0073: /maker-exit forward maker-exit paper loop operator read
     'dash_maker_exit_history',  // 0079: /maker-exit assumptions-over-time sparkline read (gate-day instrumentation)
     'dash_cheap_early',  // 0117: /cheap-early forward cheap-early-entry paper loop operator read
+    'dash_operation',    // 0124: /operation — the LIVE cheap-early lane (state, ledger, attribution, control)
     'dash_city_forecast',  // 0080: /paper-trade pre-placement forecast (current-bet box) operator read
     'dash_trading',  // 0082: /trading activation + risk console operator read (config + preflight + open orders + today spend)
     'trade_config_set',  // 0082: operator-guarded trade_config write (self-guards via operator_guard, like every operator_* RPC)

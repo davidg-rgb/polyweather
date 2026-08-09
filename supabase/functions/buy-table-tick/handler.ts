@@ -311,6 +311,21 @@ const isUnknownState = (e: BuyTableEntryRow): boolean =>
  * and zero-fill 'canceled' rows are the ONLY retryable classes — the same line the executor draws when
  * deciding whether to free a key.
  */
+/**
+ * Histogram the tick's skip reasons by TAG (the leading `[a-z_]+` token), most-common first is the caller's
+ * job — this returns a plain object so it round-trips into `job_runs.stats` as jsonb. Mirrors
+ * `scripts/diag-buy-lane.ts`'s `skipTag` exactly so the CLI and the /operation page never disagree. Pure.
+ */
+export function skipHistogram(skips: { reason: string }[]): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const s of Array.isArray(skips) ? skips : []) {
+    const m = /^([a-z_]+)/i.exec(String(s?.reason ?? '').trim());
+    const tag = m ? m[1]!.toLowerCase() : 'other';
+    out[tag] = (out[tag] ?? 0) + 1;
+  }
+  return out;
+}
+
 export function deriveEntryGate(
   entries: BuyTableEntryRow[],
   cfg: BuyTableCfg,
@@ -1324,6 +1339,10 @@ export async function buyTableTick(ctx: JobCtx, deps: BuyTableTickDeps): Promise
     entriesSeen: entries.length,
     candidates: candidates.length,
     skips: skips.length,
+    // 0124: the per-TAG histogram, not just the count — "why no buys today" is otherwise answerable only
+    // from the Edge logs, which the /operation page cannot read. Same tag derivation as
+    // scripts/diag-buy-lane.ts `skipTag` (`/^([a-z_]+)/i`), so the two surfaces always bin identically.
+    skipTags: skipHistogram(skips),
     placed,
     dryRun,
     duplicate,
