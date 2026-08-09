@@ -14,6 +14,13 @@
 Cross-refs: `WALLET-RECON-HANDOFF.md` (§11 copy-trade, §12 maker-spray, §15 the forensic purchase map this
 encodes), `AMSTERDAM-SIM.md` (the paper-sim precedent), memory `polymarket-sharp-weather-wallet.md`.
 
+> **⚠️ STRATEGY DNA STALE (2026-08-09 re-review — `WALLET-RECON-HANDOFF.md` §16).** The §2 rules encode his
+> May–Jun protocol. Mid-July, after a −66% drawdown, **he abandoned the sub-$0.10 band entirely** and the
+> profit engine moved UP to **[0.15,0.45) entries** (median entry 0.09 → ~0.20, median lead 36.9h → 45.4h,
+> sizing ~2× to ~$25/position); [0.10,0.15) turned negative. A replica re-run must re-derive the band from
+> the fresh window (`out/badatmath-purchases-jun22-aug09.csv`) — the §2 band would now replicate the part
+> of his book he cut.
+
 ---
 
 ## 1. What it is (one paragraph)
