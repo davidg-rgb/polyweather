@@ -2634,3 +2634,148 @@ export async function getCityLive(db: WebDb): Promise<CityLiveLoad> {
     },
   };
 }
+
+// ── the live cheap-early OPERATION (dash_operation, migration 0124) ──────────────────────────────────
+
+/** Lane arming state — the decision strip. Every field mirrors what the tick actually reads. */
+export interface OperationLane {
+  since: string;
+  mode: string | null;
+  activeUntil: string | null;
+  stakePerBuyUsd: number | null;
+  allowlistSize: number;
+  tickEnabled: boolean;
+  askFloor: number;
+  priceCap: number;
+  leadMinH: number;
+  leadMaxH: number;
+  maxBuysPerDay: number;
+  stopAfterFirstSuccess: boolean;
+  buysToday: number;
+  laneHalted: boolean;
+  override: {
+    active: boolean;
+    reason: string | null;
+    expiresAt: string | null;
+    createdAt: string | null;
+    daysLeft: number | null;
+  } | null;
+}
+
+export interface OperationMoney {
+  nOrders: number;
+  nFilled: number;
+  nResolved: number;
+  nWins: number;
+  stakedUsd: number;
+  realizedUsd: number;
+  atRiskUsd: number;
+  winRate: number | null;
+  meanNetPerDollar: number | null;
+}
+
+export interface OperationEquityPoint {
+  date: string;
+  realizedUsd: number;
+  atRiskUsd: number;
+  n: number;
+}
+
+export interface OperationOrder {
+  createdAt: string;
+  city: string;
+  targetDate: string;
+  label: string | null;
+  side: string;
+  price: number | null;
+  avgPrice: number | null;
+  size: number | null;
+  sizeMatched: number | null;
+  status: string;
+  resolved: boolean;
+  won: boolean | null;
+  costUsd: number;
+  realizedUsd: number | null;
+}
+
+export interface OperationCityRow {
+  city: string;
+  n: number;
+  nResolved: number;
+  wins: number;
+  winRate: number | null;
+  stakedUsd: number;
+  realizedUsd: number;
+  /** the binding weekly prune rule: <=20% win on n>=8 resolved (EDGE-WATCH-LOOP checklist). */
+  pruneFlag: boolean;
+}
+
+export interface OperationBandRow {
+  band: string;
+  n: number;
+  nResolved: number;
+  wins: number;
+  winRate: number | null;
+  stakedUsd: number;
+  realizedUsd: number;
+}
+
+/** The PAPER control over the same cell — the live lane is meaningless without it. */
+export interface OperationBenchmark {
+  capturedAt: string | null;
+  gateLabel: string | null;
+  gateReason: string | null;
+  nMarkets: number | null;
+  nCities: number | null;
+  meanNetReturn: number | null;
+  paperRealizedUsd: number | null;
+  paperRoi: number | null;
+  paperWinRate: number | null;
+}
+
+/** The tick's write-time skip fold — "why no buys today", answerable without the Edge logs. */
+export interface OperationSkipTelemetry {
+  at: string | null;
+  tags: Record<string, number>;
+  skips: number | null;
+  captures: number | null;
+  candidates: number | null;
+  degraded: boolean | null;
+}
+
+export interface OperationFeed {
+  lane: OperationLane;
+  money: OperationMoney;
+  equity: OperationEquityPoint[];
+  orders: OperationOrder[];
+  byCity: OperationCityRow[];
+  byBand: OperationBandRow[];
+  benchmark: OperationBenchmark | null;
+  skipTelemetry: OperationSkipTelemetry | null;
+}
+
+/**
+ * The live cheap-early operation (dash_operation, 0124) for /operation. Degrades to null (not a thrown 500)
+ * when the RPC is absent or errors, so the page can ship ahead of the migration — the same posture
+ * getCheapEarly takes. A lane armed with no fills yet returns empty arrays, which is the day-1 state and is
+ * rendered as an explicit "armed, waiting" empty state rather than as an error.
+ */
+export async function getOperation(db: WebDb): Promise<OperationFeed | null> {
+  let v: OperationFeed | null;
+  try {
+    v = await one<OperationFeed>(db, 'dash_operation', {});
+  } catch {
+    return null;
+  }
+  if (!v?.lane) return null;
+  return {
+    lane: v.lane,
+    money: v.money,
+    equity: v.equity ?? [],
+    orders: v.orders ?? [],
+    byCity: v.byCity ?? [],
+    byBand: v.byBand ?? [],
+    benchmark: v.benchmark ?? null,
+    skipTelemetry: v.skipTelemetry ?? null,
+  };
+}

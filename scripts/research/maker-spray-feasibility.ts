@@ -34,8 +34,12 @@
  * Run: pnpm tsx scripts/research/maker-spray-feasibility.ts [--from YYYY-MM-DD] [--to YYYY-MM-DD]
  *        [--leads 1,2] [--stations EHAM,EGLC] [--rest-at bid|bid+tick|ask-offset] [--ask-offset 0.07]
  *        [--fill-model ask_touch|last_trade] [--entry-lead-h 24[,43]] [--lookback-days 3]
- *        [--cheap-max 0.25] [--maker-rebate 0] [--margin 0.02] [--mc-iters 1000] [--cross-val] [--json]
+ *        [--cheap-max 0.25 | --band-lo 0.15 --band-hi 0.45] [--maker-rebate 0] [--margin 0.02]
+ *        [--mc-iters 1000] [--min-filled 200] [--archive-dir scripts/research/out] [--cross-val] [--json]
  */
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { gunzipSync } from 'node:zlib';
 import { parseArgs } from 'node:util';
 import { pathToFileURL } from 'node:url';
 import {
@@ -224,7 +228,8 @@ export interface EmosLoadResult {
  */
 export async function loadEmosInputs(
   db: Db,
-  args: { to: string; stations?: string[]; leads: number[] },
+  args: { to: string; stations?: string[]; leads: number[]; archiveDir?: string },
+  log: (m: string) => void = () => {},
 ): Promise<EmosLoadResult> {
   const cfg = parseConfigRows(
     await db.query<{ key: string; value: string }>(`select key, value from config`),
@@ -246,18 +251,23 @@ export async function loadEmosInputs(
   if (icaos.length === 0) throw new Error('no stations in scope');
 
   // forecasts (backfill slot) — the mos-pointskill loader
-  const fRows = await db.query<{
-    icao: string;
-    model: string;
-    target_date: string | Date;
-    lead_days: number;
-    tmax_c: string;
-  }>(
-    `select icao, model, target_date, lead_days, tmax_c
-     from forecast_snapshots
-     where snapshot_slot = 'backfill' and icao = any($1) and lead_days = any($2) and target_date <= $3`,
-    [icaos, args.leads, args.to],
-  );
+  // The hosted DB retains ZERO backfill-slot rows post-prune; --archive-dir sources them from the
+  // local parts instead. Identical predicate either way (see loadForecastRowsFromArchive).
+  const fRows: { icao: string; model: string; target_date: string | Date; lead_days: number; tmax_c: string }[] =
+    args.archiveDir
+      ? loadForecastRowsFromArchive(args.archiveDir, { icaos, leads: args.leads, to: args.to }, log)
+      : await db.query<{
+          icao: string;
+          model: string;
+          target_date: string | Date;
+          lead_days: number;
+          tmax_c: string;
+        }>(
+          `select icao, model, target_date, lead_days, tmax_c
+           from forecast_snapshots
+           where snapshot_slot = 'backfill' and icao = any($1) and lead_days = any($2) and target_date <= $3`,
+          [icaos, args.leads, args.to],
+        );
   const fc = new Map<string, Map<string, Map<number, Map<string, number>>>>();
   for (const r of fRows) {
     const t = dISO(r.target_date);
@@ -380,6 +390,191 @@ export async function loadEvents(
  * `(target_date±1)::timestamptz`). Returns Map<eventId, Map<bucketIdx, MakerSnapshot[]>> (ASC by
  * captured_at). Read-only.
  */
+// =====================================================================================
+// ARCHIVE SOURCE (--archive-dir) — the local `.ndjson.gz` twin of the two HIGH-VOLUME loaders
+// =====================================================================================
+//
+// WHY. The 2026-08-02 free-tier migration pruned the hosted DB to a hot window: `market_snapshots`
+// now starts 2026-07-30, and `forecast_snapshots` retains ZERO `snapshot_slot='backfill'` rows (the
+// one-time reconstruction frozen at target_date 2026-06-15 — the EMOS spine's only source). The two
+// spines are therefore DISJOINT in the DB and no window is runnable from SQL alone. The bulk history
+// survives losslessly in `scripts/ops/archive-retention.ts`'s local parts, so `--archive-dir` sources
+// ONLY those two time-series tables from disk.
+//
+// SCOPE OF THE SUBSTITUTION. Small dimension tables (market_buckets / market_events / cities /
+// observations / config / stations) still come from SQL — they were never pruned. Everything
+// downstream (assembleBids, the fill model, the verdict) is untouched and byte-identical: the archive
+// path only changes WHERE the same rows are read from, reproducing each SQL predicate exactly.
+
+/** One archive manifest (written by scripts/ops/archive-retention.ts). */
+interface ArchiveManifest {
+  table: string;
+  days: Record<string, { day: string; file: string; rows: number; verified: boolean }>;
+}
+
+/**
+ * Resolve the VERIFIED archive part files for `table` whose day falls in [dayFrom, dayTo]. Parts with
+ * `verified:false` are SKIPPED loudly — an unverified part may be a partial write, and silently
+ * folding one in would understate the series exactly like the truncation class this study guards against.
+ */
+export function archiveParts(
+  dir: string,
+  table: string,
+  dayFrom: string,
+  dayTo: string,
+  log: (m: string) => void,
+): string[] {
+  const base = join(dir, `${table}-archive`);
+  const manifestPath = join(base, '_manifest.json');
+  if (!existsSync(manifestPath)) throw new Error(`archive manifest not found: ${manifestPath}`);
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as ArchiveManifest;
+  const files: string[] = [];
+  let skipped = 0;
+  for (const day of Object.keys(manifest.days).sort()) {
+    if (day < dayFrom || day > dayTo) continue;
+    const d = manifest.days[day]!;
+    if (!d.verified) {
+      skipped++;
+      log(`  ⚠ archive ${table}: SKIPPING unverified part ${day}`);
+      continue;
+    }
+    const f = join(base, d.file);
+    if (!existsSync(f)) {
+      skipped++;
+      log(`  ⚠ archive ${table}: manifest lists ${d.file} but it is MISSING on disk`);
+      continue;
+    }
+    files.push(f);
+  }
+  log(`  archive ${table}: ${files.length} verified part(s) in [${dayFrom}..${dayTo}]${skipped ? `, ${skipped} skipped` : ''}`);
+  return files;
+}
+
+/** Parse one gzipped NDJSON archive part into rows. Total — blank lines skipped. */
+export function readArchivePart<T>(file: string): T[] {
+  const text = gunzipSync(readFileSync(file)).toString('utf8');
+  const out: T[] = [];
+  for (const line of text.split('\n')) {
+    if (line.trim() === '') continue;
+    out.push(JSON.parse(line) as T);
+  }
+  return out;
+}
+
+/** ISO day (UTC) shifted by n days — for widening the archive part range to cover the tz window. */
+const shiftDay = (iso: string, n: number): string =>
+  new Date(Date.parse(`${iso}T00:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10);
+
+/**
+ * The archive twin of the `forecast_snapshots` read inside `loadEmos` — same predicate
+ * (`snapshot_slot='backfill'`, icao in scope, lead_days in scope, target_date <= to).
+ */
+function loadForecastRowsFromArchive(
+  dir: string,
+  args: { icaos: string[]; leads: number[]; to: string },
+  log: (m: string) => void,
+): { icao: string; model: string; target_date: string; lead_days: number; tmax_c: string }[] {
+  const icaoSet = new Set(args.icaos);
+  const leadSet = new Set(args.leads);
+  // backfill rows were CAPTURED across the reconstruction's whole run; take every verified part and
+  // filter on target_date (the predicate that actually matters).
+  const files = archiveParts(dir, 'forecast_snapshots', '0000-00-00', '9999-99-99', log);
+  const out: { icao: string; model: string; target_date: string; lead_days: number; tmax_c: string }[] = [];
+  for (const f of files) {
+    for (const r of readArchivePart<Record<string, unknown>>(f)) {
+      if (r.snapshot_slot !== 'backfill') continue;
+      const icao = String(r.icao ?? '');
+      if (!icaoSet.has(icao)) continue;
+      const lead = Number(r.lead_days);
+      if (!leadSet.has(lead)) continue;
+      const td = String(r.target_date ?? '').slice(0, 10);
+      if (td === '' || td > args.to) continue;
+      out.push({ icao, model: String(r.model ?? ''), target_date: td, lead_days: lead, tmax_c: String(r.tmax_c) });
+    }
+  }
+  log(`  archive forecast_snapshots(backfill): ${out.length} rows in scope`);
+  return out;
+}
+
+/**
+ * The archive twin of `loadBucketSeries`. The DB still supplies the bucket→event mapping AND the
+ * per-city tz window bounds (computed in SQL exactly as the live loader does, so the two paths select
+ * the identical row set); the archive supplies only the snapshot rows themselves.
+ */
+export async function loadBucketSeriesFromArchive(
+  db: Db,
+  dir: string,
+  args: { icaos: string[]; from: string; to: string; lookbackDays: number },
+  log: (m: string) => void,
+): Promise<Map<string, Map<number, MakerSnapshot[]>>> {
+  const scope = await db.query<{
+    bucket_id: string;
+    event_id: string;
+    bucket_idx: number;
+    lo_epoch: string;
+    hi_epoch: string;
+  }>(
+    `select mb.id bucket_id, mb.event_id, mb.bucket_idx,
+            extract(epoch from ((me.target_date::timestamp - ($4 || ' days')::interval) at time zone c.tz))::text lo_epoch,
+            extract(epoch from ((me.target_date::timestamp + interval '2 days')          at time zone c.tz))::text hi_epoch
+     from market_buckets mb
+     join market_events me on me.id = mb.event_id
+     join cities        c  on c.id  = me.city_id
+     where me.ladder_ok and me.winning_bucket_idx is not null
+       and me.icao_at_creation = any($1)
+       and me.target_date >= $2 and me.target_date <= $3`,
+    [args.icaos, args.from, args.to, String(args.lookbackDays)],
+  );
+  const byBucketId = new Map(
+    scope.map((s) => [
+      s.bucket_id,
+      { eventId: s.event_id, bucketIdx: s.bucket_idx, lo: Number(s.lo_epoch), hi: Number(s.hi_epoch) },
+    ]),
+  );
+  log(`  archive scope: ${byBucketId.size} bucket(s) across ${new Set(scope.map((s) => s.event_id)).size} resolved event(s)`);
+
+  // widen the part range by the lookback (+2d forward, +1d slack each side for tz offsets)
+  const files = archiveParts(
+    dir,
+    'market_snapshots',
+    shiftDay(args.from, -(args.lookbackDays + 1)),
+    shiftDay(args.to, 3),
+    log,
+  );
+
+  const out = new Map<string, Map<number, MakerSnapshot[]>>();
+  let kept = 0;
+  for (const f of files) {
+    for (const r of readArchivePart<Record<string, unknown>>(f)) {
+      const meta = byBucketId.get(String(r.bucket_id ?? ''));
+      if (!meta) continue;
+      const ts = Math.floor(new Date(String(r.captured_at)).getTime() / 1000);
+      if (!Number.isFinite(ts) || ts < meta.lo || ts >= meta.hi) continue;
+      let byBucket = out.get(meta.eventId);
+      if (!byBucket) {
+        byBucket = new Map<number, MakerSnapshot[]>();
+        out.set(meta.eventId, byBucket);
+      }
+      const arr = byBucket.get(meta.bucketIdx) ?? [];
+      arr.push({
+        capturedAt: ts,
+        bid: r.best_bid == null ? null : Number(r.best_bid),
+        ask: r.best_ask == null ? null : Number(r.best_ask),
+        mid: r.mid == null ? null : Number(r.mid),
+        lastTrade: r.last_trade == null ? null : Number(r.last_trade),
+      });
+      byBucket.set(meta.bucketIdx, arr);
+      kept++;
+    }
+  }
+  // the SQL path returns rows pre-sorted by captured_at; the fill model scans in order, so sort here.
+  for (const byBucket of out.values()) {
+    for (const arr of byBucket.values()) arr.sort((a, b) => a.capturedAt - b.capturedAt);
+  }
+  log(`  archive market_snapshots: ${kept} snapshot row(s) kept in the tz-correct windows`);
+  return out;
+}
+
 export async function loadBucketSeries(
   db: Db,
   args: { icaos: string[]; from: string; to: string; lookbackDays: number },
@@ -664,6 +859,18 @@ export interface MakerSprayArgs {
   entryLeadHours: number[];
   lookbackDays: number;
   cheapMax: number;
+  /** Lower edge of the study band (optional; omitted/0 = the frozen §12 open-below cheap tail). */
+  cheapMin?: number;
+  /**
+   * §16.6 sufficiency floor: below this many FILLED bids the run is INSUFFICIENT, never a KILL.
+   * Optional so programmatic callers (m7) keep the old floor of 1; the CLI always sets it to 200.
+   */
+  minFilled?: number;
+  /**
+   * When set, source `market_snapshots` + backfill `forecast_snapshots` from the local archive parts
+   * under this dir instead of SQL (the post-prune hosted DB cannot serve either). Unset = SQL, unchanged.
+   */
+  archiveDir?: string;
   makerRebate: number;
   /** Maker rebate as a SHARE OF THE TAKER FEE (default 0). >0 → the realistic weather_fees model. */
   rebateRate: number;
@@ -736,6 +943,7 @@ function sprayOptsFor(args: MakerSprayArgs): {
   select: 'all' | 'forecast';
   askOffset: number;
   cheapMax: number;
+  cheapMin: number;
   rebate: number;
   rebateRate: number;
   mcIters: number;
@@ -747,6 +955,7 @@ function sprayOptsFor(args: MakerSprayArgs): {
     select: args.select,
     askOffset: args.askOffset,
     cheapMax: args.cheapMax,
+    cheapMin: args.cheapMin ?? 0,
     rebate: args.makerRebate,
     rebateRate: args.rebateRate,
     mcIters: args.mcIters,
@@ -772,15 +981,23 @@ export async function loadAndAssemble(
   db: Db,
   args: MakerSprayArgs,
   entryLeadHours: number,
+  log: (m: string) => void = () => {},
 ): Promise<LoadedSpine> {
-  const emos = await loadEmosInputs(db, { to: args.to, stations: args.stations, leads: args.leads });
+  const emos = await loadEmosInputs(
+    db,
+    { to: args.to, stations: args.stations, leads: args.leads, archiveDir: args.archiveDir },
+    log,
+  );
   const events = await loadEvents(db, { from: args.from, to: args.to, icaos: emos.icaos });
-  const seriesMap = await loadBucketSeries(db, {
+  const seriesArgs = {
     icaos: emos.icaos,
     from: args.from,
     to: args.to,
     lookbackDays: args.lookbackDays,
-  });
+  };
+  const seriesMap = args.archiveDir
+    ? await loadBucketSeriesFromArchive(db, args.archiveDir, seriesArgs, log)
+    : await loadBucketSeries(db, seriesArgs);
   const { bids, forkRmse, forkN } = assembleBids(emos, events, seriesMap, {
     from: args.from,
     to: args.to,
@@ -970,10 +1187,13 @@ export async function run(args: MakerSprayArgs, deps: MakerSprayDeps): Promise<M
   const runs: SprayRun[] = [];
   let headlineSpine: LoadedSpine | null = null;
   for (const lead of leads) {
-    const spine = await loadAndAssemble(db, args, lead);
+    const spine = await loadAndAssemble(db, args, lead, log);
     if (headlineSpine === null) headlineSpine = spine;
     const report = simulateSpray(spine.bids, opts);
-    const verdict = makerSprayVerdict(report, { marginThreshold: args.margin });
+    const verdict = makerSprayVerdict(report, {
+      marginThreshold: args.margin,
+      minFilled: args.minFilled ?? 1,
+    });
     runs.push({ entryLeadHours: lead, report, verdict });
   }
   const spine = headlineSpine!;
@@ -1082,7 +1302,7 @@ export function report(res: MakerSprayResult, log: (m: string) => void): void {
   );
   log(`scope: ${res.nStations} stations · ${res.nEvents} resolved bucket events`);
   log(
-    `params: entry-lead ${args.entryLeadHours.join(',')}h  cheap<${args.cheapMax}  rebate ${args.makerRebate}  rebate-rate ${args.rebateRate}${args.rebateRate > 0 ? ' (REALISTIC weather_fees: no maker fee + rebateRate×fee)' : ' (conservative §12 model)'}  margin +${(args.margin * 100).toFixed(0)}%  mc-iters ${args.mcIters}  lookback ${args.lookbackDays}d`,
+    `params: source ${args.archiveDir ? `ARCHIVE(${args.archiveDir})` : 'SQL'}  entry-lead ${args.entryLeadHours.join(',')}h  band [${args.cheapMin ?? 0},${args.cheapMax})  rebate ${args.makerRebate}  rebate-rate ${args.rebateRate}${args.rebateRate > 0 ? ' (REALISTIC weather_fees: no maker fee + rebateRate×fee)' : ' (conservative §12 model)'}  margin +${(args.margin * 100).toFixed(0)}%  mc-iters ${args.mcIters}  lookback ${args.lookbackDays}d`,
   );
   log('');
 
@@ -1197,7 +1417,17 @@ export function report(res: MakerSprayResult, log: (m: string) => void): void {
   // ── the WO-5 two-branch verdict template (OPEN vs FALSIFIED — Pass-1 L2) ─────────────────────────
   log('──────── VERDICT (pre-registered FROZEN kill-criterion — MAKER-SPRAY-SIM.md §9, do NOT move it) ────────');
   log(`  ${headline.verdict.summary}`);
-  if (headline.verdict.pass) {
+  if (headline.verdict.insufficient) {
+    // An empty/thin run must NEVER render as a falsification: the pooled CI is [NaN, NaN], which the
+    // `pass` test rejects, so the FAIL prose below would read as "the market is efficient" on no data.
+    log(
+      `  → NO VERDICT. n(filled)=${headline.report.nFilled} is below the ${args.minFilled ?? 1}-fill sufficiency floor,`,
+    );
+    log(
+      '    so neither PASS nor KILL is adjudicable. Do NOT record this as evidence of efficiency — it is an',
+    );
+    log('    absence of data. Widen the window or fix the loaders, then re-run.');
+  } else if (headline.verdict.pass) {
     log(
       '  → 4th ANGLE OPEN: a rested maker bid on OUR forecast clears zero EV. This is genuinely NEW out-of-market',
     );
@@ -1234,6 +1464,7 @@ export function report(res: MakerSprayResult, log: (m: string) => void): void {
             entryLeadHours: args.entryLeadHours,
             lookbackDays: args.lookbackDays,
             cheapMax: args.cheapMax,
+            cheapMin: args.cheapMin,
             makerRebate: args.makerRebate,
             rebateRate: args.rebateRate,
             margin: args.margin,
@@ -1350,6 +1581,10 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       'entry-lead-h': { type: 'string' },
       'lookback-days': { type: 'string' },
       'cheap-max': { type: 'string' },
+      'band-lo': { type: 'string' },
+      'band-hi': { type: 'string' },
+      'min-filled': { type: 'string' },
+      'archive-dir': { type: 'string' },
       'maker-rebate': { type: 'string' },
       'rebate-rate': { type: 'string' },
       margin: { type: 'string' },
@@ -1371,7 +1606,18 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       askOffset: values['ask-offset'] ? Number(values['ask-offset']) : 0.07,
       entryLeadHours: (splitList(values['entry-lead-h']) ?? ['24']).map(Number),
       lookbackDays: values['lookback-days'] ? Number(values['lookback-days']) : 3,
-      cheapMax: values['cheap-max'] ? Number(values['cheap-max']) : 0.25,
+      // --band-hi is the §16.6 spelling of --cheap-max (the band's open upper edge); --band-lo adds the
+      // lower edge §12 never had. Defaults keep the frozen §12 band [0, 0.25) byte-identical.
+      cheapMax: values['band-hi']
+        ? Number(values['band-hi'])
+        : values['cheap-max']
+          ? Number(values['cheap-max'])
+          : 0.25,
+      cheapMin: values['band-lo'] ? Number(values['band-lo']) : 0,
+      // §16.6 freezes n(filled) ≥ 200 for the maker-band adjudication; below it the run is INSUFFICIENT
+      // (no verdict), never a KILL — see the false-KILL guard in makerSprayVerdict.
+      minFilled: values['min-filled'] ? Number(values['min-filled']) : 200,
+      archiveDir: values['archive-dir'],
       makerRebate: values['maker-rebate'] ? Number(values['maker-rebate']) : 0,
       rebateRate: values['rebate-rate'] ? Number(values['rebate-rate']) : 0,
       margin: values.margin ? Number(values.margin) : 0.02,
@@ -1381,6 +1627,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     };
     const res = await run(args, { db, log: console.log });
     report(res, console.log);
+    // A sub-floor run must not exit 0. Before this guard an empty measurement printed the FAIL prose
+    // AND exited green, so a zero-data run was indistinguishable from an adjudicated falsification.
+    if (res.runs[0]!.verdict.insufficient) process.exitCode = 2;
   } finally {
     await db.end();
   }

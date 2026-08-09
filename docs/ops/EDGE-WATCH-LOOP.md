@@ -22,13 +22,18 @@
 _Claude keeps this block current every material cycle. Whole status in 20 seconds._
 
 > **⟳ Idle heartbeat (rolled in place each quiet cycle — no new bullet for zero-change sweeps):** 2026-07-26
-> **2026-07-27 ~12:10Z (MORNING) — both overnight positions LOST to late-day heating (−$7.0 all-in);
-> everything else GREEN.** Full story in the ▶▶ 12:10Z MORNING SUMMARY bullet below. Venue grade was
-> still lagging at write time (winner=null ~12:08Z) but both losses are FLOOR-CERTAIN (METAR floors:
-> WMKK 33°C > our 32°C · WSSS 32°C > our 31°C); the tick's idempotent resolution-loss booking fires
-> when the grade lands — **verify next cycle: winner idx recorded + N1 daily-loss booked.** Crons
-> 0-fail/24h; ticks at */10 out-of-window pace; dangling EMPTY (0120 holding); mode live; interlock
-> ok. **Yours TODAY: the 07-31 override renewal click (you've signaled you WILL renew).**** Material
+> **2026-07-27 ~16:50Z (LATE-DAY batch done) — both overnight positions LOST to late-day heating
+> (−$7.0 all-in, floor-certain: WMKK 33°C > our 32°C · WSSS 32°C > our 31°C); everything else GREEN.**
+> Full story in the ▶▶ 12:10Z MORNING SUMMARY bullet below. Venue grade STILL pending at 16:48Z
+> (winner=null — normal venue lag; the station-local day only ended 16:00Z; C18 manual-adjudication
+> deadline 18:00Z, then re-check each cycle); entry rows correctly `partial` with no synthetic loss
+> rows yet — the idempotent resolution-loss booking fires when the grade lands. Rota 6b synoptic
+> top-up DONE 16:48Z (17,600 obs archived / 47 new DB rows). **NEW since morning: PR #48 MERGED →
+> the EU-cluster forward-watch card (milan/paris/london/cape-town/warsaw/lucknow, pre-registered,
+> forward-only ≥07-28) is LIVE on `/convergence` prod; main merged back into the loop branch.**
+> Crons 0-fail/24h; ticks */10 out-of-window; dangling EMPTY (0120 holding); 0 unsent alerts;
+> DB 2341 MB; mode live; interlock ok. Next buy window 07-28 00:00Z (roster/caps UNCHANGED).
+> **Yours: the 07-31 override renewal click (you've signaled you WILL renew).**** Material
 > cycles tonight: fills 05:00Z · roster swap 22:46Z · 0120 fix 22:20Z (dated bullets below);
 > operator's standing intent — RENEW at 07-31, keep improving until the account is empty.
 > Day recap: efficiency-monitor Action landed 08:39Z success · all three city-tick lanes verified on the
@@ -739,6 +744,50 @@ _Claude keeps this block current every material cycle. Whole status in 20 second
   3. **`city_sim_config.active_until = 2026-07-31`** (21 days runway). I'll re-surface before ~07-29 so the
      silent-pause gotcha doesn't eat the ledger if you still want it accruing.
 - **Nothing needs you right now beyond #1** (and #1 only costs unaccrued Houston/Ankara data-days while it waits).
+
+## LANE PROFILE — the CHEAP-EARLY cell (v19, 2026-08-09, operator-directed continuous operation)
+
+The live buy-table lane was re-pointed on 2026-08-09 from the ≤15¢/late-hours profile to the **cheap-early
+cell**. Rationale, the honest evidence baseline, and the override of the "no capital before a frozen PASS"
+rule are recorded in `docs/ops/CHEAP-EARLY-ENTRY.md` §7 — read that before acting on this lane.
+
+| knob | value | why |
+|---|---|---|
+| ask band | **[0.20, 0.33]** (`ask_floor` 0.20 · `price_cap` 0.33) | the band badatmath's engine runs on; every cheaper cell is measured-losing (sub-$0.10 returned −20%…−49% of stake) |
+| lead window | **[24, 36]h** (`lead_min_h` / `lead_max_h`) | the cheap-early cell; NOT the old [2,12]h late-hours window |
+| cadence | every 5 min, **all day** (`1,6,…,56 * * * *`) | a 24–36h window is not confined to 00–10Z, so the old window split would simply miss it |
+| stake | **$5** per buy | unchanged |
+| daily cap | **`max_buys_per_day` 4** | replaces the throttle the 00–10Z window used to provide implicitly |
+| cities | all with market coverage **minus shenzhen** (46) | shenzhen is resolution-broken (WU ≠ ZGSZ METAR — `resolution-oracle-metar-only`) |
+| exit | hold to resolution | take-profit/stop exits are KILLED (`tp-exit-mechanic-kill`); do not re-litigate |
+
+**Floor vetoes are INERT in this profile, by construction.** `floor_veto` (0121) and `floor_lock_veto` (0122)
+both hang off `buy_table_intraday_floor`, which INNER JOINs `intraday_max` on `date_local`. At 24–36h lead the
+target station-local day has not started, so there is no `intraday_max` row, the floor key is absent, and the
+whole block is skipped. They remain armed and will re-engage automatically if the lead window is ever moved
+back inside the target day. **No guard was added and none is needed** — verified 2026-08-09 against the 0111
+RPC body. (They are not merely "unlikely to fire": the join makes firing impossible without an obs row.)
+
+### Weekly attribution + prune checklist (run every Monday; the badatmath discipline)
+
+The whole point of the re-point is that we now have a band and a roster we can *falsify per-city*. Run this
+every week and act on it — an unpruned allowlist is how the previous lane bled.
+
+1. **Per-band P&L.** Split realized live entries by entry price into `[0.20,0.25)` / `[0.25,0.33]`. If either
+   half is negative on n≥15, narrow the band to the surviving half rather than widening elsewhere.
+2. **Per-city P&L + win rate.** One row per city: n entries, wins, win %, net USD, ROI on stake.
+3. **PRUNE RULE (binding).** Any city with **win rate ≤20% on n≥8** is dropped from `city_allowlist` that
+   week. No appeals, no "it was unlucky" — this is the rule badatmath's own recovery came from (he cut his
+   losing band, he did not wait for it to revert). Record the drop + the numbers in the cycle log.
+4. **Re-add rule.** A pruned city may only return after a fresh 4-week paper reading at ≥35% win on n≥8.
+5. **Benchmark cross-check.** Compare the live lane against the `cheap-early-panel` paper loop over the same
+   week (same band, same window, same breadth). **If the paper gate reaches n and reads KILL while the live
+   lane is also negative, that is the EXIT signal** — clear the override and stop, do not average down.
+6. **Override runway.** Report days remaining on the `trade_gate_override` row. It expires on its own; the
+   lane going quiet is the designed failure mode, not a bug.
+7. **Skip histogram.** `pnpm tsx scripts/diag-buy-lane.ts` — the new `ask_floor` and `day_cap` tags render
+   automatically. A histogram dominated by `ask_floor` means the band is starving and the cell is not firing;
+   `day_cap` dominant means the cap is binding and worth revisiting.
 
 ## Cycle rota (v18 — run every wakeup, in this order)
 

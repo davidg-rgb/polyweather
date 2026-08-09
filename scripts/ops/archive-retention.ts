@@ -65,8 +65,81 @@ export const RETENTION: RetentionConfig[] = [
   {
     table: 'model_stats_history',
     tsColumn: 'created_at',
-    hotWindowDays: 30,
-    note: 'calibration audit log; no live or research reader — 30d kept purely for recency',
+    hotWindowDays: 7,
+    note: 'calibration audit log; no live or research reader — 7d on free tier (was 30d)',
+  },
+  // ── FREE-TIER WINDOWS (2026-08-02, FREE-TIER-MIGRATION.md) ────────────────────────────────────────────
+  // The 500 MB ceiling forces the hot window down to what LIVE readers need; every pruned row is archived
+  // locally first (verify-gated), so the statistics record is COMPLETE on disk — only the server copy shrinks.
+  {
+    table: 'market_snapshots',
+    tsColumn: 'captured_at',
+    hotWindowDays: 3,
+    note: 'top-of-book history; live readers (/events, panels) want days not months — full path archive also lives in market-history-flat.parquet',
+  },
+  {
+    table: 'bucket_probabilities',
+    tsColumn: 'made_at',
+    hotWindowDays: 7,
+    note: 'house distributions; panels replay open events (≤3d life) — 7d is 2× the deepest live need',
+  },
+  {
+    table: 'forecast_snapshots',
+    tsColumn: 'captured_at',
+    hotWindowDays: 25,
+    note: 'THE forecasting panel. Calibration reads residuals via model_stats (kept warm); 25d covers the longest lead (16d) plus grading lag with margin. Full history archived locally for training.',
+  },
+  {
+    table: 'job_runs',
+    tsColumn: 'started_at',
+    hotWindowDays: 7,
+    note: 'ops log; deadman checks read the last few runs — 7d is generous',
+  },
+  // ── CLOSED-SIGNAL TABLES ──────────────────────────────────────────────────────────────────────────────
+  // Their producing job is unscheduled (2026-08-02) so these are static datasets, not growing ones. They are
+  // archived in full and reduced to a 1-day stub on the server: the verdicts are written up in the canonical
+  // docs, and the raw record lives on disk. Re-import from the shards if a signal is ever reopened.
+  {
+    table: 'complete_set_depth_captures',
+    tsColumn: 'captured_at',
+    hotWindowDays: 1,
+    note: 'complete-set arb — KILLED (fee wall); capture job unscheduled',
+  },
+  {
+    table: 'convergence_panel',
+    tsColumn: 'captured_at',
+    hotWindowDays: 1,
+    note: 'opening-convergence forward panel — signal CLOSED 2026-07-07',
+  },
+  {
+    table: 'maker_exit_panel',
+    tsColumn: 'captured_at',
+    hotWindowDays: 1,
+    note: 'maker-exit forward panel — gate rendered KILL 2026-07-07',
+  },
+  {
+    table: 'whale_trades',
+    tsColumn: 'traded_at',
+    hotWindowDays: 1,
+    note: 'whale alarm — no insider signature found; whale-watch unscheduled',
+  },
+  {
+    table: 'wallet_positions_daily',
+    tsColumn: 'created_at',
+    hotWindowDays: 1,
+    note: 'sharp-wallet recon — all 5 angles falsified',
+  },
+  {
+    table: 'wallet_bet_calibration',
+    tsColumn: 'recorded_at',
+    hotWindowDays: 1,
+    note: 'sharp-wallet recon — all 5 angles falsified',
+  },
+  {
+    table: 'synoptic_obs',
+    tsColumn: 'obs_at',
+    hotWindowDays: 1,
+    note: 'US 5-min obs — capture-only lane, unscheduled 2026-08-02 (trial would have ended ~08-08)',
   },
 ];
 

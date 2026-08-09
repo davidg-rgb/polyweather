@@ -27,6 +27,13 @@ All data below is from Polymarket's **public, unauthenticated** APIs (recipe in 
 > **maker** edge (it rests cheap bids ~7pp below the ask; no post-fill drift to ride) and is structurally
 > **non-followable**. All three angles are now falsified; the rail stays DORMANT. Full record + the
 > reverse-engineered protocol spec: **§11 (bottom)**.
+>
+> **🔄 RE-REVIEWED 2026-08-09 — the §8.6 "does the edge persist or decay?" re-run (7 weeks late, 180k fresh
+> fills): §16.** Headline: the edge PERSISTED and scaled ($25.4k → $57.1k) but was NOT continuous (−66%
+> drawdown to Jul 9, then +$46k in 3.5 weeks). The source of the recovery is a single protocol change — **he
+> abandoned the sub-$0.10 entry band and the profit engine moved UP to 0.15–0.45**. The §15 strategy DNA
+> (0.10–0.25 engine, 36.9h lead) is stale; §16 carries the corrected protocol spec, the SELL/rewards
+> adjudication, and the implications for the operator's maker-setup goal.
 
 ---
 
@@ -929,3 +936,175 @@ total).
 **Every pattern reinforces the closed thesis:** calibration + day-before timing + breadth + maker micro-sizing
 across ~45 cities — a high-volume calibrated-longshot maker grind, structurally non-followable / non-replicable
 (the five falsified angles). Pure analytics; nothing reopens the dormant rail.
+
+---
+
+## 16. RE-REVIEW 2026-08-09 — the fresh window (Jun 22 → Aug 9): the edge persisted, and the source is band discipline, not a new signal
+
+**The ask (operator, 2026-08-09):** re-review the wallet, isolate the source of his continuous gains, update
+this doc; end goal — a similar maker setup for us. This is the §8.6 "re-run the forensic in ~2 weeks — does
+the edge persist or decay?" follow-up, run 7 weeks late on 7 weeks of unexamined activity. **Tooling reused
+as-built** (`badatmath-purchase-map.ts` ×3 windows, `wallet-forensics.ts` lifetime, plus an all-types
+`/activity` crawl — 187,577 rows, 180,159 BUY fills, 98.5% Gamma-scored; crawl guard clean, no truncation).
+
+### 16.1 The curve — persistent, NOT continuous
+
+$25.4k (Jun 21) → **$57.1k (Aug 9)**. But the path: peak **$29.2k Jun 29 → trough $9.9k Jul 9 — a −$19.3k /
+−66% drawdown** (back-to-back −$5.3k days Jul 2/3), then **+$46k in 3.5 weeks** ($9.9k → $55.8k by Aug 2,
+repeated +$5–6k cluster-days: Jul 18/25/29, Aug 1), then flat Aug 3–9. The regime detector still finds only
+the May onset (post-slope now **+$663/day**); Jun-29/Jul-11 are variance inside one regime, not breaks.
+Purchase-map reconciliation: full-window hold-to-resolution **+$30.5k (+5.0% ROI)** vs curve move +$32.4k ✓.
+He is #10 on the WEATHER month board for August ($4.6k) — July was the monster month.
+
+### 16.2 Source of gains — five candidates adjudicated
+
+1. **Not a new signal or market type.** Non-Tmax activity = 0.07% of rows (the two "Up" open positions are
+   May crypto dust, $0 value). Same ~45 cities, same 3-bucket breadth, same micro-fills (median $1.30–1.62),
+   Yes-share of buys rose to 92–98%.
+2. **Not convergence selling.** SELL dollars grew to as much as 55.8% of weekly flow — but **2,294 of 2,295
+   SELL fills priced ≥$0.99** (mean 0.998, median 16.9h *after* target-day start): he **cashes out
+   already-won shares at par** instead of waiting for redemption — capital recycling that let the same
+   bankroll re-enter next-day markets faster. Accounting flow, not alpha. (1,429 bought-and-sold legs: cost
+   $100.7k → proceeds $332.8k, median hold 42.2h.)
+3. **Rewards/rebates — real, secondary, and ON TOP of the public curve.** In-window incentives **$12.3k**
+   ($7.7k liquidity rewards + $4.6k maker/taker rebates; lifetime $15.1k, i.e. almost all post the ~Jun-24
+   weather-rewards funding). The official user-pnl curve does NOT include them (trading-only reconstruction
+   $61.6k vs official $57.1k, 7.8% gap; +incentives overshoots to $76.7k). ≈$1.7k/week on ≈$90k/week buy
+   volume ≈ **2% of volume** — a meaningful maker income stream at his scale, but not the driver.
+4. **★ THE DRIVER — he cut the dead band.** In the drawdown window his sub-$0.05 entries alone lost
+   **−$16.0k on 2,245 positions (−48.9% ROI)** — larger than the entire −$9.5k drawdown. After ~Jul 11 he
+   **abandoned <$0.10 entirely** (2,843 positions → 838, sub-0.05 → 100) and the median entry price moved
+   0.08–0.09 → 0.18–0.22. The recovery engine is **[0.15,0.45)**: +29.0% ROI on 0.15–0.25 and +21.2% on
+   0.25–0.45, on 2,557 positions; [0.10,0.15) is now *negative* (−9.7%). Recovery net **+$40.1k (+14.9% ROI,
+   32.9% win rate, 5,068 resolved — not a small-sample fluke)**. Everything else held: median lead 45.4h,
+   breadth 3, same cities. Note the arc: our own §15 map had already flagged [0.05,0.10) as a −22% DEAD ZONE
+   in his May–Jun window — **he reached the same conclusion mid-drawdown and acted on it.**
+5. **Regime tailwind — not separable.** Recovery winners are late-July heat-anomaly clusters: dallas +$6.1k
+   (+77%), helsinki +$4.6k (+80%), london +$4.0k, munich +$3.9k (na-east +38.3% ROI is now his best region;
+   tropical Asia no longer pays preferentially — east-asia was the biggest bleed, −$5.8k). Whether +14.9%
+   recovery ROI is durable band-discipline edge or an unusually forecastable heat regime cannot be separated
+   from this data: the same wallet, same protocol minus one band, was −$19k in the three prior weeks.
+
+### 16.3 Corrected protocol spec (supersedes §11/§15 where they conflict)
+
+| Lever | May–Jun (§15) | Jun 22 → Aug 9 (fresh) |
+|---|---|---|
+| Entry band engine | 0.10–0.25 (+23/+24%) | **0.15–0.45** (+29/+21%); **everything <0.15 is dead or abandoned** |
+| The cheapest tail | [0,0.05) +62.5% "lottery pays" | **−48.9% then abandoned — the §15 lottery read was variance** |
+| Median lead | 36.9h | **45.4h** (max observed 66.8h; never enters >~2.8d out) |
+| Sizing | $12.12/position | **$24.64/position** (recovery $27.71) — sized up ~2× |
+| Sells | negligible | **par cash-outs at ≥$0.99** (capital recycling, not exits) |
+| Income mix | bet P&L only | bet P&L + **~2%-of-volume rewards/rebates** on top of the curve |
+| Geography | tropical/stable pays | **heat-anomaly clusters pay** (NA-east, N-Europe); no stable regional favorite |
+| Win rate / ROI-on-vol (lifetime) | 40.6% / 1.8% | **33.0% [32.3, 33.6] / 7.4%** · Brier 0.425 vs 0.500 (p=0.000) |
+
+Lifetime bands now: [0,0.10) **−17.5%** · [0.10,0.25) +12.5% · [0.25,0.45) **+14.1%** · [0.45,0.75) +2.7% ·
+[0.75,1] +9.4%. (KILL-GATE 1's "[0.45,0.75) negative" criterion no longer holds — that band drifted mildly
+positive; the anti-survivorship conclusion is unaffected.)
+
+### 16.4 What this changes — and what it does not
+
+- **Unchanged: all five falsified replication angles.** They falsified *our forecast / our fills as a
+  follower* (§10–§14); nothing here touches those runs. Copy-trading him remains structurally dead (§11).
+- **New fact 1 — the edge is NOT decaying.** 12 weeks post-onset, at 2× sizing, the market has not absorbed
+  it (the §8.6 question, answered: **persists**). The efficient-market read of FINDINGS.md holds for *our*
+  signals; his microstructure rent is still being paid.
+- **New fact 2 — the paying band moved to [0.15,0.45), which our replication tests never isolated.**
+  KILL-GATE 2 and the §12 maker-spray tested the **<0.25 cheap tail** (rest-at-bid); the 0.25–0.45 cell —
+  now half his engine — was never run as a maker on our calibration. Prior remains LOW (our Brier deficit
+  vs the market is global, §10/§13), but the cell is genuinely untested.
+- **New fact 3 — maker incentive income is now material** (~2% of volume, on top of bet P&L). REC-10
+  falsified *forecast-free* two-sided reward farming (−41%/day); rewards as a *supplement* to a
+  positive-edge one-sided book were never falsified — but they presuppose the edge.
+- **Ops gotcha (recorded):** `badatmath-purchase-map.ts`'s resolution cache stores the literal string
+  `'unresolved'` permanently and never re-fetches — a stale June cache silently understates coverage on
+  re-runs. **Use a fresh resolution cache per re-run** (this run: `out/badatmath-resolutions-fresh.json`).
+
+### 16.5 Implications for the operator's maker-setup goal (the honest path, kill-gated)
+
+A "similar maker setup" = one-sided Yes-longshot maker book, 24–72h lead, 3-bucket spray, ~45 cities,
+micro-rested bids, par cash-out recycling, rewards on top. What stands between us and it, in order:
+
+1. **The calibration wall (unchanged, binding).** His edge survives adverse selection because his tail
+   calibration is better than the market's; ours measurably is not (Brier ours > market, §10/§13; our
+   forecast as selector is value-NEGATIVE, §12). No microstructure mimicry fixes this. Any build starts
+   with a **pre-registered backtest of the one untested cell**: maker entries in **[0.15,0.45)** gated on
+   `calibratedP > restPx`, ask-touch fill model, on data we already own (fork `maker-spray-feasibility.ts`
+   — band + select args exist). KILL bar frozen before the run, per WO-5. Prior LOW; cost ~one session.
+2. **The variance bar.** A faithful replica must survive a −66% drawdown (his path: −$19.3k on ~$90k/wk
+   volume before the +$46k). At any scale, the bankroll sizing must assume the Jul-2→Jul-9 sequence
+   happens first.
+3. **The rewards floor is not a floor.** ~2% of volume at his scale, and REC-10 proved forecast-free
+   farming bleeds −41%/day. Rewards only pay ON TOP of an edge that must exist first (see 1).
+4. **Boundary (standing):** operator funds, holds keys, authorizes every live action; nothing here reopens
+   the rail — step 1 is a read-only backtest and the only next action this re-review licenses.
+
+### 16.6 PRE-REGISTRATION — the [0.15,0.45) maker-band backtest (frozen 2026-08-09, before any number was seen)
+
+**Question:** do maker entries rested in the **[0.15,0.45) band** — the band that now carries badatmath's
+engine — gated on our calibration (`calibratedP > restPx`), clear zero after the ask-touch fill model
+(adverse selection embedded)? This is the §12 maker-spray design re-run on the one cell §12 never tested
+(§12 tested <0.25 only, and mostly the cheap tail of it).
+
+**Frozen verdict bars (binding metric = the §12 lesson: the low-variance filled-bid maker edge, never EV/$1):**
+- **PASS** = in `select=forecast` mode, mean(won − restPx) on FILLED bids has a 95% bootstrap CI with
+  **lower bound > 0**, AND zero-skill MC P(PASS | shuffled outcomes) < 5%, AND n(filled) ≥ 200, AND the
+  edge is not single-city (drop-worst-city CI still > 0).
+- **KILL** = CI upper bound < 0 (efficient in this band too), OR the zero-skill MC shows the gate passes noise.
+- **INSUFFICIENT** = CI straddles 0 or n(filled) < 200 → no live action; may earn a forward paper loop only.
+- Secondary (reported, non-binding): EV/$1, adverse-selection gap (filled-hit vs eligible-hit), Brier ours
+  vs market-at-entry, `select=all` baseline (band structure without our forecast).
+- Windows: every window the data supports (post free-tier pruning, some history is local-archive only) —
+  reported separately, verdict on the pooled set. Bars do NOT move after the run.
+
+### 16.7 RESULT + ADJUDICATION — run 2026-08-09 (same day): every signed axis NEGATIVE; the sixth angle closes
+
+**Data reality (binding, discovered in-run).** The EMOS `backfill` spine was frozen at target_date
+**2026-06-15** and survives only in the local archives (0 DB rows); dense market_snapshots capture starts
+**2026-06-12** (before that: 1 snapshot/bucket/day — no post-entry series, fill model impossible). The only
+fill-model-valid window is **Jun 12–15, 176 resolved events** — and **n(filled)=114 is a HARD ceiling**: a
+20-day-wider window (345 events, 2× candidates) added ZERO filled bids. n≥200 at `select=forecast` is
+unreachable from any archive window; only a forward loop can grow n. Archive-backed loaders were built for
+the run (`--archive-dir`; SQL path untouched; DB still supplies the bucket→event map + tz windows so both
+paths select identical rows). Resolution spine: DB `winning_bucket_idx` complete for the window; validated
+vs the Gamma caches over May 14 → Jun 15 (1,054 resolvable, **0 conflicts**).
+
+**The false-KILL trap is fixed (found pre-run).** On n=0 the script previously printed a *confident
+falsification* ("market efficient to a rested maker bid", empty CIs) and exited 0 — an empty run rendered
+as the expected answer. Now: `MakerSprayVerdict.insufficient` + `minFilled` floor (script default 200 =
+the §16.6 bar; core default 1 so §12-era callers are untouched), INSUFFICIENT prose that explicitly says
+"NOT evidence of efficiency", exit code 2, +5 unit tests (3,604 green, typecheck clean).
+
+**The numbers (band [0.15,0.45), archive window Jun 12–15, EMOS anchor RMSE 1.3053°C/360 folds — the db1
+fork anchor is not computable on the archive path and was NOT faked):**
+
+| arm | elig | FILLED | fill | **edge mean(won−restPx)** | 95% CI | zero-skill MC | drop-worst-city |
+|---|--:|--:|--:|--:|--|--:|--|
+| `forecast` (binding) | 131 | **114** | 87% | **−8.52%** | **[−15.24%, −1.79%]** | 0.00%/1000 | −9.30% [−15.37, −2.48] |
+| `all` (baseline) | 348 | **310** | 89% | **−7.63%** | **[−12.11%, −3.15%]** | 0.00%/1000 | −8.23% [−12.62, −3.59] |
+
+Secondaries, both arms: fee-net EV/$1 −37%/−30% (CIs clear 0 on the downside); adverse selection CONFIRMED
+(filled-hit 0.158 ≪ eligible-hit 0.260); **Brier ours WORSE than market-at-entry** (+0.0222 / +0.0110) —
+the §16.5 calibration wall showing up inside the band itself. Sub-bands (secondary, CIs straddle at these
+n): [0.15,0.25) −6.50%; **[0.25,0.45) −11.73% — the §12-untested upper half is the WORST cell.** Dropping
+the best city makes both arms MORE negative; the positive per-city tail is all n≤2, the negative body n=4–5.
+
+**ADJUDICATION (the two frozen bars collide on the binding arm — CI upper < 0 says KILL, n=114 < 200 says
+INSUFFICIENT; neither clause anticipated the other).** By the letter, the n-floor binds: **INSUFFICIENT**
+— and its frozen consequence applies: *no live action; may earn a forward paper loop only.* The adjudicated
+read on the evidence: **KILL-equivalent for every decision purpose.** Every signed metric is negative; the
+`all` baseline arm clears n≥200 outright and FAILs on its own terms (band structure without our forecast
+is also dead); drop-worst-city strengthens the negative; the MC passes nothing; our Brier trails the
+market at entry. No bar was moved — both clauses land on the identical operative outcome: **the backtest
+cannot justify a maker lane on our calibration. The [0.15,0.45) cell is the SIXTH falsified angle.**
+
+**Honest caveats → why the forward loop is the only remaining instrument:** the window is 4 days of the
+JUNE regime (badatmath's [0.15,0.45) engine only started printing in July); the snapshot grid is 65-min
+median (coarser than §12's ~30-min assumption — the fill model is approximate); n is data-capped forever
+on the backtest side. A forward paper maker loop on the live 10Z forecast spine (distinct gate source per
+the forward-gate law) is the only honest way to test the band in the regime where he actually earns.
+
+**Artifacts** (all `scripts/research/out/`, gitignored): `badatmath-activity-jun22-aug09.ndjson` (91 MB,
+all types) · `badatmath-fills-jun22-aug09.json` (BUY cache) · `badatmath-purchases-jun22-aug09.csv` +
+`-drawdown-jun22-jul11.csv` + `-recovery-jul12-aug09.csv` · `badatmath-resolutions-fresh.json` · logs
+`_map-*.log`, `_forensics.log`, `_fresh-*.log`.

@@ -106,3 +106,58 @@ python scripts/research/bid-path-discovery.py extract     # (if not built) the m
 ```
 Artifacts: `scripts/research/out/cheap-entry-realbook.json`, `live-winners.json`, `bid-path-features.parquet`.
 Boundary held: read-only, no trade, no credentials; writes confined to `scripts/research/out/` + this doc.
+
+---
+
+## 7 · OPERATOR OVERRIDE of the "no capital before a frozen PASS" gate (2026-08-09)
+
+**The research verdicts in §1–§6 are UNCHANGED.** This section records a governance decision, not a new
+result. Nothing below re-opens or re-scores the signal.
+
+**What was overridden.** §5 and `BUILD-STATE.md` both carry the standing rule: *no capital before a frozen
+forward PASS across ≥2 non-overlapping windows + an explicit operator decision.* On 2026-08-09 the operator
+directed continuous live operation instead, in writing:
+
+> "money is dead either way, we can either win big or loose nothing … You must choose a path, evaluate and
+> run a continuous operation with the end goal of maximizing net profit."
+
+The live buy-table lane was therefore re-pointed at this cell (band `[0.20,0.33]`, lead `[24,36]h`) under an
+explicit expiring `trade_gate_override`, **while the forward gate is still INSUFFICIENT.**
+
+**The honest state of the evidence at the moment of the override** — read this before reading any later
+P&L, because it is the baseline the decision was made against:
+
+| | value |
+|---|---|
+| §9R-E gate | `INSUFFICIENT_DATA` — 5 scored markets / 2 cities / 4 dates (needs ≥40 / ≥6 / ≥7) |
+| realized paper P&L | **−$39.10** on 5 realized entries ($120 deployed, 6 entries) |
+| realized win rate | **20%** (1W / 4L) |
+| open position mark | +$43.37 (one open market) → net marked +$4.27 |
+| panel last capture | 2026-08-02T10:47Z — the hourly `:47` cron was cut by the free-tier migration |
+
+So the cell's *realized* forward reading was **negative**, and the only thing making the panel look positive
+was a single unrealized mark. The backtested +33.9% of 2026-07-25 (n=12) is NOT the live reading and must not
+be quoted as if it were.
+
+**Why this cell and not another.** Of every band the 2026-08-09 badatmath re-review measured
+(`WALLET-RECON-HANDOFF.md` §16), `[0.15,0.45)` at 24–36h lead is the one cell our own work has **not** shown
+negative, and it coincides with the band the sharp's engine demonstrably runs on. Every cheaper cell is
+measured-losing (the sub-$0.10 band returned −20% to −49% of stake), so "cheap-early" is the least-bad
+available path, not a positive-expectancy claim.
+
+**What bounds the downside** (all live, none of it optional):
+- `buy_table.max_buys_per_day` — a hard daily cap on successful buys (the all-day lane lost the old
+  00–10Z window's implicit throttle).
+- `buy_table.ask_floor` — refuses the sub-band longshots that are the measured-losing class.
+- `trade_config.stake_per_buy_usd` $5, one entry per market **ever**, hold to resolution.
+- The `trade_gate_override` row EXPIRES; when it lapses the lane goes quiet on its own.
+- Kill switches, in increasing bluntness: `buy_table.tick_enabled=false` · `stop_after_first_success=true`
+  · `trade_gate_override_clear()` · unschedule the cron.
+
+**The benchmark still runs.** The paper loop is deliberately kept alive at matching breadth and an identical
+band/window, so the live lane always has a same-cell control to be scored against. If the paper gate ever
+reaches n and reads KILL while the live lane is negative, that is the exit signal — see the weekly
+attribution + prune checklist in `docs/ops/EDGE-WATCH-LOOP.md`.
+
+**Boundary unchanged and non-negotiable:** the operator funds the wallet, holds the signing key, and
+authorizes every live action; Claude configures software and never places a trade or touches credentials.

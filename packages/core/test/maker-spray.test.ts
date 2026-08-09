@@ -355,8 +355,10 @@ describe('makerSprayVerdict (BINDING pooled gate; reads per-station; NaN→false
     perStation: Map<string, { filledNetEv: { ev: number; evCiLo: number; evCiHi: number; n: number }; nFilled: number }> = new Map(),
     asConfirmed = true,
     pPass = 0.01,
+    nFilled = 30,
   ): MakerSprayReport =>
     ({
+      nFilled,
       filledNetEv: { ev, evCiLo: lo, evCiHi: hi, n: 30 },
       perStation,
       adverseSelection: { asConfirmed } as MakerSprayReport['adverseSelection'],
@@ -395,6 +397,54 @@ describe('makerSprayVerdict (BINDING pooled gate; reads per-station; NaN→false
     const v = makerSprayVerdict(mkReport(0.05, 0.01, 0.09, new Map(), /*asConfirmed*/ false, /*pPass*/ 0.08));
     expect(v.asSuspect).toBe(true);
     expect(v.zeroSkillPPass).toBeCloseTo(0.08, 9);
+  });
+});
+
+describe('makerSprayVerdict INSUFFICIENT floor (the false-KILL guard)', () => {
+  // A zero-fill run has a [NaN, NaN] CI, which the `pass` test rejects — so WITHOUT this guard an
+  // empty run rendered as "market efficient to a rested maker bid", i.e. a falsification on no data.
+  const mkReport = (nFilled: number, ev = NaN, lo = NaN, hi = NaN): MakerSprayReport =>
+    ({
+      nFilled,
+      filledNetEv: { ev, evCiLo: lo, evCiHi: hi, n: nFilled },
+      perStation: new Map(),
+      adverseSelection: { asConfirmed: true } as MakerSprayReport['adverseSelection'],
+      zeroSkillMc: { pPass: NaN, iters: 1000 },
+    }) as unknown as MakerSprayReport;
+
+  it('n=0 → INSUFFICIENT, not FAIL, and the summary must NOT claim efficiency', () => {
+    const v = makerSprayVerdict(mkReport(0));
+    expect(v.insufficient).toBe(true);
+    expect(v.pass).toBe(false);
+    expect(v.summary).toMatch(/INSUFFICIENT/);
+    expect(v.summary).not.toMatch(/market efficient/);
+  });
+
+  it('below an explicit floor → INSUFFICIENT even with a CI that would otherwise PASS', () => {
+    const v = makerSprayVerdict(mkReport(120, 0.05, 0.01, 0.09), { minFilled: 200 });
+    expect(v.insufficient).toBe(true);
+    expect(v.pass).toBe(false); // a real-looking positive CI must not pass on sub-floor n
+    expect(v.clearsMargin).toBe(false);
+  });
+
+  it('at/above the floor the guard is inert — the pooled CI decides as before', () => {
+    const v = makerSprayVerdict(mkReport(200, 0.05, 0.01, 0.09), { minFilled: 200 });
+    expect(v.insufficient).toBe(false);
+    expect(v.pass).toBe(true);
+    expect(v.summary).toMatch(/PASS/);
+  });
+
+  it('default floor is 1, so every pre-existing caller with n>=1 is unaffected', () => {
+    const v = makerSprayVerdict(mkReport(1, 0.02, -0.01, 0.05));
+    expect(v.insufficient).toBe(false);
+    expect(v.pass).toBe(false); // straddles 0 → the ordinary FAIL path, unchanged
+    expect(v.summary).toMatch(/market efficient/);
+  });
+
+  it('a sub-floor FAIL-looking CI is reported as INSUFFICIENT rather than a KILL', () => {
+    const v = makerSprayVerdict(mkReport(3, -0.2, -0.4, -0.05), { minFilled: 200 });
+    expect(v.insufficient).toBe(true);
+    expect(v.summary).toMatch(/INSUFFICIENT/);
   });
 });
 

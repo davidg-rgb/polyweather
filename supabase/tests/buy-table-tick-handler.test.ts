@@ -14,6 +14,7 @@ import {
   applyFavoriteVeto,
   applyRequotes,
   buyTableTick,
+  deriveEntryGate,
   parseBuyTableConfig,
   pickHouseBucket,
   requoteTargets,
@@ -270,6 +271,8 @@ describe('parseBuyTableConfig', () => {
     expect(parseBuyTableConfig([])).toEqual({
       priceCap: 0.15, leadMaxH: 12, leadMinH: 2, tickEnabled: true, cityCaps: {},
       maxEntryAttempts: 1, stopAfterFirstSuccess: false, deadPickMinBid: 0.02, favoriteVetoProb: 0.85,
+      floorVetoGapC: 0, floorVetoMinLocalHour: 10, floorLockVetoMinLocalHour: 0,
+      askFloor: 0, maxBuysPerDay: 0,
     });
     expect(
       parseBuyTableConfig([
@@ -280,10 +283,17 @@ describe('parseBuyTableConfig', () => {
         { key: 'buy_table.stop_after_first_success', value: 'true' },
         { key: 'buy_table.dead_pick_min_bid', value: '0.05' },
         { key: 'buy_table.favorite_veto_prob', value: '0.9' },
+        { key: 'buy_table.floor_veto_gap_c', value: '3' },
+        { key: 'buy_table.floor_veto_min_local_hour', value: '12' },
+        { key: 'buy_table.floor_lock_veto_min_local_hour', value: '13' },
+        { key: 'buy_table.ask_floor', value: '0.20' },
+        { key: 'buy_table.max_buys_per_day', value: '4' },
       ]),
     ).toEqual({
       priceCap: 0.1, leadMaxH: 24, leadMinH: 2, tickEnabled: false, cityCaps: {},
       maxEntryAttempts: 3, stopAfterFirstSuccess: true, deadPickMinBid: 0.05, favoriteVetoProb: 0.9,
+      floorVetoGapC: 3, floorVetoMinLocalHour: 12, floorLockVetoMinLocalHour: 13,
+      askFloor: 0.2, maxBuysPerDay: 4,
     });
   });
 
@@ -338,6 +348,148 @@ describe('buy-table-tick — the price gate (executable ask ≤ price_cap)', () 
     expect(reserves.length).toBe(1);
     expect(reserves[0]!.args['p_market_id']).toBe('c-ev-cheap-1');
     expect(h.logs.some((l) => l.msg === 'buy-table.skip' && /price_cap/.test(String(l.extra?.reason)))).toBe(true);
+  });
+});
+
+describe('buy-table-tick — the 0123 ASK FLOOR (the cheap-early cell\'s lower band edge)', () => {
+  it('skips below the floor, enters at the floor exactly, and still honors the cap above it', async () => {
+    const h = harness(
+      {
+        mode: 'off',
+        configRows: [
+          { key: 'buy_table.ask_floor', value: '0.20' },
+          { key: 'buy_table.price_cap', value: '0.33' },
+        ],
+        captures: [
+          capture({ eventId: 'ev-under', ask: 0.19, hoursToClose: 6 }), // below the floor — OUT
+          capture({ eventId: 'ev-at', ask: 0.2, hoursToClose: 6 }), // exactly the floor — IN
+          capture({ eventId: 'ev-mid', ask: 0.3, hoursToClose: 6 }), // inside the band — IN
+          capture({ eventId: 'ev-over', ask: 0.34, hoursToClose: 6 }), // above the cap — OUT
+        ],
+      },
+      'dry-run',
+    );
+    const stats = await buyTableTick(h.ctx, h.deps);
+    expect(stats.candidates).toBe(2);
+    expect(stats.askFloor).toBe(0.2);
+    expect(reservesOf(h.db).map((r) => r.args['p_market_id']).sort()).toEqual(['c-ev-at-1', 'c-ev-mid-1']);
+    const floorSkips = h.logs.filter(
+      (l) => l.msg === 'buy-table.skip' && /^ask_floor /.test(String(l.extra?.reason)),
+    );
+    expect(floorSkips.length).toBe(1);
+    // the tag must be the bare `ask_floor` token so diag-buy-lane's /^([a-z_]+)/ histogram bins it
+    expect(String(floorSkips[0]!.extra?.reason).startsWith('ask_floor (')).toBe(true);
+  });
+
+  it('is DISABLED at 0 — the pre-0123 max-only gate, unchanged (a 1¢ ask still enters)', async () => {
+    const h = harness(
+      { mode: 'off', captures: [capture({ eventId: 'ev-cheap', ask: 0.01, hoursToClose: 6 })] },
+      'dry-run',
+    );
+    const stats = await buyTableTick(h.ctx, h.deps);
+    expect(stats.candidates).toBe(1);
+    expect(h.logs.some((l) => l.msg === 'buy-table.skip' && /ask_floor/.test(String(l.extra?.reason)))).toBe(false);
+  });
+
+  it('never overrides the HARD $0.01 floor: a sub-cent ask is still below_min_price, not ask_floor', async () => {
+    const h = harness(
+      {
+        mode: 'off',
+        configRows: [{ key: 'buy_table.ask_floor', value: '0.20' }],
+        captures: [capture({ eventId: 'ev-dust', ask: 0.005, hoursToClose: 6 })],
+      },
+      'dry-run',
+    );
+    const stats = await buyTableTick(h.ctx, h.deps);
+    expect(stats.candidates).toBe(0);
+    expect(h.logs.some((l) => l.msg === 'buy-table.skip' && /below_min_price/.test(String(l.extra?.reason)))).toBe(true);
+  });
+});
+
+describe('buy-table-tick — the 0123 DAILY BUY CAP (max_buys_per_day, all-day lane exposure bound)', () => {
+  /** A ledger row with a real fill, created at `createdAt` (the cap's day key). */
+  const filled = (marketId: string, createdAt: string): BuyTableEntryRow => ({
+    marketId,
+    tokenId: `t-${marketId}`,
+    tradeDate: '2026-07-10',
+    intentKey: orderIntentKey({ marketId, side: 'BUY', purpose: 'entry', tradeDate: '2026-07-10' }),
+    status: 'filled',
+    sizeMatched: 50,
+    createdAt,
+  });
+
+  it('blocks every candidate once today\'s filled buys reach the cap', async () => {
+    const h = harness(
+      {
+        mode: 'off',
+        configRows: [{ key: 'buy_table.max_buys_per_day', value: '2' }],
+        // NOW is 2026-07-11 — two fills stamped today, one yesterday (must NOT count)
+        entries: [
+          filled('m-old', '2026-07-10T09:00:00Z'),
+          filled('m-a', '2026-07-11T01:00:00Z'),
+          filled('m-b', '2026-07-11T05:00:00Z'),
+        ],
+        captures: [capture({ eventId: 'ev-new', ask: 0.12, hoursToClose: 6 })],
+      },
+      'dry-run',
+    );
+    const stats = await buyTableTick(h.ctx, h.deps);
+    expect(stats.buysToday).toBe(2); // yesterday's fill excluded
+    expect(stats.dayCapReached).toBe(true);
+    expect(stats.candidates).toBe(0);
+    const capSkips = h.logs.filter((l) => l.msg === 'buy-table.skip' && /^day_cap /.test(String(l.extra?.reason)));
+    expect(capSkips.length).toBe(1);
+  });
+
+  it('allows entries while BELOW the cap', async () => {
+    const h = harness(
+      {
+        mode: 'off',
+        configRows: [{ key: 'buy_table.max_buys_per_day', value: '2' }],
+        entries: [filled('m-a', '2026-07-11T01:00:00Z')],
+        captures: [capture({ eventId: 'ev-new', ask: 0.12, hoursToClose: 6 })],
+      },
+      'dry-run',
+    );
+    const stats = await buyTableTick(h.ctx, h.deps);
+    expect(stats.buysToday).toBe(1);
+    expect(stats.dayCapReached).toBe(false);
+    expect(stats.candidates).toBe(1);
+  });
+
+  it('is UNCAPPED at 0 (default) however many buys today already has', async () => {
+    const h = harness(
+      {
+        mode: 'off',
+        entries: [filled('m-a', '2026-07-11T01:00:00Z'), filled('m-b', '2026-07-11T02:00:00Z')],
+        captures: [capture({ eventId: 'ev-new', ask: 0.12, hoursToClose: 6 })],
+      },
+      'dry-run',
+    );
+    const stats = await buyTableTick(h.ctx, h.deps);
+    expect(stats.dayCapReached).toBe(false);
+    expect(stats.candidates).toBe(1);
+  });
+
+  it('counts PARTIAL fills (money is deployed) and ignores non-filled statuses', () => {
+    const cfgCap = parseBuyTableConfig([{ key: 'buy_table.max_buys_per_day', value: '2' }]);
+    const rows: BuyTableEntryRow[] = [
+      { ...filled('m-p', '2026-07-11T01:00:00Z'), status: 'partial', sizeMatched: 7 },
+      { ...filled('m-f', '2026-07-11T02:00:00Z'), status: 'failed', sizeMatched: 0 },
+      { ...filled('m-c', '2026-07-11T03:00:00Z'), status: 'canceled', sizeMatched: 0 },
+    ];
+    const gate = deriveEntryGate(rows, cfgCap, NOW);
+    expect(gate.buysToday).toBe(1); // only the partial
+    expect(gate.dayCapReached).toBe(false);
+  });
+
+  it('a missing/shapeless createdAt FAILS OPEN — never counted, so the cap cannot block on bad data', () => {
+    const cfgCap = parseBuyTableConfig([{ key: 'buy_table.max_buys_per_day', value: '1' }]);
+    const noStamp: BuyTableEntryRow = { ...filled('m-x', '2026-07-11T01:00:00Z') };
+    delete (noStamp as { createdAt?: string }).createdAt;
+    const gate = deriveEntryGate([noStamp], cfgCap, NOW);
+    expect(gate.buysToday).toBe(0);
+    expect(gate.dayCapReached).toBe(false);
   });
 });
 
@@ -481,6 +633,164 @@ describe('buy-table-tick — the DEAD-BUCKET floor gate (0111): never buy a buck
     const stats = await buyTableTick(rpcGone.ctx, rpcGone.deps);
     expect(stats.candidates).toBe(1);
     expect(rpcGone.logs.some((l) => l.msg === 'buy-table.floor_read_unavailable')).toBe(true);
+  });
+});
+
+describe('buy-table-tick — the FLOOR VETO (0121): skip a late-day pick sitting far above the running max', () => {
+  // fixture pick = idx 1 '30°C' (low 30). NOW = 10:00Z → Europe/Amsterdam local 12:00 (≥ the 10h cutoff).
+  const armed = [
+    { key: 'buy_table.floor_veto_gap_c', value: '3' },
+    { key: 'buy_table.floor_veto_min_local_hour', value: '10' },
+  ];
+  const floorsFor = (maxTenthsC: number) => [{ city: 'testville', targetDate: '2026-07-11', maxTenthsC }];
+
+  it('°C: vetoes a pick whose low is ≥3°C above the floor after local 10h (the 07-28 KL class)', async () => {
+    const h = harness(
+      {
+        mode: 'off',
+        configRows: armed,
+        captures: [capture({ eventId: 'ev-1', ask: 0.12, hoursToClose: 6 })],
+        floors: floorsFor(27.0), // gap = 30 − 27.0 = 3.0
+      },
+      'dry-run',
+    );
+    const stats = await buyTableTick(h.ctx, h.deps);
+    expect(stats.candidates).toBe(0);
+    expect(h.logs.some((l) => l.msg === 'buy-table.skip' && /floor_veto .*3\.0°C above/.test(String(l.extra?.reason)))).toBe(true);
+  });
+
+  it('°C boundary: a 2.5°C gap stays below the 3°C bar → enters', async () => {
+    const h = harness(
+      {
+        mode: 'off',
+        configRows: armed,
+        captures: [capture({ eventId: 'ev-1', ask: 0.12, hoursToClose: 6 })],
+        floors: floorsFor(27.5),
+      },
+      'dry-run',
+    );
+    expect((await buyTableTick(h.ctx, h.deps)).candidates).toBe(1);
+  });
+
+  it('the HOUR cutoff spares the morning: same 3°C gap before local 10h enters (morning gaps WIN)', async () => {
+    const cap = capture({ eventId: 'ev-1', ask: 0.12, hoursToClose: 6 });
+    cap.tzName = 'America/Chicago'; // 10:00Z → 05:00 local
+    const h = harness(
+      { mode: 'off', configRows: armed, captures: [cap], floors: floorsFor(27.0) },
+      'dry-run',
+    );
+    expect((await buyTableTick(h.ctx, h.deps)).candidates).toBe(1);
+  });
+
+  it('°F: the gap is measured in °C — an 88-89°F pick (31.1°C) over a 28.0°C floor is vetoed; 28.3°C is not', async () => {
+    const fCap = () => {
+      const cap = capture({ eventId: 'ev-f', ask: 0.12, hoursToClose: 6 });
+      cap.buckets = cap.buckets!.map((b, i) => ({ ...b, label: ['86-87°F', '88-89°F', '90-91°F'][i]! }));
+      return cap;
+    };
+    const vetoed = harness({ mode: 'off', configRows: armed, captures: [fCap()], floors: floorsFor(28.0) }, 'dry-run');
+    expect((await buyTableTick(vetoed.ctx, vetoed.deps)).candidates).toBe(0);
+    const enters = harness({ mode: 'off', configRows: armed, captures: [fCap()], floors: floorsFor(28.3) }, 'dry-run');
+    expect((await buyTableTick(enters.ctx, enters.deps)).candidates).toBe(1);
+  });
+
+  it('a BOTTOM-TAIL pick ("or below", low null) is never gap-vetoed', async () => {
+    const cap = capture({ eventId: 'ev-b', ask: 0.12, hoursToClose: 6 });
+    cap.buckets = cap.buckets!.map((b, i) => (i === 1 ? { ...b, label: '30°C or below' } : b));
+    const h = harness(
+      { mode: 'off', configRows: armed, captures: [cap], floors: floorsFor(27.0) },
+      'dry-run',
+    );
+    expect((await buyTableTick(h.ctx, h.deps)).candidates).toBe(1);
+  });
+
+  it('DEFAULT OFF: without the 0121 seed (gap_c absent → 0) the same entry passes untouched', async () => {
+    const h = harness(
+      { mode: 'off', captures: [capture({ eventId: 'ev-1', ask: 0.12, hoursToClose: 6 })], floors: floorsFor(27.0) },
+      'dry-run',
+    );
+    expect((await buyTableTick(h.ctx, h.deps)).candidates).toBe(1);
+  });
+
+  it('FAIL-OPEN: a missing tz or a missing floor row never vetoes', async () => {
+    const noTz = capture({ eventId: 'ev-1', ask: 0.12, hoursToClose: 6 });
+    noTz.tzName = null;
+    const a = harness({ mode: 'off', configRows: armed, captures: [noTz], floors: floorsFor(27.0) }, 'dry-run');
+    expect((await buyTableTick(a.ctx, a.deps)).candidates).toBe(1);
+    const b = harness(
+      { mode: 'off', configRows: armed, captures: [capture({ eventId: 'ev-1', ask: 0.12, hoursToClose: 6 })], floors: [] },
+      'dry-run',
+    );
+    expect((await buyTableTick(b.ctx, b.deps)).candidates).toBe(1);
+  });
+});
+
+describe('buy-table-tick — the FLOOR-LOCK VETO (0122): never buy the bucket the running max sits in, late-day', () => {
+  // fixture pick = idx 1 '30°C'. NOW = 10:00Z. Europe/Helsinki → local 13:00 (≥ the 13h cutoff);
+  // Europe/Amsterdam → local 12:00 (below it).
+  const armed = [{ key: 'buy_table.floor_lock_veto_min_local_hour', value: '13' }];
+  const floorsFor = (maxTenthsC: number) => [{ city: 'testville', targetDate: '2026-07-11', maxTenthsC }];
+  const at13 = (over: Parameters<typeof capture>[0]) => {
+    const cap = capture(over);
+    cap.tzName = 'Europe/Helsinki';
+    return cap;
+  };
+
+  it('vetoes the pick when the rounded floor sits INSIDE its bucket at local ≥13h (the 07-28 Wellington class)', async () => {
+    const h = harness(
+      { mode: 'off', configRows: armed, captures: [at13({ eventId: 'ev-1', ask: 0.12, hoursToClose: 6 })], floors: floorsFor(30.0) },
+      'dry-run',
+    );
+    const stats = await buyTableTick(h.ctx, h.deps);
+    expect(stats.candidates).toBe(0);
+    expect(h.logs.some((l) => l.msg === 'buy-table.skip' && /floor_lock_veto .*INSIDE/.test(String(l.extra?.reason)))).toBe(true);
+  });
+
+  it('rounding decides containment: 29.5 rounds INTO 30°C → vetoed; 29.4 → 29 stays outside → enters', async () => {
+    const inside = harness(
+      { mode: 'off', configRows: armed, captures: [at13({ eventId: 'ev-1', ask: 0.12, hoursToClose: 6 })], floors: floorsFor(29.5) },
+      'dry-run',
+    );
+    expect((await buyTableTick(inside.ctx, inside.deps)).candidates).toBe(0);
+    const outside = harness(
+      { mode: 'off', configRows: armed, captures: [at13({ eventId: 'ev-1', ask: 0.12, hoursToClose: 6 })], floors: floorsFor(29.4) },
+      'dry-run',
+    );
+    expect((await buyTableTick(outside.ctx, outside.deps)).candidates).toBe(1);
+  });
+
+  it('the HOUR cutoff holds: same containment at local 12:00 (Amsterdam) enters', async () => {
+    const h = harness(
+      { mode: 'off', configRows: armed, captures: [capture({ eventId: 'ev-1', ask: 0.12, hoursToClose: 6 })], floors: floorsFor(30.0) },
+      'dry-run',
+    );
+    expect((await buyTableTick(h.ctx, h.deps)).candidates).toBe(1);
+  });
+
+  it('a TAIL pick (one bound missing) is never lock-vetoed — the measured class was single/range buckets', async () => {
+    const cap = at13({ eventId: 'ev-t', ask: 0.12, hoursToClose: 6 });
+    cap.buckets = cap.buckets!.map((b, i) => (i === 1 ? { ...b, label: '30°C or higher' } : b));
+    const h = harness({ mode: 'off', configRows: armed, captures: [cap], floors: floorsFor(31.0) }, 'dry-run');
+    expect((await buyTableTick(h.ctx, h.deps)).candidates).toBe(1);
+  });
+
+  it('DEFAULT OFF: without the 0122 seed the same lock entry passes untouched', async () => {
+    const h = harness(
+      { mode: 'off', captures: [at13({ eventId: 'ev-1', ask: 0.12, hoursToClose: 6 })], floors: floorsFor(30.0) },
+      'dry-run',
+    );
+    expect((await buyTableTick(h.ctx, h.deps)).candidates).toBe(1);
+  });
+
+  it('composes with 0111: a floor ABOVE the bucket top is dead_bucket, not floor_lock_veto', async () => {
+    const h = harness(
+      { mode: 'off', configRows: armed, captures: [at13({ eventId: 'ev-1', ask: 0.12, hoursToClose: 6 })], floors: floorsFor(31.0) },
+      'dry-run',
+    );
+    const stats = await buyTableTick(h.ctx, h.deps);
+    expect(stats.candidates).toBe(0);
+    expect(h.logs.some((l) => l.msg === 'buy-table.skip' && /dead_bucket/.test(String(l.extra?.reason)))).toBe(true);
+    expect(h.logs.some((l) => l.msg === 'buy-table.skip' && /floor_lock_veto/.test(String(l.extra?.reason)))).toBe(false);
   });
 });
 
@@ -1209,6 +1519,8 @@ describe('selectBuyTableCandidates — pure edge shapes', () => {
   const baseCfg = {
     priceCap: 0.15, leadMaxH: 12, leadMinH: 2, tickEnabled: true, cityCaps: {},
     maxEntryAttempts: 1, stopAfterFirstSuccess: false, deadPickMinBid: 0.02, favoriteVetoProb: 0.85,
+    floorVetoGapC: 0, floorVetoMinLocalHour: 10, floorLockVetoMinLocalHour: 0,
+    askFloor: 0, maxBuysPerDay: 0,
   };
 
   it('skips unseeded captures (no houseProb → no forecast center to buy)', () => {

@@ -40,6 +40,15 @@
  * near-certain of a different outcome, so cancel. bestBid is the liveness measure (real buyers; dust asks can't
  * move it). Both FAIL-OPEN on a fetch miss, but the dead-pick guard runs on the pick's own bid as the backstop.
  *
+ * 0121 FLOOR VETO (FLOOR-VETO.md — the 07-28 KL 33°C @ 31°C-floor class): the dead-bucket gate only kills
+ * IMPOSSIBLE buckets; this one skips the merely-implausible — a pick whose LOW sits ≥ buy_table.floor_veto_gap_c
+ * °C above the observed intraday running max once the station-local hour ≥ buy_table.floor_veto_min_local_hour.
+ * Mechanism: the house gaussian doesn't condition on the intraday floor; the market does (CITY-ORACLE build 3) —
+ * a big remaining gap late in the heating day means the "edge" is model overconfidence vs an informed book.
+ * Backtest (829 events / 44 cities / 22 days, real-book hourly replay): the vetoed class nets −25%/$1
+ * (test-split −35%, city-day CI [−0.55, −0.16]); morning big-gap entries win and are deliberately spared by
+ * the hour cutoff. Default OFF (gap 0); migration 0121 arms 3°C / 10h. Fails OPEN on missing floor/tz/label.
+ *
  * TRADE MODE LADDER (the double gate, preserved): the Edge secret TRADE_MODE resolved by the T1
  * `resolveTradeMode` — absent/typo ⇒ dry-run (records the intent in the ledger, NEVER posts), 'off' ⇒
  * inert. A REAL post needs TRADE_MODE=live AND trade_config.mode='live' AND
@@ -158,6 +167,34 @@ export interface BuyTableCfg {
    *  market is near-certain of a DIFFERENT outcome, so our pick is a written-off longshot → cancel the buy.
    *  Default 0.85. Set to a value > 1 (e.g. 2) to DISABLE. */
   favoriteVetoProb: number;
+  /** 0121 FLOOR VETO (FLOOR-VETO.md — the 07-28 KL 33°C @ 31°C-floor class): skip an entry whose picked
+   *  bucket's LOW sits ≥ this many °C above the observed intraday running max once the station-local day
+   *  has mostly heated (hour ≥ floorVetoMinLocalHour). The house gaussian doesn't condition on the
+   *  intraday floor; the market does — a large late-day remaining gap marks the model fighting the
+   *  thermometer (backtest 07-05..07-27: the vetoed class returns −25% per $1, test-split −35%,
+   *  CI[−0.55,−0.16]). Default 0 = DISABLED; the 0121 migration arms it at 3. */
+  floorVetoGapC: number;
+  /** 0121: the station-local fractional hour from which the floor veto applies (before it, the day
+   *  hasn't heated and a big gap is normal — morning big-gap entries WIN in the backtest). Default 10. */
+  floorVetoMinLocalHour: number;
+  /** 0122 FLOOR-LOCK VETO (FLOOR-VETO.md §8 — the 07-28 Wellington 12°C class): skip a pick whose bucket
+   *  CONTAINS the current running max (official-rounded) once the station-local hour ≥ this — betting
+   *  "the day's high is already in" against a book with fresher obs. Backtest: −33.5%/$1 full
+   *  (n=92, city-day CI [−0.60, −0.07]; test −49%), win rate 22.8%, worst in laggy-METAR stations.
+   *  Only single/range buckets (both bounds) — tails were not in the measured class. Default 0 = OFF;
+   *  migration 0122 arms 13. */
+  floorLockVetoMinLocalHour: number;
+  /** 0123 ASK FLOOR — the complement of priceCap, for the CHEAP-EARLY cell (CHEAP-EARLY-ENTRY.md): enter
+   *  only while the live re-quoted ask is AT OR ABOVE this. The cell's thesis is a [0.20,0.33] band 24–36h
+   *  out; without a floor the lane still takes the sub-20¢ longshots the §16 record shows losing 20–49% of
+   *  stake. Default 0 = DISABLED (no minimum — the pre-0123 max-only gate, unchanged). The HARD $0.01 floor
+   *  applies underneath regardless. */
+  askFloor: number;
+  /** 0123 DAILY BUY CAP — the most successful live buys the lane may open per UTC day, counted across the
+   *  whole lane from the ledger (rows with a real fill, `createdAt` on today's UTC date). All-day ticking
+   *  removes the old 00–10Z window's natural throttle, so this is the replacement exposure bound. Default
+   *  0 = UNCAPPED (pre-0123 behavior). Counts PARTIAL fills too — money is deployed either way. */
+  maxBuysPerDay: number;
 }
 
 const num = (v: string | undefined, dflt: number): number => {
@@ -207,7 +244,36 @@ export function parseBuyTableConfig(rows: { key: string; value: string }[]): Buy
     stopAfterFirstSuccess: stopRaw === 'true' || stopRaw === '1',
     deadPickMinBid: num(map.get('buy_table.dead_pick_min_bid'), 0.02),
     favoriteVetoProb: num(map.get('buy_table.favorite_veto_prob'), 0.85),
+    floorVetoGapC: num(map.get('buy_table.floor_veto_gap_c'), 0),
+    floorVetoMinLocalHour: num(map.get('buy_table.floor_veto_min_local_hour'), 10),
+    floorLockVetoMinLocalHour: num(map.get('buy_table.floor_lock_veto_min_local_hour'), 0),
+    askFloor: num(map.get('buy_table.ask_floor'), 0),
+    // an integer ≥ 0 (a fractional/negative hand-edit falls back to the safe default: uncapped)
+    maxBuysPerDay: (() => {
+      const n = num(map.get('buy_table.max_buys_per_day'), 0);
+      return Number.isInteger(n) && n >= 0 ? n : 0;
+    })(),
   };
+}
+
+/** Station-local fractional hour of `now` in `tzName` (Intl-based, Deno-safe). Null on a missing or
+ *  invalid zone — the floor veto then FAILS OPEN (same posture as every other floor-gate miss). */
+export function stationLocalHour(now: Date, tzName: string | null | undefined): number | null {
+  if (!tzName) return null;
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: tzName,
+      hour12: false,
+      hour: 'numeric',
+      minute: 'numeric',
+    }).formatToParts(now);
+    const h = Number(parts.find((p) => p.type === 'hour')?.value);
+    const m = Number(parts.find((p) => p.type === 'minute')?.value);
+    if (!Number.isFinite(h) || !Number.isFinite(m)) return null;
+    return (h === 24 ? 0 : h) + m / 60; // some ICU builds render midnight as '24'
+  } catch {
+    return null;
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
@@ -220,6 +286,10 @@ export interface EntryGate {
   blockedIntentKeys: ReadonlySet<string>;
   /** Rule 2: a real fill exists in this mode and stop_after_first_success is on — place NOTHING. */
   laneHalted: boolean;
+  /** 0123: successful buys (rows with a real fill) already opened on the CURRENT UTC day. */
+  buysToday: number;
+  /** 0123: buysToday has reached buy_table.max_buys_per_day (>0) — place NOTHING more today. */
+  dayCapReached: boolean;
 }
 
 /** A row with a REAL fill — we own shares (partial fills count: money is deployed). */
@@ -241,7 +311,26 @@ const isUnknownState = (e: BuyTableEntryRow): boolean =>
  * and zero-fill 'canceled' rows are the ONLY retryable classes — the same line the executor draws when
  * deciding whether to free a key.
  */
-export function deriveEntryGate(entries: BuyTableEntryRow[], cfg: BuyTableCfg): EntryGate {
+/**
+ * Histogram the tick's skip reasons by TAG (the leading `[a-z_]+` token), most-common first is the caller's
+ * job — this returns a plain object so it round-trips into `job_runs.stats` as jsonb. Mirrors
+ * `scripts/diag-buy-lane.ts`'s `skipTag` exactly so the CLI and the /operation page never disagree. Pure.
+ */
+export function skipHistogram(skips: { reason: string }[]): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const s of Array.isArray(skips) ? skips : []) {
+    const m = /^([a-z_]+)/i.exec(String(s?.reason ?? '').trim());
+    const tag = m ? m[1]!.toLowerCase() : 'other';
+    out[tag] = (out[tag] ?? 0) + 1;
+  }
+  return out;
+}
+
+export function deriveEntryGate(
+  entries: BuyTableEntryRow[],
+  cfg: BuyTableCfg,
+  now: Date = new Date(),
+): EntryGate {
   const rows = Array.isArray(entries) ? entries : [];
   const byKey = new Map<string, BuyTableEntryRow[]>();
   for (const e of rows) {
@@ -257,7 +346,23 @@ export function deriveEntryGate(entries: BuyTableEntryRow[], cfg: BuyTableCfg): 
     anyFill ||= filled;
     if (filled || group.some(isUnknownState) || group.length >= cfg.maxEntryAttempts) blocked.add(key);
   }
-  return { blockedIntentKeys: blocked, laneHalted: cfg.stopAfterFirstSuccess && anyFill };
+  // 0123 DAILY BUY CAP — count the lane's FILLED entries stamped with today's UTC date. Same day key the
+  // tick already uses for its degraded-alert dedupe (`toISOString().slice(0, 10)`). A row whose createdAt is
+  // missing/unparseable is NOT counted: the cap must never block on a shapeless timestamp (fail-open, the
+  // posture every other ledger-derived gate takes) — the one-entry-per-market gate still bounds exposure.
+  const today = now.toISOString().slice(0, 10);
+  let buysToday = 0;
+  for (const e of rows) {
+    if (!hasFill(e)) continue;
+    const created = typeof e.createdAt === 'string' ? e.createdAt.slice(0, 10) : null;
+    if (created === today) buysToday++;
+  }
+  return {
+    blockedIntentKeys: blocked,
+    laneHalted: cfg.stopAfterFirstSuccess && anyFill,
+    buysToday,
+    dayCapReached: cfg.maxBuysPerDay > 0 && buysToday >= cfg.maxBuysPerDay,
+  };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
@@ -309,6 +414,9 @@ export interface BuyTableEntryRow {
   intentKey: string;
   status: string;
   sizeMatched: number;
+  /** ISO timestamp the ledger row was created (buy_table_entries has always returned it) — the 0123
+   *  daily-buy-cap day key. Optional: a pre-0123 fixture without it simply never counts toward the cap. */
+  createdAt?: string;
 }
 
 export function selectBuyTableCandidates(args: {
@@ -397,6 +505,47 @@ export function selectBuyTableCandidates(args: {
             continue;
           }
         }
+        // 0122 FLOOR-LOCK VETO (FLOOR-VETO.md §8): the inverse failure of the gap veto — the pick IS the
+        // bucket the running max already sits in (official-rounded), late in the station-local day. That is
+        // a bet that the day's high is already in, made against a book with fresher obs (the 07-28
+        // Wellington 12°C @ 0.33 with house q 0.896: one +1°C tick 48 min later killed it). Backtested
+        // −33.5%/$1 (n=92, test −49%, CI clear of 0 on both clusterings, hour-robust 12–14h). Single/range
+        // buckets only — both bounds required (tails were not in the measured class). Same fail-open posture.
+        if (cfg.floorLockVetoMinLocalHour > 0 && def.low != null && def.high != null) {
+          const nativeFloor = metarMaxToNative(Number(floorTenths), def.unit);
+          const localHour = stationLocalHour(now, r.tzName);
+          if (
+            nativeFloor >= def.low && nativeFloor <= def.high &&
+            localHour != null && localHour >= cfg.floorLockVetoMinLocalHour
+          ) {
+            skips.push({
+              ref,
+              reason: `floor_lock_veto (the observed running max ${floorTenths}°C → ${nativeFloor}°${def.unit} native already sits INSIDE the pick ${def.low}–${def.high}°${def.unit} at station-local ${localHour.toFixed(1)}h ≥ ${cfg.floorLockVetoMinLocalHour}h — buying "the high is already in" against a fresher book is the backtested-toxic lock bet)`,
+            });
+            continue;
+          }
+        }
+        // 0121 FLOOR VETO (FLOOR-VETO.md): the bucket isn't dead, but its LOW sits far above the observed
+        // running max late in the station-local day — the class where the house gaussian is fighting the
+        // thermometer while the market has already priced the intraday obs (backtested −25%/$1 net, the
+        // 07-28 KL 33°C-vs-31°C-floor failure mode). Bottom-tail buckets (low null) are never gap-vetoed;
+        // a missing tz/floor fails OPEN like every other floor-gate miss. Disabled while floorVetoGapC ≤ 0.
+        if (cfg.floorVetoGapC > 0 && def.low != null) {
+          const lowC = def.unit === 'F' ? ((def.low - 32) * 5) / 9 : def.low;
+          const gapC = lowC - Number(floorTenths);
+          const localHour = stationLocalHour(now, r.tzName);
+          if (
+            gapC >= cfg.floorVetoGapC - 1e-9 &&
+            localHour != null &&
+            localHour >= cfg.floorVetoMinLocalHour
+          ) {
+            skips.push({
+              ref,
+              reason: `floor_veto (pick low ${def.low}°${def.unit} is ${gapC.toFixed(1)}°C above the observed running max ${floorTenths}°C at station-local ${localHour.toFixed(1)}h ≥ ${cfg.floorVetoMinLocalHour}h — a late ≥${cfg.floorVetoGapC}°C remaining jump is the backtested-toxic entry class)`,
+            });
+            continue;
+          }
+        }
       } catch {
         // unparseable label — fail open; the price/size gates still apply
       }
@@ -428,6 +577,16 @@ export function selectBuyTableCandidates(args: {
     // bucket dead; never buy it however far under the cap it sits.
     if (ask < HARD_MIN_ASK - 1e-9) {
       skips.push({ ref, reason: `below_min_price (ask ${ask.toFixed(4)} < the hard $0.01 floor — non-configurable)` });
+      continue;
+    }
+    // 0123 ASK FLOOR — the cheap-early cell's lower edge. Applied BEFORE the cap so the band reads as one
+    // gate [askFloor, cap]. Disabled at 0 (the pre-0123 max-only behavior). Deliberately GLOBAL: the
+    // per-city 0109 map is a max-only override and gains no floor twin — one band for the whole lane.
+    if (cfg.askFloor > 0 && ask < cfg.askFloor - 1e-9) {
+      skips.push({
+        ref,
+        reason: `ask_floor (ask ${ask.toFixed(3)} < floor ${cfg.askFloor} — below the cheap-early entry band; the sub-floor longshots are the measured-losing class)`,
+      });
       continue;
     }
     // 0109: MAX-ONLY price gate — a per-city cap override REPLACES the global cap when the operator set one;
@@ -958,7 +1117,7 @@ export async function buyTableTick(ctx: JobCtx, deps: BuyTableTickDeps): Promise
   // 7 · candidates (pure) — the BUY-TABLE gates over the latest capture per market, behind the 0102
   //     entry gate (rule 1: bounded retry only after PROVABLY-dead attempts; rule 2: a real fill +
   //     stop_after_first_success halts ALL new entries — the operator's one-verified-buy semantics).
-  const gate = deriveEntryGate(entries, cfg);
+  const gate = deriveEntryGate(entries, cfg, now);
   let { candidates, skips } = degraded
     ? { candidates: [] as BuyTableCandidate[], skips: [{ ref: 'ALL', reason: 'degraded — failed read is never "no candidates"' }] }
     : selectBuyTableCandidates({
@@ -992,6 +1151,18 @@ export async function buyTableTick(ctx: JobCtx, deps: BuyTableTickDeps): Promise
       candidates.map((c) => ({
         ref: `${c.city}/${c.tradeDate}`,
         reason: 'lane_halted — a successful buy exists and stop_after_first_success is on (working as designed)',
+      })),
+    );
+    candidates = [];
+  }
+
+  // 0123 DAILY BUY CAP — the all-day lane's exposure bound (the old 00–10Z window used to throttle this
+  // implicitly). Applied AFTER lane_halted so the more specific reason wins, and BEFORE any placement.
+  if (gate.dayCapReached && candidates.length > 0) {
+    skips = skips.concat(
+      candidates.map((c) => ({
+        ref: `${c.city}/${c.tradeDate}`,
+        reason: `day_cap (${gate.buysToday} successful buy(s) already opened today ≥ max_buys_per_day ${cfg.maxBuysPerDay} — the lane is done for this UTC day)`,
       })),
     );
     candidates = [];
@@ -1161,10 +1332,17 @@ export async function buyTableTick(ctx: JobCtx, deps: BuyTableTickDeps): Promise
     favoriteVetoed,
     deadPickMinBid: cfg.deadPickMinBid,
     favoriteVetoProb: cfg.favoriteVetoProb,
+    floorVetoGapC: cfg.floorVetoGapC,
+    floorVetoMinLocalHour: cfg.floorVetoMinLocalHour,
+    floorLockVetoMinLocalHour: cfg.floorLockVetoMinLocalHour,
     captures: captures.length,
     entriesSeen: entries.length,
     candidates: candidates.length,
     skips: skips.length,
+    // 0124: the per-TAG histogram, not just the count — "why no buys today" is otherwise answerable only
+    // from the Edge logs, which the /operation page cannot read. Same tag derivation as
+    // scripts/diag-buy-lane.ts `skipTag` (`/^([a-z_]+)/i`), so the two surfaces always bin identically.
+    skipTags: skipHistogram(skips),
     placed,
     dryRun,
     duplicate,
@@ -1172,8 +1350,12 @@ export async function buyTableTick(ctx: JobCtx, deps: BuyTableTickDeps): Promise
     lossesBooked,
     preflightOk,
     priceCap: cfg.priceCap,
+    askFloor: cfg.askFloor,
     cityOverrides: Object.keys(cfg.cityCaps).length,
     leadWindowH: [cfg.leadMinH, cfg.leadMaxH],
+    maxBuysPerDay: cfg.maxBuysPerDay,
+    buysToday: gate.buysToday,
+    dayCapReached: gate.dayCapReached,
     stakeUsd,
     cities: allowlist.length,
     maxEntryAttempts: cfg.maxEntryAttempts,
