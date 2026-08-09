@@ -57,6 +57,14 @@ describe('getOperation (dash_operation, 0124)', () => {
       byBand: [{ band: '[0.20,0.25)', n: 1, nResolved: 1, wins: 0, winRate: 0, stakedUsd: 4.8, realizedUsd: -4.8 }],
       benchmark: { capturedAt: '2026-08-09T10:00:00Z', gateLabel: 'INSUFFICIENT_DATA', gateReason: 'need more', nMarkets: 5, nCities: 2, meanNetReturn: null, paperRealizedUsd: -39.1, paperRoi: 0.03, paperWinRate: 0.2 },
       skipTelemetry: { at: '2026-08-09T12:00:00Z', tags: { lead_window: 40, ask_floor: 3 }, skips: 43, captures: 44, candidates: 1, degraded: false },
+      log: [
+        { id: 2, at: '2026-08-09T12:00:00Z', kind: 'config_change', title: 'Lane armed', body: 'knobs set', meta: { migration: '0123' } },
+        { id: 1, at: '2026-08-09T11:00:00Z', kind: 'decision', title: 'Path selected', body: 'cheap-early', meta: {} },
+      ],
+      daily: [
+        { date: '2026-08-09', nOrders: 2, nFills: 2, stakedUsd: 10, realizedUsd: -5, cumRealizedUsd: -5, nTicks: 59, topSkipTag: 'lead_window', topSkipN: 40 },
+        { date: '2026-08-08', nOrders: 0, nFills: 0, stakedUsd: 0, realizedUsd: 0, cumRealizedUsd: 0, nTicks: 0, topSkipTag: null, topSkipN: null },
+      ],
     };
     const out = await getOperation(stubDb(payload));
     expect(out?.lane.askFloor).toBe(0.2);
@@ -66,6 +74,10 @@ describe('getOperation (dash_operation, 0124)', () => {
     expect(out?.byCity[0]!.pruneFlag).toBe(false);
     expect(out?.skipTelemetry?.tags['lead_window']).toBe(40);
     expect(out?.benchmark?.gateLabel).toBe('INSUFFICIENT_DATA');
+    expect(out?.log[0]!.kind).toBe('config_change');   // newest first, passed through verbatim
+    expect(out?.log[0]!.meta['migration']).toBe('0123');
+    expect(out?.daily[0]!.topSkipTag).toBe('lead_window');
+    expect(out?.daily[1]!.topSkipTag).toBeNull();       // a quiet day keeps its null, never coerced to ''
   });
 
   it('day-1 armed-but-no-fills: absent collections default to [] rather than throwing', async () => {
@@ -77,6 +89,8 @@ describe('getOperation (dash_operation, 0124)', () => {
     expect(out?.byBand).toEqual([]);
     expect(out?.benchmark).toBeNull();
     expect(out?.skipTelemetry).toBeNull();
+    expect(out?.log).toEqual([]);
+    expect(out?.daily).toEqual([]);
   });
 
   it('degrades to null when the RPC is absent (the page ships ahead of migration 0124)', async () => {

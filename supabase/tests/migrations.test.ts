@@ -547,6 +547,7 @@ describe('migrations 0001–0010', () => {
       '0122_buy_table_floor_lock_veto.sql',
       '0123_buy_table_cheap_early_lane.sql',
       '0124_dash_operation.sql',
+      '0125_operation_log.sql',
     ]);
   });
 });

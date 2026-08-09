@@ -283,6 +283,86 @@ function SkipTelemetry({ feed }: { feed: OperationFeed }): ReactElement {
   );
 }
 
+// ─── 5 · daily digest + decision log (the hub layer) ─────────────────────────
+
+function DailyDigest({ feed }: { feed: OperationFeed }): ReactElement {
+  const rows = feed.daily;
+  if (rows.length === 0) return <p className="muted">No digest yet.</p>;
+  return (
+    <>
+      <table className="tbl">
+        <thead>
+          <tr>
+            <th>day</th><th>orders</th><th>fills</th><th>staked</th>
+            <th>realized</th><th>cumulative</th><th>ticks</th><th>top skip (last tick)</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((d) => {
+            const quiet = d.nOrders === 0;
+            return (
+              <tr key={d.date} style={quiet ? { opacity: 0.6 } : undefined}>
+                <td>{fmtDate(d.date)}</td>
+                <td>{d.nOrders}</td>
+                <td>{d.nFills}</td>
+                <td>{d.stakedUsd === 0 ? '—' : fmtUsd(d.stakedUsd)}</td>
+                <td style={{ color: d.realizedUsd === 0 ? undefined : pnlColor(d.realizedUsd) }}>
+                  {d.realizedUsd === 0 ? '—' : signedUsd(d.realizedUsd)}
+                </td>
+                <td style={{ color: pnlColor(d.cumRealizedUsd) }}>{signedUsd(d.cumRealizedUsd)}</td>
+                <td>{d.nTicks}</td>
+                <td className="mono">
+                  {d.topSkipTag == null ? '—' : `${d.topSkipTag}${d.topSkipN == null ? '' : ` (${d.topSkipN})`}`}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      <p className="muted" style={{ fontSize: '0.85rem' }}>
+        &ldquo;Top skip&rdquo; is the day&apos;s LAST tick histogram — a snapshot, not a daily total.
+        Candidates and skips are counted per tick, so an unbought market recurs on every one of the day&apos;s
+        ticks; summing them would multiply it by the tick rate. <span className="mono">nTicks</span> is the
+        honest count of how often the lane looked.
+      </p>
+    </>
+  );
+}
+
+const KIND_COLOR: Record<string, string> = {
+  decision: 'var(--ams-secondary)',
+  adjudication: AMBER,
+  config_change: GREEN,
+  evaluation: 'var(--ams-secondary)',
+  incident: RED,
+  info: 'var(--ams-muted, var(--muted))',
+};
+
+function DecisionLog({ feed }: { feed: OperationFeed }): ReactElement {
+  if (feed.log.length === 0) {
+    return (
+      <p className="muted">
+        No entries yet. Every operation-affecting decision — config change, prune, override action,
+        adjudication, weekly evaluation — is appended here via{' '}
+        <span className="mono">operation_log_append</span> in the session that makes it.
+      </p>
+    );
+  }
+  return (
+    <div className="log-cards">
+      {feed.log.map((e) => (
+        <article key={e.id} className="tile" style={{ marginBottom: '0.75rem', borderLeft: `3px solid ${KIND_COLOR[e.kind] ?? AMBER}` }}>
+          <div className="cap" style={{ color: KIND_COLOR[e.kind] ?? undefined }}>
+            {e.kind.replace('_', ' ')} · {fmtDateTime(e.at)}
+          </div>
+          <div style={{ fontWeight: 600, margin: '0.2rem 0 0.4rem' }}>{e.title}</div>
+          <div style={{ whiteSpace: 'pre-wrap', fontSize: '0.9rem', lineHeight: 1.45 }}>{e.body}</div>
+        </article>
+      ))}
+    </div>
+  );
+}
+
 // ─── page ────────────────────────────────────────────────────────────────────
 
 export default async function OperationPage(): Promise<ReactElement> {
@@ -313,6 +393,9 @@ export default async function OperationPage(): Promise<ReactElement> {
       </p>
 
       <DecisionStrip feed={feed} />
+
+      <h2>Daily digest</h2>
+      <DailyDigest feed={feed} />
 
       <h2>Equity</h2>
       <Equity feed={feed} />
@@ -362,6 +445,13 @@ export default async function OperationPage(): Promise<ReactElement> {
           </tbody>
         </table>
       )}
+
+      <h2>Decision log</h2>
+      <p className="muted" style={{ fontSize: '0.85rem' }}>
+        The narrative record: why the lane is pointed where it is, what was adjudicated, what changed and
+        when. This page is the system of record — chat is the exception channel.
+      </p>
+      <DecisionLog feed={feed} />
     </div>
   );
 }
