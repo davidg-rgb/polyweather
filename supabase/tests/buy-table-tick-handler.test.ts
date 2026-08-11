@@ -491,6 +491,65 @@ describe('buy-table-tick — the 0123 DAILY BUY CAP (max_buys_per_day, all-day l
     expect(gate.buysToday).toBe(0);
     expect(gate.dayCapReached).toBe(false);
   });
+
+  it('mid-tick: the cap binds BETWEEN placements — one tick can never fill past max_buys_per_day (2026-08-10: 11 buys in one tick under cap 4)', async () => {
+    const h = harness(
+      {
+        mode: 'live', preflightOk: true,
+        configRows: [{ key: 'buy_table.max_buys_per_day', value: '2' }],
+        captures: [
+          capture({ eventId: 'ev-1', ask: 0.12, hoursToClose: 6 }),
+          capture({ eventId: 'ev-2', ask: 0.12, hoursToClose: 7 }),
+          capture({ eventId: 'ev-3', ask: 0.12, hoursToClose: 8 }),
+        ],
+      },
+      'live',
+    );
+    const stats = await buyTableTick(h.ctx, h.deps);
+    expect(stats.placed).toBe(2); // the mock venue fills every FAK — the third candidate must never post
+    expect(h.client.postCalls).toBe(2);
+    expect(stats.dayCapReached).toBe(true);
+    const capSkips = h.logs.filter((l) => l.msg === 'buy-table.skip' && /^day_cap .*mid-tick/.test(String(l.extra?.reason)));
+    expect(capSkips.length).toBe(1);
+  });
+
+  it('mid-tick: ledger fills from EARLIER ticks count toward the same cap', async () => {
+    const h = harness(
+      {
+        mode: 'live', preflightOk: true,
+        configRows: [{ key: 'buy_table.max_buys_per_day', value: '2' }],
+        entries: [filled('m-a', '2026-07-11T01:00:00Z')], // one fill already booked today (NOW = 2026-07-11)
+        captures: [
+          capture({ eventId: 'ev-1', ask: 0.12, hoursToClose: 6 }),
+          capture({ eventId: 'ev-2', ask: 0.12, hoursToClose: 7 }),
+        ],
+      },
+      'live',
+    );
+    const stats = await buyTableTick(h.ctx, h.deps);
+    expect(stats.buysToday).toBe(1);
+    expect(stats.placed).toBe(1); // 1 booked + 1 this tick = cap 2 — the second candidate never posts
+    expect(h.client.postCalls).toBe(1);
+    expect(stats.dayCapReached).toBe(true);
+  });
+
+  it('mid-tick boundary: clean rejections deploy no money and do NOT consume the cap — the lane keeps trying', async () => {
+    const h = harness(
+      {
+        mode: 'live', preflightOk: true,
+        configRows: [{ key: 'buy_table.max_buys_per_day', value: '1' }],
+        captures: [
+          capture({ eventId: 'ev-1', ask: 0.12, hoursToClose: 6 }),
+          capture({ eventId: 'ev-2', ask: 0.12, hoursToClose: 7 }),
+        ],
+      },
+      'live',
+      { postOrder: async () => ({ success: false, errorMsg: 'rejected: insufficient balance' }) },
+    );
+    const stats = await buyTableTick(h.ctx, h.deps);
+    expect(stats.failed).toBe(2); // both attempted — a rejection is not a buy
+    expect(stats.dayCapReached).toBe(false);
+  });
 });
 
 describe('buy-table-tick — per-city price CAPS (0109, max-only) override the global cap', () => {
