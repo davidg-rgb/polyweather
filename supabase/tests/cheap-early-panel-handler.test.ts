@@ -21,6 +21,8 @@ interface FakeDbOpts {
   enabled?: string; // the cheap_early.enabled config value ('1' default)
   behavior?: (city: string) => CityBehavior;
   gateHangs?: boolean; // record_cheap_early_gate never resolves — the bookkeeping timeout must bound it
+  /** 0126 staged idiom: the slim RPC is absent (pre-migration) — throws undefined_function. */
+  slimAbsent?: boolean;
 }
 
 interface FakeDb {
@@ -37,7 +39,12 @@ function fakeDb(opts: FakeDbOpts): FakeDb {
   let inFlight = 0;
   state.port = {
     async rpc<T>(fn: string, args: Record<string, unknown>): Promise<T[]> {
-      if (fn === 'convergence_capture_inputs') {
+      // 0126: the panel's primary read. Pre-migration (slimAbsent) it throws undefined_function so the
+      // handler's staged fallback to convergence_capture_inputs is exercised.
+      if (fn === 'cheap_early_capture_inputs' && opts.slimAbsent) {
+        throw new Error('function public.cheap_early_capture_inputs(...) does not exist (42883)');
+      }
+      if (fn === 'cheap_early_capture_inputs' || fn === 'convergence_capture_inputs') {
         const city = (args.p_cities as string[])[0]!;
         const b = opts.behavior?.(city) ?? 'ok';
         inFlight++;
@@ -46,7 +53,7 @@ function fakeDb(opts: FakeDbOpts): FakeDb {
           if (b === 'hang') return await new Promise<never>(() => {}); // never resolves — the timeout must fire
           if (typeof b === 'number') await sleep(b);
           state.fetchedCities.push(city);
-          return [{ convergence_capture_inputs: { captures: [], resolutions: [] } }] as T[];
+          return [{ [fn]: { captures: [], resolutions: [] } }] as T[];
         } finally {
           inFlight--;
         }
@@ -122,5 +129,24 @@ describe('cheap-early-panel handler', () => {
     const stats = await cheapEarlyPanel(ctx(db), { now: NOW, fetchConcurrency: 1, fetchBudgetMs: 10 });
     expect((stats.budgetSkipped as number)).toBeGreaterThan(0);
     expect(db.writes).toContain('record_cheap_early_panel'); // a partial snapshot still beats a dead tick
+  });
+
+  it('0126: the slim RPC (cheap_early_capture_inputs) is the primary read', async () => {
+    const db = fakeDb({ cities: ['ankara', 'helsinki'] });
+    const rpcNames: string[] = [];
+    const inner = db.port.rpc.bind(db.port);
+    db.port.rpc = async (fn: string, args: Record<string, unknown>) => (rpcNames.push(fn), inner(fn, args));
+    const stats = await cheapEarlyPanel(ctx(db), { now: NOW });
+    expect(stats.cityErrors).toBe(0);
+    expect(rpcNames.filter((f) => f === 'cheap_early_capture_inputs').length).toBe(2);
+    expect(rpcNames).not.toContain('convergence_capture_inputs');
+  });
+
+  it('0126 staged idiom: an absent slim RPC (pre-migration) falls back to convergence_capture_inputs — no cityErrors', async () => {
+    const db = fakeDb({ cities: ['ankara', 'helsinki'], slimAbsent: true });
+    const stats = await cheapEarlyPanel(ctx(db), { now: NOW });
+    expect(stats.cityErrors).toBe(0); // the 42883 is a fallback trigger, never an error
+    expect(db.fetchedCities.sort()).toEqual(['ankara', 'helsinki']); // both cities served by the legacy read
+    expect(db.writes).toContain('record_cheap_early_panel');
   });
 });

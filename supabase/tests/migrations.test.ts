@@ -548,6 +548,7 @@ describe('migrations 0001–0010', () => {
       '0123_buy_table_cheap_early_lane.sql',
       '0124_dash_operation.sql',
       '0125_operation_log.sql',
+      '0126_cheap_early_slim_inputs.sql',
     ]);
   });
 });

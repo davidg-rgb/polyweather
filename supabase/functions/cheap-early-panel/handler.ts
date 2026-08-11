@@ -101,6 +101,42 @@ export async function cheapEarlyPanel(ctx: JobCtx, deps: CheapEarlyPanelDeps): P
   let budgetSkipped = 0;
   const fetchStarted = Date.now();
   let nextCity = 0;
+  // 0126: the SLIM per-city read ([24,36]h window slice + last tick — cheap_early_capture_inputs),
+  // falling back to the full-grid convergence_capture_inputs where 0126 isn't applied yet (the 42883
+  // staged idiom, same envelope shape). The full grid is what starved this panel: per-city cost grew
+  // with capture volume until cityErrors hit 46/46 and the gate sat at 0 entries (2026-08-02→08-11).
+  let slimAbsent = false;
+  const fetchCity = async (city: string): Promise<CaptureInputs> => {
+    if (!slimAbsent) {
+      try {
+        const r = await withTimeout(
+          db.rpc<{ cheap_early_capture_inputs: CaptureInputs }>('cheap_early_capture_inputs', {
+            p_days: PANEL_DAYS,
+            p_cities: [city],
+            p_window_lo_h: cfg.windowLoH,
+            p_window_hi_h: cfg.windowHiH,
+          }),
+          cityTimeoutMs,
+          `cheap_early_capture_inputs(${city}) timed out after ${cityTimeoutMs}ms`,
+        );
+        return r[0]?.cheap_early_capture_inputs ?? { captures: [], resolutions: [] };
+      } catch (e) {
+        const m = e instanceof Error ? e.message : String(e);
+        if (!(m.includes('42883') || /does not exist/i.test(m))) throw e;
+        slimAbsent = true;
+        log('cheap_early_capture_inputs absent — migration 0126 not applied; falling back to convergence_capture_inputs');
+      }
+    }
+    const r = await withTimeout(
+      db.rpc<{ convergence_capture_inputs: CaptureInputs }>('convergence_capture_inputs', {
+        p_days: PANEL_DAYS,
+        p_cities: [city],
+      }),
+      cityTimeoutMs,
+      `convergence_capture_inputs(${city}) timed out after ${cityTimeoutMs}ms`,
+    );
+    return r[0]?.convergence_capture_inputs ?? { captures: [], resolutions: [] };
+  };
   const worker = async (): Promise<void> => {
     for (;;) {
       const i = nextCity++;
@@ -112,15 +148,7 @@ export async function cheapEarlyPanel(ctx: JobCtx, deps: CheapEarlyPanelDeps): P
         continue;
       }
       try {
-        const r = await withTimeout(
-          db.rpc<{ convergence_capture_inputs: CaptureInputs }>('convergence_capture_inputs', {
-            p_days: PANEL_DAYS,
-            p_cities: [city],
-          }),
-          cityTimeoutMs,
-          `convergence_capture_inputs(${city}) timed out after ${cityTimeoutMs}ms`,
-        );
-        const inp = r[0]?.convergence_capture_inputs ?? { captures: [], resolutions: [] };
+        const inp = await fetchCity(city);
         if (Array.isArray(inp.captures)) captures.push(...inp.captures);
         if (Array.isArray(inp.resolutions)) resolutions.push(...inp.resolutions);
       } catch (e) {
