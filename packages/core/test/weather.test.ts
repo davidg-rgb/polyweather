@@ -16,7 +16,7 @@ import {
   previousRunsUrl,
   requestWeight,
 } from '../src/weather/openmeteo.ts';
-import { extractWuApiKey, isFinalized, parseWuObservations, wuDailyMax, wuObsUrl } from '../src/weather/wu.ts';
+import { extractWuApiKey, extractWuApiKeys, isFinalized, parseWuObservations, wuDailyMax, wuObsUrl } from '../src/weather/wu.ts';
 
 const RESEARCH = join(import.meta.dirname, '..', '..', '..', 'research');
 const fixture = (f: string): unknown => JSON.parse(readFileSync(join(RESEARCH, f), 'utf8'));
@@ -219,6 +219,22 @@ describe('Wunderground v1 (§6.10)', () => {
     // must be the key actually used in apiKey= URLs inside the page, not a random hash
     expect(html).toContain(`apiKey=${key}`);
     expect(extractWuApiKey('<html>no key here</html>')).toBeNull();
+  });
+
+  it('extractWuApiKeys returns BOTH serializations, "API_KEY" JSON blob first, deduped (2026-08-06 page change)', () => {
+    const dead = 'a'.repeat(32);
+    const live = 'b'.repeat(31) + 'c';
+    // the real 2026-08-06 shape: an unrelated service URL keeps a dead apiKey= token while the
+    // live key sits in an API_KEY JS blob later in the page
+    const html =
+      `<script>fetch("https://svc.example/v1/x?apiKey=${dead}")</script>` +
+      `<script>const data = {"API_KEY":"${live}","units":"m"}</script>` +
+      `<img src="/y?apiKey=${dead}">`; // duplicate — must not repeat
+    expect(extractWuApiKeys(html)).toEqual([live, dead]);
+    expect(extractWuApiKeys(`only legacy apiKey=${dead} here`)).toEqual([dead]);
+    expect(extractWuApiKeys('<html>no key here</html>')).toEqual([]);
+    // spaced JSON form still matches
+    expect(extractWuApiKeys(`{"API_KEY" : "${live}"}`)).toEqual([live]);
   });
 
   it('KORD units=e fixture → daily max 87 (the live-verified grading value)', () => {

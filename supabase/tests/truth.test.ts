@@ -135,6 +135,30 @@ describe('fetch-actuals (§6.15)', () => {
     expect(stats['finalized']).toBe(4);
   });
 
+  it('a DEAD apiKey= token on the page is probe-rejected — the live "API_KEY" blob key is cached (2026-08-06 outage shape)', async () => {
+    await db.exec(`update config set value = '2026-06-01T00:00:00Z' where key = 'wuKeyFetchedAt'`);
+    await db.exec(`delete from observations where icao = 'RKSI'`); // make Jun 9 a candidate again
+    const dead = 'd'.repeat(32);
+    const live = 'e'.repeat(32);
+    const stats = await fetchActuals(ctx(), {
+      ...baseDeps(),
+      // API_KEY blob ranks first but is the DEAD key here — the probe must reject it and fall
+      // through to the legacy apiKey= candidate, exercising the multi-candidate walk.
+      fetchText: async () =>
+        `<script>const data = {"API_KEY":"${dead}"}</script><a href="/x?apiKey=${live}">`,
+      fetchJson: async (url: string) => {
+        if (url.includes(`apiKey=${dead}`)) throw new Error('HTTP 401 from api.weather.com');
+        if (url.includes('aviationweather')) return metarFx;
+        if (url.includes('mesonet')) return { data: [] };
+        if (url.includes('archive-api')) return era5Fx;
+        return rksiObs;
+      },
+    });
+    const key = await rows<{ value: string }>(db, `select value from config where key = 'wuApiKey'`);
+    expect(key[0]!.value).toBe(live); // the dead candidate was never cached
+    expect(stats['observationsUpserted']).toBe(4); // the pipeline is unblocked, not just the key
+  });
+
   it('key-refresh failure goes CRITICAL but keeps the stale key', async () => {
     await db.exec(`update config set value = '2026-06-01T00:00:00Z' where key = 'wuKeyFetchedAt'`);
     const before = alerts.filter((a) => a.kind === 'WU_KEY').length;
