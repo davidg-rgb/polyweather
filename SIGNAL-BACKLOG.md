@@ -1006,6 +1006,23 @@ Maker-TP is already dead at the 6.5% real-book fill rate (§13); path rules (sto
 martingale, `BID-PATH-DISCOVERY.md`). **Hold-to-resolution stands; no config change.** Full record:
 `docs/ops/BUY-TABLE-LIVE.md` (2026-07-27 section).
 
+## 13-R3. The live cheap-early lane (2026-08-09 → 08-15) — STOPPED 2026-08-15; improvement sweep finds NO lever
+
+The operator-directed live cheap-early lane (`docs/ops/CHEAP-EARLY-ENTRY.md` §7, override id=3) ran six days on
+$60: 22 fills / 20 resolved / **3W-17L (15%) / −$48.46**, wallet at $0.61, and the forward paper gate read KILL at
+n=56 — the pre-registered exit rule (weekly checklist #5) fired; **stopped on the operator's instruction 2026-08-15**
+(override cleared, `trade_config.mode` → dry-run). The improvement question was then answered on the topped-up real
+book (`scripts/research/cheap-early-improve.py`, 1,729 events / 45 cities / 41 days / 3,960 cells, no look-ahead,
+train≤07-26 / test≥07-27, replica 16/16 faithful to the real fills wherever the archive saw the tick):
+**the live rule is −6.9% [−20, +7] on 689 entries and the tested rule −3.7% [−18, +11] — live's 15% is inside the
+backtest's 26%, no live-only defect. No lever helps:** timing flat (36–48h unmeasurable — the capture stream has a
+hard wall at 36h); the **bias-corrected forecast pick is decisively WORSE than the raw consensus (−30.6%, CI
+[−64.5, −18.9], n=176)**; a model-vs-market margin is monotonically destructive (m=.20 → −28%); the ladder is calibrated
+(win ≈ ask in every sub-band; wider bands buy power, not edge); as-of city skill does not carry forward. Of 1,055
+sufficient cells, 183 have a wholly-negative CI and **one** a wholly-positive one (n=42, ciLow +0.4% after 3,960 tries).
+**Six forward paper variants are pre-registered** (controls + least-bad + that lone survivor) on `/cheap-early` — decision
+metric = city-clustered CI on net/$1, not the gate label. Full record: `docs/ops/CHEAP-EARLY-IMPROVE.md`. **No capital.**
+
 ## What NOT to do
 
 Don't build items 5–10 before items 1–4 resolve — 1–4 are all read-only analysis over data that

@@ -814,6 +814,9 @@ every week and act on it — an unpruned allowlist is how the previous lane bled
 5. **Benchmark cross-check.** Compare the live lane against the `cheap-early-panel` paper loop over the same
    week (same band, same window, same breadth). **If the paper gate reaches n and reads KILL while the live
    lane is also negative, that is the EXIT signal** — clear the override and stop, do not average down.
+   Then read the **Variants** table on `/cheap-early` (pre-registered 2026-08-15, CHEAP-EARLY-IMPROVE.md §8):
+   a variant only counts as an improvement if its city-clustered CI excludes 0 AND its net beats canonical's;
+   DEAD ones are pruned and stop being argued about. Variants are measurement only — no capital path.
 6. **Override runway.** Report days remaining on the `trade_gate_override` row. It expires on its own; the
    lane going quiet is the designed failure mode, not a bug.
 7. **Skip histogram.** `pnpm tsx scripts/diag-buy-lane.ts` — the new `ask_floor` and `day_cap` tags render

@@ -30,6 +30,14 @@
  *      exact form cheap-entry-realbook.py:net_return uses — so the forward engine and the offline twin agree on
  *      a shared event set (the handoff §5 regression check).
  *
+ * THE VARIANT LAYER (2026-08-15, CHEAP-EARLY-IMPROVE.md §8). The rule above stays the CANONICAL config and the
+ * only gate of record. On top of it the engine carries three extra knobs — `entryRule` ('first' = what the live
+ * lane actually did), `minEdge` (a houseProb − ask margin; 0 = off) and `cityFilter` (top-K by recent hit rate)
+ * — and a PRE-REGISTERED set of six variants (CHEAP_EARLY_VARIANTS) the forward loop scores side by side, so
+ * "would a change to the failed live rule have helped?" is measured forward rather than re-tuned in hindsight.
+ * The canonical path with the frozen defaults is unchanged, knob for knob. A variant verdict is NEVER written to
+ * bot_gate_snapshot — there is no capital path off a variant, by construction.
+ *
  * Pure + total (junk → entered:false / NaN, never throws). Imports only sibling pure modules (the shared ingest
  * types + the fee curve + the §9R-E verdict) — never io/trading/fs.
  */
@@ -53,6 +61,30 @@ function mean(xs: number[]): number {
 // Config
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 
+/** how the entry tick is chosen among the in-window captures.
+ *  'latest' — the SMALLEST hours-to-close in the window (the frozen/tested rule, the default);
+ *  'first'  — the EARLIEST capture (ascending capturedAt) whose pick clears the band + depth (+ minEdge) gates,
+ *             i.e. what the LIVE buy lane actually did (it fires on the first quote it sees in its window). */
+export type CheapEarlyEntryRule = 'latest' | 'first';
+
+/** which of `cities` the panel actually scores.
+ *  'all'  — every configured city (the frozen default);
+ *  'topK' — only the k best cities by recent prediction hit rate (graded ≥ minGraded over windowDays), the
+ *           "survivor" pre-registration. Requires cityHitRates on the panel call; without them NO city is
+ *           eligible (fail-closed — a missing input must never silently widen the universe). */
+export type CheapEarlyCityFilter =
+  | { kind: 'all' }
+  | { kind: 'topK'; k: number; minGraded: number; windowDays: number };
+
+/** one city's recent prediction hit rate (cheap_early_city_hit_rates, 0127) — the topK filter's input. */
+export interface CheapEarlyCityHitRate {
+  hitRate: number;
+  graded: number;
+}
+
+/** citySlug → its recent hit rate. */
+export type CheapEarlyCityHitRates = Record<string, CheapEarlyCityHitRate>;
+
 /** The cheap-early engine's frozen config — the strategy under test (handoff §0). */
 export interface CheapEarlyCfg {
   /** the scored universe. Default the 4 live cities; WIDENING is the one allowed variation (it raises the fire
@@ -71,6 +103,13 @@ export interface CheapEarlyCfg {
   stakeUsd: number;
   /** the weather taker fee rate the paper model charges (V2 fees are protocol-set; paper models it). */
   takerFeeRate: number;
+  /** which in-window tick to enter on ('latest' — the frozen/tested rule; 'first' — the live lane's rule). */
+  entryRule: CheapEarlyEntryRule;
+  /** minimum houseProb − ask the pick must carry to be entered. 0 DISABLES the gate (the frozen default —
+   *  the canonical rule enters on the band alone, so a 0 must not start filtering picks priced above house). */
+  minEdge: number;
+  /** which configured cities are actually scored (the frozen default is every one of them). */
+  cityFilter: CheapEarlyCityFilter;
 }
 
 /** the frozen 4 live cities (cheap-entry-realbook.py's LIVE set). Widening is the one allowed variation. */
@@ -85,11 +124,140 @@ export const CHEAP_EARLY_DEFAULTS = {
   askBandHi: 0.33,
   stakeUsd: 20,
   takerFeeRate: 0.05,
+  entryRule: 'latest',
+  minEdge: 0,
+  cityFilter: { kind: 'all' },
 } as const;
 
 /** Build the frozen CheapEarlyCfg for a city set. `over` lets a test/override tighten one knob without forking. */
 export function cheapEarlyCfg(cities: string[], over: Partial<CheapEarlyCfg> = {}): CheapEarlyCfg {
   return { cities, ...CHEAP_EARLY_DEFAULTS, ...over };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────
+// The PRE-REGISTERED forward variants (2026-08-15, docs/ops/CHEAP-EARLY-IMPROVE.md §8)
+// ─────────────────────────────────────────────────────────────────────────────────────────────────
+
+/** the offline real-book sweep's read for a variant (Jul 5 – Aug 15, city-clustered CI on net per $1) — carried
+ *  in code so the page can show BACKTEST vs FORWARD side by side and the forward run cannot be re-narrated. */
+export interface CheapEarlyBacktestRef {
+  n: number;
+  netRet: number;
+  ciLow: number;
+  ciHigh: number;
+}
+
+/** one pre-registered variant: an id, the operator-facing label, the cfg delta off the canonical config, and the
+ *  backtest cell it was registered from. The set is CODE (pre-registered) — there is no config surface to edit
+ *  it, because a variant you can re-tune after seeing the forward read is not a forward test. */
+export interface CheapEarlyVariant {
+  id: string;
+  label: string;
+  over: Partial<CheapEarlyCfg>;
+  backtestRef: CheapEarlyBacktestRef;
+}
+
+/** the canonical variant's id — its block mirrors the view's top-level entries/money/gate and it is the ONLY
+ *  one whose verdict is ever written to the gate of record (bot_gate_snapshot). */
+export const CANONICAL_VARIANT_ID = 'canonical';
+
+/**
+ * The six variants scored side by side on every tick. Pre-registered 2026-08-15 from the 3,960-cell real-book
+ * sweep (CHEAP-EARLY-IMPROVE.md): the sweep found NO lever that improves the cell — every CI straddles zero —
+ * with one exception, `survivor`, the single positive cell of 3,960, which is exactly the shape a multiple-
+ * comparisons artifact takes. It is registered here to be KILLED or CONFIRMED forward, not to be believed.
+ * PAPER ONLY: a variant verdict never touches bot_gate_snapshot (only the canonical gate write does).
+ */
+export const CHEAP_EARLY_VARIANTS: readonly CheapEarlyVariant[] = [
+  {
+    id: CANONICAL_VARIANT_ID,
+    label: 'tested rule [24,36] × [0.20,0.33]',
+    over: {},
+    backtestRef: { n: 689, netRet: -0.037, ciLow: -0.181, ciHigh: 0.11 },
+  },
+  {
+    id: 'live-replica',
+    label: 'what live did — first-in-window (~36h)',
+    over: { entryRule: 'first' },
+    backtestRef: { n: 689, netRet: -0.069, ciLow: -0.2, ciHigh: 0.069 },
+  },
+  {
+    id: 'wide-band',
+    label: '[24,36] × [0.15,0.40]',
+    over: { askBandLo: 0.15, askBandHi: 0.4 },
+    backtestRef: { n: 895, netRet: -0.005, ciLow: -0.13, ciHigh: 0.09 },
+  },
+  {
+    id: 'wide-band-open',
+    label: '[24,36] × [0.10,0.50]',
+    over: { askBandLo: 0.1, askBandHi: 0.5 },
+    backtestRef: { n: 978, netRet: 0.004, ciLow: -0.13, ciHigh: 0.1 },
+  },
+  {
+    id: 'late-12h',
+    label: '[12,15] × [0.15,0.40]',
+    over: { windowLoH: 12, windowHiH: 15, askBandLo: 0.15, askBandHi: 0.4 },
+    backtestRef: { n: 860, netRet: -0.005, ciLow: -0.12, ciHigh: 0.1 },
+  },
+  {
+    id: 'survivor',
+    label: '[33,36] × [0.30,0.33] · margin 0.05 · top-20 cities',
+    over: {
+      windowLoH: 33,
+      windowHiH: 36,
+      askBandLo: 0.3,
+      askBandHi: 0.33,
+      minEdge: 0.05,
+      cityFilter: { kind: 'topK', k: 20, minGraded: 8, windowDays: 28 },
+    },
+    backtestRef: { n: 42, netRet: 0.396, ciLow: 0.004, ciHigh: 1.24 },
+  },
+] as const;
+
+/** Bump when the entry/gate semantics or the variant set change — the tag is stamped on the view so an old
+ *  snapshot can never be read as if it came from the current engine. ce2 (2026-08-15): the variant sweep
+ *  (entryRule / minEdge / cityFilter) lands on top of the frozen ce1 canonical rule. */
+export const CHEAP_EARLY_ENGINE_VERSION = 'ce2';
+
+/** Build a variant's effective cfg off the live canonical config (so a city widening/pause applies to all six). */
+export function cheapEarlyVariantCfg(base: CheapEarlyCfg, v: CheapEarlyVariant): CheapEarlyCfg {
+  return { ...base, ...v.over };
+}
+
+/** The UNION entry window across the canonical cfg + every variant — what the slim inputs RPC must ship so no
+ *  variant is starved of the ticks its window needs (0126's p_window_lo_h / p_window_hi_h). */
+export function cheapEarlyWindowUnion(
+  base: CheapEarlyCfg,
+  variants: readonly CheapEarlyVariant[] = CHEAP_EARLY_VARIANTS,
+): { loH: number; hiH: number } {
+  let loH = base.windowLoH;
+  let hiH = base.windowHiH;
+  for (const v of Array.isArray(variants) ? variants : []) {
+    const c = cheapEarlyVariantCfg(base, v);
+    if (Number.isFinite(c.windowLoH)) loH = Math.min(loH, c.windowLoH);
+    if (Number.isFinite(c.windowHiH)) hiH = Math.max(hiH, c.windowHiH);
+  }
+  return { loH, hiH };
+}
+
+/**
+ * The cities a cfg actually scores. 'all' → every configured city. 'topK' → the k highest recent hit rates
+ * among the configured cities with graded ≥ minGraded (ties broken stably by slug). FAIL-CLOSED: a topK filter
+ * with no hit rates scores NOTHING (a missing input must never silently widen the universe back to 'all').
+ */
+export function cheapEarlyEligibleCities(cfg: CheapEarlyCfg, hitRates?: CheapEarlyCityHitRates): string[] {
+  const cities = Array.isArray(cfg?.cities) ? cfg.cities : [];
+  const filter = cfg?.cityFilter ?? { kind: 'all' };
+  if (filter.kind !== 'topK') return [...cities];
+  if (!hitRates) return [];
+  const minGraded = Number.isFinite(filter.minGraded) ? filter.minGraded : 0;
+  const k = Number.isFinite(filter.k) ? Math.max(0, Math.trunc(filter.k)) : 0;
+  return cities
+    .map((city) => ({ city, r: hitRates[city] }))
+    .filter((x) => !!x.r && fin(x.r.hitRate) && (x.r.graded ?? 0) >= minGraded)
+    .sort((a, b) => (b.r!.hitRate - a.r!.hitRate) || a.city.localeCompare(b.city))
+    .slice(0, k)
+    .map((x) => x.city);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
@@ -104,7 +272,8 @@ export type CheapEarlyReason =
   | 'grading_mismatch' // venue↔truth disagreement — ambiguous payout, out of scoring
   | 'no_in_window_capture' // no capture in [windowLoH, windowHiH]h-to-close with a quotable, temperature-labelled pick
   | 'ask_out_of_band' // the latest in-window pick's bestAsk fell outside [askBandLo, askBandHi]
-  | 'thin_depth'; // the pick's executable depth was below the stake (not fillable)
+  | 'thin_depth' // the pick's executable depth was below the stake (not fillable)
+  | 'below_min_edge'; // houseProb − ask fell short of cfg.minEdge (only ever raised when minEdge > 0)
 
 /** One market's realized cheap-early paper trade (or a non-entry, entered:false + reason). */
 export interface CheapEarlyTrade {
@@ -226,13 +395,12 @@ export function replayCheapEarlyEvent(
 
   const ticks = input.ticks;
 
-  // ── (1) find the LATEST allowable in-window entry: the smallest hours-to-close in [windowLoH, windowHiH] whose
+  // ── (1) the in-window CANDIDATES: ticks whose hours-to-close sits in [windowLoH, windowHiH] and whose
   //    argmax-houseProb pick is quotable (finite bestAsk) AND temperature-labelled (matches the Python's
-  //    bestAsk-not-None + pick_temp-not-None candidate filter, then min-htc). No look-ahead — the window is the
-  //    wall clock to resolution, never the outcome. ──
-  let entryIdx = -1;
-  let entryPick: OpeningBucket | null = null;
-  let entryHtc = Number.POSITIVE_INFINITY;
+  //    bestAsk-not-None + pick_temp-not-None candidate filter). No look-ahead — the window is the wall clock
+  //    to resolution, never the outcome. ──
+  interface Candidate { i: number; htc: number; capMs: number; pick: OpeningBucket }
+  const candidates: Candidate[] = [];
   for (let i = 0; i < ticks.length; i++) {
     const t = ticks[i]!;
     const capMs = new Date(t.capturedAt).getTime();
@@ -241,14 +409,47 @@ export function replayCheapEarlyEvent(
     if (!(htc >= cfg.windowLoH && htc <= cfg.windowHiH)) continue;
     const pick = pickBucket(t.buckets);
     if (!pick || !fin(pick.bestAsk) || parseTemp(pick.label) === null) continue;
-    if (htc < entryHtc) {
-      entryHtc = htc;
-      entryIdx = i;
-      entryPick = pick;
-    }
+    candidates.push({ i, htc, capMs, pick });
   }
-  if (entryIdx < 0 || !entryPick) return NOT_ENTERED(eventId, city, targetDate, 'no_in_window_capture');
+  if (candidates.length === 0) return NOT_ENTERED(eventId, city, targetDate, 'no_in_window_capture');
 
+  // ── (2) the price + depth (+ margin) gate, as a predicate — 'latest' applies it to the chosen tick,
+  //    'first' searches for the earliest tick that clears it (what the live lane does). minEdge 0 disables
+  //    the margin leg entirely, so the canonical rule is byte-identical to the pre-variant engine. ──
+  const gateOf = (pick: OpeningBucket): CheapEarlyReason | '' => {
+    const ask = pick.bestAsk as number;
+    if (ask < cfg.askBandLo || ask > cfg.askBandHi) return 'ask_out_of_band';
+    if (!(pick.depthUsd >= cfg.stakeUsd)) return 'thin_depth';
+    if (cfg.minEdge > 0 && !(fin(pick.houseProb) && pick.houseProb - ask >= cfg.minEdge)) return 'below_min_edge';
+    return '';
+  };
+
+  // ── (3) choose the entry tick.
+  //    'latest' (frozen/tested): the SMALLEST hours-to-close in the window — first minimum wins on a tie,
+  //      matching cheap-entry-realbook.py's `r.htc < picks[k].htc`; the gate is then applied to it.
+  //    'first' (live replica): the EARLIEST capture that clears the gate. When none does, the reported reason
+  //      is the earliest candidate's failure — the deterministic, interpretable representative. ──
+  let entry: Candidate | null = null;
+  let blocked: { c: Candidate; reason: CheapEarlyReason } | null = null;
+  if (cfg.entryRule === 'first') {
+    const ascending = [...candidates].sort((a, b) => a.capMs - b.capMs || a.i - b.i);
+    for (const c of ascending) {
+      const r = gateOf(c.pick);
+      if (!r) { entry = c; break; }
+      if (!blocked) blocked = { c, reason: r };
+    }
+  } else {
+    let best = candidates[0]!;
+    for (const c of candidates) if (c.htc < best.htc) best = c;
+    const r = gateOf(best.pick);
+    if (r) blocked = { c: best, reason: r };
+    else entry = best;
+  }
+
+  const shown = entry ?? blocked!.c;
+  const entryPick = shown.pick;
+  const entryIdx = shown.i;
+  const entryHtc = shown.htc;
   const entryAsk = entryPick.bestAsk as number;
   const depthUsd = entryPick.depthUsd;
   const observedSpread = fin(entryPick.bestBid) ? entryAsk - entryPick.bestBid : NaN;
@@ -258,21 +459,14 @@ export function replayCheapEarlyEvent(
   const diag: Partial<CheapEarlyTrade> = {
     entryLabel, entryTemp, htcAtEntry: entryHtc, entryAsk, depthUsd, observedSpread,
   };
+  if (!entry) return NOT_ENTERED(eventId, city, targetDate, blocked!.reason, diag);
 
-  // ── (2) the price + depth gate ────────────────────────────────────────────────────────────────────────
-  if (entryAsk < cfg.askBandLo || entryAsk > cfg.askBandHi) {
-    return NOT_ENTERED(eventId, city, targetDate, 'ask_out_of_band', diag);
-  }
-  if (!(depthUsd >= cfg.stakeUsd)) {
-    return NOT_ENTERED(eventId, city, targetDate, 'thin_depth', diag);
-  }
-
-  // ── (3) taker fill at bestAsk + hold to resolution ─────────────────────────────────────────────────────
+  // ── (4) taker fill at bestAsk + hold to resolution ─────────────────────────────────────────────────────
   const stakeUsd = cfg.stakeUsd;
   const shares = stakeUsd / entryAsk;
   const feeUsd = takerFeePerShare(entryAsk, cfg.takerFeeRate) * shares; // the entry taker fee (only leg — we hold)
 
-  // ── (4) grade at resolution (label-based; winnerIdx routed through ITS label — never a pick-index compare) ──
+  // ── (5) grade at resolution (label-based; winnerIdx routed through ITS label — never a pick-index compare) ──
   const winnerIdx = input.resolution?.winnerIdx ?? null;
   if (winnerIdx == null) {
     // unresolved → an OPEN position: mark conservatively to the last realizable bid (mtm; excluded from the gate).
@@ -328,6 +522,9 @@ export interface CheapEarlyPanel {
   /** the entry-rate denominator (fresh, gm-excluded events considered) + why the rest did not enter. */
   nConsidered: number;
   reasonTally: Record<string, number>;
+  /** the cities this run actually scored — cfg.cities under 'all', the surviving top-K under 'topK' (empty when
+   *  a topK filter had no hit rates: fail-closed, the variant simply scores nothing). */
+  scoredCities: string[];
 }
 
 /**
@@ -341,8 +538,13 @@ export function replayCheapEarlyPanel(
   cfg: CheapEarlyCfg,
   resolvesByEvent: Map<string, number | null>,
   verdictOpts: VerdictOpts = {},
+  cityHitRates?: CheapEarlyCityHitRates,
 ): CheapEarlyPanel {
   const evs = (Array.isArray(events) ? events : []).filter((e): e is EventReplayInput => !!e && Array.isArray(e.ticks));
+  // the cityFilter is resolved ONCE per panel and folded into the scoped cfg, so the per-event replay keeps its
+  // single "is this city in scope" test (cfg.cities) and cannot drift from the panel's denominator.
+  const scoredCities = cheapEarlyEligibleCities(cfg, cityHitRates);
+  const scoped: CheapEarlyCfg = { ...cfg, cities: scoredCities };
   const ledger: CheapEarlyTrade[] = [];
   const panel: OpeningMarketResult[] = [];
   const reasonTally: Record<string, number> = {};
@@ -351,9 +553,9 @@ export function replayCheapEarlyPanel(
   for (const e of evs) {
     // off-universe markets are not "considered" (they were never in scope); everything else counts toward the
     // fresh entry-rate denominator, including grading_mismatch (tallied but never scored).
-    if (!cfg.cities.includes(e.city)) continue;
+    if (!scoped.cities.includes(e.city)) continue;
     nConsidered++;
-    const t = replayCheapEarlyEvent(e, cfg, resolvesByEvent.get(e.eventId) ?? null);
+    const t = replayCheapEarlyEvent(e, scoped, resolvesByEvent.get(e.eventId) ?? null);
     if (!t.entered) {
       reasonTally[t.reason] = (reasonTally[t.reason] ?? 0) + 1;
       continue;
@@ -382,5 +584,6 @@ export function replayCheapEarlyPanel(
     meanObservedSpread: mean(realizedRows.map((t) => t.observedSpread)),
     nConsidered,
     reasonTally,
+    scoredCities,
   };
 }

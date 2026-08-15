@@ -578,6 +578,7 @@ mid-basis passes flipped negative on the real book (maker-exit, C22 fade, C23 tr
 | Amsterdam analytics deliverable | `AMSTERDAM-SIM.md` | — |
 | Live status + operator TODO | `BUILD-STATE.md` | Active Phase |
 | Signal backlog — untested angles, priority-ordered, pre-registered gates | `SIGNAL-BACKLOG.md` | — |
+| Live cheap-early lane 08-09→08-15 (3W-17L, −$48) + the 3,960-cell improvement sweep — no lever, forward variants pre-registered | `docs/ops/CHEAP-EARLY-IMPROVE.md` | §2–§5, §8 |
 | Backlog #9 precip/snow/wind markets — **KILL at the liquidity gate** (2026-07-03: temp ladders median $34k/24h; precip/wind are sparse one-offs ≤$802/24h — no universe worth a forecast pipeline) | `SIGNAL-BACKLOG.md` | item 9 |
 | Backlog #7 sharp order-arrival signal — **KILL, structurally impossible keyless** (2026-07-03: the public book is anonymous by design; the only wallet-attributed feed is fills/settlements — order-placement data does not exist for us) | `SIGNAL-BACKLOG.md` | item 7 |
 | Backlog #11 nonlinear-ML residual post-processing — **KILL** (2026-07-03, pre-registered boosted-stumps design, l3b feature set: corrected TEST MAE WORSE than raw by 0.0159°C, day-clustered CI [−0.0280, −0.0051] excludes 0 on the harmful side; TEST residual R² −6.11% vs the linear +0.60% bound; TRAIN improved/TEST degraded = overfit. The one feature leak (climatology) biases FOR the model — it still lost. Closes the sole open gap from EXTERNAL-AGENT-CROSSCHECK.md; 3rd post-processing kill after linear MOS −3.32%) | `SIGNAL-BACKLOG.md` | item 11 |
