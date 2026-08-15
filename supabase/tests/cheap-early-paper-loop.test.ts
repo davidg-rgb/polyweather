@@ -14,7 +14,7 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { PGlite } from '@electric-sql/pglite';
-import { asRole, freshDb, rows } from './harness.ts';
+import { asRole, freshDb, migrationFiles, rows } from './harness.ts';
 
 const OPERATOR = { email: 'david.geborek@gmail.com' };
 
@@ -259,5 +259,138 @@ describe('0117 cheap-early paper loop — schema + RPCs + safety', () => {
     expect(out.variants).toEqual(view.variants);
     // the 0125 body is otherwise intact — the benchmark block still reads the same snapshot.
     expect((out.benchmark as { gateLabel: string }).gateLabel).toBe('INSUFFICIENT_DATA');
+  });
+
+  // ── 0129 · the persisted variant ledger (n must accrue past the free-tier capture prune) ─────────
+  /** the migration's SECTION 4 seed block on its own — a guarded DO block, so it is safely re-runnable. */
+  function seedSql(): string {
+    const sql = migrationFiles().find((m) => m.name === '0129_cheap_early_variant_ledger.sql')!.sql;
+    const at = sql.indexOf('-- ── SECTION 4');
+    expect(at, 'the 0129 seed section must be locatable for the re-run test').toBeGreaterThan(0);
+    return sql.slice(at);
+  }
+
+  const LEDGER_ROWS = [
+    { variantId: 'canonical', city: 'madrid', targetDate: '2026-06-18', label: '21C', ask: 0.25, hoursToClose: 30, depthUsd: 400, won: true, net: 2.85, stakeUsd: 20, engineVersion: 'ce2' },
+    { variantId: 'canonical', city: 'singapore', targetDate: '2026-06-19', label: '31C', ask: 0.3, hoursToClose: 28, depthUsd: 150, won: false, net: -1, stakeUsd: 20, engineVersion: 'ce2' },
+  ];
+
+  it('0129 the seed lifts the REALIZED entries out of the latest cheap_early_panel snapshot (open ones stay out)', async () => {
+    await rows(db, `truncate table public.cheap_early_variant_ledger`);
+    const view = {
+      stakeUsd: 20,
+      variantsCommon: { engineVersion: 'ce2' },
+      variants: [
+        {
+          id: 'canonical',
+          entries: [
+            { city: 'madrid', date: '2026-06-18', label: '21C', ask: 0.25, won: true, net: 2.85, htc: 30, depth: 400 },
+            { city: 'singapore', date: '2026-06-19', label: '31C', ask: 0.3, won: false, net: -1, htc: 28, depth: 150 },
+            // OPEN (won:null) — never persistable; it is re-replayed live each tick.
+            { city: 'ankara', date: '2026-06-20', label: '33C', ask: 0.22, won: null, net: -0.2, htc: null, depth: null },
+          ],
+        },
+        { id: 'wide-band', entries: [{ city: 'madrid', date: '2026-06-18', label: '21C', ask: 0.18, won: true, net: 4.4 }] },
+      ],
+    };
+    await rows(db, `select public.record_cheap_early_panel($1::jsonb)`, [JSON.stringify(view)]);
+
+    await db.exec(seedSql());
+    const seeded = await rows<{ variant_id: string; city: string; target_date: string; won: boolean; net_return: string; hours_to_close: string | null; stake_usd: string; engine_version: string }>(
+      db, `select variant_id, city, target_date, won, net_return, hours_to_close, stake_usd, engine_version
+             from public.cheap_early_variant_ledger order by variant_id, city`,
+    );
+    expect(seeded.map((r) => `${r.variant_id}/${r.city}`)).toEqual(['canonical/madrid', 'canonical/singapore', 'wide-band/madrid']);
+    expect(seeded[0]!.won).toBe(true);
+    expect(Number(seeded[0]!.net_return)).toBeCloseTo(2.85, 9);
+    expect(Number(seeded[0]!.hours_to_close)).toBe(30);
+    expect(Number(seeded[0]!.stake_usd)).toBe(20);
+    expect(seeded[0]!.engine_version).toBe('ce2');
+
+    // re-running the seed inserts NOTHING (the guard is "the table is empty", not "these keys are new").
+    await db.exec(seedSql());
+    const [cnt] = await rows<{ n: string }>(db, `select count(*) as n from public.cheap_early_variant_ledger`);
+    expect(Number(cnt!.n)).toBe(3);
+  });
+
+  it('0129 record_cheap_early_variant_entries is IDEMPOTENT (a second identical call writes nothing)', async () => {
+    await rows(db, `truncate table public.cheap_early_variant_ledger`);
+    const [first] = await rows<{ n: number }>(db, `select public.record_cheap_early_variant_entries($1::jsonb) as n`, [JSON.stringify(LEDGER_ROWS)]);
+    expect(Number(first!.n)).toBe(2);
+    const [again] = await rows<{ n: number }>(db, `select public.record_cheap_early_variant_entries($1::jsonb) as n`, [JSON.stringify(LEDGER_ROWS)]);
+    expect(Number(again!.n)).toBe(0); // unchanged rows are not rewritten
+    const [cnt] = await rows<{ n: string }>(db, `select count(*) as n from public.cheap_early_variant_ledger`);
+    expect(Number(cnt!.n)).toBe(2);
+
+    // a REGRADE does land, and only that row.
+    const regraded = [{ ...LEDGER_ROWS[0]!, won: false, net: -1 }, LEDGER_ROWS[1]!];
+    const [upd] = await rows<{ n: number }>(db, `select public.record_cheap_early_variant_entries($1::jsonb) as n`, [JSON.stringify(regraded)]);
+    expect(Number(upd!.n)).toBe(1);
+    const [row] = await rows<{ won: boolean; net_return: string }>(
+      db, `select won, net_return from public.cheap_early_variant_ledger where variant_id = 'canonical' and city = 'madrid'`,
+    );
+    expect(row!.won).toBe(false);
+    expect(Number(row!.net_return)).toBeCloseTo(-1, 9);
+  });
+
+  it('0129 record_cheap_early_variant_entries drops junk and survives a duplicated key in ONE batch', async () => {
+    await rows(db, `truncate table public.cheap_early_variant_ledger`);
+    const batch = [
+      { variantId: 'canonical', city: 'madrid', targetDate: '2026-06-18', won: true, net: 2.85 },
+      { variantId: 'canonical', city: 'madrid', targetDate: '2026-06-18', won: true, net: 2.85 }, // the same row twice
+      { variantId: 'canonical', city: 'oslo', targetDate: '2026-06-18', won: null, net: -0.2 },   // OPEN → dropped
+      { variantId: 'canonical', city: '', targetDate: '2026-06-18', won: true, net: 1 },          // no key → dropped
+      { variantId: 'canonical', city: 'lisbon', targetDate: '2026-06-18', won: true },            // no net → dropped
+    ];
+    const [ins] = await rows<{ n: number }>(db, `select public.record_cheap_early_variant_entries($1::jsonb) as n`, [JSON.stringify(batch)]);
+    expect(Number(ins!.n)).toBe(1);
+    const cities = await rows<{ city: string }>(db, `select city from public.cheap_early_variant_ledger order by city`);
+    expect(cities.map((r) => r.city)).toEqual(['madrid']);
+    // junk payloads are a no-op, never an error.
+    for (const junk of ['null', '{}', '[]', '"nope"']) {
+      const [z] = await rows<{ n: number }>(db, `select public.record_cheap_early_variant_entries($1::jsonb) as n`, [junk]);
+      expect(Number(z!.n)).toBe(0);
+    }
+  });
+
+  it('0129 cheap_early_variant_ledger_read round-trips the shape buildCheapEarlyView merges', async () => {
+    await rows(db, `truncate table public.cheap_early_variant_ledger`);
+    await rows(db, `select public.record_cheap_early_variant_entries($1::jsonb)`, [
+      JSON.stringify([...LEDGER_ROWS, { variantId: 'wide-band', city: 'madrid', targetDate: '2026-06-01', won: true, net: 4.4, ask: 0.18, stakeUsd: 20 }]),
+    ]);
+    const [out] = await rows<{ out: Record<string, { city: string; targetDate: string; won: boolean; net: number; ask: number; hoursToClose: number | null; depthUsd: number | null; stakeUsd: number }[]> }>(
+      db, `select public.cheap_early_variant_ledger_read() as out`,
+    );
+    const led = out!.out;
+    expect(Object.keys(led).sort()).toEqual(['canonical', 'wide-band']);
+    expect(led.canonical!.map((r) => r.city)).toEqual(['madrid', 'singapore']); // ordered by target date
+    expect(led.canonical![0]).toMatchObject({ city: 'madrid', targetDate: '2026-06-18', won: true, ask: 0.25, hoursToClose: 30, depthUsd: 400, stakeUsd: 20 });
+    expect(Number(led.canonical![0]!.net)).toBeCloseTo(2.85, 9);
+    expect(led['wide-band']!).toHaveLength(1);
+
+    // p_since bounds the read by target date; an empty ledger reads as {} (never null).
+    const [since] = await rows<{ out: Record<string, unknown[]> }>(db, `select public.cheap_early_variant_ledger_read('2026-06-19') as out`);
+    expect(Object.keys(since!.out)).toEqual(['canonical']);
+    expect(since!.out.canonical).toHaveLength(1);
+    await rows(db, `truncate table public.cheap_early_variant_ledger`);
+    const [empty] = await rows<{ out: Record<string, unknown> }>(db, `select public.cheap_early_variant_ledger_read() as out`);
+    expect(empty!.out).toEqual({});
+  });
+
+  it('0129 both ledger RPCs are service-role only (no browser session may read or write the forward record)', async () => {
+    await expect(
+      asRole(db, 'authenticated', OPERATOR, async () => rows(db, `select public.cheap_early_variant_ledger_read()`)),
+    ).rejects.toThrow();
+    await expect(
+      asRole(db, 'authenticated', OPERATOR, async () => rows(db, `select public.record_cheap_early_variant_entries('[]'::jsonb)`)),
+    ).rejects.toThrow();
+    // and RLS is on with no policies — the table itself is unreachable outside the definer functions.
+    const [t] = await rows<{ relrowsecurity: boolean; npolicies: string }>(
+      db,
+      `select c.relrowsecurity, (select count(*) from pg_policies p where p.tablename = 'cheap_early_variant_ledger') as npolicies
+         from pg_class c where c.oid = 'public.cheap_early_variant_ledger'::regclass`,
+    );
+    expect(t!.relrowsecurity).toBe(true);
+    expect(Number(t!.npolicies)).toBe(0);
   });
 });

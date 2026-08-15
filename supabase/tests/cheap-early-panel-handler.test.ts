@@ -27,6 +27,10 @@ interface FakeDbOpts {
   windowSetAbsent?: boolean;
   /** 0127: the top-K city filter's input — 'error' makes the read fail (it must stay non-fatal). */
   hitRates?: Record<string, { hitRate: number; graded: number }> | 'error';
+  /** 0129: the persisted variant ledger read — 'error' makes it fail (it must stay non-fatal). */
+  ledgerRead?: Record<string, unknown[]> | 'error';
+  /** 0129: record_cheap_early_variant_entries always throws (the write must stay non-fatal). */
+  ledgerWriteFails?: boolean;
 }
 
 interface FakeDb {
@@ -50,6 +54,16 @@ function fakeDb(opts: FakeDbOpts): FakeDb {
       if (fn === 'cheap_early_city_hit_rates') {
         if (opts.hitRates === 'error') throw new Error('cheap_early_city_hit_rates boom');
         return [{ cheap_early_city_hit_rates: opts.hitRates ?? {} }] as T[];
+      }
+      // 0129: the persisted variant ledger — best-effort on BOTH legs; neither may fail the tick.
+      if (fn === 'cheap_early_variant_ledger_read') {
+        if (opts.ledgerRead === 'error') throw new Error('cheap_early_variant_ledger_read boom');
+        return [{ cheap_early_variant_ledger_read: opts.ledgerRead ?? {} }] as T[];
+      }
+      if (fn === 'record_cheap_early_variant_entries') {
+        state.writes.push(fn);
+        if (opts.ledgerWriteFails) throw new Error('record_cheap_early_variant_entries boom');
+        return [{ record_cheap_early_variant_entries: (args.p_rows as unknown[]).length }] as T[];
       }
       // 0126: the panel's primary read. Pre-migration (slimAbsent) it throws undefined_function so the
       // handler's staged fallback to convergence_capture_inputs is exercised.
@@ -222,5 +236,85 @@ describe('cheap-early-panel handler', () => {
       'reason', 'totalNetUsd', 'winFrac', 'zeroSkillPassRate',
     ]);
     expect(JSON.stringify(payload)).not.toContain('variant');
+  });
+
+  // ── 0129 · the persisted variant ledger (read once, write the realized rows back) ────────────────
+  /** `n` synthetic PERSISTED canonical entries — the shape cheap_early_variant_ledger_read returns. */
+  const ledgerRows = (n: number): Record<string, unknown[]> => ({
+    canonical: Array.from({ length: n }, (_, i) => ({
+      city: `c${i}`,
+      targetDate: `2026-06-${String((i % 28) + 1).padStart(2, '0')}`,
+      label: '21C',
+      ask: 0.25,
+      hoursToClose: 30,
+      depthUsd: 400,
+      won: i % 4 === 0,
+      net: i % 4 === 0 ? 2.85 : -1,
+      stakeUsd: 20,
+    })),
+  });
+
+  it('0129: the ledger is read ONCE and threaded into the view (the forward n survives the capture prune)', async () => {
+    const db = fakeDb({ cities: ['ankara'], ledgerRead: ledgerRows(3) });
+    const stats = await cheapEarlyPanel(ctx(db), { now: NOW });
+    expect(db.args.cheap_early_variant_ledger_read).toHaveLength(1);
+    expect(stats.ledgerAvailable).toBe(true);
+    // the replay saw NO captures this tick, so every scored market came from the ledger.
+    expect(stats.nMarkets).toBe(3);
+    expect(db.writes).toContain('record_cheap_early_panel');
+  });
+
+  it('0129: a FAILING ledger read is non-fatal — the tick falls back to the replayed captures alone', async () => {
+    const db = fakeDb({ cities: ['ankara'], ledgerRead: 'error' });
+    const stats = await cheapEarlyPanel(ctx(db), { now: NOW });
+    expect(stats.ledgerAvailable).toBe(false);
+    expect(stats.nMarkets).toBe(0);
+    expect(db.writes).toContain('record_cheap_early_panel'); // the snapshot still lands
+  });
+
+  it('0129: every REALIZED entry is written back once, chunked at 500 rows', async () => {
+    const db = fakeDb({ cities: ['ankara'], ledgerRead: ledgerRows(600) });
+    const stats = await cheapEarlyPanel(ctx(db), { now: NOW });
+    const calls = db.args.record_cheap_early_variant_entries!;
+    // 600 canonical rows merged in -> 600 realized entries out, in two chunks (500 + 100). No other variant
+    // has ledger rows and no captures were served, so nothing else contributes.
+    expect(calls).toHaveLength(2);
+    expect((calls[0]!.p_rows as unknown[]).length).toBe(500);
+    expect((calls[1]!.p_rows as unknown[]).length).toBe(100);
+    expect(stats.ledgerSent).toBe(600);
+    expect(stats.ledgerWritten).toBe(600);
+    // the row shape the 0129 RPC parses — key + grade + scoring + the engine tag.
+    const row = (calls[0]!.p_rows as Record<string, unknown>[])[0]!;
+    expect(row.variantId).toBe('canonical');
+    expect(typeof row.city).toBe('string');
+    expect(typeof row.targetDate).toBe('string');
+    expect(typeof row.won).toBe('boolean');
+    expect(typeof row.net).toBe('number');
+    expect(row.stakeUsd).toBe(20);
+    expect(row.engineVersion).toBe('ce2');
+  });
+
+  it('0129: the chunk size is a seam — 250 rows split into three calls of 100/100/50', async () => {
+    const db = fakeDb({ cities: ['ankara'], ledgerRead: ledgerRows(250) });
+    await cheapEarlyPanel(ctx(db), { now: NOW, ledgerChunk: 100 });
+    const sizes = db.args.record_cheap_early_variant_entries!.map((a) => (a.p_rows as unknown[]).length);
+    expect(sizes).toEqual([100, 100, 50]);
+  });
+
+  it('0129: a FAILING ledger write is non-fatal (retried once) — the tick completes and the snapshot lands', async () => {
+    const db = fakeDb({ cities: ['ankara'], ledgerRead: ledgerRows(2), ledgerWriteFails: true });
+    const stats = await cheapEarlyPanel(ctx(db), { now: NOW });
+    // one chunk, attempted twice (the single retry), then given up on — the next tick re-sends.
+    expect(db.args.record_cheap_early_variant_entries).toHaveLength(2);
+    expect(stats.ledgerWritten).toBe(0);
+    expect(stats.ledgerSkipped).toBe(2);
+    expect(db.writes).toContain('record_cheap_early_panel');
+  });
+
+  it('0129: nothing is written when there is nothing realized to persist', async () => {
+    const db = fakeDb({ cities: ['ankara'] });
+    const stats = await cheapEarlyPanel(ctx(db), { now: NOW });
+    expect(db.args.record_cheap_early_variant_entries).toBeUndefined();
+    expect(stats.ledgerSent).toBe(0);
   });
 });
