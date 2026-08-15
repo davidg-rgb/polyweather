@@ -8,7 +8,13 @@
  *   2. pull the RAW fresh-allowlist capture series + the venue resolution map PER CITY (convergence_capture_inputs,
  *      service-role — the SAME inputs the taker bracket / maker-exit views use; it already carries every field the
  *      cheap-early engine reads: idx, label, bestAsk, depthUsd, houseProb, resolvesAt).
- *   3. run the PURE cheap-early replay view (buildCheapEarlyView → replayCheapEarlyPanel over the frozen params).
+ *   2b. read the per-city recent hit rates (cheap_early_city_hit_rates, 0127) — the top-K city filter's ONLY
+ *      input. Best-effort: on any error the top-K variants score nothing (fail-closed), the tick continues.
+ *   3. run the PURE cheap-early replay view (buildCheapEarlyView → replayCheapEarlyPanel over the frozen params),
+ *      which also scores the six PRE-REGISTERED variants side by side (CHEAP-EARLY-IMPROVE.md §8) off the SAME
+ *      ingest. The slim read is asked for the DISJOINT window SET across all of them (0128 p_windows), so no variant
+ *      is starved and no dead middle hours are scanned.
+ *      Variant verdicts are MEASUREMENT ONLY — step 5 writes the gate of record from the CANONICAL block alone.
  *   4. store the small view (record_cheap_early_panel) — the /cheap-early page reads only that snapshot.
  *   5. persist the §9R-E verdict (record_cheap_early_gate, source='forward-cheap-early' PINNED) so the operator
  *      watches the clustered CI narrowing over forward days — the DEGRADED-TICK GUARD withholds the gate-of-record
@@ -26,7 +32,10 @@ import { retryWrite, withTimeout } from '../_shared/retry.ts';
 import {
   buildCheapEarlyView,
   cheapEarlyCfg,
+  cheapEarlyWindowSet,
   parseCheapEarlyConfig,
+  CHEAP_EARLY_VARIANTS,
+  type CheapEarlyCityHitRates,
   type RawCaptureRow,
   type RawResolution,
 } from '../../../packages/core/src/index.ts';
@@ -55,6 +64,10 @@ const RECORD_WRITE_BACKOFF_MS = [3_000, 8_000];
 const RECORD_WRITE_TIMEOUT_MS = 15_000;
 const BOOKKEEPING_TIMEOUT_MS = 10_000;
 
+/** the top-K city filter's read (0127) — BEST-EFFORT and bounded: without it the top-K variants simply score
+ *  nothing (fail-closed) and read INSUFFICIENT / 'no city hit rates'; the tick never fails over it. */
+const HIT_RATES_TIMEOUT_MS = 15_000;
+
 export interface CheapEarlyPanelDeps {
   now: Date;
   /** test seams — production uses the module defaults above. */
@@ -62,6 +75,7 @@ export interface CheapEarlyPanelDeps {
   cityTimeoutMs?: number;
   fetchBudgetMs?: number;
   bookkeepingTimeoutMs?: number;
+  hitRatesTimeoutMs?: number;
   gateMaxCityErrors?: number;
   gateMinMarkets?: number;
   retrySleep?: (ms: number) => Promise<void>;
@@ -89,6 +103,40 @@ export async function cheapEarlyPanel(ctx: JobCtx, deps: CheapEarlyPanelDeps): P
     return { asOf: deps.now.toISOString(), paused: true };
   }
   const cfg = cheapEarlyCfg(opCfg.cities);
+  // the DISJOINT entry-window SET across the canonical cfg + every pre-registered variant — the slim RPC must
+  // ship every tick any variant windows on ([12,15] ∪ [24,36] today), or a variant is starved rather than
+  // measured. Kept as a SET, not collapsed to the contiguous union [12,36]: the union doubles the per-city rows
+  // (prod: tokyo 733 caps/0.8s vs 1,492/2.5s) and under 3-way concurrency that is what blew the tick to 287s.
+  const windowSet = cheapEarlyWindowSet(cfg);
+  // the flat [lo,hi,lo,hi,…] pairs 0128's p_windows takes, and the contiguous fallback for the 0126 signature.
+  const windowPairs = windowSet.flatMap((w) => [w.loH, w.hiH]);
+  const windowSpan = windowSet.length
+    ? { loH: Math.min(...windowSet.map((w) => w.loH)), hiH: Math.max(...windowSet.map((w) => w.hiH)) }
+    : { loH: cfg.windowLoH, hiH: cfg.windowHiH };
+  log('slim read window set', { windows: windowSet.map((w) => `[${w.loH},${w.hiH}]`), span: `[${windowSpan.loH},${windowSpan.hiH}]` });
+
+  // 1b) the top-K city filter's input (0127) — BEST-EFFORT: on any error the hit rates stay undefined and the
+  //     top-K variants score nothing (fail-closed, reads 'no city hit rates'). Never fails the tick.
+  const topK = CHEAP_EARLY_VARIANTS.map((v) => v.over.cityFilter).find((f) => f?.kind === 'topK');
+  let cityHitRates: CheapEarlyCityHitRates | undefined;
+  if (topK && topK.kind === 'topK') {
+    try {
+      const r = await withTimeout(
+        db.rpc<{ cheap_early_city_hit_rates: CheapEarlyCityHitRates }>('cheap_early_city_hit_rates', {
+          p_window_days: topK.windowDays,
+          p_min_graded: topK.minGraded,
+        }),
+        deps.hitRatesTimeoutMs ?? HIT_RATES_TIMEOUT_MS,
+        `cheap_early_city_hit_rates timed out after ${deps.hitRatesTimeoutMs ?? HIT_RATES_TIMEOUT_MS}ms`,
+      );
+      const raw = r[0]?.cheap_early_city_hit_rates;
+      if (raw && typeof raw === 'object') cityHitRates = raw;
+    } catch (e) {
+      log('city hit rates unavailable — top-K variants score nothing this tick (non-fatal)', {
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
+  }
 
   // 2) raw inputs per city, through a bounded worker pool with a per-city timeout + an overall budget (mirror
   //    maker-exit-panel). Interleaved arrival is safe — buildEvents groups per event + sorts ticks internally.
@@ -101,6 +149,68 @@ export async function cheapEarlyPanel(ctx: JobCtx, deps: CheapEarlyPanelDeps): P
   let budgetSkipped = 0;
   const fetchStarted = Date.now();
   let nextCity = 0;
+  // 0128 → 0126 → 0069: the SLIM per-city read (window slices + last tick — cheap_early_capture_inputs), asked
+  // for the DISJOINT window SET (0128's p_windows) and degrading down the staged 42883 idiom — first to 0126's
+  // single contiguous [min lo, max hi] window, then to the full-grid convergence_capture_inputs (same envelope
+  // shape). The full grid is what starved this panel: per-city cost grew with capture volume until cityErrors
+  // hit 46/46 and the gate sat at 0 entries (2026-08-02→08-11); the contiguous union then tripled the slim
+  // read's own per-city time (287s tick / 10 cityErrors, 2026-08-15) — hence the set.
+  const isUndefinedFunction = (e: unknown): boolean => {
+    const m = e instanceof Error ? e.message : String(e);
+    return m.includes('42883') || /does not exist/i.test(m);
+  };
+  let windowSetAbsent = false; // 0128 not applied — the RPC has no p_windows parameter
+  let slimAbsent = false; // 0126 not applied either — no slim RPC at all
+  const fetchCity = async (city: string): Promise<CaptureInputs> => {
+    if (!slimAbsent && !windowSetAbsent) {
+      try {
+        const r = await withTimeout(
+          db.rpc<{ cheap_early_capture_inputs: CaptureInputs }>('cheap_early_capture_inputs', {
+            p_days: PANEL_DAYS,
+            p_cities: [city],
+            p_window_lo_h: windowSpan.loH,
+            p_window_hi_h: windowSpan.hiH,
+            p_windows: windowPairs,
+          }),
+          cityTimeoutMs,
+          `cheap_early_capture_inputs(${city}) timed out after ${cityTimeoutMs}ms`,
+        );
+        return r[0]?.cheap_early_capture_inputs ?? { captures: [], resolutions: [] };
+      } catch (e) {
+        if (!isUndefinedFunction(e)) throw e;
+        windowSetAbsent = true;
+        log('cheap_early_capture_inputs(p_windows) absent — migration 0128 not applied; falling back to the single [min,max] window');
+      }
+    }
+    if (!slimAbsent) {
+      try {
+        const r = await withTimeout(
+          db.rpc<{ cheap_early_capture_inputs: CaptureInputs }>('cheap_early_capture_inputs', {
+            p_days: PANEL_DAYS,
+            p_cities: [city],
+            p_window_lo_h: windowSpan.loH,
+            p_window_hi_h: windowSpan.hiH,
+          }),
+          cityTimeoutMs,
+          `cheap_early_capture_inputs(${city}) timed out after ${cityTimeoutMs}ms`,
+        );
+        return r[0]?.cheap_early_capture_inputs ?? { captures: [], resolutions: [] };
+      } catch (e) {
+        if (!isUndefinedFunction(e)) throw e;
+        slimAbsent = true;
+        log('cheap_early_capture_inputs absent — migration 0126 not applied; falling back to convergence_capture_inputs');
+      }
+    }
+    const r = await withTimeout(
+      db.rpc<{ convergence_capture_inputs: CaptureInputs }>('convergence_capture_inputs', {
+        p_days: PANEL_DAYS,
+        p_cities: [city],
+      }),
+      cityTimeoutMs,
+      `convergence_capture_inputs(${city}) timed out after ${cityTimeoutMs}ms`,
+    );
+    return r[0]?.convergence_capture_inputs ?? { captures: [], resolutions: [] };
+  };
   const worker = async (): Promise<void> => {
     for (;;) {
       const i = nextCity++;
@@ -112,15 +222,7 @@ export async function cheapEarlyPanel(ctx: JobCtx, deps: CheapEarlyPanelDeps): P
         continue;
       }
       try {
-        const r = await withTimeout(
-          db.rpc<{ convergence_capture_inputs: CaptureInputs }>('convergence_capture_inputs', {
-            p_days: PANEL_DAYS,
-            p_cities: [city],
-          }),
-          cityTimeoutMs,
-          `convergence_capture_inputs(${city}) timed out after ${cityTimeoutMs}ms`,
-        );
-        const inp = r[0]?.convergence_capture_inputs ?? { captures: [], resolutions: [] };
+        const inp = await fetchCity(city);
         if (Array.isArray(inp.captures)) captures.push(...inp.captures);
         if (Array.isArray(inp.resolutions)) resolutions.push(...inp.resolutions);
       } catch (e) {
@@ -138,7 +240,24 @@ export async function cheapEarlyPanel(ctx: JobCtx, deps: CheapEarlyPanelDeps): P
 
   // 3) the pure cheap-early view (entries / measured reads / fictive money / §9R-E gate). cityErrors is threaded
   //    in so the page can flag when allowlist cities were dropped this tick (a silent gate undercount).
-  const view = { ...buildCheapEarlyView(captures, resolutions, cfg), days: PANEL_DAYS, cityErrors };
+  const view = { ...buildCheapEarlyView(captures, resolutions, cfg, { cityHitRates }), days: PANEL_DAYS, cityErrors };
+
+  // 3b) the pre-registered variant sweep, one line each (CHEAP-EARLY-IMPROVE.md §8). Measurement only — the
+  //     gate-of-record write below stays CANONICAL-ONLY, so a variant can never reach capital.
+  for (const v of view.variants) {
+    log('variant', {
+      id: v.id,
+      rule: v.cfg.entryRule,
+      window: `[${v.cfg.windowLoH},${v.cfg.windowHiH}]`,
+      band: `[${v.cfg.askBandLo},${v.cfg.askBandHi}]`,
+      nExecuted: v.nExecuted,
+      nRealized: v.nRealized,
+      meanNetReturn: v.meanNetReturn,
+      ciLow: v.ciLow,
+      ciHigh: v.ciHigh,
+      verdict: v.verdict,
+    });
+  }
 
   // 4) store the small snapshot — BOUNDED RETRY (mirror 0073 / WS-5): one transient timeout must not discard the
   //    per-city fetch work. Safe to retry: record_cheap_early_panel is a pure insert + prune-to-200, and
@@ -215,6 +334,8 @@ export async function cheapEarlyPanel(ctx: JobCtx, deps: CheapEarlyPanelDeps): P
     meanNetReturn: view.assumptions.meanNetReturn,
     winRate: view.assumptions.winRate,
     label: view.gate.label,
+    variants: view.variants.length,
+    cityHitRates: cityHitRates ? Object.keys(cityHitRates).length : 0,
     snapshotId,
     ...(gateDegraded ? { gateWriteSkipped: 'degraded' as const } : {}),
   };

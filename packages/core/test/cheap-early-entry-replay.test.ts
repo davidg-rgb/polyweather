@@ -6,15 +6,23 @@
  *   - grading is by TEMPERATURE LABEL, never the bucket index (the sort-safe join — traps #7);
  *   - the fee math is pinned to (won − ask − takerFeePerShare(ask))/ask (the cheap-entry-realbook.py twin);
  *   - the panel verdict binds on ciLow>0 + zero-skill MC, NOT winFrac (minWinFrac 0); totality (junk → no throw).
+ *
+ * …and the PRE-REGISTERED variant knobs on top of it (CHEAP-EARLY-IMPROVE.md §8): entryRule 'first' vs 'latest',
+ * the minEdge margin (0 = off, so the canonical path is unchanged), the fail-closed top-K city filter, and the
+ * frozen six-variant registry + its DISJOINT entry-window set (0128).
  */
 import { describe, expect, it } from 'vitest';
 import {
   replayCheapEarlyEvent,
   replayCheapEarlyPanel,
   cheapEarlyCfg,
+  cheapEarlyEligibleCities,
+  cheapEarlyWindowSet,
   parseTemp,
+  CANONICAL_VARIANT_ID,
   CHEAP_EARLY_CITIES,
   CHEAP_EARLY_DEFAULTS,
+  CHEAP_EARLY_VARIANTS,
   type CheapEarlyCfg,
 } from '../src/sim/cheap-early-entry-replay.ts';
 import type { EventReplayInput, ReplayTick } from '../src/sim/opening-bracket-replay.ts';
@@ -201,6 +209,149 @@ describe('replayCheapEarlyPanel', () => {
     expect(panel.ledger).toEqual([]);
     expect(panel.nExecuted).toBe(0);
     expect(panel.verdict.label).toBe('INSUFFICIENT_DATA');
+  });
+});
+
+describe('the pre-registered variant knobs (CHEAP-EARLY-IMPROVE.md §8)', () => {
+  // one synthetic event with THREE in-window ticks: 35h (ask 0.32), 30h (ask 0.22), 26h (ask 0.24).
+  const threeTick = (): EventReplayInput =>
+    input([tick(35, { bestAsk: 0.32 }), tick(30, { bestAsk: 0.22 }), tick(26, { bestAsk: 0.24 })]);
+
+  it("entryRule 'latest' takes the smallest hours-to-close; 'first' takes the earliest clearing tick", () => {
+    const latest = replayCheapEarlyEvent(threeTick(), cfg({ entryRule: 'latest' }), RESOLVE_MS);
+    expect(latest.entered).toBe(true);
+    expect(latest.htcAtEntry).toBeCloseTo(26, 6);
+    expect(latest.entryAsk).toBeCloseTo(0.24, 9);
+
+    const first = replayCheapEarlyEvent(threeTick(), cfg({ entryRule: 'first' }), RESOLVE_MS);
+    expect(first.entered).toBe(true);
+    expect(first.htcAtEntry).toBeCloseTo(35, 6); // the EARLIEST capture — what the live lane did
+    expect(first.entryAsk).toBeCloseTo(0.32, 9);
+
+    // and 'latest' is the frozen default (the canonical path is unchanged by the knob existing)
+    expect(replayCheapEarlyEvent(threeTick(), cfg(), RESOLVE_MS).htcAtEntry).toBeCloseTo(26, 6);
+  });
+
+  it("entryRule 'first' SKIPS an earlier tick that fails the band and takes the next one that clears", () => {
+    // 35h is out of band (0.60) → the first CLEARING tick is 30h @ 0.22, not the 26h 'latest' pick.
+    const ev = input([tick(35, { bestAsk: 0.6 }), tick(30, { bestAsk: 0.22 }), tick(26, { bestAsk: 0.24 })]);
+    const t = replayCheapEarlyEvent(ev, cfg({ entryRule: 'first' }), RESOLVE_MS);
+    expect(t.entered).toBe(true);
+    expect(t.htcAtEntry).toBeCloseTo(30, 6);
+  });
+
+  it('minEdge blocks a pick whose houseProb − ask falls short (and 0 disables the gate entirely)', () => {
+    // pick houseProb 0.40, ask 0.32 → edge 0.08.
+    const ev = (): EventReplayInput => input([tick(30, { bestAsk: 0.32, houseProb: 0.4 })]);
+    expect(replayCheapEarlyEvent(ev(), cfg({ minEdge: 0.05 }), RESOLVE_MS).entered).toBe(true); // 0.08 ≥ 0.05
+    const blocked = replayCheapEarlyEvent(ev(), cfg({ minEdge: 0.12 }), RESOLVE_MS); // 0.08 < 0.12
+    expect(blocked.entered).toBe(false);
+    expect(blocked.reason).toBe('below_min_edge');
+    expect(blocked.entryAsk).toBeCloseTo(0.32, 9); // the diagnostic ask is still recorded
+
+    // minEdge 0 (the frozen default) must NOT filter a pick priced ABOVE its house probability.
+    const rich = input([tick(30, { bestAsk: 0.3, houseProb: 0.22 })]);
+    expect(replayCheapEarlyEvent(rich, cfg(), RESOLVE_MS).entered).toBe(true);
+  });
+
+  it('the topK city filter ranks by hit rate and drops the under-graded + the out-of-rank cities', () => {
+    const c = cheapEarlyCfg(['helsinki', 'ankara', 'wellington', 'madrid'], {
+      cityFilter: { kind: 'topK', k: 2, minGraded: 8, windowDays: 28 },
+    });
+    const rates = {
+      helsinki: { hitRate: 0.5, graded: 20 }, // rank 1
+      ankara: { hitRate: 0.45, graded: 12 }, // rank 2
+      wellington: { hitRate: 0.9, graded: 3 }, // BEST rate but graded < minGraded → ineligible
+      madrid: { hitRate: 0.4, graded: 30 }, // eligible but ranked 3rd of 3 → outside k=2
+    };
+    expect(cheapEarlyEligibleCities(c, rates)).toEqual(['helsinki', 'ankara']);
+    // fail-closed: no hit rates ⇒ NO city is eligible (a missing input must never widen the universe).
+    expect(cheapEarlyEligibleCities(c, undefined)).toEqual([]);
+    // 'all' is unaffected by the hit rates.
+    expect(cheapEarlyEligibleCities(cheapEarlyCfg(['helsinki', 'ankara']), rates)).toEqual(['helsinki', 'ankara']);
+  });
+
+  it('the panel scores ONLY the eligible cities under a topK filter (and nothing without hit rates)', () => {
+    const events: EventReplayInput[] = [
+      { eventId: '10', city: 'helsinki', targetDate: '2026-06-10', tz: TZ, ticks: [tick(30, { bestAsk: 0.25 })], resolution: { winnerIdx: 1, gradingMismatch: false } },
+      { eventId: '11', city: 'madrid', targetDate: '2026-06-11', tz: TZ, ticks: [tick(30, { bestAsk: 0.25 })], resolution: { winnerIdx: 1, gradingMismatch: false } },
+    ];
+    const resolves = new Map([['10', RESOLVE_MS], ['11', RESOLVE_MS]]);
+    const c = cheapEarlyCfg(['helsinki', 'madrid'], { cityFilter: { kind: 'topK', k: 1, minGraded: 8, windowDays: 28 } });
+    const rates = { helsinki: { hitRate: 0.5, graded: 20 }, madrid: { hitRate: 0.4, graded: 30 } };
+
+    const scoped = replayCheapEarlyPanel(events, c, resolves, {}, rates);
+    expect(scoped.scoredCities).toEqual(['helsinki']);
+    expect(scoped.nConsidered).toBe(1); // madrid is out of the universe entirely, not a non-entry
+    expect(scoped.nExecuted).toBe(1);
+
+    const blind = replayCheapEarlyPanel(events, c, resolves);
+    expect(blind.scoredCities).toEqual([]);
+    expect(blind.nConsidered).toBe(0);
+    expect(blind.nExecuted).toBe(0);
+  });
+
+  it('the variant registry is the pre-registered six, canonical first and unmodified', () => {
+    expect(CHEAP_EARLY_VARIANTS.map((v) => v.id)).toEqual([
+      'canonical', 'live-replica', 'wide-band', 'wide-band-open', 'late-12h', 'survivor',
+    ]);
+    expect(CHEAP_EARLY_VARIANTS[0]!.id).toBe(CANONICAL_VARIANT_ID);
+    // the canonical variant carries NO cfg delta — its block must be the headline panel, byte for byte.
+    expect(CHEAP_EARLY_VARIANTS[0]!.over).toEqual({});
+    // every variant carries the backtest cell it was registered from (the "backtest vs forward" column).
+    for (const v of CHEAP_EARLY_VARIANTS) {
+      expect(v.backtestRef.n).toBeGreaterThan(0);
+      expect(v.backtestRef.ciLow).toBeLessThanOrEqual(v.backtestRef.netRet);
+      expect(v.backtestRef.ciHigh).toBeGreaterThanOrEqual(v.backtestRef.netRet);
+    }
+    // the window SET must cover every variant's window, or a variant is starved rather than measured — and it
+    // must stay DISJOINT (0128), because the contiguous union [12,36] reads ~2x the captures per city.
+    const base = cheapEarlyCfg([...CHEAP_EARLY_CITIES]);
+    expect(cheapEarlyWindowSet(base)).toEqual([{ loH: 12, hiH: 15 }, { loH: 24, hiH: 36 }]);
+  });
+});
+
+describe('cheapEarlyWindowSet — the disjoint window set the slim read is asked for (0128)', () => {
+  const base = cheapEarlyCfg([...CHEAP_EARLY_CITIES]);
+  const setOf = (...windows: Array<[number, number]>) =>
+    cheapEarlyWindowSet(
+      base,
+      windows.map(([lo, hi], i) => ({
+        id: `v${i}`,
+        label: `[${lo},${hi}]`,
+        over: { windowLoH: lo, windowHiH: hi },
+        backtestRef: { n: 1, netRet: 0, ciLow: 0, ciHigh: 0 },
+      })),
+    );
+
+  it('a CONTAINED variant window merges into the canonical one ([24,36] ∪ [33,36] → [24,36])', () => {
+    expect(setOf([33, 36])).toEqual([{ loH: 24, hiH: 36 }]);
+  });
+
+  it('an OVERLAPPING window extends the slice rather than adding one', () => {
+    expect(setOf([20, 30])).toEqual([{ loH: 20, hiH: 36 }]);
+  });
+
+  it('a TOUCHING window merges (adjacent, no dead gap to save)', () => {
+    expect(setOf([12, 24])).toEqual([{ loH: 12, hiH: 36 }]);
+  });
+
+  it('a DETACHED window stays its own slice — the dead middle is never read', () => {
+    expect(setOf([12, 15])).toEqual([{ loH: 12, hiH: 15 }, { loH: 24, hiH: 36 }]);
+  });
+
+  it('several detached windows come back sorted and disjoint', () => {
+    expect(setOf([6, 8], [12, 15], [13, 16])).toEqual([
+      { loH: 6, hiH: 8 }, { loH: 12, hiH: 16 }, { loH: 24, hiH: 36 },
+    ]);
+  });
+
+  it('the canonical window alone is the whole set when no variant widens it', () => {
+    expect(cheapEarlyWindowSet(base, [])).toEqual([{ loH: 24, hiH: 36 }]);
+  });
+
+  it('junk windows (NaN / inverted) are dropped, never emitted as a slice', () => {
+    expect(setOf([Number.NaN, 20], [30, 10])).toEqual([{ loH: 24, hiH: 36 }]);
   });
 });
 

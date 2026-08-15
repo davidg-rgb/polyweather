@@ -27,9 +27,21 @@ import { buildEvents, type RawCaptureRow, type Resolution } from './opening-brac
 import type { RawResolution } from './opening-convergence-view.ts';
 import {
   replayCheapEarlyPanel,
+  cheapEarlyVariantCfg,
+  cheapEarlyWindowSet,
+  CANONICAL_VARIANT_ID,
   CHEAP_EARLY_CITIES,
+  CHEAP_EARLY_ENGINE_VERSION,
+  CHEAP_EARLY_VARIANTS,
+  type CheapEarlyBacktestRef,
   type CheapEarlyCfg,
+  type CheapEarlyCityFilter,
+  type CheapEarlyCityHitRates,
+  type CheapEarlyEntryRule,
+  type CheapEarlyPanel,
   type CheapEarlyTrade,
+  type CheapEarlyVariant,
+  type CheapEarlyWindow,
 } from './cheap-early-entry-replay.ts';
 
 /** One logged potential entry (a cheap-early trade made legible). */
@@ -125,6 +137,69 @@ export interface CheapEarlyGate {
   zeroSkillPassRate: number;
 }
 
+/** the verdict rendered per VARIANT. 'INSUFFICIENT' folds openingVerdict's INSUFFICIENT_DATA (and the
+ *  mid-basis PASS_PENDING_REAL_BOOK, which this real-book loop never issues); 'DEAD' is the PRE-REGISTERED
+ *  prune — n ≥ the §9R-E market floor with the city-clustered CI wholly below zero, i.e. measured-negative,
+ *  not merely unproven. */
+export type CheapEarlyVariantVerdict = 'PASS' | 'KILL' | 'INSUFFICIENT' | 'DEAD';
+
+/** the variant's effective strategy params, surfaced so the page's table is self-describing. */
+export interface CheapEarlyVariantCfgSummary {
+  entryRule: CheapEarlyEntryRule;
+  windowLoH: number;
+  windowHiH: number;
+  askBandLo: number;
+  askBandHi: number;
+  minEdge: number;
+  cityFilter: CheapEarlyCityFilter;
+  /** the cities the variant actually scored (top-K resolves to a subset; 'all' is the full allowlist). */
+  scoredCities: string[];
+}
+
+/** one variant entry, compact — the page drills into a variant without carrying the full ledger six times. */
+export interface CheapEarlyVariantEntry {
+  city: string;
+  date: string;
+  label: string;
+  ask: number;
+  won: boolean | null;
+  net: number;
+}
+
+/** One pre-registered variant scored side by side with the canonical rule (CHEAP-EARLY-IMPROVE.md §8). */
+export interface CheapEarlyVariantBlock {
+  id: string;
+  label: string;
+  cfg: CheapEarlyVariantCfgSummary;
+  /** the offline real-book sweep cell this variant was pre-registered from — the "backtest vs forward" column. */
+  backtestRef: CheapEarlyBacktestRef;
+  /** the §9R-E gate over THIS variant's realized ledger (identical shape to the canonical gate; NEVER written
+   *  to bot_gate_snapshot — a variant has no capital path). */
+  gate: CheapEarlyGate;
+  money: { realizedPnlUsd: number; roi: number; winRate: number };
+  nExecuted: number;
+  nRealized: number;
+  meanNetReturn: number;
+  meanEntryAsk: number;
+  ciLow: number;
+  ciHigh: number;
+  nCities: number;
+  nDays: number;
+  verdict: CheapEarlyVariantVerdict;
+  entries: CheapEarlyVariantEntry[];
+}
+
+/** what every variant shares — the denominator they were all scored over + the entry-window SET pulled. */
+export interface CheapEarlyVariantsCommon {
+  nEventsConsidered: number;
+  /** the DISJOINT windows the slim read shipped this tick (0128) — one slice per detached variant window. */
+  windowSet: CheapEarlyWindow[];
+  /** the engine tag the variants were scored under (an old snapshot can't be read as a current one). */
+  engineVersion: string;
+  /** false when a topK variant had no city hit rates this tick (it scores nothing — fail-closed). */
+  cityHitRatesAvailable: boolean;
+}
+
 export interface CheapEarlyView {
   days: number;
   cities: string[];
@@ -141,6 +216,9 @@ export interface CheapEarlyView {
   money: CheapEarlyMoney;
   assumptions: CheapEarlyAssumptions;
   gate: CheapEarlyGate;
+  /** the pre-registered variant sweep (canonical first) — measurement only, no capital path. */
+  variants: CheapEarlyVariantBlock[];
+  variantsCommon: CheapEarlyVariantsCommon;
   /** per-city input-fetch errors on the Edge tick that produced this view (the handler overrides the 0 default). */
   cityErrors: number;
 }
@@ -148,15 +226,110 @@ export interface CheapEarlyView {
 /** the §9R-E sufficiency bars — imported from the engine (single source of truth; openingVerdict enforces them). */
 const GATE = { minMarkets: GATE_MIN_MARKETS, minCities: GATE_MIN_CITIES, minDistinctDays: GATE_MIN_DISTINCT_DAYS };
 
+/** the §9R-E gate block for a replayed panel — one shape, used by the canonical view AND every variant, so a
+ *  variant's bars can never disagree with its own verdict (or with how the canonical gate is rendered). */
+function gateOf(panel: CheapEarlyPanel): CheapEarlyGate {
+  const v = panel.verdict;
+  return {
+    label: v.label,
+    reason: v.reason,
+    nMarkets: v.nMarkets,
+    minMarkets: GATE.minMarkets,
+    nCities: v.nCities,
+    minCities: GATE.minCities,
+    nDistinctDays: v.nDistinctDays,
+    minDistinctDays: GATE.minDistinctDays,
+    winFrac: v.winFrac,
+    meanNetReturn: v.meanNetReturn,
+    ciLow: v.ciLow,
+    ciHigh: v.ciHigh,
+    zeroSkillPassRate: v.zeroSkillPassRate,
+  };
+}
+
+/** Map a §9R-E label to the variant verdict + apply the PRE-REGISTERED prune: DEAD when the panel has cleared
+ *  the market floor AND its city-clustered CI is wholly negative (measured-negative, not merely unproven). */
+function variantVerdict(gate: CheapEarlyGate): CheapEarlyVariantVerdict {
+  if (gate.nMarkets >= GATE.minMarkets && Number.isFinite(gate.ciHigh) && gate.ciHigh < 0) return 'DEAD';
+  if (gate.label === 'PASS') return 'PASS';
+  if (gate.label === 'KILL') return 'KILL';
+  return 'INSUFFICIENT';
+}
+
+/** One variant block from an already-replayed panel (the events are built ONCE and replayed per variant — the
+ *  ingest, not the replay, is the expensive half). */
+function variantBlockOf(
+  variant: CheapEarlyVariant,
+  cfg: CheapEarlyCfg,
+  panel: CheapEarlyPanel,
+  hitRatesMissing: boolean,
+): CheapEarlyVariantBlock {
+  const gate = gateOf(panel);
+  const realized = panel.ledger.filter((t) => t.status === 'realized');
+  const deployed = panel.ledger.reduce((a, t) => a + t.stakeUsd, 0);
+  const realizedPnlUsd = realized.reduce((a, t) => a + t.netPnlUsd, 0);
+  const entries: CheapEarlyVariantEntry[] = panel.ledger
+    .map((t) => ({ city: t.city, date: t.targetDate, label: t.entryLabel, ask: t.entryAsk, won: t.won, net: t.netReturn }))
+    .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : a.city.localeCompare(b.city)));
+  // a topK variant with no hit rates scored NOTHING (fail-closed) — say so, rather than reporting an empty
+  // panel as if the rule simply never fired.
+  const missing = hitRatesMissing && cfg.cityFilter.kind === 'topK';
+  return {
+    id: variant.id,
+    label: variant.label,
+    cfg: {
+      entryRule: cfg.entryRule,
+      windowLoH: cfg.windowLoH,
+      windowHiH: cfg.windowHiH,
+      askBandLo: cfg.askBandLo,
+      askBandHi: cfg.askBandHi,
+      minEdge: cfg.minEdge,
+      cityFilter: cfg.cityFilter,
+      scoredCities: panel.scoredCities,
+    },
+    backtestRef: variant.backtestRef,
+    gate: missing ? { ...gate, reason: 'no city hit rates' } : gate,
+    money: {
+      realizedPnlUsd,
+      roi: deployed > 0 ? panel.ledger.reduce((a, t) => a + t.netPnlUsd, 0) / deployed : 0,
+      winRate: panel.winRate,
+    },
+    nExecuted: panel.nExecuted,
+    nRealized: panel.nRealized,
+    meanNetReturn: panel.meanNetReturn,
+    meanEntryAsk: panel.meanEntryAsk,
+    ciLow: gate.ciLow,
+    ciHigh: gate.ciHigh,
+    nCities: gate.nCities,
+    nDays: gate.nDistinctDays,
+    verdict: missing ? 'INSUFFICIENT' : variantVerdict(gate),
+    entries,
+  };
+}
+
+/** Optional inputs the Edge tick threads in (the pure default is "no hit rates, the frozen variant set"). */
+export interface CheapEarlyViewOpts {
+  /** per-city recent prediction hit rates (cheap_early_city_hit_rates, 0127) — the topK filter's input. Absent
+   *  ⇒ every topK variant scores nothing and reads INSUFFICIENT / 'no city hit rates' (fail-closed). */
+  cityHitRates?: CheapEarlyCityHitRates;
+  /** the pre-registered variant set (a test seam — production always uses CHEAP_EARLY_VARIANTS). */
+  variants?: readonly CheapEarlyVariant[];
+}
+
 /**
  * Build the /cheap-early view from the raw capture series + the resolution rows. cfg supplies the frozen
  * strategy params (cities allowlist, window, ask band, stake, fee). The hours-to-close clock (resolvesAt) comes
  * from the captures themselves — no external resolution join is needed to window.
+ *
+ * The events + resolution map are built ONCE and replayed per pre-registered variant; the CANONICAL variant is
+ * the top-level entries/money/assumptions/gate (it reuses that very panel — the block and the headline can
+ * never disagree).
  */
 export function buildCheapEarlyView(
   captures: RawCaptureRow[],
   resolutions: RawResolution[],
   cfg: CheapEarlyCfg,
+  opts: CheapEarlyViewOpts = {},
 ): CheapEarlyView {
   const caps = Array.isArray(captures) ? captures : [];
   const resMap = new Map<string, Resolution>(
@@ -176,7 +349,11 @@ export function buildCheapEarlyView(
     resolvesByEvent.set(c.eventId, Number.isFinite(ms) ? ms : null);
   }
 
-  const panel = replayCheapEarlyPanel(events, cfg, resolvesByEvent);
+  const variantDefs = opts.variants ?? CHEAP_EARLY_VARIANTS;
+  const hitRates = opts.cityHitRates;
+
+  // the CANONICAL panel — the top-level entries/money/assumptions/gate, and the canonical variant's block.
+  const panel = replayCheapEarlyPanel(events, cfg, resolvesByEvent, {}, hitRates);
 
   // ── per-event entries from the replayed ledger (entered trades) ───────────────────────────────────────
   const entries: CheapEarlyEntry[] = panel.ledger
@@ -266,20 +443,25 @@ export function buildCheapEarlyView(
 
   // ── gate progress: ALL counts + the label/reason come straight from the ONE openingVerdict, so the displayed
   //    bars can never disagree with the verdict label. ─────────────────────────────────────────────────────
-  const gate: CheapEarlyGate = {
-    label: v.label,
-    reason: v.reason,
-    nMarkets: v.nMarkets,
-    minMarkets: GATE.minMarkets,
-    nCities: v.nCities,
-    minCities: GATE.minCities,
-    nDistinctDays: v.nDistinctDays,
-    minDistinctDays: GATE.minDistinctDays,
-    winFrac: v.winFrac,
-    meanNetReturn: v.meanNetReturn,
-    ciLow: v.ciLow,
-    ciHigh: v.ciHigh,
-    zeroSkillPassRate: v.zeroSkillPassRate,
+  const gate: CheapEarlyGate = gateOf(panel);
+
+  // ── the PRE-REGISTERED variant sweep (CHEAP-EARLY-IMPROVE.md §8) — the same events replayed under each
+  //    variant's cfg delta. MEASUREMENT ONLY: these verdicts are rendered on /cheap-early and nowhere else;
+  //    the gate of record (bot_gate_snapshot) is written from the CANONICAL block alone. ─────────────────
+  const hitRatesMissing = hitRates == null;
+  const variants: CheapEarlyVariantBlock[] = variantDefs.map((variant) => {
+    const vcfg = cheapEarlyVariantCfg(cfg, variant);
+    // the canonical variant IS the headline panel — replay it once, never twice (and never differently).
+    const vpanel = variant.id === CANONICAL_VARIANT_ID && Object.keys(variant.over).length === 0
+      ? panel
+      : replayCheapEarlyPanel(events, vcfg, resolvesByEvent, {}, hitRates);
+    return variantBlockOf(variant, vcfg, vpanel, hitRatesMissing);
+  });
+  const variantsCommon: CheapEarlyVariantsCommon = {
+    nEventsConsidered: events.length,
+    windowSet: cheapEarlyWindowSet(cfg, variantDefs),
+    engineVersion: CHEAP_EARLY_ENGINE_VERSION,
+    cityHitRatesAvailable: !hitRatesMissing,
   };
 
   return {
@@ -296,6 +478,8 @@ export function buildCheapEarlyView(
     money,
     assumptions,
     gate,
+    variants,
+    variantsCommon,
     cityErrors: 0, // pure default; the cheap-early-panel Edge handler overrides with the tick's real count
   };
 }

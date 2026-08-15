@@ -19,13 +19,31 @@ export function wuObsUrl(
 }
 
 /**
- * Regex the 32-hex public frontend key out of a wunderground.com history page.
- * Runtime extraction — never hardcoded; cached in config with TTL so key
- * rotation self-heals.
+ * Regex the 32-hex public frontend key CANDIDATES out of a wunderground.com history page,
+ * highest-confidence serialization first, deduped in page order within each form.
+ *
+ * 2026-08-06: WU moved the live key into a `{"API_KEY":"…"}` JS blob while an unrelated
+ * service URL kept a DEAD `apiKey=` token on the page — a single-match extraction cannot
+ * pick the real key anymore, so callers must probe-validate candidates in order against a
+ * live obs fetch (fetch-actuals `ensureWuKey` does).
+ */
+export function extractWuApiKeys(html: string): string[] {
+  const out: string[] = [];
+  for (const re of [/"API_KEY"\s*:\s*"([a-f0-9]{32})"/g, /apiKey=([a-f0-9]{32})/g]) {
+    for (const m of html.matchAll(re)) {
+      const key = m[1]!;
+      if (!out.includes(key)) out.push(key);
+    }
+  }
+  return out;
+}
+
+/**
+ * First candidate from extractWuApiKeys — the legacy single-key form. Runtime extraction —
+ * never hardcoded; cached in config with TTL so key rotation self-heals.
  */
 export function extractWuApiKey(html: string): string | null {
-  const m = /apiKey=([a-f0-9]{32})/.exec(html);
-  return m ? m[1]! : null;
+  return extractWuApiKeys(html)[0] ?? null;
 }
 
 const WuPayloadSchema = z.object({

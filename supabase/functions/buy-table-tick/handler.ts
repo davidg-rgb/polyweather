@@ -1197,12 +1197,31 @@ export async function buyTableTick(ctx: JobCtx, deps: BuyTableTickDeps): Promise
   let dryRun = 0;
   let duplicate = 0;
   let failed = 0;
+  let fillsThisTick = 0;
   let haltedAfterFill = false;
   let haltedOnAmbiguous = false;
+  let capHitMidTick = false;
   let zeroFillAdjudicated = 0;
   const blocked = mode === 'live' && preflightOk !== true;
   if (candidates.length > 0 && !blocked) {
     for (const [i, c] of candidates.entries()) {
+      // DAY CAP, re-checked BETWEEN placements — gate.dayCapReached is derived from the ledger at tick
+      // start, so it cannot see fills made later in this same loop: the first tick of a UTC day would
+      // otherwise place EVERY candidate at once (2026-08-10: 11 buys in one tick under max_buys_per_day
+      // 4). Counts FILLS (sizeMatched > 0), the same event deriveEntryGate's buysToday counts — a clean
+      // venue rejection does not consume the cap.
+      if (cfg.maxBuysPerDay > 0 && gate.buysToday + fillsThisTick >= cfg.maxBuysPerDay) {
+        capHitMidTick = true;
+        for (const rest of candidates.slice(i)) {
+          const skip = {
+            ref: `${rest.city}/${rest.tradeDate}`,
+            reason: `day_cap (${gate.buysToday + fillsThisTick} successful buy(s) this UTC day reached max_buys_per_day ${cfg.maxBuysPerDay} mid-tick)`,
+          };
+          skips.push(skip);
+          log('buy-table.skip', skip);
+        }
+        break;
+      }
       try {
         const result = await executor.placeTaker({
           marketId: c.marketId,
@@ -1219,6 +1238,7 @@ export async function buyTableTick(ctx: JobCtx, deps: BuyTableTickDeps): Promise
         if (result.status === 'placed') placed++;
         else if (result.status === 'dry_run') dryRun++;
         else if (result.status === 'duplicate') duplicate++;
+        if ((result.sizeMatched ?? 0) > 0) fillsThisTick++;
         log('buy-table.intent', {
           marketRef: c.marketId,
           city: c.city,
@@ -1355,7 +1375,7 @@ export async function buyTableTick(ctx: JobCtx, deps: BuyTableTickDeps): Promise
     leadWindowH: [cfg.leadMinH, cfg.leadMaxH],
     maxBuysPerDay: cfg.maxBuysPerDay,
     buysToday: gate.buysToday,
-    dayCapReached: gate.dayCapReached,
+    dayCapReached: gate.dayCapReached || capHitMidTick,
     stakeUsd,
     cities: allowlist.length,
     maxEntryAttempts: cfg.maxEntryAttempts,

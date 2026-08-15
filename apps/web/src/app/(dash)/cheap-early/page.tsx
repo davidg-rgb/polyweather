@@ -15,7 +15,7 @@
  * non-overlapping windows + an explicit operator decision (CHEAP-EARLY-ENTRY-FORWARD-HANDOFF.md / FINDINGS.md).
  */
 import type { ReactElement } from 'react';
-import type { CheapEarlyEntry, CheapEarlyPerDay, CheapEarlyView } from '@weather-edge/core';
+import type { CheapEarlyEntry, CheapEarlyPerDay, CheapEarlyVariantBlock, CheapEarlyView } from '@weather-edge/core';
 import { EquityChart } from '../../../components/EquityChart.tsx';
 import { getCheapEarly } from '../../../lib/loaders.ts';
 import { fmtAgo, fmtDate, fmtDateTime, fmtPct, fmtProb, fmtStockholm, fmtUsd, num } from '../../../lib/format.ts';
@@ -218,6 +218,87 @@ function PerDayTable({ rows }: { rows: CheapEarlyPerDay[] }): ReactElement {
   );
 }
 
+/**
+ * The PRE-REGISTERED variant sweep (CHEAP-EARLY-IMPROVE.md §8) — every variant scored forward on the same
+ * ticks as the canonical rule, beside the backtest cell it was registered from. Measurement only: no variant
+ * verdict is ever written to the gate of record, so nothing here is a capital path.
+ */
+function VariantsTable({ view }: { view: CheapEarlyView }): ReactElement {
+  const rows = view.variants ?? [];
+  if (rows.length === 0) return <p className="muted">No variant sweep in this snapshot (pre-0127 tick).</p>;
+  const canonical = rows.find((v) => v.id === 'canonical') ?? null;
+  const verdictColor = (v: CheapEarlyVariantBlock['verdict']): string =>
+    v === 'PASS' ? GREEN : v === 'DEAD' || v === 'KILL' ? RED : AMBER;
+  return (
+    <div className="tbl-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th>variant</th>
+            <th>rule</th>
+            <th className="num">n (exec / realized)</th>
+            <th className="num">win%</th>
+            <th className="num">mean ask</th>
+            <th className="num">net / $1</th>
+            <th className="num">city-clustered CI</th>
+            <th>verdict</th>
+            <th className="num">backtest net / $1 (CI · n)</th>
+            <th className="num">Δ vs canonical</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((v) => {
+            const isCanonical = v.id === canonical?.id;
+            const delta =
+              isCanonical || !canonical || !Number.isFinite(v.meanNetReturn) || !Number.isFinite(canonical.meanNetReturn)
+                ? null
+                : v.meanNetReturn - canonical.meanNetReturn;
+            const band = `[${fmtProb(v.cfg.askBandLo)},${fmtProb(v.cfg.askBandHi)}]`;
+            const topK = v.cfg.cityFilter.kind === 'topK' ? v.cfg.cityFilter : null;
+            return (
+              <tr key={v.id}>
+                <td className="small">
+                  <span className="mono">{v.id}</span>
+                  {isCanonical ? <span className="chip small" style={{ marginLeft: '0.35rem' }}>gate of record</span> : null}
+                  <div className="muted small">{v.label}</div>
+                </td>
+                <td className="small mono">
+                  {v.cfg.entryRule}-in-window · [{v.cfg.windowLoH},{v.cfg.windowHiH}]h · {band}
+                  {v.cfg.minEdge > 0 ? ` · m≥${pp(v.cfg.minEdge, 0)}` : ''}
+                  {topK ? ` · top-${topK.k} (${v.cfg.scoredCities.length} eligible)` : ''}
+                </td>
+                <td className="num">{v.nExecuted} / {v.nRealized}</td>
+                <td className="num">{Number.isFinite(v.money.winRate) ? fmtPct(v.money.winRate, 0) : '—'}</td>
+                <td className="num">{Number.isFinite(v.meanEntryAsk) ? fmtProb(v.meanEntryAsk) : '—'}</td>
+                <td className="num" style={{ color: Number.isFinite(v.meanNetReturn) ? pnlColor(v.meanNetReturn) : undefined }}>
+                  {signedPct(v.meanNetReturn)}
+                </td>
+                <td className="num small">
+                  {Number.isFinite(v.ciLow) ? `[${signedPct(v.ciLow)}, ${signedPct(v.ciHigh)}]` : <span className="muted">below floor</span>}
+                </td>
+                <td className="small">
+                  <span
+                    className="chip small"
+                    style={{ color: verdictColor(v.verdict), fontWeight: v.verdict === 'DEAD' ? 700 : undefined }}
+                  >
+                    {v.verdict}
+                  </span>
+                </td>
+                <td className="num small muted">
+                  {signedPct(v.backtestRef.netRet)} [{signedPct(v.backtestRef.ciLow)}, {signedPct(v.backtestRef.ciHigh)}] · n={v.backtestRef.n}
+                </td>
+                <td className="num" style={{ color: delta == null ? undefined : pnlColor(delta) }}>
+                  {delta == null ? '—' : signedPct(delta)}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 /** Logged potential entries + their hold-to-resolution outcomes, newest target-day first. */
 function EntriesTable({ rows }: { rows: CheapEarlyEntry[] }): ReactElement {
   if (rows.length === 0) return <p className="muted">No entries logged in the window yet.</p>;
@@ -346,6 +427,47 @@ export default async function CheapEarlyPage(): Promise<ReactElement> {
           Fire rate = entered / considered (the strategy is selective by design — &quot;occasional buy&quot;).
         </p>
         <PerDayTable rows={view.perDay} />
+      </div>
+
+      <h2>Variants (pre-registered 2026-08-15)</h2>
+      <div className="panel">
+        <p className="muted small" style={{ marginTop: 0 }}>
+          The six rules the 3,960-cell real-book sweep (<span className="mono">CHEAP-EARLY-IMPROVE.md</span> §8)
+          registered for a forward read — scored on the <strong>same ticks</strong> as the canonical rule every hour,
+          beside the backtest cell each came from. <strong>Not editable</strong>: the set is pinned in code, because a
+          variant you can re-tune after seeing the forward number is not a forward test.
+        </p>
+        <VariantsTable view={view} />
+        <p className="muted small" style={{ marginTop: '0.6rem' }}>
+          <strong>How to read it.</strong> The decision metric is the <strong>city-clustered 95% CI on net per $1</strong>,
+          and it only exists once a variant clears the §9R-E floor (n ≥ {view.gate.minMarkets} markets · ≥{view.gate.minCities}{' '}
+          cities · ≥{view.gate.minDistinctDays} distinct days). A variant <strong>improves</strong> on the canonical rule only
+          if its CI <strong>excludes 0</strong> AND its net exceeds canonical&apos;s — a higher point estimate with a CI
+          straddling 0 is noise, which is exactly what the backtest column shows for every cell but{' '}
+          <span className="mono">survivor</span> (the one positive cell of 3,960 — registered here to be killed or confirmed,
+          not believed). <strong style={{ color: RED }}>DEAD</strong> = n ≥ {view.gate.minMarkets} with the CI wholly
+          negative: the pre-registered prune. <strong>No variant verdict touches the gate of record</strong> — the
+          §9R-E snapshot is written from the canonical block alone, so there is no capital path off this table.
+          {view.variantsCommon ? (
+            <>
+              {Array.isArray(view.variantsCommon.windowSet) && view.variantsCommon.windowSet.length ? (
+                <>
+                  {' '}Entry windows pulled this tick:{' '}
+                  {view.variantsCommon.windowSet.map((w) => `[${w.loH},${w.hiH}]`).join(' ∪ ')}h ·
+                </>
+              ) : null}{' '}
+              engine{' '}
+              <span className="mono">{view.variantsCommon.engineVersion}</span>
+              {view.variantsCommon.cityHitRatesAvailable ? null : (
+                <>
+                  {' '}
+                  <span className="chip" style={{ color: AMBER }}>⚠ no city hit rates this tick — top-K variants scored nothing</span>
+                </>
+              )}
+              .
+            </>
+          ) : null}
+        </p>
       </div>
 
       <h2>Logged potential entries &amp; hold-to-resolution outcomes</h2>

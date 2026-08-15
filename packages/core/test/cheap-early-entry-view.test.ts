@@ -8,7 +8,12 @@ import {
   buildCheapEarlyView,
   parseCheapEarlyConfig,
 } from '../src/sim/cheap-early-entry-view.ts';
-import { cheapEarlyCfg, CHEAP_EARLY_CITIES } from '../src/sim/cheap-early-entry-replay.ts';
+import {
+  cheapEarlyCfg,
+  CANONICAL_VARIANT_ID,
+  CHEAP_EARLY_CITIES,
+  CHEAP_EARLY_VARIANTS,
+} from '../src/sim/cheap-early-entry-replay.ts';
 import type { RawBucket, RawCaptureRow } from '../src/sim/opening-bracket-ingest.ts';
 import type { RawResolution } from '../src/sim/opening-convergence-view.ts';
 
@@ -109,6 +114,72 @@ describe('buildCheapEarlyView', () => {
     expect(view.entries).toEqual([]);
     expect(view.gate.label).toBe('INSUFFICIENT_DATA');
     expect(view.money.nEntries).toBe(0);
+  });
+});
+
+describe('buildCheapEarlyView — the pre-registered variant sweep (CHEAP-EARLY-IMPROVE.md §8)', () => {
+  it('emits one block per registered variant, canonical first, with the top-level view UNCHANGED', () => {
+    const captures = [
+      ...freshEvent('A', 'helsinki', 'Europe/Helsinki'),
+      ...freshEvent('B', 'ankara', 'Europe/Istanbul'),
+    ];
+    const resolutions: RawResolution[] = [
+      { id: 'A', winnerIdx: 1, gradingMismatch: false },
+      { id: 'B', winnerIdx: 0, gradingMismatch: false },
+    ];
+    const cfg = cheapEarlyCfg([...CHEAP_EARLY_CITIES]);
+    const view = buildCheapEarlyView(captures, resolutions, cfg);
+
+    expect(view.variants.map((v) => v.id)).toEqual(CHEAP_EARLY_VARIANTS.map((v) => v.id));
+    expect(view.variants).toHaveLength(6);
+    expect(view.variantsCommon.windowSet).toEqual([{ loH: 12, hiH: 15 }, { loH: 24, hiH: 36 }]);
+    expect(view.variantsCommon.cityHitRatesAvailable).toBe(false);
+
+    // the CANONICAL block IS the headline panel — the gate-of-record view can never disagree with its own row.
+    const canonical = view.variants.find((v) => v.id === CANONICAL_VARIANT_ID)!;
+    expect(canonical.nExecuted).toBe(view.money.nEntries);
+    expect(canonical.gate).toEqual(view.gate);
+    expect(canonical.meanNetReturn).toBeCloseTo(view.assumptions.meanNetReturn, 12);
+    expect(canonical.entries.map((e) => e.city).sort()).toEqual(['ankara', 'helsinki']);
+
+    // and the top-level sections are byte-identical to the pre-variant build (no variant leaks into them).
+    const baseline = buildCheapEarlyView(captures, resolutions, cfg, { variants: [] });
+    expect(baseline.variants).toEqual([]);
+    expect({ ...view, variants: [], variantsCommon: baseline.variantsCommon }).toEqual(baseline);
+  });
+
+  it('a top-K variant without city hit rates scores NOTHING and says why (fail-closed)', () => {
+    const captures = [...freshEvent('A', 'helsinki', 'Europe/Helsinki')];
+    const view = buildCheapEarlyView(captures, [{ id: 'A', winnerIdx: 1, gradingMismatch: false }], cheapEarlyCfg([...CHEAP_EARLY_CITIES]));
+    const survivor = view.variants.find((v) => v.id === 'survivor')!;
+    expect(survivor.cfg.scoredCities).toEqual([]);
+    expect(survivor.nExecuted).toBe(0);
+    expect(survivor.verdict).toBe('INSUFFICIENT');
+    expect(survivor.gate.reason).toBe('no city hit rates');
+  });
+
+  it('DEAD: a variant that clears the market floor with a wholly-negative city CI is pruned', () => {
+    // 42 markets across 6 cities × 7 days, every one a LOSS → the clustered CI cannot include 0.
+    const cities = ['ankara', 'helsinki', 'kuala-lumpur', 'wellington', 'madrid', 'singapore'];
+    const captures: RawCaptureRow[] = [];
+    const resolutions: RawResolution[] = [];
+    for (let d = 0; d < 7; d++) {
+      for (const city of cities) {
+        const id = `${city}-${d}`;
+        // the winner is bucket 0; the house pick is bucket 1 → every entry loses.
+        captures.push({ ...cap(id, city, 'Europe/Helsinki', IN_WINDOW, 0.5), targetDate: `2026-06-${String(10 + d).padStart(2, '0')}` });
+        resolutions.push({ id, winnerIdx: 0, gradingMismatch: false });
+      }
+    }
+    const view = buildCheapEarlyView(captures, resolutions, cheapEarlyCfg(cities));
+    const canonical = view.variants.find((v) => v.id === CANONICAL_VARIANT_ID)!;
+    expect(canonical.nRealized).toBe(42);
+    expect(canonical.nCities).toBe(6);
+    expect(canonical.nDays).toBe(7);
+    expect(canonical.ciHigh).toBeLessThan(0);
+    expect(canonical.verdict).toBe('DEAD');
+    // and the gate of record still reads its own §9R-E label — DEAD is a VARIANT-layer prune, not a new label.
+    expect(view.gate.label).toBe('KILL');
   });
 });
 

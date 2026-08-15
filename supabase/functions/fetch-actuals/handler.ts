@@ -5,7 +5,7 @@
 import {
   archiveUrl,
   cToF,
-  extractWuApiKey,
+  extractWuApiKeys,
   iemDailyUrl,
   iemNetworkFor,
   isFinalized,
@@ -62,8 +62,29 @@ async function ensureWuKey(ctx: JobCtx, deps: ActualsDeps, force = false): Promi
 
   try {
     const html = await deps.fetchText('https://www.wunderground.com/history/daily/kr/incheon/RKSI');
-    const key = extractWuApiKey(html);
-    if (!key) throw new Error('no 32-hex apiKey in page source');
+    const candidates = extractWuApiKeys(html);
+    if (candidates.length === 0) throw new Error('no 32-hex apiKey in page source');
+    // PROBE-VALIDATE before caching (2026-08-06 outage): a WU page change left a DEAD `apiKey=`
+    // token in place while the live key moved into an `"API_KEY"` JS blob — extraction kept
+    // "succeeding" with the dead key and every obs call 401'd for five days. A candidate is only
+    // cached once a real obs fetch (yesterday at the scrape station) accepts it.
+    let key: string | null = null;
+    let lastProbeErr = '';
+    for (const cand of candidates) {
+      try {
+        const probeDate = addDays(localDateAt('Asia/Seoul', deps.now), -1);
+        parseWuObservations(await deps.fetchJson(wuObsUrl('RKSI', 'KR', 'm', yyyymmdd(probeDate), cand)));
+        key = cand;
+        break;
+      } catch (probeErr) {
+        lastProbeErr = String(probeErr);
+      }
+    }
+    if (!key) {
+      throw new Error(
+        `no candidate key passed the obs probe (${candidates.length} tried; last error: ${lastProbeErr})`,
+      );
+    }
     await ctx.db.rpc('set_config_value', { p_key: 'wuApiKey', p_value: key });
     await ctx.db.rpc('set_config_value', { p_key: 'wuKeyFetchedAt', p_value: deps.now.toISOString() });
     return key;
