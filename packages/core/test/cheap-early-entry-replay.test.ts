@@ -9,7 +9,7 @@
  *
  * …and the PRE-REGISTERED variant knobs on top of it (CHEAP-EARLY-IMPROVE.md §8): entryRule 'first' vs 'latest',
  * the minEdge margin (0 = off, so the canonical path is unchanged), the fail-closed top-K city filter, and the
- * frozen six-variant registry + its union entry window.
+ * frozen six-variant registry + its DISJOINT entry-window set (0128).
  */
 import { describe, expect, it } from 'vitest';
 import {
@@ -17,7 +17,7 @@ import {
   replayCheapEarlyPanel,
   cheapEarlyCfg,
   cheapEarlyEligibleCities,
-  cheapEarlyWindowUnion,
+  cheapEarlyWindowSet,
   parseTemp,
   CANONICAL_VARIANT_ID,
   CHEAP_EARLY_CITIES,
@@ -304,9 +304,54 @@ describe('the pre-registered variant knobs (CHEAP-EARLY-IMPROVE.md §8)', () => 
       expect(v.backtestRef.ciLow).toBeLessThanOrEqual(v.backtestRef.netRet);
       expect(v.backtestRef.ciHigh).toBeGreaterThanOrEqual(v.backtestRef.netRet);
     }
-    // the UNION window must cover every variant's window, or a variant is starved rather than measured.
+    // the window SET must cover every variant's window, or a variant is starved rather than measured — and it
+    // must stay DISJOINT (0128), because the contiguous union [12,36] reads ~2x the captures per city.
     const base = cheapEarlyCfg([...CHEAP_EARLY_CITIES]);
-    expect(cheapEarlyWindowUnion(base)).toEqual({ loH: 12, hiH: 36 });
+    expect(cheapEarlyWindowSet(base)).toEqual([{ loH: 12, hiH: 15 }, { loH: 24, hiH: 36 }]);
+  });
+});
+
+describe('cheapEarlyWindowSet — the disjoint window set the slim read is asked for (0128)', () => {
+  const base = cheapEarlyCfg([...CHEAP_EARLY_CITIES]);
+  const setOf = (...windows: Array<[number, number]>) =>
+    cheapEarlyWindowSet(
+      base,
+      windows.map(([lo, hi], i) => ({
+        id: `v${i}`,
+        label: `[${lo},${hi}]`,
+        over: { windowLoH: lo, windowHiH: hi },
+        backtestRef: { n: 1, netRet: 0, ciLow: 0, ciHigh: 0 },
+      })),
+    );
+
+  it('a CONTAINED variant window merges into the canonical one ([24,36] ∪ [33,36] → [24,36])', () => {
+    expect(setOf([33, 36])).toEqual([{ loH: 24, hiH: 36 }]);
+  });
+
+  it('an OVERLAPPING window extends the slice rather than adding one', () => {
+    expect(setOf([20, 30])).toEqual([{ loH: 20, hiH: 36 }]);
+  });
+
+  it('a TOUCHING window merges (adjacent, no dead gap to save)', () => {
+    expect(setOf([12, 24])).toEqual([{ loH: 12, hiH: 36 }]);
+  });
+
+  it('a DETACHED window stays its own slice — the dead middle is never read', () => {
+    expect(setOf([12, 15])).toEqual([{ loH: 12, hiH: 15 }, { loH: 24, hiH: 36 }]);
+  });
+
+  it('several detached windows come back sorted and disjoint', () => {
+    expect(setOf([6, 8], [12, 15], [13, 16])).toEqual([
+      { loH: 6, hiH: 8 }, { loH: 12, hiH: 16 }, { loH: 24, hiH: 36 },
+    ]);
+  });
+
+  it('the canonical window alone is the whole set when no variant widens it', () => {
+    expect(cheapEarlyWindowSet(base, [])).toEqual([{ loH: 24, hiH: 36 }]);
+  });
+
+  it('junk windows (NaN / inverted) are dropped, never emitted as a slice', () => {
+    expect(setOf([Number.NaN, 20], [30, 10])).toEqual([{ loH: 24, hiH: 36 }]);
   });
 });
 

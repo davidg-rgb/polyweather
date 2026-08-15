@@ -23,6 +23,8 @@ interface FakeDbOpts {
   gateHangs?: boolean; // record_cheap_early_gate never resolves — the bookkeeping timeout must bound it
   /** 0126 staged idiom: the slim RPC is absent (pre-migration) — throws undefined_function. */
   slimAbsent?: boolean;
+  /** 0128 staged idiom: the slim RPC exists but on the OLD 4-arg signature — only the p_windows call 42883s. */
+  windowSetAbsent?: boolean;
   /** 0127: the top-K city filter's input — 'error' makes the read fail (it must stay non-fatal). */
   hitRates?: Record<string, { hitRate: number; graded: number }> | 'error';
 }
@@ -32,7 +34,7 @@ interface FakeDb {
   fetchedCities: string[];
   maxInFlight: number;
   writes: string[];
-  /** every rpc call's args, by fn name (the union-window + canonical-gate-payload assertions read these). */
+  /** every rpc call's args, by fn name (the window-set + canonical-gate-payload assertions read these). */
   args: Record<string, Record<string, unknown>[]>;
 }
 
@@ -53,6 +55,10 @@ function fakeDb(opts: FakeDbOpts): FakeDb {
       // handler's staged fallback to convergence_capture_inputs is exercised.
       if (fn === 'cheap_early_capture_inputs' && opts.slimAbsent) {
         throw new Error('function public.cheap_early_capture_inputs(...) does not exist (42883)');
+      }
+      // 0128: pre-migration the function exists on 0126's 4-arg signature — the p_windows call alone is undefined.
+      if (fn === 'cheap_early_capture_inputs' && opts.windowSetAbsent && args.p_windows !== undefined) {
+        throw new Error('function public.cheap_early_capture_inputs(integer, text[], double precision, double precision, double precision[]) does not exist (42883)');
       }
       if (fn === 'cheap_early_capture_inputs' || fn === 'convergence_capture_inputs') {
         const city = (args.p_cities as string[])[0]!;
@@ -160,13 +166,31 @@ describe('cheap-early-panel handler', () => {
     expect(db.writes).toContain('record_cheap_early_panel');
   });
 
-  it('0127: the slim read is asked for the UNION variant window, not just the canonical [24,36]', async () => {
+  it('0128: the slim read is asked for the DISJOINT window SET, not the contiguous [12,36] union', async () => {
     const db = fakeDb({ cities: ['ankara'] });
     await cheapEarlyPanel(ctx(db), { now: NOW });
     const call = db.args.cheap_early_capture_inputs![0]!;
-    // late-12h windows on [12,15] and the canonical/survivor on up to 36 — a narrower pull STARVES a variant.
+    // late-12h windows on [12,15] and the canonical/survivor on up to 36 — a narrower pull STARVES a variant,
+    // while the contiguous union drags in the dead 15–24h middle (2x the rows/city — the 287s tick).
+    expect(call.p_windows).toEqual([12, 15, 24, 36]);
+    // the legacy scalars ride along as the span, so a 0128-less database still gets a serviceable window.
     expect(call.p_window_lo_h).toBe(12);
     expect(call.p_window_hi_h).toBe(36);
+  });
+
+  it('0128 staged idiom: an OLD-signature slim RPC (no p_windows) retries with the [12,36] span — no cityErrors', async () => {
+    const db = fakeDb({ cities: ['ankara', 'helsinki'], windowSetAbsent: true });
+    const stats = await cheapEarlyPanel(ctx(db), { now: NOW });
+    expect(stats.cityErrors).toBe(0); // the 42883 is a fallback trigger, never an error
+    expect(db.fetchedCities.sort()).toEqual(['ankara', 'helsinki']); // both cities served by the 0126 signature
+    const served = db.args.cheap_early_capture_inputs!.filter((a) => a.p_windows === undefined);
+    expect(served.length).toBeGreaterThan(0);
+    for (const a of served) {
+      expect(a.p_window_lo_h).toBe(12);
+      expect(a.p_window_hi_h).toBe(36);
+    }
+    expect(db.args.convergence_capture_inputs).toBeUndefined(); // never degrades past the slim read
+    expect(db.writes).toContain('record_cheap_early_panel');
   });
 
   it('0127: the city hit rates are read once with the registered top-K params', async () => {

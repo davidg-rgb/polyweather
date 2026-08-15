@@ -450,8 +450,13 @@ export default async function CheapEarlyPage(): Promise<ReactElement> {
           §9R-E snapshot is written from the canonical block alone, so there is no capital path off this table.
           {view.variantsCommon ? (
             <>
-              {' '}Union entry window pulled this tick: [{view.variantsCommon.windowUnion.loH},
-              {view.variantsCommon.windowUnion.hiH}]h · engine{' '}
+              {Array.isArray(view.variantsCommon.windowSet) && view.variantsCommon.windowSet.length ? (
+                <>
+                  {' '}Entry windows pulled this tick:{' '}
+                  {view.variantsCommon.windowSet.map((w) => `[${w.loH},${w.hiH}]`).join(' ∪ ')}h ·
+                </>
+              ) : null}{' '}
+              engine{' '}
               <span className="mono">{view.variantsCommon.engineVersion}</span>
               {view.variantsCommon.cityHitRatesAvailable ? null : (
                 <>

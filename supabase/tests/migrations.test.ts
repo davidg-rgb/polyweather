@@ -550,6 +550,9 @@ describe('migrations 0001–0010', () => {
       '0125_operation_log.sql',
       '0126_cheap_early_slim_inputs.sql',
       '0127_cheap_early_variants.sql',
+      // 0128: cheap_early_capture_inputs takes a SET of disjoint hours-to-close windows (flat p_windows pairs)
+      // instead of one contiguous span — the [12,15]∪[24,36] variant set was read as [12,36] (2x the rows/city).
+      '0128_cheap_early_window_set.sql',
     ]);
   });
 });

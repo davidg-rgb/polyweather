@@ -224,20 +224,39 @@ export function cheapEarlyVariantCfg(base: CheapEarlyCfg, v: CheapEarlyVariant):
   return { ...base, ...v.over };
 }
 
-/** The UNION entry window across the canonical cfg + every variant — what the slim inputs RPC must ship so no
- *  variant is starved of the ticks its window needs (0126's p_window_lo_h / p_window_hi_h). */
-export function cheapEarlyWindowUnion(
+/** A contiguous entry window in hours-to-close — one slice of the slim inputs read. */
+export interface CheapEarlyWindow {
+  loH: number;
+  hiH: number;
+}
+
+/** The DISJOINT entry-window SET across the canonical cfg + every variant — what the slim inputs RPC must ship
+ *  (0128's p_windows) so no variant is starved of the ticks its window needs. Overlapping/touching windows merge
+ *  ([24,36] ∪ [33,36] → [24,36]); a detached one stays its OWN slice ([12,15]), because collapsing the set into
+ *  one contiguous union ([12,36] — the 0126 read) doubles the rows scanned per city: measured on prod, tokyo
+ *  [24,36] = 733 captures / 0.8s vs [12,36] = 1,492 / 2.5s, and under 3-way concurrency that is what blew the
+ *  tick to 287s with 10 cityErrors. */
+export function cheapEarlyWindowSet(
   base: CheapEarlyCfg,
   variants: readonly CheapEarlyVariant[] = CHEAP_EARLY_VARIANTS,
-): { loH: number; hiH: number } {
-  let loH = base.windowLoH;
-  let hiH = base.windowHiH;
+): CheapEarlyWindow[] {
+  const raw: CheapEarlyWindow[] = [];
+  const push = (loH: number, hiH: number): void => {
+    if (Number.isFinite(loH) && Number.isFinite(hiH) && hiH >= loH) raw.push({ loH, hiH });
+  };
+  push(base.windowLoH, base.windowHiH);
   for (const v of Array.isArray(variants) ? variants : []) {
     const c = cheapEarlyVariantCfg(base, v);
-    if (Number.isFinite(c.windowLoH)) loH = Math.min(loH, c.windowLoH);
-    if (Number.isFinite(c.windowHiH)) hiH = Math.max(hiH, c.windowHiH);
+    push(c.windowLoH, c.windowHiH);
   }
-  return { loH, hiH };
+  raw.sort((a, b) => a.loH - b.loH || a.hiH - b.hiH);
+  const merged: CheapEarlyWindow[] = [];
+  for (const w of raw) {
+    const last = merged[merged.length - 1];
+    if (last && w.loH <= last.hiH) last.hiH = Math.max(last.hiH, w.hiH);
+    else merged.push({ ...w });
+  }
+  return merged;
 }
 
 /**

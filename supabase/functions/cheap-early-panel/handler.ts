@@ -12,7 +12,8 @@
  *      input. Best-effort: on any error the top-K variants score nothing (fail-closed), the tick continues.
  *   3. run the PURE cheap-early replay view (buildCheapEarlyView → replayCheapEarlyPanel over the frozen params),
  *      which also scores the six PRE-REGISTERED variants side by side (CHEAP-EARLY-IMPROVE.md §8) off the SAME
- *      ingest. The slim read is asked for the UNION entry window across all of them, so no variant is starved.
+ *      ingest. The slim read is asked for the DISJOINT window SET across all of them (0128 p_windows), so no variant
+ *      is starved and no dead middle hours are scanned.
  *      Variant verdicts are MEASUREMENT ONLY — step 5 writes the gate of record from the CANONICAL block alone.
  *   4. store the small view (record_cheap_early_panel) — the /cheap-early page reads only that snapshot.
  *   5. persist the §9R-E verdict (record_cheap_early_gate, source='forward-cheap-early' PINNED) so the operator
@@ -31,7 +32,7 @@ import { retryWrite, withTimeout } from '../_shared/retry.ts';
 import {
   buildCheapEarlyView,
   cheapEarlyCfg,
-  cheapEarlyWindowUnion,
+  cheapEarlyWindowSet,
   parseCheapEarlyConfig,
   CHEAP_EARLY_VARIANTS,
   type CheapEarlyCityHitRates,
@@ -102,9 +103,17 @@ export async function cheapEarlyPanel(ctx: JobCtx, deps: CheapEarlyPanelDeps): P
     return { asOf: deps.now.toISOString(), paused: true };
   }
   const cfg = cheapEarlyCfg(opCfg.cities);
-  // the UNION entry window across the canonical cfg + every pre-registered variant — the slim RPC must ship
-  // every tick any variant windows on ([12,36] today), or a variant is starved rather than measured.
-  const windowUnion = cheapEarlyWindowUnion(cfg);
+  // the DISJOINT entry-window SET across the canonical cfg + every pre-registered variant — the slim RPC must
+  // ship every tick any variant windows on ([12,15] ∪ [24,36] today), or a variant is starved rather than
+  // measured. Kept as a SET, not collapsed to the contiguous union [12,36]: the union doubles the per-city rows
+  // (prod: tokyo 733 caps/0.8s vs 1,492/2.5s) and under 3-way concurrency that is what blew the tick to 287s.
+  const windowSet = cheapEarlyWindowSet(cfg);
+  // the flat [lo,hi,lo,hi,…] pairs 0128's p_windows takes, and the contiguous fallback for the 0126 signature.
+  const windowPairs = windowSet.flatMap((w) => [w.loH, w.hiH]);
+  const windowSpan = windowSet.length
+    ? { loH: Math.min(...windowSet.map((w) => w.loH)), hiH: Math.max(...windowSet.map((w) => w.hiH)) }
+    : { loH: cfg.windowLoH, hiH: cfg.windowHiH };
+  log('slim read window set', { windows: windowSet.map((w) => `[${w.loH},${w.hiH}]`), span: `[${windowSpan.loH},${windowSpan.hiH}]` });
 
   // 1b) the top-K city filter's input (0127) — BEST-EFFORT: on any error the hit rates stay undefined and the
   //     top-K variants score nothing (fail-closed, reads 'no city hit rates'). Never fails the tick.
@@ -140,28 +149,54 @@ export async function cheapEarlyPanel(ctx: JobCtx, deps: CheapEarlyPanelDeps): P
   let budgetSkipped = 0;
   const fetchStarted = Date.now();
   let nextCity = 0;
-  // 0126: the SLIM per-city read ([24,36]h window slice + last tick — cheap_early_capture_inputs),
-  // falling back to the full-grid convergence_capture_inputs where 0126 isn't applied yet (the 42883
-  // staged idiom, same envelope shape). The full grid is what starved this panel: per-city cost grew
-  // with capture volume until cityErrors hit 46/46 and the gate sat at 0 entries (2026-08-02→08-11).
-  let slimAbsent = false;
+  // 0128 → 0126 → 0069: the SLIM per-city read (window slices + last tick — cheap_early_capture_inputs), asked
+  // for the DISJOINT window SET (0128's p_windows) and degrading down the staged 42883 idiom — first to 0126's
+  // single contiguous [min lo, max hi] window, then to the full-grid convergence_capture_inputs (same envelope
+  // shape). The full grid is what starved this panel: per-city cost grew with capture volume until cityErrors
+  // hit 46/46 and the gate sat at 0 entries (2026-08-02→08-11); the contiguous union then tripled the slim
+  // read's own per-city time (287s tick / 10 cityErrors, 2026-08-15) — hence the set.
+  const isUndefinedFunction = (e: unknown): boolean => {
+    const m = e instanceof Error ? e.message : String(e);
+    return m.includes('42883') || /does not exist/i.test(m);
+  };
+  let windowSetAbsent = false; // 0128 not applied — the RPC has no p_windows parameter
+  let slimAbsent = false; // 0126 not applied either — no slim RPC at all
   const fetchCity = async (city: string): Promise<CaptureInputs> => {
-    if (!slimAbsent) {
+    if (!slimAbsent && !windowSetAbsent) {
       try {
         const r = await withTimeout(
           db.rpc<{ cheap_early_capture_inputs: CaptureInputs }>('cheap_early_capture_inputs', {
             p_days: PANEL_DAYS,
             p_cities: [city],
-            p_window_lo_h: windowUnion.loH,
-            p_window_hi_h: windowUnion.hiH,
+            p_window_lo_h: windowSpan.loH,
+            p_window_hi_h: windowSpan.hiH,
+            p_windows: windowPairs,
           }),
           cityTimeoutMs,
           `cheap_early_capture_inputs(${city}) timed out after ${cityTimeoutMs}ms`,
         );
         return r[0]?.cheap_early_capture_inputs ?? { captures: [], resolutions: [] };
       } catch (e) {
-        const m = e instanceof Error ? e.message : String(e);
-        if (!(m.includes('42883') || /does not exist/i.test(m))) throw e;
+        if (!isUndefinedFunction(e)) throw e;
+        windowSetAbsent = true;
+        log('cheap_early_capture_inputs(p_windows) absent — migration 0128 not applied; falling back to the single [min,max] window');
+      }
+    }
+    if (!slimAbsent) {
+      try {
+        const r = await withTimeout(
+          db.rpc<{ cheap_early_capture_inputs: CaptureInputs }>('cheap_early_capture_inputs', {
+            p_days: PANEL_DAYS,
+            p_cities: [city],
+            p_window_lo_h: windowSpan.loH,
+            p_window_hi_h: windowSpan.hiH,
+          }),
+          cityTimeoutMs,
+          `cheap_early_capture_inputs(${city}) timed out after ${cityTimeoutMs}ms`,
+        );
+        return r[0]?.cheap_early_capture_inputs ?? { captures: [], resolutions: [] };
+      } catch (e) {
+        if (!isUndefinedFunction(e)) throw e;
         slimAbsent = true;
         log('cheap_early_capture_inputs absent — migration 0126 not applied; falling back to convergence_capture_inputs');
       }

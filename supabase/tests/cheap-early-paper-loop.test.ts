@@ -175,6 +175,72 @@ describe('0117 cheap-early paper loop — schema + RPCs + safety', () => {
     ).rejects.toThrow();
   });
 
+  // ── 0128 · the slim capture read takes a SET of disjoint windows ─────────────────────────────────
+  /** One event with a tick at each of the given hours-to-close, tagged by peak_mid = htc/100. */
+  async function seedWindowSetEvent(city: string, htcs: number[]): Promise<void> {
+    const region = (await rows<{ region: string }>(db, `select region from public.clusters limit 1`))[0]!.region;
+    const cityId = (await rows<{ city_id: string }>(
+      db, `select city_id from public.upsert_city($1, $1, 'US', 'C', 'UTC', $2)`, [city, region],
+    ))[0]!.city_id;
+    const evId = (await rows<{ id: string }>(
+      db,
+      `insert into public.market_events (poly_event_id, slug, city_id, target_date, unit, ladder_ok)
+       values ('pe-' || $1, 'ev-' || $1, $2::uuid, current_date, 'C', true) returning id`,
+      [city, cityId],
+    ))[0]!.id;
+    // resolves_at is 1h out, so captured_at = resolves_at − htc puts each tick at exactly that hours-to-close.
+    // hours_since_listing 0.5 makes the event FRESH (the min(...) < 1 allowlist filter).
+    await rows(
+      db,
+      `insert into public.opening_captures
+         (captured_at, event_id, city, target_date, tz_name, resolves_at, hours_since_listing, peak_mid, buckets)
+       select now() + interval '1 hour' - (h || ' hours')::interval, $1::uuid, $2, current_date, 'UTC',
+              now() + interval '1 hour', 0.5, h / 100.0, '[]'::jsonb
+         from unnest($3::int[]) h`,
+      [evId, city, htcs],
+    );
+  }
+
+  /** the kept ticks, as their hours-to-close tags. `windows` null → the legacy 0126 two-scalar call shape. */
+  async function keptHtcs(city: string, windows: number[] | null, lo = 12, hi = 36): Promise<number[]> {
+    const arr = windows === null ? 'null::double precision[]' : `array[${windows.join(',')}]::double precision[]`;
+    const [out] = await rows<{ out: { captures: { peakMid: number }[] | null } }>(
+      db,
+      `select public.cheap_early_capture_inputs(21, array[$1], ${lo}, ${hi}, ${arr}) as out`,
+      [city],
+    );
+    return (out!.out.captures ?? []).map((c) => Math.round(Number(c.peakMid) * 100)).sort((a, b) => a - b);
+  }
+
+  it('0128 p_windows: EVERY window of the set is kept and the dead middle is dropped (+ the last tick, always)', async () => {
+    // 30h → inside [24,36] · 20h → the dead middle the contiguous [12,36] union used to drag in · 13h → inside
+    // [12,15] · 2h → out of every window but the event's LAST tick (the open-mark/winner-label lookup).
+    await seedWindowSetEvent('winset', [30, 20, 13, 2]);
+
+    expect(await keptHtcs('winset', [12, 15, 24, 36])).toEqual([2, 13, 30]);
+    // the contiguous union is what 0126 could express — it reads the 20h tick nobody scores (the 2x row cost).
+    expect(await keptHtcs('winset', null)).toEqual([2, 13, 20, 30]);
+    // a single-pair p_windows behaves exactly like the old two-scalar window.
+    expect(await keptHtcs('winset', [24, 36])).toEqual([2, 30]);
+    // …and an empty/odd p_windows falls back to the scalars rather than returning the last tick alone.
+    expect(await keptHtcs('winset', [])).toEqual([2, 13, 20, 30]);
+    expect(await keptHtcs('winset', [24])).toEqual([2, 13, 20, 30]);
+  });
+
+  it('0128 the ±1h capture-cadence slack applies to EACH window of the set, not just the span', async () => {
+    await seedWindowSetEvent('winslack', [16, 11, 23, 37, 19, 1]);
+    // [12,15]±1 → 11 and 16 are in; [24,36]±1 → 23 and 37 are in; 19 (dead middle) is out; 1 is the last tick.
+    expect(await keptHtcs('winslack', [12, 15, 24, 36])).toEqual([1, 11, 16, 23, 37]);
+  });
+
+  it('0128 cheap_early_capture_inputs is service-role only (no browser session may read it)', async () => {
+    await expect(
+      asRole(db, 'authenticated', OPERATOR, async () =>
+        rows(db, `select public.cheap_early_capture_inputs(21, array['winset'])`),
+      ),
+    ).rejects.toThrow();
+  });
+
   it("0127 dash_operation carries the panel's `variants` block through to /operation", async () => {
     const view = {
       days: 21,

@@ -132,7 +132,7 @@ describe('buildCheapEarlyView — the pre-registered variant sweep (CHEAP-EARLY-
 
     expect(view.variants.map((v) => v.id)).toEqual(CHEAP_EARLY_VARIANTS.map((v) => v.id));
     expect(view.variants).toHaveLength(6);
-    expect(view.variantsCommon.windowUnion).toEqual({ loH: 12, hiH: 36 });
+    expect(view.variantsCommon.windowSet).toEqual([{ loH: 12, hiH: 15 }, { loH: 24, hiH: 36 }]);
     expect(view.variantsCommon.cityHitRatesAvailable).toBe(false);
 
     // the CANONICAL block IS the headline panel — the gate-of-record view can never disagree with its own row.

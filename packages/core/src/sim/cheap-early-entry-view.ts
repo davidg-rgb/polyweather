@@ -28,7 +28,7 @@ import type { RawResolution } from './opening-convergence-view.ts';
 import {
   replayCheapEarlyPanel,
   cheapEarlyVariantCfg,
-  cheapEarlyWindowUnion,
+  cheapEarlyWindowSet,
   CANONICAL_VARIANT_ID,
   CHEAP_EARLY_CITIES,
   CHEAP_EARLY_ENGINE_VERSION,
@@ -41,6 +41,7 @@ import {
   type CheapEarlyPanel,
   type CheapEarlyTrade,
   type CheapEarlyVariant,
+  type CheapEarlyWindow,
 } from './cheap-early-entry-replay.ts';
 
 /** One logged potential entry (a cheap-early trade made legible). */
@@ -188,10 +189,11 @@ export interface CheapEarlyVariantBlock {
   entries: CheapEarlyVariantEntry[];
 }
 
-/** what every variant shares — the denominator they were all scored over + the union entry window pulled. */
+/** what every variant shares — the denominator they were all scored over + the entry-window SET pulled. */
 export interface CheapEarlyVariantsCommon {
   nEventsConsidered: number;
-  windowUnion: { loH: number; hiH: number };
+  /** the DISJOINT windows the slim read shipped this tick (0128) — one slice per detached variant window. */
+  windowSet: CheapEarlyWindow[];
   /** the engine tag the variants were scored under (an old snapshot can't be read as a current one). */
   engineVersion: string;
   /** false when a topK variant had no city hit rates this tick (it scores nothing — fail-closed). */
@@ -457,7 +459,7 @@ export function buildCheapEarlyView(
   });
   const variantsCommon: CheapEarlyVariantsCommon = {
     nEventsConsidered: events.length,
-    windowUnion: cheapEarlyWindowUnion(cfg, variantDefs),
+    windowSet: cheapEarlyWindowSet(cfg, variantDefs),
     engineVersion: CHEAP_EARLY_ENGINE_VERSION,
     cityHitRatesAvailable: !hitRatesMissing,
   };
