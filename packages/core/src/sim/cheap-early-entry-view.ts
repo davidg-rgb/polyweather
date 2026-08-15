@@ -15,6 +15,13 @@
  *   5. the §9R-E gate progress toward a verdict (≥40 markets / ≥6 cities / ≥7 days; binds on ciLow>0 +
  *      zero-skill MC, NOT winFrac — handoff §2).
  *
+ * THE PERSISTED LEDGER (2026-08-15, migration 0129). The replay above can only ever score the captures still in
+ * the database, and on the Supabase free tier `opening_captures` is pruned at resolved+1 day (~18–30 MB/day is
+ * not retainable). So the forward run's REALIZED entries are persisted per variant and folded back in here
+ * (opts.ledger): every variant — the canonical one included, so the gate of record accrues too — is scored over
+ * ledger ∪ replay, deduped by (city, targetDate) with the ledger row winning. Without opts.ledger the view is
+ * byte-for-byte the pre-0129 replay-only build.
+ *
  * NOTHING here is a live trade or a capital decision — it is the forward PAPER measurement made legible; the
  * §9R-E gate governs any GO (which additionally needs ≥2 non-overlapping PASSes + an explicit operator step —
  * never this build). Pure + total: junk → empty sections, never throws. Imports only the engine + the shared raw
@@ -27,6 +34,7 @@ import { buildEvents, type RawCaptureRow, type Resolution } from './opening-brac
 import type { RawResolution } from './opening-convergence-view.ts';
 import {
   replayCheapEarlyPanel,
+  summarizeCheapEarlyLedger,
   cheapEarlyVariantCfg,
   cheapEarlyWindowSet,
   CANONICAL_VARIANT_ID,
@@ -151,12 +159,16 @@ export interface CheapEarlyVariantCfgSummary {
   askBandLo: number;
   askBandHi: number;
   minEdge: number;
+  /** the paper stake per entry — carried per variant so the ledger writer never has to assume a shared stake. */
+  stakeUsd: number;
   cityFilter: CheapEarlyCityFilter;
   /** the cities the variant actually scored (top-K resolves to a subset; 'all' is the full allowlist). */
   scoredCities: string[];
 }
 
-/** one variant entry, compact — the page drills into a variant without carrying the full ledger six times. */
+/** one variant entry, compact — the page drills into a variant without carrying the full ledger six times.
+ *  `won: null` marks an OPEN (ungraded) entry; a realized entry always carries a boolean — that is the flag the
+ *  0129 ledger writer/seed reads to decide what is persistable. */
 export interface CheapEarlyVariantEntry {
   city: string;
   date: string;
@@ -164,7 +176,32 @@ export interface CheapEarlyVariantEntry {
   ask: number;
   won: boolean | null;
   net: number;
+  /** hours-to-close at entry + the pick's executable depth ($) — carried so the PERSISTED ledger (0129) keeps the
+   *  diagnostics the pruned captures can no longer supply. null when the source row never had them. */
+  htc: number | null;
+  depth: number | null;
 }
+
+/** One REALIZED entry read back from `cheap_early_variant_ledger` (0129) — the forward record that survives the
+ *  free-tier `opening_captures` prune (resolved+1d), so a variant's n accrues across ticks instead of spanning
+ *  only whatever captures are still in the database. Every field but the key + net is optional: an old row (or a
+ *  seed off a pre-0129 panel snapshot) simply carries less. */
+export interface CheapEarlyLedgerRow {
+  city: string;
+  targetDate: string;
+  label?: string | null;
+  ask?: number | null;
+  capturedAt?: string | null;
+  hoursToClose?: number | null;
+  depthUsd?: number | null;
+  won?: boolean | null;
+  /** the realized net return per $1 staked (the ledger's scoring unit — matches CheapEarlyTrade.netReturn). */
+  net: number;
+  stakeUsd?: number | null;
+}
+
+/** variantId → its persisted realized rows (the shape cheap_early_variant_ledger_read returns). */
+export type CheapEarlyLedger = Record<string, CheapEarlyLedgerRow[]>;
 
 /** One pre-registered variant scored side by side with the canonical rule (CHEAP-EARLY-IMPROVE.md §8). */
 export interface CheapEarlyVariantBlock {
@@ -187,6 +224,10 @@ export interface CheapEarlyVariantBlock {
   nDays: number;
   verdict: CheapEarlyVariantVerdict;
   entries: CheapEarlyVariantEntry[];
+  /** how the merged realized set was sourced: rows recovered from the persisted 0129 ledger vs rows this tick's
+   *  replay produced itself. ledgerRows > 0 is the proof the record survived a capture prune. */
+  ledgerRows: number;
+  replayRows: number;
 }
 
 /** what every variant shares — the denominator they were all scored over + the entry-window SET pulled. */
@@ -198,6 +239,9 @@ export interface CheapEarlyVariantsCommon {
   engineVersion: string;
   /** false when a topK variant had no city hit rates this tick (it scores nothing — fail-closed). */
   cityHitRatesAvailable: boolean;
+  /** true when the persisted 0129 variant ledger was readable this tick (false ⇒ the panel spans only the
+   *  captures still in the database — on the free tier that is ~a day, not the accrued forward run). */
+  ledgerAvailable: boolean;
 }
 
 export interface CheapEarlyView {
@@ -256,20 +300,107 @@ function variantVerdict(gate: CheapEarlyGate): CheapEarlyVariantVerdict {
   return 'INSUFFICIENT';
 }
 
-/** One variant block from an already-replayed panel (the events are built ONCE and replayed per variant — the
- *  ingest, not the replay, is the expensive half). */
+/** the (city, targetDate) identity of a scored market — the ledger's primary key, and one market per city per
+ *  day by construction (a city lists exactly one temperature event per target date). */
+const marketKey = (city: string, targetDate: string): string => `${city} ${targetDate}`;
+
+/** Turn one persisted ledger row into the engine's trade shape, so the merged set is a plain CheapEarlyTrade[]
+ *  that every downstream reader (the money tracker, the entries table, the §9R-E verdict) already understands.
+ *  Fields the ledger never carried (eventId, observedSpread, the winner temperature, the fee split) come back as
+ *  ''/NaN/null — the means that read them filter non-finite values, so a recovered row simply does not vote on
+ *  the cost reads it cannot answer. null when the row is unusable (no key, or no finite net). */
+function ledgerTrade(row: CheapEarlyLedgerRow, fallbackStakeUsd: number): CheapEarlyTrade | null {
+  const city = String(row?.city ?? '');
+  const targetDate = String(row?.targetDate ?? '');
+  const net = Number(row?.net);
+  if (!city || !targetDate || !Number.isFinite(net)) return null;
+  const stakeUsd = Number.isFinite(Number(row.stakeUsd)) ? Number(row.stakeUsd) : fallbackStakeUsd;
+  const ask = Number.isFinite(Number(row.ask)) ? Number(row.ask) : NaN;
+  return {
+    eventId: '',
+    city,
+    targetDate,
+    entered: true,
+    reason: '',
+    entryLabel: String(row.label ?? ''),
+    entryTemp: null,
+    htcAtEntry: Number.isFinite(Number(row.hoursToClose)) ? Number(row.hoursToClose) : null,
+    entryAsk: ask,
+    depthUsd: Number.isFinite(Number(row.depthUsd)) ? Number(row.depthUsd) : NaN,
+    observedSpread: NaN,
+    winnerTemp: null,
+    won: row.won === true,
+    status: 'realized',
+    stakeUsd,
+    feeUsd: 0,
+    netPnlUsd: net * stakeUsd,
+    netReturn: net,
+  };
+}
+
+/** a variant's panel after the persisted ledger has been folded in, with the provenance split. */
+interface MergedPanel {
+  panel: CheapEarlyPanel;
+  ledgerRows: number;
+  replayRows: number;
+}
+
+/**
+ * Merge a variant's PERSISTED realized rows (0129) into the panel this tick replayed, and re-score the result.
+ *
+ * Dedupe is by (city, targetDate) with the LEDGER row winning — it was graded when the captures still existed,
+ * and a re-replay off a partially-pruned capture series is the weaker witness of the same market. Replay rows the
+ * ledger has never seen are kept (that is how new markets enter the record); OPEN replay rows are kept untouched
+ * unless the ledger already carries that market graded, which would otherwise double-count one market's stake.
+ *
+ * With no ledger rows this returns the replayed panel UNTOUCHED (same object) — the pre-0129 behaviour, exactly.
+ */
+function mergeVariantPanel(panel: CheapEarlyPanel, rows: CheapEarlyLedgerRow[] | undefined, cfg: CheapEarlyCfg): MergedPanel {
+  const replayRealized = panel.ledger.filter((t) => t.status === 'realized').length;
+  const recovered = (Array.isArray(rows) ? rows : [])
+    .map((r) => ledgerTrade(r, cfg.stakeUsd))
+    .filter((t): t is CheapEarlyTrade => t !== null);
+  if (recovered.length === 0) return { panel, ledgerRows: 0, replayRows: replayRealized };
+  const covered = new Set(recovered.map((t) => marketKey(t.city, t.targetDate)));
+  const kept = panel.ledger.filter((t) => !covered.has(marketKey(t.city, t.targetDate)));
+  const merged = [...recovered, ...kept].sort(
+    (a, b) => (a.targetDate < b.targetDate ? -1 : a.targetDate > b.targetDate ? 1 : a.city.localeCompare(b.city)),
+  );
+  return {
+    panel: summarizeCheapEarlyLedger(merged, {
+      nConsidered: panel.nConsidered,
+      reasonTally: panel.reasonTally,
+      scoredCities: panel.scoredCities,
+    }),
+    ledgerRows: recovered.length,
+    replayRows: kept.filter((t) => t.status === 'realized').length,
+  };
+}
+
+/** One variant block from an already-replayed (and ledger-merged) panel — the events are built ONCE and replayed
+ *  per variant; the ingest, not the replay, is the expensive half. */
 function variantBlockOf(
   variant: CheapEarlyVariant,
   cfg: CheapEarlyCfg,
-  panel: CheapEarlyPanel,
+  merged: MergedPanel,
   hitRatesMissing: boolean,
 ): CheapEarlyVariantBlock {
+  const panel = merged.panel;
   const gate = gateOf(panel);
   const realized = panel.ledger.filter((t) => t.status === 'realized');
   const deployed = panel.ledger.reduce((a, t) => a + t.stakeUsd, 0);
   const realizedPnlUsd = realized.reduce((a, t) => a + t.netPnlUsd, 0);
   const entries: CheapEarlyVariantEntry[] = panel.ledger
-    .map((t) => ({ city: t.city, date: t.targetDate, label: t.entryLabel, ask: t.entryAsk, won: t.won, net: t.netReturn }))
+    .map((t) => ({
+      city: t.city,
+      date: t.targetDate,
+      label: t.entryLabel,
+      ask: t.entryAsk,
+      won: t.won,
+      net: t.netReturn,
+      htc: Number.isFinite(t.htcAtEntry as number) ? (t.htcAtEntry as number) : null,
+      depth: Number.isFinite(t.depthUsd) ? t.depthUsd : null,
+    }))
     .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : a.city.localeCompare(b.city)));
   // a topK variant with no hit rates scored NOTHING (fail-closed) — say so, rather than reporting an empty
   // panel as if the rule simply never fired.
@@ -284,6 +415,7 @@ function variantBlockOf(
       askBandLo: cfg.askBandLo,
       askBandHi: cfg.askBandHi,
       minEdge: cfg.minEdge,
+      stakeUsd: cfg.stakeUsd,
       cityFilter: cfg.cityFilter,
       scoredCities: panel.scoredCities,
     },
@@ -304,6 +436,8 @@ function variantBlockOf(
     nDays: gate.nDistinctDays,
     verdict: missing ? 'INSUFFICIENT' : variantVerdict(gate),
     entries,
+    ledgerRows: merged.ledgerRows,
+    replayRows: merged.replayRows,
   };
 }
 
@@ -314,6 +448,10 @@ export interface CheapEarlyViewOpts {
   cityHitRates?: CheapEarlyCityHitRates;
   /** the pre-registered variant set (a test seam — production always uses CHEAP_EARLY_VARIANTS). */
   variants?: readonly CheapEarlyVariant[];
+  /** the PERSISTED realized entries per variant (cheap_early_variant_ledger_read, 0129). Absent ⇒ the view is
+   *  exactly the pre-0129 replay-only build; present ⇒ every variant (canonical included, so the gate of record
+   *  accrues too) is scored over ledger ∪ replay. This is what makes n survive the free-tier capture prune. */
+  ledger?: CheapEarlyLedger;
 }
 
 /**
@@ -352,10 +490,14 @@ export function buildCheapEarlyView(
   const variantDefs = opts.variants ?? CHEAP_EARLY_VARIANTS;
   const hitRates = opts.cityHitRates;
 
-  // the CANONICAL panel — the top-level entries/money/assumptions/gate, and the canonical variant's block.
-  const panel = replayCheapEarlyPanel(events, cfg, resolvesByEvent, {}, hitRates);
+  // the CANONICAL panel — the top-level entries/money/assumptions/gate, and the canonical variant's block. It is
+  // MERGED with the persisted 0129 ledger before anything reads it, so the headline (and therefore the gate of
+  // record) accrues across ticks instead of spanning only the captures that survived the free-tier prune.
+  const replayed = replayCheapEarlyPanel(events, cfg, resolvesByEvent, {}, hitRates);
+  const canonicalMerged = mergeVariantPanel(replayed, opts.ledger?.[CANONICAL_VARIANT_ID], cfg);
+  const panel = canonicalMerged.panel;
 
-  // ── per-event entries from the replayed ledger (entered trades) ───────────────────────────────────────
+  // ── per-event entries from the merged ledger (entered trades — replayed this tick or recovered from 0129) ──
   const entries: CheapEarlyEntry[] = panel.ledger
     .filter((t: CheapEarlyTrade) => t.entered && Number.isFinite(t.netPnlUsd) && Number.isFinite(t.netReturn))
     .map((t: CheapEarlyTrade) => ({
@@ -388,7 +530,11 @@ export function buildCheapEarlyView(
     d.net += en.netPnlUsd;
     dayAgg.set(en.targetDate, d);
   }
-  const perDay: CheapEarlyPerDay[] = [...consideredByDay.keys()].sort().map((date) => {
+  // the day axis is the UNION of "days we saw markets on" and "days we hold entries for": a day whose captures
+  // have been pruned still owns its recovered entries (considered 0), so the equity curve keeps the accrued
+  // history instead of silently dropping it. Without a ledger the entry days are a subset of the considered
+  // days, so the union is the same set — the pre-0129 axis, unchanged.
+  const perDay: CheapEarlyPerDay[] = [...new Set([...consideredByDay.keys(), ...dayAgg.keys()])].sort().map((date) => {
     const consideredN = consideredByDay.get(date) ?? 0;
     const d = dayAgg.get(date) ?? { entered: 0, stake: 0, net: 0 };
     return { date, considered: consideredN, entered: d.entered, firePct: consideredN > 0 ? d.entered / consideredN : 0, stakeUsd: d.stake, netPnlUsd: d.net };
@@ -451,17 +597,19 @@ export function buildCheapEarlyView(
   const hitRatesMissing = hitRates == null;
   const variants: CheapEarlyVariantBlock[] = variantDefs.map((variant) => {
     const vcfg = cheapEarlyVariantCfg(cfg, variant);
-    // the canonical variant IS the headline panel — replay it once, never twice (and never differently).
-    const vpanel = variant.id === CANONICAL_VARIANT_ID && Object.keys(variant.over).length === 0
-      ? panel
-      : replayCheapEarlyPanel(events, vcfg, resolvesByEvent, {}, hitRates);
-    return variantBlockOf(variant, vcfg, vpanel, hitRatesMissing);
+    // the canonical variant IS the headline panel — replay (and merge) it once, never twice (and never
+    // differently), so the block and the headline can still not disagree.
+    const vmerged = variant.id === CANONICAL_VARIANT_ID && Object.keys(variant.over).length === 0
+      ? canonicalMerged
+      : mergeVariantPanel(replayCheapEarlyPanel(events, vcfg, resolvesByEvent, {}, hitRates), opts.ledger?.[variant.id], vcfg);
+    return variantBlockOf(variant, vcfg, vmerged, hitRatesMissing);
   });
   const variantsCommon: CheapEarlyVariantsCommon = {
     nEventsConsidered: events.length,
     windowSet: cheapEarlyWindowSet(cfg, variantDefs),
     engineVersion: CHEAP_EARLY_ENGINE_VERSION,
     cityHitRatesAvailable: !hitRatesMissing,
+    ledgerAvailable: opts.ledger != null,
   };
 
   return {

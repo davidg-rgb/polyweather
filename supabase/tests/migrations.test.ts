@@ -553,6 +553,10 @@ describe('migrations 0001–0010', () => {
       // 0128: cheap_early_capture_inputs takes a SET of disjoint hours-to-close windows (flat p_windows pairs)
       // instead of one contiguous span — the [12,15]∪[24,36] variant set was read as [12,36] (2x the rows/city).
       '0128_cheap_early_window_set.sql',
+      // 0129: cheap_early_variant_ledger — the forward run's REALIZED entries persisted per variant, so n
+      // accrues past the free-tier opening_captures prune (resolved+1d) instead of resetting to a ~1-day
+      // sample every night. Measurement only; seeded once from the latest cheap_early_panel snapshot.
+      '0129_cheap_early_variant_ledger.sql',
     ]);
   });
 });

@@ -267,7 +267,16 @@ function VariantsTable({ view }: { view: CheapEarlyView }): ReactElement {
                   {v.cfg.minEdge > 0 ? ` · m≥${pp(v.cfg.minEdge, 0)}` : ''}
                   {topK ? ` · top-${topK.k} (${v.cfg.scoredCities.length} eligible)` : ''}
                 </td>
-                <td className="num">{v.nExecuted} / {v.nRealized}</td>
+                <td className="num">
+                  {v.nExecuted} / {v.nRealized}
+                  {(v.ledgerRows ?? 0) > 0 ? (
+                    // 0129: how much of the realized sample was RECOVERED from the persisted ledger vs replayed
+                    // from the captures still in the database — the proof the record outlived the capture prune.
+                    <div className="muted small">
+                      {v.ledgerRows} ledger / {v.replayRows} replay
+                    </div>
+                  ) : null}
+                </td>
                 <td className="num">{Number.isFinite(v.money.winRate) ? fmtPct(v.money.winRate, 0) : '—'}</td>
                 <td className="num">{Number.isFinite(v.meanEntryAsk) ? fmtProb(v.meanEntryAsk) : '—'}</td>
                 <td className="num" style={{ color: Number.isFinite(v.meanNetReturn) ? pnlColor(v.meanNetReturn) : undefined }}>

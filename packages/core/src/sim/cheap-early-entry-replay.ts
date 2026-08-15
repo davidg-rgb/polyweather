@@ -546,6 +546,56 @@ export interface CheapEarlyPanel {
   scoredCities: string[];
 }
 
+/** the per-panel context a summary needs that the ledger itself cannot carry (the entry-rate denominator + why
+ *  the rest did not enter + which cities were in scope) — all replay-side facts. */
+export interface CheapEarlyLedgerContext {
+  nConsidered: number;
+  reasonTally: Record<string, number>;
+  scoredCities: string[];
+}
+
+/**
+ * Summarize a cheap-early ledger into a CheapEarlyPanel — the §9R-E verdict + the money/cost/extent reads over
+ * its REALIZED rows. Split out of replayCheapEarlyPanel so the forward view can re-score a ledger that has been
+ * MERGED with the persisted variant ledger (0129: `opening_captures` is pruned at resolved+1d on the free tier,
+ * so the replay alone can only ever see the last day or two) through the exact same arithmetic and the exact
+ * same verdict options — a merged panel and a replayed panel can never diverge in how they are scored.
+ *
+ * minWinFrac 0 → the gate binds on ciLow>0 + zero-skill MC only (handoff §2); real-book basis (the whole point
+ * vs the synthetic-book backtests that false-passed). A caller MAY override, but never RAISE minWinFrac here.
+ */
+export function summarizeCheapEarlyLedger(
+  ledger: CheapEarlyTrade[],
+  ctx: CheapEarlyLedgerContext,
+  verdictOpts: VerdictOpts = {},
+): CheapEarlyPanel {
+  const rows = Array.isArray(ledger) ? ledger : [];
+  const realizedRows = rows.filter((t) => t.status === 'realized');
+  const panel: OpeningMarketResult[] = realizedRows.map((t) => ({
+    city: t.city,
+    targetDate: t.targetDate,
+    netPnlUsd: t.netPnlUsd,
+    stakeUsd: t.stakeUsd,
+    netReturn: t.netReturn,
+    executed: true,
+  }));
+  return {
+    ledger: rows,
+    verdict: openingVerdict(panel, { priceBasis: 'real-book', minWinFrac: 0, ...verdictOpts }),
+    meanNetReturn: mean(realizedRows.map((t) => t.netReturn)),
+    totalNetUsd: realizedRows.reduce((a, t) => a + t.netPnlUsd, 0),
+    winRate: realizedRows.length ? realizedRows.filter((t) => t.netPnlUsd > 0).length / realizedRows.length : NaN,
+    nExecuted: rows.length,
+    nRealized: realizedRows.length,
+    meanEntryAsk: mean(realizedRows.map((t) => t.entryAsk)),
+    meanDepthUsd: mean(realizedRows.map((t) => t.depthUsd)),
+    meanObservedSpread: mean(realizedRows.map((t) => t.observedSpread)),
+    nConsidered: ctx?.nConsidered ?? 0,
+    reasonTally: ctx?.reasonTally ?? {},
+    scoredCities: ctx?.scoredCities ?? [],
+  };
+}
+
 /**
  * Replay the cheap-early strategy over a panel. `resolvesByEvent` maps eventId → the venue resolution epoch ms
  * (the hours-to-close clock); a missing/absent entry drops that market (no_resolve_clock — cannot window). The
@@ -565,10 +615,8 @@ export function replayCheapEarlyPanel(
   const scoredCities = cheapEarlyEligibleCities(cfg, cityHitRates);
   const scoped: CheapEarlyCfg = { ...cfg, cities: scoredCities };
   const ledger: CheapEarlyTrade[] = [];
-  const panel: OpeningMarketResult[] = [];
   const reasonTally: Record<string, number> = {};
   let nConsidered = 0;
-  let realized = 0;
   for (const e of evs) {
     // off-universe markets are not "considered" (they were never in scope); everything else counts toward the
     // fresh entry-rate denominator, including grading_mismatch (tallied but never scored).
@@ -581,28 +629,6 @@ export function replayCheapEarlyPanel(
     }
     if (!Number.isFinite(t.netReturn) || !Number.isFinite(t.netPnlUsd)) continue;
     ledger.push(t);
-    if (t.status === 'realized') {
-      realized++;
-      panel.push({ city: e.city, targetDate: e.targetDate, netPnlUsd: t.netPnlUsd, stakeUsd: t.stakeUsd, netReturn: t.netReturn, executed: true });
-    }
   }
-  // minWinFrac 0 → the gate binds on ciLow>0 + zero-skill MC only (handoff §2); real-book basis (the whole point
-  // vs the synthetic-book backtests that false-passed). A caller MAY override, but never RAISE minWinFrac here.
-  const verdict = openingVerdict(panel, { priceBasis: 'real-book', minWinFrac: 0, ...verdictOpts });
-  const realizedRows = ledger.filter((t) => t.status === 'realized');
-  return {
-    ledger,
-    verdict,
-    meanNetReturn: mean(realizedRows.map((t) => t.netReturn)),
-    totalNetUsd: realizedRows.reduce((a, t) => a + t.netPnlUsd, 0),
-    winRate: realizedRows.length ? realizedRows.filter((t) => t.netPnlUsd > 0).length / realizedRows.length : NaN,
-    nExecuted: ledger.length,
-    nRealized: realized,
-    meanEntryAsk: mean(realizedRows.map((t) => t.entryAsk)),
-    meanDepthUsd: mean(realizedRows.map((t) => t.depthUsd)),
-    meanObservedSpread: mean(realizedRows.map((t) => t.observedSpread)),
-    nConsidered,
-    reasonTally,
-    scoredCities,
-  };
+  return summarizeCheapEarlyLedger(ledger, { nConsidered, reasonTally, scoredCities }, verdictOpts);
 }

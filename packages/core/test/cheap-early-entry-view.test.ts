@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildCheapEarlyView,
   parseCheapEarlyConfig,
+  type CheapEarlyLedger,
 } from '../src/sim/cheap-early-entry-view.ts';
 import {
   cheapEarlyCfg,
@@ -205,5 +206,136 @@ describe('parseCheapEarlyConfig', () => {
     expect(parseCheapEarlyConfig([{ key: 'cheap_early.enabled', value: 'false' }]).enabled).toBe(false);
     const bad = parseCheapEarlyConfig([{ key: 'cheap_early.cities', value: '[not json' }]);
     expect(bad.cities).toEqual(['ankara', 'helsinki', 'kuala-lumpur', 'wellington']); // fell back to the default
+  });
+});
+
+describe('buildCheapEarlyView — the persisted variant ledger (migration 0129)', () => {
+  const cfg = (): ReturnType<typeof cheapEarlyCfg> => cheapEarlyCfg([...CHEAP_EARLY_CITIES]);
+  /** the two-market fixture the first suite uses: helsinki wins, ankara loses, both realized. */
+  const twoMarkets = (): { captures: RawCaptureRow[]; resolutions: RawResolution[] } => ({
+    captures: [...freshEvent('A', 'helsinki', 'Europe/Helsinki'), ...freshEvent('B', 'ankara', 'Europe/Istanbul')],
+    resolutions: [
+      { id: 'A', winnerIdx: 1, gradingMismatch: false },
+      { id: 'B', winnerIdx: 0, gradingMismatch: false },
+    ],
+  });
+
+  it('an ABSENT ledger leaves the view byte-identical to the replay-only build', () => {
+    const { captures, resolutions } = twoMarkets();
+    const base = buildCheapEarlyView(captures, resolutions, cfg());
+    const same = buildCheapEarlyView(captures, resolutions, cfg(), { ledger: undefined });
+    expect(same).toEqual(base);
+    expect(base.variantsCommon.ledgerAvailable).toBe(false);
+    // and an EMPTY ledger object changes nothing but the availability flag.
+    const empty = buildCheapEarlyView(captures, resolutions, cfg(), { ledger: {} });
+    expect(empty.variantsCommon.ledgerAvailable).toBe(true);
+    expect({ ...empty, variantsCommon: base.variantsCommon }).toEqual(base);
+    for (const v of base.variants) {
+      expect(v.ledgerRows).toBe(0);
+      expect(v.replayRows).toBe(v.nRealized);
+    }
+  });
+
+  it('merges ledger rows the replay can no longer see — n accrues past the capture prune', () => {
+    // the captures for madrid/singapore have been pruned; only their persisted ledger rows remain.
+    const { captures, resolutions } = twoMarkets();
+    const ledger: CheapEarlyLedger = {
+      canonical: [
+        { city: 'madrid', targetDate: '2026-06-18', label: '21C', ask: 0.25, hoursToClose: 30, depthUsd: 400, won: true, net: 2.85, stakeUsd: 20 },
+        { city: 'singapore', targetDate: '2026-06-19', label: '31C', ask: 0.3, hoursToClose: 28, depthUsd: 150, won: false, net: -1, stakeUsd: 20 },
+      ],
+    };
+    const view = buildCheapEarlyView(captures, resolutions, cfg(), { ledger });
+    const canonical = view.variants.find((v) => v.id === CANONICAL_VARIANT_ID)!;
+
+    expect(canonical.ledgerRows).toBe(2);
+    expect(canonical.replayRows).toBe(2); // the two markets still in the capture window
+    expect(canonical.nRealized).toBe(4);
+    // the HEADLINE accrues too — that is what lets the gate of record reach its §9R-E floor.
+    expect(view.gate.nMarkets).toBe(4);
+    expect(view.gate.nCities).toBe(4);
+    expect(view.money.nRealized).toBe(4);
+    expect(view.entries.map((e) => e.city).sort()).toEqual(['ankara', 'helsinki', 'madrid', 'singapore']);
+    // the stats are computed over the MERGED set, not the replayed one.
+    const nets = view.entries.filter((e) => e.status === 'realized').map((e) => e.netReturn);
+    expect(view.assumptions.meanNetReturn).toBeCloseTo(nets.reduce((a, b) => a + b, 0) / nets.length, 12);
+    // …and the recovered days keep their P&L on the equity curve (their captures are gone, the record is not).
+    expect(view.perDay.map((d) => d.date)).toEqual(['2026-06-18', '2026-06-19', DATE]);
+    expect(view.perDay[0]).toMatchObject({ date: '2026-06-18', considered: 0, entered: 1 });
+    // a ledger row's $ P&L is net-per-$1 x its own stake.
+    expect(view.entries.find((e) => e.city === 'madrid')!.netPnlUsd).toBeCloseTo(2.85 * 20, 9);
+  });
+
+  it('dedupes by (city, targetDate) with the LEDGER row winning; unrealized replay entries are untouched', () => {
+    const captures = [
+      ...freshEvent('A', 'helsinki', 'Europe/Helsinki'), // replay says WON
+      ...freshEvent('B', 'ankara', 'Europe/Istanbul'), // unresolved -> an OPEN entry
+    ];
+    const resolutions: RawResolution[] = [{ id: 'A', winnerIdx: 1, gradingMismatch: false }];
+    // the ledger carries helsinki/DATE as a LOSS — the graded record must win over the re-replay.
+    const ledger: CheapEarlyLedger = {
+      canonical: [{ city: 'helsinki', targetDate: DATE, label: '21C', ask: 0.25, won: false, net: -1, stakeUsd: 20 }],
+    };
+    const view = buildCheapEarlyView(captures, resolutions, cfg(), { ledger });
+    const canonical = view.variants.find((v) => v.id === CANONICAL_VARIANT_ID)!;
+
+    expect(canonical.ledgerRows).toBe(1);
+    expect(canonical.replayRows).toBe(0); // the one replayed realized row was the duplicate the ledger won
+    expect(canonical.nRealized).toBe(1);
+    expect(view.entries.find((e) => e.city === 'helsinki')!.won).toBe(false);
+    expect(view.entries.find((e) => e.city === 'helsinki')!.netReturn).toBeCloseTo(-1, 9);
+    // the OPEN ankara entry survives the merge untouched and stays out of the gate.
+    const open = view.entries.find((e) => e.city === 'ankara')!;
+    expect(open.status).toBe('open');
+    expect(view.money.nOpen).toBe(1);
+    expect(view.gate.nMarkets).toBe(1);
+  });
+
+  it('scores EVERY variant over its own ledger — a variant with no rows is unaffected', () => {
+    const { captures, resolutions } = twoMarkets();
+    const ledger: CheapEarlyLedger = {
+      'wide-band': [
+        { city: 'madrid', targetDate: '2026-06-18', label: '21C', ask: 0.18, won: true, net: 4.4, stakeUsd: 20 },
+      ],
+    };
+    const view = buildCheapEarlyView(captures, resolutions, cfg(), { ledger });
+    const wide = view.variants.find((v) => v.id === 'wide-band')!;
+    const canonical = view.variants.find((v) => v.id === CANONICAL_VARIANT_ID)!;
+    expect(wide.ledgerRows).toBe(1);
+    expect(wide.nRealized).toBe(3);
+    expect(canonical.ledgerRows).toBe(0);
+    expect(canonical.nRealized).toBe(2); // the canonical gate is NOT moved by another variant's ledger
+    expect(view.gate.nMarkets).toBe(2);
+  });
+
+  it('is total on junk ledger rows (missing keys / non-finite nets are dropped, never thrown on)', () => {
+    const { captures, resolutions } = twoMarkets();
+    const ledger: CheapEarlyLedger = {
+      canonical: [
+        { city: '', targetDate: '2026-06-18', won: true, net: 1 },
+        { city: 'madrid', targetDate: '', won: true, net: 1 },
+        { city: 'madrid', targetDate: '2026-06-18', won: true, net: Number.NaN },
+        { city: 'madrid', targetDate: '2026-06-18', won: true, net: 0.5 }, // the only usable row
+      ],
+    };
+    const view = buildCheapEarlyView(captures, resolutions, cfg(), { ledger });
+    const canonical = view.variants.find((v) => v.id === CANONICAL_VARIANT_ID)!;
+    expect(canonical.ledgerRows).toBe(1);
+    expect(canonical.nRealized).toBe(3);
+    // a row with no stake falls back to the cfg stake, so its $ P&L is still scored.
+    expect(view.entries.find((e) => e.city === 'madrid')!.netPnlUsd).toBeCloseTo(0.5 * 20, 9);
+  });
+
+  it('the canonical block still mirrors the headline once the ledger is merged in', () => {
+    const { captures, resolutions } = twoMarkets();
+    const ledger: CheapEarlyLedger = {
+      canonical: [{ city: 'madrid', targetDate: '2026-06-18', label: '21C', ask: 0.25, won: true, net: 2.85, stakeUsd: 20 }],
+    };
+    const view = buildCheapEarlyView(captures, resolutions, cfg(), { ledger });
+    const canonical = view.variants.find((v) => v.id === CANONICAL_VARIANT_ID)!;
+    expect(canonical.gate).toEqual(view.gate);
+    expect(canonical.nExecuted).toBe(view.money.nEntries);
+    expect(canonical.meanNetReturn).toBeCloseTo(view.assumptions.meanNetReturn, 12);
+    expect(canonical.money.realizedPnlUsd).toBeCloseTo(view.money.realizedPnlUsd, 9);
   });
 });

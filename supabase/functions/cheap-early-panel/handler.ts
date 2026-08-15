@@ -8,6 +8,9 @@
  *   2. pull the RAW fresh-allowlist capture series + the venue resolution map PER CITY (convergence_capture_inputs,
  *      service-role — the SAME inputs the taker bracket / maker-exit views use; it already carries every field the
  *      cheap-early engine reads: idx, label, bestAsk, depthUsd, houseProb, resolvesAt).
+ *   1c. read the PERSISTED variant ledger (cheap_early_variant_ledger_read, 0129) — the forward run's accrued
+ *      REALIZED entries. Best-effort: without it the tick scores only the captures still in the database, which
+ *      on the free tier is ~1 day (opening_captures is pruned at resolved+1d), and the page says so.
  *   2b. read the per-city recent hit rates (cheap_early_city_hit_rates, 0127) — the top-K city filter's ONLY
  *      input. Best-effort: on any error the top-K variants score nothing (fail-closed), the tick continues.
  *   3. run the PURE cheap-early replay view (buildCheapEarlyView → replayCheapEarlyPanel over the frozen params),
@@ -15,6 +18,8 @@
  *      ingest. The slim read is asked for the DISJOINT window SET across all of them (0128 p_windows), so no variant
  *      is starved and no dead middle hours are scanned.
  *      Variant verdicts are MEASUREMENT ONLY — step 5 writes the gate of record from the CANONICAL block alone.
+ *   3c. write every variant's REALIZED entries back to that ledger (record_cheap_early_variant_entries) so the
+ *      forward n accrues past the capture prune. Idempotent upsert, chunked, best-effort, bounded.
  *   4. store the small view (record_cheap_early_panel) — the /cheap-early page reads only that snapshot.
  *   5. persist the §9R-E verdict (record_cheap_early_gate, source='forward-cheap-early' PINNED) so the operator
  *      watches the clustered CI narrowing over forward days — the DEGRADED-TICK GUARD withholds the gate-of-record
@@ -34,8 +39,10 @@ import {
   cheapEarlyCfg,
   cheapEarlyWindowSet,
   parseCheapEarlyConfig,
+  CHEAP_EARLY_ENGINE_VERSION,
   CHEAP_EARLY_VARIANTS,
   type CheapEarlyCityHitRates,
+  type CheapEarlyLedger,
   type RawCaptureRow,
   type RawResolution,
 } from '../../../packages/core/src/index.ts';
@@ -68,6 +75,15 @@ const BOOKKEEPING_TIMEOUT_MS = 10_000;
  *  nothing (fail-closed) and read INSUFFICIENT / 'no city hit rates'; the tick never fails over it. */
 const HIT_RATES_TIMEOUT_MS = 15_000;
 
+/** the persisted variant ledger (0129) — the forward run's accrued realized entries. BEST-EFFORT on both legs:
+ *  a failed READ degrades the tick to the replay-only sample (the pre-0129 behaviour, flagged on the page via
+ *  variantsCommon.ledgerAvailable); a failed WRITE loses nothing but this tick's persistence (the next tick
+ *  re-sends the same rows — the upsert is idempotent). Neither ever fails the tick. */
+const LEDGER_READ_TIMEOUT_MS = 20_000;
+const LEDGER_WRITE_TIMEOUT_MS = 20_000;
+/** rows per record_cheap_early_variant_entries call — bounds the jsonb payload and the statement's work. */
+const LEDGER_WRITE_CHUNK = 500;
+
 export interface CheapEarlyPanelDeps {
   now: Date;
   /** test seams — production uses the module defaults above. */
@@ -76,6 +92,8 @@ export interface CheapEarlyPanelDeps {
   fetchBudgetMs?: number;
   bookkeepingTimeoutMs?: number;
   hitRatesTimeoutMs?: number;
+  ledgerTimeoutMs?: number;
+  ledgerChunk?: number;
   gateMaxCityErrors?: number;
   gateMinMarkets?: number;
   retrySleep?: (ms: number) => Promise<void>;
@@ -136,6 +154,26 @@ export async function cheapEarlyPanel(ctx: JobCtx, deps: CheapEarlyPanelDeps): P
         error: e instanceof Error ? e.message : String(e),
       });
     }
+  }
+
+  // 1c) the PERSISTED variant ledger (0129) — the forward run's accrued realized entries. BEST-EFFORT: on any
+  //     error (including a pre-0129 database, where the RPC simply does not exist) it stays undefined and the
+  //     view falls back to the replay-only sample, flagged as variantsCommon.ledgerAvailable=false. Without it
+  //     the panel spans only the captures still in the database — ~1 day once the free-tier prune is running.
+  const ledgerTimeoutMs = deps.ledgerTimeoutMs ?? LEDGER_READ_TIMEOUT_MS;
+  let ledger: CheapEarlyLedger | undefined;
+  try {
+    const r = await withTimeout(
+      db.rpc<{ cheap_early_variant_ledger_read: CheapEarlyLedger }>('cheap_early_variant_ledger_read', {}),
+      ledgerTimeoutMs,
+      `cheap_early_variant_ledger_read timed out after ${ledgerTimeoutMs}ms`,
+    );
+    const raw = r[0]?.cheap_early_variant_ledger_read;
+    if (raw && typeof raw === 'object') ledger = raw;
+  } catch (e) {
+    log('variant ledger unavailable — this tick scores the replayed captures alone (non-fatal)', {
+      error: e instanceof Error ? e.message : String(e),
+    });
   }
 
   // 2) raw inputs per city, through a bounded worker pool with a per-city timeout + an overall budget (mirror
@@ -240,7 +278,7 @@ export async function cheapEarlyPanel(ctx: JobCtx, deps: CheapEarlyPanelDeps): P
 
   // 3) the pure cheap-early view (entries / measured reads / fictive money / §9R-E gate). cityErrors is threaded
   //    in so the page can flag when allowlist cities were dropped this tick (a silent gate undercount).
-  const view = { ...buildCheapEarlyView(captures, resolutions, cfg, { cityHitRates }), days: PANEL_DAYS, cityErrors };
+  const view = { ...buildCheapEarlyView(captures, resolutions, cfg, { cityHitRates, ledger }), days: PANEL_DAYS, cityErrors };
 
   // 3b) the pre-registered variant sweep, one line each (CHEAP-EARLY-IMPROVE.md §8). Measurement only — the
   //     gate-of-record write below stays CANONICAL-ONLY, so a variant can never reach capital.
@@ -256,8 +294,74 @@ export async function cheapEarlyPanel(ctx: JobCtx, deps: CheapEarlyPanelDeps): P
       ciLow: v.ciLow,
       ciHigh: v.ciHigh,
       verdict: v.verdict,
+      ledgerRows: v.ledgerRows,
+      replayRows: v.replayRows,
     });
   }
+
+  // 3c) PERSIST every variant's REALIZED entries (0129) — the whole point of the ledger: the captures behind
+  //     these rows are pruned at resolved+1 day, so a market that is not written here now is gone from the
+  //     forward record forever. Sent from the MERGED set (ledger ∪ replay) because the upsert is idempotent —
+  //     re-sending an unchanged row writes nothing and the RPC returns 0. BEST-EFFORT + BOUNDED on every axis:
+  //     ≤LEDGER_WRITE_CHUNK rows per statement, one retry per chunk, and an overall budget after which the
+  //     remaining chunks are dropped (the next hourly tick re-sends them). Never fails the tick.
+  const ledgerRowsOut = view.variants.flatMap((v) =>
+    v.entries
+      .filter((e) => e.won !== null) // REALIZED only — an open entry is re-replayed live, never persisted
+      .map((e) => ({
+        variantId: v.id,
+        city: e.city,
+        targetDate: e.date,
+        label: e.label,
+        ask: Number.isFinite(e.ask) ? e.ask : null,
+        hoursToClose: e.htc,
+        depthUsd: e.depth,
+        won: e.won,
+        net: Number.isFinite(e.net) ? e.net : null,
+        stakeUsd: v.cfg.stakeUsd,
+        engineVersion: CHEAP_EARLY_ENGINE_VERSION,
+      }))
+      .filter((r) => r.net !== null),
+  );
+  const ledgerChunk = Math.max(1, deps.ledgerChunk ?? LEDGER_WRITE_CHUNK);
+  const ledgerWriteTimeoutMs = deps.ledgerTimeoutMs ?? LEDGER_WRITE_TIMEOUT_MS;
+  const ledgerBudgetMs = ledgerWriteTimeoutMs * 6;
+  const ledgerStarted = Date.now();
+  let ledgerWritten = 0;
+  let ledgerSkipped = 0;
+  for (let i = 0; i < ledgerRowsOut.length; i += ledgerChunk) {
+    if (Date.now() - ledgerStarted > ledgerBudgetMs) {
+      ledgerSkipped += ledgerRowsOut.length - i;
+      break;
+    }
+    const chunk = ledgerRowsOut.slice(i, i + ledgerChunk);
+    let done = false;
+    for (let attempt = 0; attempt < 2 && !done; attempt++) {
+      try {
+        const r = await withTimeout(
+          db.rpc<{ record_cheap_early_variant_entries: number }>('record_cheap_early_variant_entries', { p_rows: chunk }),
+          ledgerWriteTimeoutMs,
+          `record_cheap_early_variant_entries timed out after ${ledgerWriteTimeoutMs}ms`,
+        );
+        ledgerWritten += Number(r[0]?.record_cheap_early_variant_entries ?? 0);
+        done = true;
+      } catch (e) {
+        if (attempt === 1) {
+          ledgerSkipped += chunk.length;
+          log('variant ledger write failed (non-fatal — the next tick re-sends)', {
+            rows: chunk.length,
+            error: e instanceof Error ? e.message : String(e),
+          });
+        }
+      }
+    }
+  }
+  log('variant ledger persisted', {
+    available: view.variantsCommon.ledgerAvailable,
+    sent: ledgerRowsOut.length,
+    written: ledgerWritten,
+    skipped: ledgerSkipped,
+  });
 
   // 4) store the small snapshot — BOUNDED RETRY (mirror 0073 / WS-5): one transient timeout must not discard the
   //    per-city fetch work. Safe to retry: record_cheap_early_panel is a pure insert + prune-to-200, and
@@ -336,6 +440,10 @@ export async function cheapEarlyPanel(ctx: JobCtx, deps: CheapEarlyPanelDeps): P
     label: view.gate.label,
     variants: view.variants.length,
     cityHitRates: cityHitRates ? Object.keys(cityHitRates).length : 0,
+    ledgerAvailable: view.variantsCommon.ledgerAvailable,
+    ledgerSent: ledgerRowsOut.length,
+    ledgerWritten,
+    ...(ledgerSkipped > 0 ? { ledgerSkipped } : {}),
     snapshotId,
     ...(gateDegraded ? { gateWriteSkipped: 'degraded' as const } : {}),
   };
